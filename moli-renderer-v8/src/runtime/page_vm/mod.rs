@@ -2382,7 +2382,10 @@ impl PageVm {
             .vm
             .take()
             .expect("committed main navigation must retain its source ScriptVm until retirement");
-        vm.detach_default_inspector_context_for_context_teardown();
+        // Unload output has already joined the Page journal. The replacement
+        // agent's reattachment owns the context reset; disposal of this old
+        // backend must not publish a second reset for the same navigation.
+        vm.retire_inspector_context_for_replacement();
         vm.close_page_context_resources_for_context_teardown();
         drop(vm);
     }

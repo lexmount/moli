@@ -311,7 +311,12 @@ mod tests {
         let (events, _, _) = outcome.into_protocol_event_parts();
         events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect()
     }
 
@@ -513,12 +518,14 @@ mod tests {
             conn.commit_prepared_attach_event_plan(prepared_attach)
                 .into_background_events()
         });
-        assert!(
-            attached
-                .iter()
-                .any(|event| event.clone().into_protocol_message()["method"]
-                    == "Target.attachedToTarget")
-        );
+        assert!(attached.iter().any(|event| {
+            event
+                .clone()
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")["method"]
+                == "Target.attachedToTarget"
+        }));
         let original_binding =
             ctx.with_fixture(|conn| conn.session_binding_lifetime(PEER).unwrap());
         let completed = drive(&mut ctx, *pending).await;
@@ -537,7 +544,12 @@ mod tests {
                     let (events, _, _) = outcome.into_protocol_event_parts();
                     break events
                         .into_iter()
-                        .map(BackgroundProtocolEvent::into_protocol_message)
+                        .map(|event| {
+                            event
+                                .into_protocol_message()
+                                .into_json()
+                                .expect("scalar protocol fixture")
+                        })
                         .collect::<Vec<_>>();
                 }
             }
@@ -792,7 +804,11 @@ mod tests {
         assert_eq!(
             events
                 .iter()
-                .map(|event| event.clone().into_protocol_message())
+                .map(|event| event
+                    .clone()
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture"))
                 .find(|message| message["id"] == 702)
                 .unwrap()["result"]["success"],
             true
@@ -840,7 +856,12 @@ mod tests {
                     let (events, _, _) = outcome.into_protocol_event_parts();
                     break events
                         .into_iter()
-                        .map(BackgroundProtocolEvent::into_protocol_message)
+                        .map(|event| {
+                            event
+                                .into_protocol_message()
+                                .into_json()
+                                .expect("scalar protocol fixture")
+                        })
                         .collect::<Vec<_>>();
                 }
             }

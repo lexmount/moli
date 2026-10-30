@@ -414,6 +414,39 @@ fn renderer_inspector_unique_id_capture_depth_recovers_after_panic() {
 }
 
 #[test]
+fn retiring_inspector_notifications_preserves_pending_command_responses() {
+    let outbound = InspectorOutbound::default();
+    let (response_tx, mut response_rx) = tokio::sync::oneshot::channel();
+    outbound
+        .register_response_callback(RendererRuntimeInspectorResponseSender::new(42, response_tx));
+    outbound.retire_notifications();
+    outbound.push_value(json!({"method":"Runtime.executionContextsCleared","params":{}}));
+    assert!(outbound.take_pending_messages().is_empty());
+
+    outbound.push_response_value(
+        42,
+        json!({
+            "id":42,
+            "error":{"code":-32000,"message":"Execution context was destroyed."}
+        }),
+    );
+    let completion = response_rx
+        .try_recv()
+        .expect("context destruction must still settle the admitted command");
+    assert_eq!(
+        completion
+            .output
+            .protocol_response(42)
+            .unwrap()
+            .as_json()
+            .unwrap()["error"]["message"],
+        "Execution context was destroyed."
+    );
+    assert_eq!(outbound.response_callback_counts(), (0, 0));
+    outbound.deactivate();
+}
+
+#[test]
 fn replacement_document_binding_does_not_adopt_previous_agent_outbound() {
     crate::ensure_v8_for_test();
     let mut isolate = v8::Isolate::new(Default::default());
@@ -437,7 +470,13 @@ fn replacement_document_binding_does_not_adopt_previous_agent_outbound() {
         |_, outbound, _| outbound.push_value(previous_message),
     );
 
+    let retired_outbound = initial.with_session_and_outbound(
+        &mut inspector_backend,
+        PageInspectorSessionTarget::Frontend(None),
+        |_, outbound, _| outbound,
+    );
     initial.deactivate_page_vm_binding_for_teardown();
+    retired_outbound.push_value(json!({"method":"Runtime.executionContextsCleared","params":{}}));
     let current_message = json!({
         "method": "Runtime.consoleAPICalled",
         "params": { "agent": "current" }

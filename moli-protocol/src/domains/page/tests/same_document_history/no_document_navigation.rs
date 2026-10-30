@@ -445,30 +445,29 @@ async fn no_document_navigation_preserves_protocol_result_semantics() {
                     let url = page.base_url.replace("/history.html", "/no-document");
                     let outcome = tokio::time::timeout(
                         std::time::Duration::from_secs(5),
-                        page.ctx
-                            .conn
-                            .execute_automation_command(AutomationCommand::Navigate(
-                                DevToolsNavigateCommand {
-                                    context: AutomationContext {
-                                        protocol,
-                                        session_id: Some(DevToolsSessionId::from(SESSION)),
-                                        target_id: Some(DevToolsTargetId::from(FRAME)),
-                                        browser_context_id: None,
-                                    },
-                                    url,
-                                    referrer: None,
-                                    wait: DevToolsNavigationWait::Load,
+                        page.ctx.execute_owned_automation_command_for_test(
+                            AutomationCommand::Navigate(DevToolsNavigateCommand {
+                                context: AutomationContext {
+                                    protocol,
+                                    session_id: Some(DevToolsSessionId::from(SESSION)),
+                                    target_id: Some(DevToolsTargetId::from(FRAME)),
+                                    browser_context_id: None,
                                 },
-                            )),
+                                url,
+                                referrer: None,
+                                wait: DevToolsNavigationWait::Load,
+                            }),
+                        ),
                     )
                     .await
                     .expect("ignored response must settle the protocol navigation");
-                    let (result, _, _, renderer_predecessor) = outcome.into_complete_parts();
-                    page.ctx
-                        .route_direct_command_renderer_predecessor_for_test(
-                            renderer_predecessor
-                                .expect("beforeunload must publish its renderer turn"),
-                        )
+                    assert!(
+                        outcome.renderer_output_predecessor().is_some(),
+                        "beforeunload must publish its renderer turn"
+                    );
+                    let (result, _) = page
+                        .ctx
+                        .consume_automation_with_captured_sidecars_for_test(outcome)
                         .await;
                     let AutomationResult::Navigate(result) = result.unwrap() else {
                         panic!("expected navigation result");

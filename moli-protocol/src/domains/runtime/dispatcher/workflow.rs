@@ -195,7 +195,7 @@ impl RuntimeWorkflow {
         &mut self,
         target: DevToolsRuntimeTarget,
         command: AutomationCommand,
-    ) -> Result<Value, DevToolsError> {
+    ) -> Result<moli_protocol_cdp::CdpMessage, DevToolsError> {
         let owner = CommandOwnerScope::for_route(target.route.clone());
         let mut listeners = Vec::new();
         let (command, params) = match command {

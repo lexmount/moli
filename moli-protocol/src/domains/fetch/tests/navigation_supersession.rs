@@ -113,7 +113,12 @@ async fn disable_cleanup_reports_policy_failure_after_settling_its_navigation() 
     let messages = plan
         .into_background_events(Some(3), Some("SID-1"))
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         messages.iter().filter(|message| message["id"] == 2).count(),

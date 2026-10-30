@@ -2434,8 +2434,11 @@ impl ProtocolDeliveryEnvelope {
     /// JSON-only adapters consume wire messages; neutral facts and scheduler
     /// control inputs remain on their typed delivery paths.
     pub fn into_wire_message(self) -> Option<Value> {
-        self.has_protocol_wire_message()
-            .then(|| self.into_protocol_message().into_json().expect("JSON-only protocol adapter requires scalar payload"))
+        self.has_protocol_wire_message().then(|| {
+            self.into_protocol_message()
+                .into_json()
+                .expect("JSON-only protocol adapter requires scalar payload")
+        })
     }
 
     pub fn into_protocol_message(self) -> CdpMessage {
@@ -4213,12 +4216,9 @@ impl BackgroundTargetReceivedMessageFromTargetEvent {
     fn into_protocol_message(self) -> Value {
         let mut nested_message = self.nested_event.into_protocol_message();
         if self.strip_implicit_session
-            && nested_message["sessionId"].as_str() == Some(self.target_session_id.as_str())
+            && nested_message.session_id() == Some(self.target_session_id.as_str())
         {
-            nested_message
-                .as_object_mut()
-                .expect("a protocol message is an object")
-                .remove("sessionId");
+            nested_message.set_session_id(None);
         }
         build_event(
             "Target.receivedMessageFromTarget",
@@ -4552,7 +4552,10 @@ mod tests {
                 .kind(),
             std::io::ErrorKind::BrokenPipe
         );
-        let message = cloned.into_protocol_message_for_typed_runtime_route();
+        let message = cloned
+            .into_protocol_message_for_typed_runtime_route()
+            .into_json()
+            .expect("scalar protocol fixture");
         assert_eq!(message["id"], 42);
         assert_eq!(
             message["error"]["message"],
@@ -5481,7 +5484,10 @@ mod tests {
                 strip,
             );
             assert!(event.protocol_message().is_none());
-            let message = event.into_protocol_message();
+            let message = event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture");
             let payload: Value =
                 serde_json::from_str(message["params"]["message"].as_str().unwrap()).unwrap();
             assert_eq!(

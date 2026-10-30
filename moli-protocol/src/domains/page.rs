@@ -76,6 +76,10 @@ pub(crate) use navigation::{
     CompletedNavigateLoadCommand, prepare_automation_navigation,
     superseded_intercepted_navigation_events,
 };
+pub(crate) use navigation::{
+    BeforeUnloadNavigationStep, CompletedBeforeUnloadNavigationCommand,
+    PreparedBeforeUnloadNavigation,
+};
 mod output;
 use capture::*;
 pub(in crate::domains) use output::project_page_output_finite;
@@ -219,6 +223,7 @@ enum PendingPageCommandKind {
         transfer_mode: DevToolsPrintToPdfTransferMode,
     },
     Navigate(Box<navigation::PendingNavigateLoadCommand>),
+    BeforeUnloadNavigation(Box<navigation::PendingBeforeUnloadNavigationCommand>),
     TraverseSameDocumentHistory(Box<navigation::PendingSameDocumentHistoryTraversalCommand>),
     ChildFrameNavigate(Box<navigation::PendingChildFrameNavigateCommand>),
     ContinueNavigationWithoutRequestPause(
@@ -285,6 +290,7 @@ enum CompletedPageCommandKind {
         transfer_mode: DevToolsPrintToPdfTransferMode,
     },
     Navigate(Box<navigation::CompletedNavigateLoadCommand>),
+    BeforeUnloadNavigation(Box<navigation::CompletedBeforeUnloadNavigationCommand>),
     TraverseSameDocumentHistory(Box<navigation::CompletedSameDocumentHistoryTraversalCommand>),
     ChildFrameNavigate(Box<navigation::CompletedChildFrameNavigateCommand>),
     ContinueNavigationWithoutRequestPause(
@@ -326,6 +332,7 @@ impl CompletedPageCommandKind {
             Self::BringToFront { .. }
             | Self::AddScriptToEvaluateOnNewDocument(_)
             | Self::Navigate(_)
+            | Self::BeforeUnloadNavigation(_)
             | Self::ContinueNavigationWithoutRequestPause(_)
             | Self::StopLoading(_)
             | Self::Crash(_)
@@ -443,7 +450,10 @@ impl PendingPageCommandDispatch {
                 transfer_mode,
             },
             PendingPageCommandKind::Navigate(pending) => {
-                CompletedPageCommandKind::Navigate(Box::new(pending.wait().await))
+                CompletedPageCommandKind::Navigate(Box::new(Box::pin(pending.wait()).await))
+            }
+            PendingPageCommandKind::BeforeUnloadNavigation(pending) => {
+                CompletedPageCommandKind::BeforeUnloadNavigation(Box::new(pending.wait().await))
             }
             PendingPageCommandKind::TraverseSameDocumentHistory(pending) => {
                 CompletedPageCommandKind::TraverseSameDocumentHistory(Box::new(

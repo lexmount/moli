@@ -493,6 +493,8 @@ mod tests {
                     .await;
                 let mut renderer = OwnedAutomationRenderer {
                     receiver: context.take_renderer_transport_for_owned_state_test(),
+                    ready: context.state.scheduler_events_ready(),
+                    waiting: Default::default(),
                     pending: Default::default(),
                 };
                 let owner = context.state;
@@ -606,6 +608,8 @@ mod tests {
                 let mut context = fixture().await;
                 let mut renderer = OwnedAutomationRenderer {
                     receiver: context.take_renderer_transport_for_owned_state_test(),
+                    ready: context.state.scheduler_events_ready(),
+                    waiting: Default::default(),
                     pending: Default::default(),
                 };
                 let owner = context.state;
@@ -656,6 +660,8 @@ mod tests {
                     let mut context = fixture().await;
                     let mut renderer = OwnedAutomationRenderer {
                         receiver: context.take_renderer_transport_for_owned_state_test(),
+                        ready: context.state.scheduler_events_ready(),
+                        waiting: Default::default(),
                         pending: Default::default(),
                     };
                     let owner = context.state;
@@ -727,6 +733,8 @@ mod tests {
                 let receiver = context.take_renderer_transport_for_owned_state_test();
                 let mut renderer = OwnedAutomationRenderer {
                     receiver,
+                    ready: context.state.scheduler_events_ready(),
+                    waiting: Default::default(),
                     pending: Default::default(),
                 };
                 let owner = context.state;
@@ -871,6 +879,8 @@ mod tests {
 
     struct OwnedAutomationRenderer {
         receiver: moli_core::RendererOutputTransportReceiver,
+        ready: std::rc::Rc<tokio::sync::Notify>,
+        waiting: std::collections::VecDeque<crate::ProtocolSchedulerWork>,
         pending: futures_util::stream::FuturesUnordered<
             futures_util::future::LocalBoxFuture<
                 'static,
@@ -892,6 +902,17 @@ mod tests {
                 let pending = match event {
                     CdpSchedulerEvent::RendererOutputProjectionPrepared { pending } => {
                         Some(pending)
+                    }
+                    CdpSchedulerEvent::ProtocolWorkPublished { work }
+                        if !work.is_ready()
+                            || !handle
+                                .with_state(|state| {
+                                    state.protocol_work_predecessor_is_projected(&work)
+                                })
+                                .unwrap() =>
+                    {
+                        self.waiting.push_back(work);
+                        None
                     }
                     CdpSchedulerEvent::ProtocolWorkPublished { work } => handle
                         .with_state(|state| {
@@ -925,7 +946,35 @@ mod tests {
 
         async fn advance(&mut self, handle: &crate::conn::ProtocolStateHandle) {
             use futures_util::StreamExt as _;
+            if let Some(index) = self.waiting.iter().position(|work| {
+                work.is_ready()
+                    && handle
+                        .with_state(|state| state.protocol_work_predecessor_is_projected(work))
+                        .unwrap()
+            }) {
+                let work = self
+                    .waiting
+                    .remove(index)
+                    .expect("selected work remains resident");
+                self.admit_scheduler_events(
+                    handle,
+                    vec![crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }],
+                );
+                return;
+            }
+            let events = handle
+                .with_state(|state| state.take_scheduler_events())
+                .unwrap();
+            if !events.is_empty() {
+                self.admit_scheduler_events(handle, events);
+                return;
+            }
             let output = tokio::select! {
+                _ = self.ready.notified() => {
+                    let events = handle.with_state(|state| state.take_scheduler_events()).unwrap();
+                    self.admit_scheduler_events(handle, events);
+                    return;
+                }
                 Some(completed) = self.pending.next(), if !self.pending.is_empty() => {
                     handle.with_state(|state| {
                         state.connection.complete_owned_protocol_scheduler_work(completed)
@@ -940,6 +989,21 @@ mod tests {
                 }
             };
             self.admit_scheduler_events(handle, output.into_protocol_event_parts().1);
+        }
+
+        async fn drive<T>(
+            &mut self,
+            handle: &crate::conn::ProtocolStateHandle,
+            wait: impl std::future::Future<Output = T>,
+        ) -> T {
+            let mut wait = Box::pin(wait);
+            loop {
+                tokio::select! {
+                    biased;
+                    result = &mut wait => return result,
+                    _ = self.advance(handle) => {}
+                }
+            }
         }
 
         async fn project_fence(
@@ -1008,7 +1072,9 @@ mod tests {
             handle: &crate::conn::ProtocolStateHandle,
             step: AutomationCommandTaskStep,
         ) -> Result<AutomationResult, DevToolsError> {
-            let (result, output) = finish_owned_automation_output(handle, step).await;
+            let (result, output) = self
+                .drive(handle, finish_owned_automation_output(handle, step))
+                .await;
             let (events, after, boundary, post, scheduler, predecessor) =
                 output.into_renderer_owner_turn_parts();
             assert!(
@@ -1027,21 +1093,17 @@ mod tests {
         }
     }
 
-    async fn run_owned_automation_for_test(
-        handle: &crate::conn::ProtocolStateHandle,
-        command: AutomationCommand,
-    ) -> Result<AutomationResult, DevToolsError> {
-        let step = handle
-            .with_state(move |state| state.connection.start_automation_command_dispatch(command))
-            .unwrap();
-        finish_owned_automation(handle, step).await
-    }
-
     #[tokio::test]
     async fn automation_navigation_ready_loss_keeps_original_loader_after_replacement() {
         tokio::task::LocalSet::new()
             .run_until(async {
-                let context = fixture().await;
+                let mut context = fixture().await;
+                let mut renderer = OwnedAutomationRenderer {
+                    receiver: context.take_renderer_transport_for_owned_state_test(),
+                    ready: context.state.scheduler_events_ready(),
+                    waiting: Default::default(),
+                    pending: Default::default(),
+                };
                 let owner = context.state;
                 let handle = owner.handle();
                 let command = AutomationCommand::Navigate(DevToolsNavigateCommand {
@@ -1058,7 +1120,7 @@ mod tests {
                 else {
                     panic!("the original owner retains its pending receipt");
                 };
-                drop(pending.take_wait().wait().await);
+                drop(renderer.drive(&handle, pending.take_wait().wait()).await);
                 let original_loader = handle
                     .with_state(|state| {
                         let owner = state
@@ -1071,17 +1133,18 @@ mod tests {
                             .unwrap()
                     })
                     .unwrap();
-                let replacement = run_owned_automation_for_test(
-                    &handle,
-                    AutomationCommand::Navigate(DevToolsNavigateCommand {
-                        context: command_context(),
-                        url: "data:text/html,<main>replacement-navigation</main>".into(),
-                        referrer: None,
-                        wait: DevToolsNavigationWait::DocumentInstalled,
-                    }),
-                )
-                .await
-                .unwrap();
+                let replacement = renderer
+                    .run(
+                        &handle,
+                        AutomationCommand::Navigate(DevToolsNavigateCommand {
+                            context: command_context(),
+                            url: "data:text/html,<main>replacement-navigation</main>".into(),
+                            referrer: None,
+                            wait: DevToolsNavigationWait::DocumentInstalled,
+                        }),
+                    )
+                    .await
+                    .unwrap();
                 let AutomationResult::Navigate(replacement) = replacement else {
                     panic!("the replacement completes while the old ready result is lost");
                 };
@@ -1096,7 +1159,7 @@ mod tests {
                     })
                     .unwrap();
                 let AutomationResult::Navigate(original) =
-                    finish_owned_automation(&handle, step).await.unwrap()
+                    renderer.finish_step(&handle, step).await.unwrap()
                 else {
                     panic!("recovery must preserve the accepted original terminal");
                 };

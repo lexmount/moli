@@ -985,7 +985,12 @@ async fn tab_auto_attach_waits_outside_completion_for_the_original_page_install(
     let (events, _, _) = tab.into_protocol_event_parts();
     let tab_session = events
         .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .find(|message| message["id"] == 2)
         .unwrap()["result"]["sessionId"]
         .as_str()
@@ -1051,7 +1056,12 @@ async fn tab_auto_attach_waits_outside_completion_for_the_original_page_install(
     let (events, _, _) = outcome.into_protocol_event_parts();
     let messages: Vec<_> = events
         .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect();
     let response = messages
         .iter()

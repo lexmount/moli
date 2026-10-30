@@ -1,4 +1,3 @@
-use super::*;
 use crate::conn::{BrowserContext, CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand};
 use crate::testing::TestContext;
 
@@ -143,7 +142,12 @@ async fn network_and_adapter_emulation_complete_through_direct_state() {
         let (events, _, _predecessor) = outcome.into_protocol_event_parts();
         let messages: Vec<_> = events
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect();
         assert_eq!(
             messages
@@ -228,7 +232,12 @@ async fn performance_accessibility_and_dom_use_synchronous_state_completion() {
         let (events, _, _predecessor) = outcome.into_protocol_event_parts();
         let messages: Vec<_> = events
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect();
         let response = messages.iter().find(|message| message["id"] == id).unwrap();
         assert!(response.get("error").is_none(), "{method}: {response:?}");
@@ -404,7 +413,12 @@ async fn input_owned_completion_retains_context_through_cancel_and_ready_loss() 
         let (events, _, _) = outcome.into_protocol_event_parts();
         let messages: Vec<_> = events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect();
         assert_eq!(
             messages
@@ -507,7 +521,12 @@ async fn discarded_input_workflow_result_keeps_the_original_native_output() {
     );
     let messages: Vec<_> = events
         .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect();
     assert_eq!(
         messages
@@ -567,7 +586,12 @@ async fn direct_input_mutates_the_original_document_without_a_mailbox() {
         let (events, _, _) = outcome.into_protocol_event_parts();
         let messages: Vec<_> = events
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect();
         if id == 73 {
             assert_eq!(
@@ -591,9 +615,10 @@ async fn direct_input_mutates_the_original_document_without_a_mailbox() {
 }
 
 async fn run_direct_fetch_command(
-    handle: &ProtocolStateHandle,
+    fixture: &mut TestContext,
     command: serde_json::Value,
 ) -> (Vec<serde_json::Value>, usize) {
+    let handle = fixture.handle();
     let command = ParsedCdpCommand::parse_str(command.to_string()).unwrap();
     let mut context = CommandDispatchContext::default();
     context.set_terminal_response_delivery_override(
@@ -614,17 +639,24 @@ async fn run_direct_fetch_command(
                         .into_iter()
                         .chain(after)
                         .chain(response)
-                        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+                        .map(|event| {
+                            event
+                                .into_protocol_message()
+                                .into_json()
+                                .expect("scalar protocol fixture")
+                        })
                         .collect(),
                     workflows,
                 );
             }
             CdpCommandTaskStep::Pending(pending) => {
                 workflows += usize::from(pending.kind_name() == "Workflow");
-                let completed =
-                    tokio::time::timeout(std::time::Duration::from_secs(5), pending.wait())
-                        .await
-                        .unwrap();
+                let completed = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    fixture.drive_owned_wait(pending.wait()),
+                )
+                .await
+                .unwrap();
                 step = handle
                     .with_state(|state| {
                         state.complete_command_dispatch_with_context(completed, &mut context)
@@ -665,12 +697,10 @@ async fn fetch_document_continuations_complete_with_direct_state_and_no_mailbox(
         fixture
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-direct-fetch"))
             .await;
-        let owner = fixture.state;
-        let handle = owner.handle();
         let mut patterns = vec![json!({"urlPattern":"*","requestStage":"Request"})];
         if action == "continueResponse" {
             let (enabled, _) = run_direct_fetch_command(
-                &handle,
+                &mut fixture,
                 json!({"id":0,"sessionId":"SID-direct-fetch","method":"Network.enable"}),
             )
             .await;
@@ -680,14 +710,14 @@ async fn fetch_document_continuations_complete_with_direct_state_and_no_mailbox(
             );
             patterns.push(json!({"urlPattern":"*","requestStage":"Response"}));
         }
-        let (enabled, _) = run_direct_fetch_command(&handle,
+        let (enabled, _) = run_direct_fetch_command(&mut fixture,
             json!({"id":1,"sessionId":"SID-direct-fetch","method":"Fetch.enable","params":{"patterns":patterns}})
         ).await;
         assert_eq!(
             enabled.iter().find(|message| message["id"] == 1).unwrap()["result"],
             json!({})
         );
-        let (paused, _) = run_direct_fetch_command(&handle,
+        let (paused, _) = run_direct_fetch_command(&mut fixture,
             json!({"id":2,"sessionId":"SID-direct-fetch","method":"Page.navigate","params":{"url":url}})
         ).await;
         let request_id = paused
@@ -712,7 +742,7 @@ async fn fetch_document_continuations_complete_with_direct_state_and_no_mailbox(
         } else {
             action
         };
-        let (mut completed, workflows) = run_direct_fetch_command(&handle,
+        let (mut completed, workflows) = run_direct_fetch_command(&mut fixture,
             json!({"id":3,"sessionId":"SID-direct-fetch","method":format!("Fetch.{method}"),"params":params})
         ).await;
         assert!(
@@ -740,7 +770,7 @@ async fn fetch_document_continuations_complete_with_direct_state_and_no_mailbox(
                         .unwrap()
             );
             assert!(!completed.iter().any(|message| message["id"] == 2));
-            let (response, workflows) = run_direct_fetch_command(&handle,
+            let (response, workflows) = run_direct_fetch_command(&mut fixture,
                 json!({"id":4,"sessionId":"SID-direct-fetch","method":"Fetch.continueResponse","params":{"requestId":response_id,"responseCode":201,"responseHeaders":[{"name":"Content-Type","value":"text/html"}]}})
             ).await;
             assert!(workflows > 0);
@@ -791,7 +821,7 @@ async fn fetch_document_continuations_complete_with_direct_state_and_no_mailbox(
             );
         } else {
             assert!(navigation.get("error").is_none(), "{navigation:?}");
-            let (evaluated, _) = run_direct_fetch_command(&handle,
+            let (evaluated, _) = run_direct_fetch_command(&mut fixture,
                 json!({"id":5,"sessionId":"SID-direct-fetch","method":"Runtime.evaluate","params":{"expression":"document.title","returnByValue":true}})
             ).await;
             assert_eq!(

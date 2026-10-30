@@ -453,10 +453,13 @@ impl RendererPageScriptEnvironment {
         }
     }
 
-    pub(super) fn inherit_window_identity(&self, host: &mut JsContextHost) {
+    pub(super) fn inherit_window_identity(&self, host: &mut JsContextHost) -> bool {
         if let Some(name) = self.inner.browsing_context_name.get() {
             host.bind_browsing_context_name(name.clone());
             host.bind_auxiliary_window(self.inner.auxiliary_window.get().cloned());
+            true
+        } else {
+            false
         }
     }
 

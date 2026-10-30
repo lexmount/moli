@@ -129,7 +129,12 @@ async fn finish(
                 let (events, _, _) = outcome.into_protocol_event_parts();
                 return events
                     .into_iter()
-                    .map(|event| event.into_protocol_message())
+                    .map(|event| {
+                        event
+                            .into_protocol_message()
+                            .into_json()
+                            .expect("scalar protocol fixture")
+                    })
                     .collect();
             }
             CdpCommandTaskStep::Pending(pending) => {
@@ -474,7 +479,12 @@ async fn auto_attach_multi_context_sweep_keeps_page_streams_independent() {
     );
     let messages = events
         .into_iter()
-        .map(|event| event.into_protocol_message())
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect::<Vec<_>>();
     success(&messages, 1920);
     let mut targets = messages

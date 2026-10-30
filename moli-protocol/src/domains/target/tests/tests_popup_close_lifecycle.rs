@@ -77,7 +77,7 @@ async fn assert_close_keeps_history_until_beforeunload_finishes(features: &str, 
             }))
             .await;
             let opener_id = take_created_target_id(&mut ctx, 1);
-            let context_id = ctx.conn.browser_context.as_ref().unwrap().id.clone();
+            let context_id = ctx.with_fixture(|conn| conn.browser_context.as_ref().unwrap().id.clone());
             ctx.wait_until_scheduler_state("close opener committed", |conn| {
                 conn.browser_context_by_id(&context_id)
                     .and_then(|context| loaded_page_for_target(context, &opener_id))
@@ -120,6 +120,16 @@ async fn assert_close_keeps_history_until_beforeunload_finishes(features: &str, 
                         .is_some_and(|context| context.page_target(&popup_id).is_none())
             })
             .await;
+            if !events.iter().any(|message| message["method"] == "Target.targetDestroyed"
+                && message["params"]["targetId"] == popup_id)
+            {
+                crate::testing::wait_until_scheduler_message(
+                    &mut ctx,
+                    "scripted popup close publishes its target retirement",
+                    |message| message["method"] == "Target.targetDestroyed"
+                        && message["params"]["targetId"] == popup_id,
+                ).await;
+            }
             events.extend(ctx.take_all());
             assert_eq!(events.iter().filter(|message| {
                 message["method"] == "Target.targetDestroyed"

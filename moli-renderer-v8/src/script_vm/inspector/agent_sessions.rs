@@ -339,6 +339,15 @@ impl RendererDevToolsAgentSessions {
             .map(|session| (Rc::clone(&session.session), session.outbound.clone()))
     }
 
+    pub(super) fn retire_notifications(&self) {
+        for session in self.frontend.values() {
+            session.outbound.retire_notifications();
+        }
+        if let Some(session) = &self.internal_runtime_evaluate {
+            session.outbound.retire_notifications();
+        }
+    }
+
     pub(super) fn deactivate_all(&self) {
         for session in self.frontend.values() {
             session.outbound.deactivate();

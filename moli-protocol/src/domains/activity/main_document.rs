@@ -1578,9 +1578,11 @@ mod tests {
                 .unwrap();
             let (events, _) = outcome.into_protocol_event_parts();
             assert!(
-                events
-                    .into_iter()
-                    .any(|event| event.into_protocol_message()["method"] == "Page.loadEventFired"),
+                events.into_iter().any(|event| event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")["method"]
+                    == "Page.loadEventFired"),
                 "the original load boundary reaches its output handoff"
             );
             let duplicate = pending.wait().await;

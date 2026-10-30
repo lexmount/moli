@@ -444,6 +444,7 @@ mod tests {
             .pop()
             .expect("runtime deferred output should contain the raw event")
             .into_parts();
+        let message = message.into_json().expect("scalar protocol fixture");
 
         assert_eq!(message["method"], json!("Page.fileChooserOpened"));
         assert_eq!(message["sessionId"], json!("SID-runtime"));
@@ -469,7 +470,12 @@ mod tests {
         let responses = output
             .take_protocol_events_with_id(71)
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(

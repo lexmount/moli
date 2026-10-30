@@ -15,10 +15,7 @@ use crate::native_bridge::{
     NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntryId,
     NavigationHistoryEntryKey, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
 };
-use crate::{
-    document_runtime::DomHandle, native_bridge::node_runtime_and_handle_from_object,
-    util::context_host_ptr_from_window_object,
-};
+use crate::{document_runtime::DomHandle, util::context_host_ptr_from_window_object};
 
 pub(crate) fn capture_navigation_entry_seed_for_holder<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -319,22 +316,8 @@ pub(crate) fn current_document_referrer_policy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    let document = get_own_static_property(scope, owner, "document")
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    if let Ok((runtime_ptr, document_handle)) = node_runtime_and_handle_from_object(scope, document)
-    {
-        let runtime = unsafe { &*runtime_ptr };
-        return document_referrer_policy_for_native_document(runtime, document_handle)
-            .or_else(|| current_entry_referrer_policy(scope, owner));
-    }
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let document_handle = crate::native_bridge::document::detached_native_handle_for_runtime(
-        scope,
-        runtime_ptr,
-        document,
-    )?;
-    let runtime = unsafe { &*runtime_ptr };
-    document_referrer_policy_for_native_document(runtime, document_handle)
+    let (runtime_ptr, document_handle) = navigation_owner_native_document(scope, owner)?;
+    document_referrer_policy_for_native_document(unsafe { &*runtime_ptr }, document_handle)
         .or_else(|| current_entry_referrer_policy(scope, owner))
 }
 
@@ -369,27 +352,21 @@ pub(super) fn current_document_content_security_policies<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> Vec<ContentSecurityPolicy> {
-    let Some(document) = get_own_static_property(scope, owner, "document")
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return Vec::new();
-    };
-    if let Ok((runtime_ptr, document_handle)) = node_runtime_and_handle_from_object(scope, document)
-    {
-        return unsafe { &*runtime_ptr }
-            .meta_content_security_policies_for_document(document_handle);
-    }
-    let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return Vec::new();
-    };
-    let Some(document_handle) = crate::native_bridge::document::detached_native_handle_for_runtime(
-        scope,
-        runtime_ptr,
-        document,
-    ) else {
-        return Vec::new();
-    };
-    unsafe { &*runtime_ptr }.meta_content_security_policies_for_document(document_handle)
+    navigation_owner_native_document(scope, owner).map_or_else(Vec::new, |(runtime, document)| {
+        unsafe { &*runtime }.meta_content_security_policies_for_document(document)
+    })
+}
+
+// Window.document is a native cached accessor. Policy inheritance resolves the
+// receiver's own native Document without evaluating author-visible properties.
+fn navigation_owner_native_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> Option<(*mut crate::native_bridge::JsContextHost, DomHandle)> {
+    let runtime = super::window_accessors::window_host_ptr(scope, owner)?;
+    let document =
+        super::window_accessors::window_document_handle(scope, owner, unsafe { &*runtime })?;
+    Some((runtime, document))
 }
 
 fn current_entry_referrer_policy<'s>(

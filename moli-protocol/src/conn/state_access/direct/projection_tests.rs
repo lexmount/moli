@@ -121,7 +121,12 @@ fn finish(
             (
                 events
                     .into_iter()
-                    .map(|event| event.into_protocol_message())
+                    .map(|event| {
+                        event
+                            .into_protocol_message()
+                            .into_json()
+                            .expect("scalar protocol fixture")
+                    })
                     .collect(),
                 take_work(work),
             )

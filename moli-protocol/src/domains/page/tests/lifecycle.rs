@@ -291,25 +291,9 @@ async fn install_runtime_document_replacement_test_page(ctx: &mut TestContext) -
         .build_fixture_navigation("data:text/html,<body>initial</body>", Some("SID-1"))
         .await
         .expect("runtime replacement fixture page should load");
-    let artifacts = navigation.page_creation_artifacts;
-    ctx.with_fixture(|conn| {
-        conn.browser_context
-            .as_mut()
-            .expect("runtime replacement fixture browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(navigation.page)
-    });
-    let (binding, initial_events) = ctx.with_fixture(|conn| {
-        conn.bind_renderer_document_lifecycle_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-1"),
-            artifacts,
-            None,
-            "TID-1".to_owned(),
-            LOADER_ID.to_owned(),
-        )
-    });
-    assert!(binding.is_some());
+    let initial_events = ctx
+        .install_loaded_navigation_fixture_for_session_owner(navigation, Some("SID-1"))
+        .await;
     assert_eq!(
         initial_events.len(),
         2,

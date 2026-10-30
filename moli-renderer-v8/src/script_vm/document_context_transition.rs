@@ -127,7 +127,7 @@ impl ScriptVm {
                 .is_empty(),
             "replacing an Inspector must retire prebootstrapped descendant realms"
         );
-        self.detach_default_inspector_context_for_context_teardown();
+        self.retire_inspector_context_for_replacement();
         std::mem::swap(&mut self.page_inspector, &mut bootstrap.page_inspector);
         // Destroy the old registrations before publishing this same retained
         // V8 Context. A later context_destroyed would erase the new binding.

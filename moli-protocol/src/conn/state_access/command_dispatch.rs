@@ -724,7 +724,7 @@ impl ProtocolWorkflowState<'_> {
         completed: CompletedCommandWorkflow,
         id: u64,
         context: &mut CommandWorkflowContext,
-    ) -> Option<serde_json::Value> {
+    ) -> Option<moli_protocol_cdp::CdpMessage> {
         let outcome = finish_command(self.connection, completed, Some(context.context_mut()));
         let (events, after, boundary, post, scheduler, predecessor) =
             outcome.into_renderer_owner_turn_parts();

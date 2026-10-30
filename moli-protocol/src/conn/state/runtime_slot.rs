@@ -61,6 +61,15 @@ struct PreparedDocumentOutput {
     binding: CommittedRendererDocumentBinding,
 }
 
+/// A reserved replacement agent does not retire the source Document yet.
+/// Its synchronous unload prefix remains observable until the replacement's
+/// native Started fact crosses the same FIFO stream.
+#[derive(Debug)]
+struct OutgoingRendererDocumentOutput {
+    document: RendererDocumentLifecycleIdentity,
+    attachment: RendererAgentAttachment,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct TargetRuntimeSlot {
     page_slot: TargetPageSlot,
@@ -70,6 +79,7 @@ pub(crate) struct TargetRuntimeSlot {
     javascript_dialog_scope: TargetJavaScriptDialogScope,
     network_agent: TargetNetworkAgentState,
     prepared_document_output: Option<PreparedDocumentOutput>,
+    outgoing_document_output: Option<OutgoingRendererDocumentOutput>,
     retiring_renderer_document_outputs: Vec<RetiringRendererDocumentOutput>,
     last_started_output_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
     log_output_queue: TargetLogOutputQueueState,
@@ -321,6 +331,7 @@ impl TargetRuntimeSlot {
     ) -> Option<Page> {
         self.javascript_dialog_scope.retire();
         self.prepared_document_output = None;
+        self.outgoing_document_output = None;
         let previous = self.page_slot.replace_loaded_page_with_reason(None, reason);
         self.transition_renderer_channel_for_page_absence(reason);
         self.reset_document_output_state();
@@ -352,6 +363,7 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn mark_loaded_page_absent(&mut self, reason: TargetPageAbsenceReason) {
         self.javascript_dialog_scope.retire();
+        self.outgoing_document_output = None;
         self.page_slot.mark_loaded_page_absent(reason);
         self.transition_renderer_channel_for_page_absence(reason);
     }
@@ -479,10 +491,32 @@ impl TargetRuntimeSlot {
             .page_slot
             .bind_pending_document_navigation_renderer_page(transaction.navigation(), renderer_page)
         {
+            if self.outgoing_document_output.is_none()
+                && let Some(attachment) = transaction.previous()
+                && self.page_slot.loaded_page().is_some_and(|page| {
+                    page.renderer_agent_attachment_id() == Some(attachment.id())
+                        && page.renderer_devtools_agent_token() == attachment.agent_token()
+                })
+                && let Some(binding) = self.page_slot.renderer_document_lifecycle_binding()
+            {
+                self.outgoing_document_output = Some(OutgoingRendererDocumentOutput {
+                    document: binding.renderer_document_identity(),
+                    attachment,
+                });
+            }
             return Ok(transaction);
         }
         self.devtools_renderer_channel
             .rollback_committed_candidate(transaction)?;
+        if self
+            .outgoing_document_output
+            .as_ref()
+            .is_some_and(|output| {
+                self.devtools_renderer_channel.current() == Some(output.attachment)
+            })
+        {
+            self.outgoing_document_output = None;
+        }
         Err(DevToolsRendererChannelError::CommittedCandidateMismatch)
     }
 
@@ -495,6 +529,15 @@ impl TargetRuntimeSlot {
             .rollback_committed_candidate(transaction)?;
         self.page_slot
             .clear_pending_document_navigation_if_loader_matches(&loader_id);
+        if self
+            .outgoing_document_output
+            .as_ref()
+            .is_some_and(|output| {
+                self.devtools_renderer_channel.current() == Some(output.attachment)
+            })
+        {
+            self.outgoing_document_output = None;
+        }
         Ok(())
     }
 
@@ -551,8 +594,35 @@ impl TargetRuntimeSlot {
         attachment_id: RendererAgentAttachmentId,
         batches: Vec<RendererRuntimeInspectorMessageBatch>,
     ) -> Result<Vec<RendererRuntimeInspectorMessageBatch>, DevToolsRendererChannelError> {
+        if let Some(output) = &self.outgoing_document_output
+            && output.attachment.id() == attachment_id
+            && !self.devtools_renderer_channel.is_closed()
+            && batches
+                .iter()
+                .all(|batch| batch.agent_token == output.attachment.agent_token())
+        {
+            return Ok(batches);
+        }
         self.devtools_renderer_channel
             .route_current_output(attachment_id, batches)
+    }
+
+    pub(crate) fn renderer_output_attachment_for_agent(
+        &self,
+        agent: RendererDevToolsAgentToken,
+    ) -> Option<RendererAgentAttachment> {
+        if self.devtools_renderer_channel.is_closed() {
+            return None;
+        }
+        self.devtools_renderer_channel
+            .current()
+            .filter(|attachment| attachment.agent_token() == agent)
+            .or_else(|| {
+                self.outgoing_document_output
+                    .as_ref()
+                    .map(|output| output.attachment)
+                    .filter(|attachment| attachment.agent_token() == agent)
+            })
     }
 
     pub(crate) fn finish_renderer_document_navigation(
@@ -629,6 +699,16 @@ impl TargetRuntimeSlot {
         &mut self,
         document: moli_core::RendererDocumentLifecycleIdentity,
     ) {
+        if self
+            .outgoing_document_output
+            .as_ref()
+            .is_some_and(|output| {
+                output.document.frame == document.frame
+                    && output.document.document != document.document
+            })
+        {
+            self.outgoing_document_output = None;
+        }
         self.last_started_output_document = Some(document);
         // A replacement VM starts only after its predecessor has retired its
         // producers and journaled their final synchronous output. The stable

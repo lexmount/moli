@@ -906,11 +906,11 @@ impl TestContext {
         navigation.commit(permit, configuration).await
     }
 
-    async fn install_loaded_navigation_fixture_for_session_owner(
+    pub(crate) async fn install_loaded_navigation_fixture_for_session_owner(
         &mut self,
         navigation: crate::conn::LoadedNavigation,
         session_id: Option<&str>,
-    ) {
+    ) -> Vec<moli_core::page::RendererDocumentLifecycleEvent> {
         let owner =
             self.with_fixture(|conn| crate::conn::CommandOwnerScope::capture(conn, session_id));
         let (_, target_id) = self.with_fixture(|conn| {
@@ -954,7 +954,7 @@ impl TestContext {
                 &final_url,
             )
         });
-        let (binding, _) = self.with_fixture(|conn| {
+        let (binding, initial_events) = self.with_fixture(|conn| {
             conn.bind_renderer_document_lifecycle_for_owner(
                 &owner,
                 page_creation_artifacts,
@@ -981,6 +981,7 @@ impl TestContext {
             self.route_renderer_output_predecessor_before_command_response(predecessor)
                 .await;
         }
+        initial_events
     }
 
     /// Feed a JSON-serialisable message through the async CDP entrypoint and
@@ -2299,7 +2300,11 @@ impl TestContext {
                     .drain(..position)
                     .filter_map(BackgroundProtocolEvent::into_wire_message),
             );
-            let message = events.remove(0).into_protocol_message().into_json().expect("scalar protocol fixture");
+            let message = events
+                .remove(0)
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture");
             let Some(command_id) = message.get("id").and_then(Value::as_u64) else {
                 self.sent.push(message);
                 continue;
@@ -2767,7 +2772,13 @@ pub(crate) fn protocol_events_into_internal_messages(
     events
         .into_iter()
         .filter(BackgroundProtocolEvent::has_protocol_wire_message)
-        .map(|event| event.into_parts().0.into_json().expect("scalar protocol fixture"))
+        .map(|event| {
+            event
+                .into_parts()
+                .0
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect()
 }
 

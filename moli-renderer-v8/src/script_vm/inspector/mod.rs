@@ -133,6 +133,10 @@ impl DocumentInspectorBinding {
         self.agent.dom_debugger_pause_scheduler()
     }
 
+    pub(crate) fn retire_notifications_for_replacement(&self) {
+        self.agent.retire_notifications();
+    }
+
     pub(crate) fn deactivate_page_vm_binding_for_teardown(&mut self) {
         self.agent.deactivate_all_routes();
     }

@@ -363,6 +363,10 @@ impl RendererDevToolsAgent {
         self.state.borrow().sessions.frontend_routes()
     }
 
+    pub(super) fn retire_notifications(&self) {
+        self.state.borrow().sessions.retire_notifications();
+    }
+
     pub(super) fn deactivate_all_routes(&self) {
         self.state.borrow().sessions.deactivate_all();
     }

@@ -14,6 +14,26 @@ mod workflow;
 pub use task::{CompletedProtocolSchedulerWork, PendingProtocolSchedulerWork};
 
 impl CdpConnection {
+    pub(crate) fn renderer_output_projection_receipt(
+        &mut self,
+        predecessor: moli_core::RendererOutputFence,
+        target_id: Option<String>,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (projected, receipt) = tokio::sync::oneshot::channel();
+        let sequence = self
+            .scheduler_state
+            .allocate_protocol_work_publish_sequence();
+        let work = crate::domains::activity::ProtocolSchedulerWork::renderer_projection_receipt(
+            sequence,
+            predecessor,
+            target_id,
+            projected,
+        );
+        self.scheduler_state
+            .push_scheduler_event(super::CdpSchedulerEvent::ProtocolWorkPublished { work });
+        receipt
+    }
+
     /// Barrier admission and renderer-call registration belong to this same
     /// connection. The adapter owns only the move-only response permit.
     pub fn admit_runtime_command_output_barrier(
@@ -259,7 +279,7 @@ impl CdpConnection {
                         .all(|fence| self.renderer_output_cursor_is_projected(fence.cursor())),
                     "materialized protocol output cannot cross its concrete renderer predecessor"
                 );
-                output.events
+                output.finish()
             }
             ReadyProtocolSchedulerWork::ProtocolObservation(work) => {
                 work.into_background_events(self)
