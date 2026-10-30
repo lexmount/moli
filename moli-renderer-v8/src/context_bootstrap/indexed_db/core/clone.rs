@@ -9,15 +9,17 @@ use crate::structured_clone::{
 };
 use crate::{
     context_bootstrap::{
-        FileSystemHandleDurablePayload, build_file_list_object, build_file_system_handle_from_durable_payload, file_list_files_from_object,
+        FileSystemHandleDurablePayload, build_file_list_object,
+        build_file_system_handle_from_durable_payload, file_list_files_from_object,
         file_system_handle_clone_payload_from_object,
         file_system_handle_durable_payload_from_object, image_data_clone_payload_from_object,
     },
     structured_clone::{
         BlobClonePayload, HOST_OBJECT_TAG_BLOB, HOST_OBJECT_TAG_CRYPTO_KEY,
-        HOST_OBJECT_TAG_FILE_LIST, HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE, HOST_OBJECT_TAG_IMAGE_DATA, HOST_OBJECT_TAG_IMAGE_DATA_GRAPH,
-        blob_clone_payload_from_object, read_crypto_key_payload, read_image_data_payload, read_image_data_graph_payload,
-        write_crypto_key_payload, write_image_data_payload,
+        HOST_OBJECT_TAG_FILE_LIST, HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE, HOST_OBJECT_TAG_IMAGE_DATA,
+        HOST_OBJECT_TAG_IMAGE_DATA_GRAPH, blob_clone_payload_from_object, read_crypto_key_payload,
+        read_image_data_graph_payload, read_image_data_payload, write_crypto_key_payload,
+        write_image_data_payload,
     },
 };
 use crate::{
@@ -25,8 +27,9 @@ use crate::{
         build_web_transport_error_from_clone_payload, web_transport_error_clone_payload_from_object,
     },
     structured_clone::{
-        HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR, read_web_transport_error_payload,
-        write_web_transport_error_payload, HOST_OBJECT_TAG_IMAGE_BITMAP, read_image_bitmap_payload, write_image_bitmap_payload,
+        HOST_OBJECT_TAG_IMAGE_BITMAP, HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR,
+        read_image_bitmap_payload, read_web_transport_error_payload, write_image_bitmap_payload,
+        write_web_transport_error_payload,
     },
 };
 use moli_indexeddb::{IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind};
@@ -394,7 +397,10 @@ impl IndexedDbStructuredCloneDeserializer<'_> {
             return Some(v8::Local::new(scope, object));
         }
         let external = self.external_objects.get(index as usize).filter(|object| {
-            matches!(object, IndexedDbExternalObject::Blob { .. } | IndexedDbExternalObject::File { .. })
+            matches!(
+                object,
+                IndexedDbExternalObject::Blob { .. } | IndexedDbExternalObject::File { .. }
+            )
         })?;
         if let Err(error) = self.external_object_cache.borrow_mut().try_reserve(1) {
             self.objects.borrow_mut().error = Some(IndexedDbError::Resource(error.to_string()));
@@ -403,7 +409,9 @@ impl IndexedDbStructuredCloneDeserializer<'_> {
         self.objects.borrow_mut().reserve_blob()?;
         let (object, id) = build_blob_from_external_object(scope, external)?;
         self.objects.borrow_mut().blobs.push(id);
-        self.external_object_cache.borrow_mut().insert(index, v8::Global::new(scope, object));
+        self.external_object_cache
+            .borrow_mut()
+            .insert(index, v8::Global::new(scope, object));
         Some(object)
     }
 }

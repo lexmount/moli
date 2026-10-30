@@ -16,7 +16,9 @@ pub(crate) fn register_worker_blob_read_task(
         ready.lock().push_back(id);
         wake.send(()).is_ok()
     });
-    state.pending_file_reading_tasks.insert(id, crate::context_bootstrap::FileReadingTask::Blob(task));
+    state
+        .pending_file_reading_tasks
+        .insert(id, crate::context_bootstrap::FileReadingTask::Blob(task));
     Some(complete)
 }
 
