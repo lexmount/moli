@@ -189,12 +189,37 @@ pub(in crate::native_bridge::document) fn build_detached_document_clone_shell<'s
 
     // Start with an empty, inert Document. Only the metadata required by the
     // DOM cloning algorithm is inherited, before any cloned children are added.
-    let cloned = new_detached_document_shell(scope, &kind, &content_type, url, false, DetachedDocumentBuildContext::Windowless)?;
-    set_detached_document_parse_metadata(scope, cloned, quirks_mode, &character_set, allow_declarative_shadow_roots)?;
+    let cloned = new_detached_document_shell(
+        scope,
+        &kind,
+        &content_type,
+        url,
+        false,
+        DetachedDocumentBuildContext::Windowless,
+    )?;
+    set_detached_document_parse_metadata(
+        scope,
+        cloned,
+        quirks_mode,
+        &character_set,
+        allow_declarative_shadow_roots,
+    )?;
     let clone_handle = detached_native_handle_for_runtime(scope, runtime_ptr, cloned)?;
-    if !unsafe { &mut *runtime_ptr }.dom_host_mut().initialize_document_clone_metadata(clone_handle, &document) {
+    if !unsafe { &mut *runtime_ptr }
+        .dom_host_mut()
+        .initialize_document_clone_metadata(clone_handle, &document)
+    {
         return None;
     }
+    // Chromium's web Document clones use their copied URL/about base URL once
+    // a copied <base> is removed. Do not expose the native DOM clone helper's
+    // stricter frozen computed-base override through this browser surface.
+    unsafe { &mut *runtime_ptr }
+        .dom_host_mut()
+        .node_mut(clone_handle)?
+        .data_mut()
+        .as_document_mut()?
+        .set_base_url_override(None);
     inherit_detached_document_origin(scope, cloned, source);
     Some(cloned)
 }

@@ -2,7 +2,6 @@ use super::super::*;
 use crate::native_bridge::document::{
     parse_import_node_options, validate_registry_association_for_document,
 };
-use crate::native_bridge::node_runtime_and_handle_from_object_or_detached;
 use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 use crate::util::context_host_ptr_from_global_bridge;
 use crate::web_api_interfaces;
