@@ -253,7 +253,7 @@ async fn indexed_db_key_ranges_protect_bounds_and_validate_receivers() -> Result
         assert_eq!(result["state"], "pass", "{target}: {result}");
         assert_eq!(
             result["checks"].as_array().unwrap().len(),
-            if target == "worker" { 317 } else { 329 },
+            if target == "worker" { 341 } else { 353 },
             "{target}: {result}"
         );
     }
@@ -695,7 +695,7 @@ async fn indexed_db_writes_clone_before_key_paths_and_snapshot_queued_values() -
         assert_eq!(result["state"], "pass", "{target}: {result}");
         assert_eq!(
             result["checks"].as_array().unwrap().len(),
-            165,
+            181,
             "{target}: {result}"
         );
     }

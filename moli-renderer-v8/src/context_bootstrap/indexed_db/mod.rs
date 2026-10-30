@@ -152,7 +152,8 @@ pub(in crate::context_bootstrap) fn new_dom_string_list<'s>(
 ) -> v8::Local<'s, v8::Object> {
     super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "DOMStringList")
         .expect("DOMStringList constructor should materialize before creating an instance");
-    new_idb_dom_string_list(scope, values)
+    let names = values.iter().map(IndexedDbName::from).collect::<Vec<_>>();
+    new_idb_dom_string_list(scope, &names)
 }
 
 pub(in crate::context_bootstrap) use self::core::indexed_db_usage_bytes_for_storage_key;

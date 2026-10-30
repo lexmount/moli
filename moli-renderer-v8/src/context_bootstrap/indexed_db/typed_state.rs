@@ -999,6 +999,7 @@ pub(super) fn release_indexed_db_transaction_dispatch_refs<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
 ) {
+    super::core::release_schema_handle_caches(scope, transaction);
     let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
         return;
     };

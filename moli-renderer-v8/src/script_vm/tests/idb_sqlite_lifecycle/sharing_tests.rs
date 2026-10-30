@@ -42,11 +42,13 @@ async fn idb_sqlite_metadata_is_shared_across_aliases_realms_and_readonly_commit
             .concat(Array.from({length:64}, () => realm.IDBTransaction.prototype.objectStore.call(tx,'records')));
         globalThis.indexAliases = aliases.map(store => store.index('compound'));
         return [Object.getPrototypeOf(indexAliases[0].keyPath) === Array.prototype,
-            Object.getPrototypeOf(indexAliases[64].keyPath) === realm.Array.prototype,
-            indexAliases[0].keyPath !== indexAliases[1].keyPath].join(',');
+            Object.getPrototypeOf(indexAliases[64].keyPath) === Array.prototype,
+            aliases.every(store => store === aliases[0]) &&
+            indexAliases.every(index => index === indexAliases[0]) &&
+            indexAliases[0].keyPath === indexAliases[1].keyPath].join(',');
     })()"#).unwrap(), "true,true,true");
     let before = probe(&mut vm);
-    assert_eq!([before.store_handles, before.index_handles], [128, 128]);
+    assert_eq!([before.store_handles, before.index_handles], [1, 1]);
     assert_eq!(before.live_nodes(), [1, 1, 2]);
     backend.drain(&mut vm, &loader).await;
     // The same schema must survive a normal commit: refreshing surfaces must

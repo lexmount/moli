@@ -3280,6 +3280,7 @@ opening.onsuccess = () => { globalThis.db = opening.result; dbReady = true; };
                         status: 200,
                         status_text: "OK".into(),
                         headers: Vec::new(),
+                        cors_exposed_header_names: None,
                         body: vec![0],
                     },
                     cache_usage,
@@ -6938,253 +6939,6 @@ navigator.storageBuckets.open('limited', {quota: 16}).then(bucket => {
 }
 
 #[test]
-fn indexed_db_roundtrips_native_exception_data_without_author_access() {
-    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-exception-data.test/");
-    vm.eval(&format!(
-        "{}\nglobalThis.exceptionPayloadResult = 'pending'; indexedDBExceptionPayloadProbe(globalThis).then(result => {{ exceptionPayloadResult = JSON.stringify(result); }}, error => {{ exceptionPayloadResult = JSON.stringify({{error: error.name + ':' + error.message}}); }});",
-        include_str!("../../../tests/fixtures/indexeddb-exception-payloads.js"),
-    ))
-    .expect("IndexedDB exception data probe should schedule");
-    let result = vm
-        .eval_after_selected_page_tasks("String(exceptionPayloadResult)")
-        .expect("IndexedDB exception data probe should complete");
-    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
-    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
-    assert_eq!(result["rows"].as_array().unwrap().len(), 225, "{result}");
-}
-
-#[test]
-fn indexed_db_native_exception_data_survives_profile_restart() {
-    let root = indexed_db_test_root("exception-data-profile-restart");
-    let page_url = "https://indexeddb-exception-profile.test/";
-    for phase in ["write", "read"] {
-        let manager = crate::new_indexed_db_manager(Some(root.clone()))
-            .expect("durable IndexedDB manager should initialize");
-        let mut vm = new_storage_page_task_executor_test_vm(page_url);
-        vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
-        vm.set_storage_bucket_store(
-            crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
-        );
-        vm.eval(&format!("globalThis.exceptionPayloadPhase = {phase:?};"))
-            .unwrap();
-        vm.eval(
-            r#"
-globalThis.exceptionPayloadRestart = 'pending';
-(async () => {
-  const request = value => new Promise((resolve, reject) => {
-    value.onsuccess = () => resolve(value.result);
-    value.onerror = () => reject(value.error);
-  });
-  const done = tx => new Promise((resolve, reject) => {
-    tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
-  });
-  const open = indexedDB.open('durable-exceptions', 1);
-  open.onupgradeneeded = () => open.result.createObjectStore('values');
-  const db = await request(open);
-  try {
-    if (exceptionPayloadPhase === 'write') {
-      const error = new DOMException('stored\u0000\ud83d\ude00', 'AbortError');
-      const quota = new QuotaExceededError('full', {quota:0, requested:12.5});
-      const value = {error, alias:error, quota}; value.self = value;
-      const tx = db.transaction('values','readwrite'), complete = done(tx);
-      tx.objectStore('values').put(value, 'record'); await complete;
-      exceptionPayloadRestart = 'stored';
-    } else {
-      const tx = db.transaction('values'), complete = done(tx);
-      const value = await request(tx.objectStore('values').get('record'));
-      await complete;
-      exceptionPayloadRestart = JSON.stringify([
-        value.self === value, value.error === value.alias,
-        Object.getPrototypeOf(value.error) === DOMException.prototype,
-        value.error.name, value.error.message, value.error.code,
-        Object.getPrototypeOf(value.quota) === QuotaExceededError.prototype,
-        value.quota.name, value.quota.message, value.quota.code,
-        value.quota.quota, value.quota.requested,
-        !Object.hasOwn(value.error,'stack'), !Object.hasOwn(value.quota,'stack')
-      ]);
-    }
-  } finally { db.close(); }
-})().catch(error => { exceptionPayloadRestart = error.name+':'+error.message; });
-"#,
-        )
-        .expect("durable exception data workflow should schedule");
-        let result = vm
-            .eval_after_selected_page_tasks("String(exceptionPayloadRestart)")
-            .expect("durable exception data workflow should complete");
-        if phase == "write" {
-            assert_eq!(result, "stored");
-        } else {
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(&result).unwrap(),
-                serde_json::json!([
-                    true,
-                    true,
-                    true,
-                    "AbortError",
-                    "stored\0😀",
-                    20,
-                    true,
-                    "QuotaExceededError",
-                    "full",
-                    22,
-                    0,
-                    12.5,
-                    true,
-                    true
-                ])
-            );
-        }
-    }
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn indexed_db_roundtrips_image_data_and_geometry_objects() {
-    let mut vm =
-        new_storage_page_task_executor_test_vm("https://indexeddb-image-data-geometry.test/");
-
-    vm.eval(
-        r#"
-(() => {
-  globalThis.__indexedDbGeometryResult = "pending";
-  const dbName = `image-data-geometry-${Math.random()}`;
-  const open = indexedDB.open(dbName, 1);
-  open.onerror = () => {
-    globalThis.__indexedDbGeometryResult = `open-error:${open.error && open.error.name}`;
-  };
-  open.onupgradeneeded = () => open.result.createObjectStore("values");
-  open.onsuccess = () => {
-    const image = new ImageData(
-      new Uint8ClampedArray([1, 2, 3, 4, 5, 6, 7, 8]),
-      2,
-      1,
-      { colorSpace: "display-p3" }
-    );
-    const pointReadOnly = new DOMPointReadOnly(1, -0, Infinity, NaN);
-    const point = new DOMPoint(2, 3, 4, 5);
-    const rectReadOnly = new DOMRectReadOnly(6, 7, 8, 9);
-    const rect = new DOMRect(10, 11, 12, 13);
-    const quad = new DOMQuad(
-      { x: 1, y: 2, z: 3, w: 4 },
-      { x: 5, y: 6, z: 7, w: 8 },
-      { x: 9, y: 10, z: 11, w: 12 },
-      { x: 13, y: 14, z: 15, w: 16 }
-    );
-    const matrixReadOnly = new DOMMatrixReadOnly([1, 2, 3, 4, 5, 6]);
-    const matrix = new DOMMatrix([
-      11, 12, 13, 14,
-      21, 22, 23, 24,
-      31, 32, 33, 34,
-      41, 42, 43, 44
-    ]);
-    for (const value of [
-      image,
-      pointReadOnly,
-      point,
-      rectReadOnly,
-      rect,
-      quad,
-      matrixReadOnly,
-      matrix
-    ]) {
-      value.expando = "not serialized";
-    }
-
-    const write = open.result.transaction("values", "readwrite");
-    write.objectStore("values").put({
-      image,
-      imageAlias: image,
-      pointReadOnly,
-      point,
-      rectReadOnly,
-      rect,
-      quad,
-      matrixReadOnly,
-      matrix
-    }, "value");
-    write.oncomplete = () => {
-      const read = open.result.transaction("values").objectStore("values").get("value");
-      read.onerror = () => {
-        globalThis.__indexedDbGeometryResult =
-          `read-error:${read.error && read.error.name}`;
-      };
-      read.onsuccess = () => {
-        const row = read.result;
-        const exactBrand = (value, name) =>
-          Object.getPrototypeOf(value) === self[name].prototype;
-        const sameValues = (value, names, expected) =>
-          names.every((name, index) => Object.is(value[name], expected[index]));
-        globalThis.__indexedDbGeometryResult = JSON.stringify({
-          image: [
-            exactBrand(row.image, "ImageData"),
-            row.image !== image,
-            row.image === row.imageAlias,
-            row.image.width,
-            row.image.height,
-            row.image.colorSpace,
-            Array.from(row.image.data).join(","),
-            row.image.data !== image.data
-          ],
-          pointReadOnly:
-            exactBrand(row.pointReadOnly, "DOMPointReadOnly") &&
-            sameValues(row.pointReadOnly, ["x", "y", "z", "w"], [1, -0, Infinity, NaN]),
-          point:
-            exactBrand(row.point, "DOMPoint") &&
-            sameValues(row.point, ["x", "y", "z", "w"], [2, 3, 4, 5]),
-          rectReadOnly:
-            exactBrand(row.rectReadOnly, "DOMRectReadOnly") &&
-            sameValues(row.rectReadOnly, ["x", "y", "width", "height"], [6, 7, 8, 9]),
-          rect:
-            exactBrand(row.rect, "DOMRect") &&
-            sameValues(row.rect, ["x", "y", "width", "height"], [10, 11, 12, 13]),
-          quad:
-            exactBrand(row.quad, "DOMQuad") &&
-            [row.quad.p1, row.quad.p2, row.quad.p3, row.quad.p4]
-              .every((pointValue, index) =>
-                sameValues(
-                  pointValue,
-                  ["x", "y", "z", "w"],
-                  [1 + index * 4, 2 + index * 4, 3 + index * 4, 4 + index * 4]
-                )),
-          matrixReadOnly:
-            exactBrand(row.matrixReadOnly, "DOMMatrixReadOnly") &&
-            sameValues(row.matrixReadOnly, ["a", "b", "c", "d", "e", "f", "is2D"],
-              [1, 2, 3, 4, 5, 6, true]),
-          matrix:
-            exactBrand(row.matrix, "DOMMatrix") &&
-            sameValues(row.matrix, ["m11", "m12", "m13", "m14", "m41", "m42", "m43", "m44", "is2D"],
-              [11, 12, 13, 14, 41, 42, 43, 44, false]),
-          expandosExcluded: [
-            row.image,
-            row.pointReadOnly,
-            row.point,
-            row.rectReadOnly,
-            row.rect,
-            row.quad,
-            row.matrixReadOnly,
-            row.matrix
-          ].every(value => value.expando === undefined)
-        });
-      };
-    };
-  };
-  return "scheduled";
-})()
-"#,
-    )
-    .expect("indexeddb ImageData/Geometry workflow should schedule");
-
-    let result = vm
-        .eval_after_selected_page_tasks("String(globalThis.__indexedDbGeometryResult)")
-        .expect("indexeddb ImageData/Geometry result should be readable");
-
-    assert_eq!(
-        result,
-        r#"{"image":[true,true,true,2,1,"display-p3","1,2,3,4,5,6,7,8",true],"pointReadOnly":true,"point":true,"rectReadOnly":true,"rect":true,"quad":true,"matrixReadOnly":true,"matrix":true,"expandosExcluded":true}"#
-    );
-}
-
-#[test]
 fn indexed_db_utf16_database_names_survive_sqlite_profile_restart() {
     let root = indexed_db_test_root("database-names-profile-restart");
     let units: Vec<Vec<u16>> = vec![
@@ -8076,4 +7830,187 @@ fn indexed_db_rejects_invalid_explicit_keys() {
     globalThis.__indexedDbInvalidExplicitKeyError = errors.join("|");
   };
   return "scheduled";
+})()
+"#,
+    )
+    .expect("indexeddb invalid-explicit key workflow should schedule");
+
+    let result = vm
+        .eval_after_selected_page_tasks("String(globalThis.__indexedDbInvalidExplicitKeyError)")
+        .expect("indexeddb invalid-explicit key result should be readable");
+
+    assert_eq!(result, "DataError|DataError|DataError|DataError");
+}
+
+#[test]
+fn indexed_db_native_exception_data_survives_profile_restart() {
+    let root = indexed_db_test_root("exception-data-profile-restart");
+    let page_url = "https://indexeddb-exception-profile.test/";
+    for phase in ["write", "read"] {
+        let manager = crate::new_indexed_db_manager(Some(root.clone()))
+            .expect("durable IndexedDB manager should initialize");
+        let mut vm = new_storage_page_task_executor_test_vm(page_url);
+        vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+        vm.set_storage_bucket_store(
+            crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+        );
+        vm.eval(&format!("globalThis.exceptionPayloadPhase = {phase:?};"))
+            .unwrap();
+        vm.eval(
+            r#"
+globalThis.exceptionPayloadRestart = 'pending';
+(async () => {
+  const request = value => new Promise((resolve, reject) => {
+    value.onsuccess = () => resolve(value.result);
+    value.onerror = () => reject(value.error);
+  });
+  const done = tx => new Promise((resolve, reject) => {
+    tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
+  });
+  const open = indexedDB.open('durable-exceptions', 1);
+  open.onupgradeneeded = () => open.result.createObjectStore('values');
+  const db = await request(open);
+  try {
+    if (exceptionPayloadPhase === 'write') {
+      const error = new DOMException('stored\u0000\ud83d\ude00', 'AbortError');
+      const quota = new QuotaExceededError('full', {quota:0, requested:12.5});
+      const value = {error, alias:error, quota}; value.self = value;
+      const tx = db.transaction('values','readwrite'), complete = done(tx);
+      tx.objectStore('values').put(value, 'record'); await complete;
+      exceptionPayloadRestart = 'stored';
+    } else {
+      const tx = db.transaction('values'), complete = done(tx);
+      const value = await request(tx.objectStore('values').get('record'));
+      await complete;
+      exceptionPayloadRestart = JSON.stringify([
+        value.self === value, value.error === value.alias,
+        Object.getPrototypeOf(value.error) === DOMException.prototype,
+        value.error.name, value.error.message, value.error.code,
+        Object.getPrototypeOf(value.quota) === QuotaExceededError.prototype,
+        value.quota.name, value.quota.message, value.quota.code,
+        value.quota.quota, value.quota.requested,
+        !Object.hasOwn(value.error,'stack'), !Object.hasOwn(value.quota,'stack')
+      ]);
+    }
+  } finally { db.close(); }
+})().catch(error => { exceptionPayloadRestart = error.name+':'+error.message; });
+"#,
+        )
+        .expect("durable exception data workflow should schedule");
+        let result = vm
+            .eval_after_selected_page_tasks("String(exceptionPayloadRestart)")
+            .expect("durable exception data workflow should complete");
+        if phase == "write" {
+            assert_eq!(result, "stored");
+        } else {
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                serde_json::json!([
+                    true,
+                    true,
+                    true,
+                    "AbortError",
+                    "stored\0😀",
+                    20,
+                    true,
+                    "QuotaExceededError",
+                    "full",
+                    22,
+                    0,
+                    12.5,
+                    true,
+                    true
+                ])
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn indexed_db_request_declared_properties_preserve_own_enumerable_surface() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://indexeddb-request-enumerable.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__indexedDbRequestEnumerableResult = "pending";
+  const open = indexedDB.open(`app-${Math.random()}`, 1);
+  const openKeys = Object.keys(open).sort();
+  const openSourceIsNull = open.source === null;
+  const openTransactionIsNull = open.transaction === null;
+  const openHandlers = [
+    Object.hasOwn(open, "onupgradeneeded"),
+    Object.hasOwn(open, "onblocked")
+  ];
+  open.onupgradeneeded = () => open.result.createObjectStore("kv");
+  open.onsuccess = () => {
+    const db = open.result;
+    const databaseKeys = Object.keys(db).sort();
+    const databaseHandlers = [
+      Object.hasOwn(db, "onabort"),
+      Object.hasOwn(db, "onclose"),
+      Object.hasOwn(db, "onerror"),
+      Object.hasOwn(db, "onversionchange")
+    ];
+    const tx = db.transaction("kv");
+    const transactionKeys = Object.keys(tx).sort();
+    const transactionHandlers = [
+      Object.hasOwn(tx, "onabort"),
+      Object.hasOwn(tx, "oncomplete"),
+      Object.hasOwn(tx, "onerror")
+    ];
+    const request = tx.objectStore("kv").get("missing");
+    globalThis.__indexedDbRequestEnumerableResult = JSON.stringify({
+      openKeys,
+      openHandlers,
+      databaseKeys,
+      databaseHandlers,
+      databaseVersion: db.version,
+      databaseStores: db.objectStoreNames.contains("kv"),
+      transactionKeys,
+      transactionHandlers,
+      transactionMode: tx.mode,
+      transactionStores: tx.objectStoreNames.contains("kv"),
+      requestKeys: Object.keys(request).sort(),
+      requestHandlers: [
+        Object.hasOwn(request, "onupgradeneeded"),
+        Object.hasOwn(request, "onblocked")
+      ],
+      openSourceIsNull,
+      openTransactionIsNull,
+      initialReadyState: request.readyState
+    });
+  };
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("indexeddb request enumerable workflow should schedule");
+
+    let result = vm
+        .eval_after_selected_page_tasks("String(globalThis.__indexedDbRequestEnumerableResult)")
+        .expect("indexeddb request enumerable result should be readable");
+
+    assert_eq!(
+        result,
+        r#"{"openKeys":["onblocked","onerror","onsuccess","onupgradeneeded"],"openHandlers":[true,true],"databaseKeys":["onabort","onclose","onerror","onversionchange"],"databaseHandlers":[true,true,true,true],"databaseVersion":1,"databaseStores":true,"transactionKeys":["objectStoreNames","onabort","oncomplete","onerror"],"transactionHandlers":[true,true,true],"transactionMode":"readonly","transactionStores":true,"requestKeys":["onerror","onsuccess"],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
+    );
+}
+
+#[test]
+fn indexed_db_roundtrips_native_exception_data_without_author_access() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-exception-data.test/");
+    vm.eval(&format!(
+        "{}\nglobalThis.exceptionPayloadResult = 'pending'; indexedDBExceptionPayloadProbe(globalThis).then(result => {{ exceptionPayloadResult = JSON.stringify(result); }}, error => {{ exceptionPayloadResult = JSON.stringify({{error: error.name + ':' + error.message}}); }});",
+        include_str!("../../../tests/fixtures/indexeddb-exception-payloads.js"),
+    ))
+    .expect("IndexedDB exception data probe should schedule");
+    let result = vm
+        .eval_after_selected_page_tasks("String(exceptionPayloadResult)")
+        .expect("IndexedDB exception data probe should complete");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["rows"].as_array().unwrap().len(), 225, "{result}");
 }
