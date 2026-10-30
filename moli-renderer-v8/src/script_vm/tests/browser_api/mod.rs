@@ -53,6 +53,7 @@ mod notification_init;
 mod payload_event_init;
 mod performance;
 mod performance_memory;
+mod permissions_policy;
 mod platform_identity;
 mod pointer_capture;
 mod pointer_lock;
