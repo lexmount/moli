@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 use moli_layout::{
     FrozenLayoutTree, LayoutControlSurfaceHit, LayoutError, LayoutHit, LayoutPaintedSurfaceHit,
     LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutTransform2D,
@@ -7,7 +9,8 @@ use moli_layout::{
 use moli_layout::LayoutScrollbarHit;
 
 use super::provider::{
-    observable_geometry_batch, observable_hit_test_all, provider_contract_error,
+    observable_geometry_batch, observable_geometry_query, observable_hit_test_all,
+    provider_contract_error,
 };
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
@@ -26,6 +29,137 @@ pub(crate) struct InputHit {
 pub(crate) struct InputSurfaceHit {
     pub(crate) input: Option<InputHit>,
     pub(crate) control: Option<LayoutControlSurfaceHit<DomHandle>>,
+}
+
+/// Reuses hit-test transforms and retains the published snapshot for receivers
+/// in other frames. Sampling does not walk layout boxes or enumerate frames.
+pub(crate) struct InputFrameTransforms {
+    root_document: DomHandle,
+    tree: Option<Rc<FrozenLayoutTree<DomHandle>>>,
+    root_to_document: RefCell<smallvec::SmallVec<[(DomHandle, LayoutTransform2D); 1]>>,
+}
+
+impl InputFrameTransforms {
+    pub(crate) fn sample(
+        runtime: &JsContextHost,
+        hits: impl IntoIterator<Item = InputHit>,
+    ) -> Self {
+        let root_document = runtime.document_handle();
+        let transforms = hits
+            .into_iter()
+            .filter_map(|hit| {
+                let document = runtime.dom_host().owner_document_handle(hit.handle)?;
+                (document != root_document).then_some((document, hit.root_to_frame))
+            })
+            .collect();
+        Self {
+            root_document,
+            tree: runtime.retain_latest_layout_tree(),
+            root_to_document: RefCell::new(transforms),
+        }
+    }
+
+    pub(crate) fn for_target(
+        &self,
+        runtime: &JsContextHost,
+        target: DomHandle,
+    ) -> LayoutTransform2D {
+        let Some(document) = runtime.dom_host().owner_document_handle(target) else {
+            return LayoutTransform2D::IDENTITY;
+        };
+        if document == self.root_document {
+            return LayoutTransform2D::IDENTITY;
+        }
+        if let Some((_, transform)) = self
+            .root_to_document
+            .borrow()
+            .iter()
+            .find(|(known, _)| *known == document)
+        {
+            return *transform;
+        }
+        // Only a receiver outside the hit-tested frames needs another geometry
+        // lookup. Query the retained snapshot, never live layout after callbacks.
+        let transform = if runtime.layout_policy().uses_real_layout() {
+            self.tree.as_ref().and_then(|tree| {
+                let root = runtime
+                    .dom_host()
+                    .dom()
+                    .document_element_handle_for_document(document)?;
+                Self::for_root_in_tree(tree, root, 0)
+            })
+        } else {
+            self.for_mock_document(runtime, document, 0)
+        }
+        // An unrendered or newly created frame has no sampled viewport. Root
+        // coordinates let capture/touch cleanup finish without a layout error.
+        .unwrap_or(LayoutTransform2D::IDENTITY);
+        self.root_to_document
+            .borrow_mut()
+            .push((document, transform));
+        transform
+    }
+
+    fn for_root_in_tree(
+        tree: &FrozenLayoutTree<DomHandle>,
+        root: DomHandle,
+        depth: usize,
+    ) -> Option<LayoutTransform2D> {
+        if tree.source_root() == root {
+            return Some(LayoutTransform2D::IDENTITY);
+        }
+        if depth >= CHILD_FRAME_DEPTH_LIMIT {
+            return None;
+        }
+        for frame in tree.embedded_frames() {
+            let Some(child_to_target) = Self::for_root_in_tree(&frame.tree, root, depth + 1) else {
+                continue;
+            };
+            // Inspect boxes only along the requested frame's ancestor chain.
+            let geometry = &tree
+                .boxes
+                .iter()
+                .rev()
+                .find(|layout_box| layout_box.principal_source == Some(frame.source))?
+                .geometry;
+            let viewport_to_local = tree
+                .coordinate_space(geometry.coordinate_space)?
+                .local_to_viewport
+                .inverse()?;
+            let parent_to_child =
+                LayoutTransform2D::translation(-geometry.content_box.x, -geometry.content_box.y)
+                    .concatenate(viewport_to_local);
+            return Some(child_to_target.concatenate(parent_to_child));
+        }
+        None
+    }
+
+    fn for_mock_document(
+        &self,
+        runtime: &JsContextHost,
+        document: DomHandle,
+        depth: usize,
+    ) -> Option<LayoutTransform2D> {
+        if document == self.root_document {
+            return Some(LayoutTransform2D::IDENTITY);
+        }
+        if depth >= CHILD_FRAME_DEPTH_LIMIT {
+            return None;
+        }
+        let frame = runtime.child_browsing_context_host_for_document_handle(document)?;
+        let parent = runtime.dom_host().owner_document_handle(frame)?;
+        let LayoutQueryAnswer::BoxModel(Some(model)) =
+            observable_geometry_query(runtime, parent, &LayoutQuery::BoxModel { source: frame })
+                .ok()?
+        else {
+            return None;
+        };
+        let origin = model.content.points[0];
+        Some(
+            LayoutTransform2D::translation(-origin.x, -origin.y)
+                .concatenate(self.for_mock_document(runtime, parent, depth + 1)?),
+        )
+    }
 }
 
 #[derive(Clone, Copy)]
