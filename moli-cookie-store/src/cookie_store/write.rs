@@ -226,6 +226,9 @@ impl CookieStore {
         {
             return Err(CookieError::SameSiteNoneRequiresSecure);
         }
+        if let Some(reason) = same_site_set_rejection_reason(&cookie, context) {
+            return Err(reason.into_cookie_error());
+        }
         if context.enforce_browser_policy
             && cookie_name_value_too_large(cookie.name(), cookie.value())
         {

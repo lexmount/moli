@@ -395,6 +395,11 @@ fn cookie_set_rejection_reason_to_str(reason: StoredCookieSetRejectionReason) ->
         StoredCookieSetRejectionReason::NonRelativeScheme => "NonRelativeScheme",
         StoredCookieSetRejectionReason::DomainMismatch => "DomainMismatch",
         StoredCookieSetRejectionReason::SameSiteNoneRequiresSecure => "SameSiteNoneRequiresSecure",
+        StoredCookieSetRejectionReason::SameSiteStrict => "SameSiteStrict",
+        StoredCookieSetRejectionReason::SameSiteLax => "SameSiteLax",
+        StoredCookieSetRejectionReason::SameSiteUnspecifiedTreatedAsLax => {
+            "SameSiteUnspecifiedTreatedAsLax"
+        }
         StoredCookieSetRejectionReason::PrefixViolation => "PrefixViolation",
         StoredCookieSetRejectionReason::SecureOverlay => "SecureOverlay",
         StoredCookieSetRejectionReason::NameValueTooLarge => "NameValueTooLarge",

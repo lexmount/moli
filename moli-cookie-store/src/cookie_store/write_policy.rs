@@ -62,6 +62,9 @@ pub(super) fn collect_preinsert_rejection_reasons(
     {
         reasons.push(CookieSetRejectionReason::SameSiteNoneRequiresSecure);
     }
+    if let Some(reason) = same_site_set_rejection_reason(cookie, context) {
+        reasons.push(reason);
+    }
     if context.enforce_browser_policy && cookie_name_value_too_large(cookie.name(), cookie.value())
     {
         reasons.push(CookieSetRejectionReason::NameValueTooLarge);
@@ -117,6 +120,29 @@ pub(super) fn collect_preinsert_rejection_reasons(
     }
 
     reasons
+}
+
+pub(super) fn same_site_set_rejection_reason(
+    cookie: &Cookie<'_>,
+    context: &InsertContext<'_>,
+) -> Option<CookieSetRejectionReason> {
+    if !context.enforce_browser_policy
+        || context.source == CookieAccessSource::Cdp
+        || (context.source == CookieAccessSource::Http
+            && context.request_type == HttpRequestType::TopLevelNavigation)
+        || matches!(
+            context.same_site_context.for_inclusion(),
+            SameSiteRequestContext::SameSiteStrict | SameSiteRequestContext::SameSiteLax
+        )
+    {
+        return None;
+    }
+    match cookie.same_site() {
+        Some(SameSite::None) => None,
+        Some(SameSite::Strict) => Some(CookieSetRejectionReason::SameSiteStrict),
+        Some(SameSite::Lax) => Some(CookieSetRejectionReason::SameSiteLax),
+        None => Some(CookieSetRejectionReason::SameSiteUnspecifiedTreatedAsLax),
+    }
 }
 
 pub(super) fn provisional_set_access_result() -> CookieSetAccessResult {
