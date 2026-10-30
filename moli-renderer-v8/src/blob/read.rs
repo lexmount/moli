@@ -94,6 +94,8 @@ fn settle<'s>(
             return;
         }
     };
+    let scope = std::pin::pin!(v8::TryCatch::new(scope));
+    let scope = &mut scope.init();
     let value = match format {
         BlobReadFormat::Text => {
             v8_string(scope, &moli_encoding::decode_utf8(&bytes)).map(Into::into)
@@ -103,6 +105,14 @@ fn settle<'s>(
     };
     if let Some(value) = value {
         let _ = resolver.resolve(scope, value);
+    } else {
+        let error = scope.exception().unwrap_or_else(|| {
+            let message = v8::String::new(scope, "Could not allocate Blob read result")
+                .unwrap_or_else(|| v8::String::empty(scope));
+            v8::Exception::error(scope, message)
+        });
+        scope.reset();
+        let _ = resolver.reject(scope, error);
     }
 }
 
@@ -133,6 +143,22 @@ pub(super) fn read_promise_in_owner<'s>(
         let scope = &mut v8::ContextScope::new(scope, owner);
         submit(scope, resolver, data, target);
     }
+    Some(promise)
+}
+
+/// Platform consumers govern their own promise delivery. Reading their RAM
+/// snapshots does not invoke the public Blob file-reading algorithm.
+pub(crate) fn read_internal_promise<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data: moli_file_api::BlobData,
+    format: BlobReadFormat,
+) -> Option<v8::Local<'s, v8::Promise>> {
+    let Some(bytes) = data.as_bytes() else {
+        return read_promise(scope, data, format);
+    };
+    let resolver = v8::PromiseResolver::new(scope)?;
+    let promise = resolver.get_promise(scope);
+    settle(scope, resolver, format, Ok(bytes.to_vec()));
     Some(promise)
 }
 
