@@ -83,7 +83,7 @@ fn set_response_cookie_str_with_access_result_reports_sanitized_attribute_warnin
     );
     assert_eq!(
         result.effective_same_site,
-        Some(CookieEffectiveSameSite::NoRestriction)
+        Some(CookieEffectiveSameSite::LaxAllowUnsafe)
     );
 
     let cookie = store
@@ -110,7 +110,7 @@ fn set_with_access_result_warns_when_secure_cookie_is_granted_on_localhost_http(
     );
     assert_eq!(
         result.effective_same_site,
-        Some(CookieEffectiveSameSite::NoRestriction)
+        Some(CookieEffectiveSameSite::LaxAllowUnsafe)
     );
 }
 
@@ -366,6 +366,7 @@ fn canonical_partitioned_cookie_with_explicit_key_is_stored() {
             priority: Some(CookiePriority::Medium),
             source_scheme: CookieSourceScheme::Secure,
             source_port: 443,
+            creation_time: None,
         },
         &request_url,
     )
@@ -407,6 +408,7 @@ fn set_canonical_cookie_with_context_round_trips_metadata() {
             priority: Some(CookiePriority::High),
             source_scheme: CookieSourceScheme::Secure,
             source_port: 443,
+            creation_time: None,
         },
         &InsertContext::http(&request_url),
     );
@@ -440,6 +442,7 @@ fn canonical_host_only_input_preserves_explicit_domain() {
             priority: Some(CookiePriority::Medium),
             source_scheme: CookieSourceScheme::Secure,
             source_port: 443,
+            creation_time: None,
         },
         &request_url,
     )
@@ -474,6 +477,7 @@ fn set_canonical_cookie_with_context_accepts_partitioned_cookie() {
             priority: Some(CookiePriority::Medium),
             source_scheme: CookieSourceScheme::Secure,
             source_port: 443,
+            creation_time: None,
         },
         &InsertContext::http(&request_url),
     );
