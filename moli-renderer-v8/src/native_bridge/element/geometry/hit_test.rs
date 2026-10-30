@@ -193,7 +193,7 @@ pub(crate) fn captured_frame_input_surface_hit_test(
         root_point,
         previous_root_to_frame,
         include_scrollbars,
-        true,
+        false,
     )
 }
 

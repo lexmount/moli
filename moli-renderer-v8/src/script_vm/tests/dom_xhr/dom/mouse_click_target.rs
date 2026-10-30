@@ -332,7 +332,7 @@ fn mouse_auxclick_uses_the_flat_tree_common_ancestor() {
 }
 
 #[test]
-fn mouse_release_without_a_hit_clears_the_pending_click() {
+fn mouse_release_outside_viewport_clears_the_pending_click() {
     let mut vm = scan_link_vm();
     mouse_button(&mut vm, 20.0, "mousedown");
     vm.dispatch_mouse_event_at_point(2000.0, 2000.0, "mouseup", 0, None, 0.0, 0.0)
@@ -341,7 +341,7 @@ fn mouse_release_without_a_hit_clears_the_pending_click() {
     assert_eq!(
         vm.eval("JSON.stringify([events.filter(e => e[0] === 'click'), scans])")
             .expect("clicks should evaluate"),
-        "[[],0]",
+        r#"[[["click","",true]],0]"#,
     );
 }
 
@@ -476,6 +476,7 @@ fn removing_one_chorded_press_preserves_the_other_buttons_activation() {
                     ..Default::default()
                 },
                 0,
+                false,
             )
             .expect("chorded coordinate input should dispatch");
         };

@@ -96,7 +96,7 @@ globalThis.__installFrameDragProbe = (origin, mode) => {
       lost:events.some(e=>e.type==='lostpointercapture'),pendingClear:!own.hasPointerCapture(state.id)});
     record('author-getters',{notRead:state.getterReads===0});
     const checks=rows.flatMap(r=>Object.values(r.checks));
-    return {events,rows,errors,state,complete:errors.length===0&&checks.every(v=>v===true),
+    return {origin,mode,events,rows,errors,state,complete:errors.length===0&&checks.every(v=>v===true),
       passed:checks.filter(v=>v===true).length,total:checks.length};
   }};
 };

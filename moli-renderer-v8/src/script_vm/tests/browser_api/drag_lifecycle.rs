@@ -25,6 +25,7 @@ fn dispatch_drag_lifecycle_input(
             ..Default::default()
         },
         modifiers,
+        false,
     )
     .unwrap();
 }
@@ -201,7 +202,7 @@ fn native_hover_keeps_mouse_and_pen_pointer_targets_independent() {
 }
 
 #[test]
-fn native_drop_uses_the_drop_handlers_effect_and_suppresses_text_input() {
+fn native_drop_separates_keyboard_suppression_from_explicit_text_insertion() {
     let mut vm = new_rendered_test_vm("https://drag-effect.test/", "<html><body></body></html>");
     vm.eval(&format!(
         "{}; globalThis.__dragResults=__installDragLifecycleProbe('drop',false,0);\n\
@@ -221,12 +222,12 @@ fn native_drop_uses_the_drop_handlers_effect_and_suppresses_text_input() {
         dispatch_drag_lifecycle_input(&mut vm, "mouse", 17, input);
     }
     vm.eval("globalThis.edit=document.createElement('input'); edit.value='keep'; document.body.appendChild(edit); edit.focus(); 'ready'").unwrap();
-    assert!(!vm.insert_text_into_active_control("ignored").unwrap());
+    assert!(vm.insert_text_into_active_control("inserted").unwrap());
     vm.dispatch_key_event("keydown", "x", "KeyX", "x", 0, false, true)
         .unwrap();
     assert_eq!(
         vm.eval("JSON.stringify([edit.value,keyEvents])").unwrap(),
-        "[\"keep\",[]]"
+        "[\"keepinserted\",[]]"
     );
     for input in [
         ("a", "mousemove", 320.0, 0, 1, 0),
@@ -237,7 +238,7 @@ fn native_drop_uses_the_drop_handlers_effect_and_suppresses_text_input() {
     }
     assert_eq!(vm.eval("endEffect").unwrap(), "link");
     vm.insert_text_into_active_control(" resumed").unwrap();
-    assert_eq!(vm.eval("edit.value").unwrap(), "keep resumed");
+    assert_eq!(vm.eval("edit.value").unwrap(), "keepinserted resumed");
 }
 
 #[test]
@@ -261,7 +262,7 @@ fn native_drag_cancels_the_source_when_first_movement_crosses_a_drop_zone() {
     }
     assert_eq!(
         vm.eval("JSON.stringify(cancelTargets)").unwrap(),
-        "[[\"source\",320,80,0.5]]"
+        "[[\"source\",320,80,0]]"
     );
     for input in [
         ("b", "mousemove", 520.0, 0, 1, 0),

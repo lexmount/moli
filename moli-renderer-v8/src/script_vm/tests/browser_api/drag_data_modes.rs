@@ -18,6 +18,7 @@ fn mode_input(vm: &mut ScriptVm, pointer_type: &str, input: (&str, f64, i32, u8)
             ..Default::default()
         },
         modifiers,
+        false,
     )
     .unwrap();
 }
@@ -155,7 +156,7 @@ fn external_drag_views_hide_payload_until_drop_and_keep_text_default_action() {
         vm.dispatch_drag_event_at_point(10.0, 10.0, event, data.clone(), 0)
             .unwrap();
     }
-    assert_eq!(vm.eval("JSON.stringify([observations,target.value,transfers.every(dt=>dt.items.length===0 && dt.types.length===0 && dt.getData('text/plain')==='')])").unwrap(), r#"[[["dragenter","",1,["text/plain"]],["",true],["dragover","",1,["text/plain"]],["",true],["drop","external",1,["text/plain"]],["external",true]],"external",true]"#);
+    assert_eq!(vm.eval("JSON.stringify([observations,target.value,transfers.every(dt=>dt.items.length===0 && dt.types.length===0 && dt.getData('text/plain')==='')])").unwrap(), r#"[[["dragenter","",1,["text/plain"]],["",true],["dragover","",1,["text/plain"]],["",true],["dragover","",1,["text/plain"]],["",true],["drop","external",1,["text/plain"]],["external",true]],"external",true]"#);
 }
 
 #[test]
@@ -186,8 +187,10 @@ fn external_file_drop_uses_backing_store_after_event_view_is_disabled() {
         directories: vec![],
         drag_operations_mask: 1,
     };
-    vm.dispatch_drag_event_at_point(10.0, 10.0, "drop", data, 0)
-        .unwrap();
+    for event in ["dragenter", "dragover", "drop"] {
+        vm.dispatch_drag_event_at_point(10.0, 10.0, event, data.clone(), 0)
+            .unwrap();
+    }
     assert_eq!(vm.eval("JSON.stringify([events,target.files[0].name,target.files[0].size,saved.files.length,payload.kind,payload.getAsFile()])").unwrap(),r#"[[[1,true,"upload.txt"],["input",0,0]],"upload.txt",8,0,"",null]"#);
 }
 
@@ -202,12 +205,12 @@ fn native_drag_event_views_use_each_target_documents_realm() {
           globalThis.child=frame.contentWindow;
           child.document.body.innerHTML='<div id="inside" style="position:absolute;left:0;top:0;width:160px;height:160px"></div>';
           const source={source};source.draggable=true;
-          globalThis.rows=[];globalThis.saved=[];
+          globalThis.rows=[];globalThis.saved=[];let sourceView;
           for(const [win,name] of [[window,'parent'],[child,'child']]) {{
             for(const type of ['dragstart','dragenter','dragover','drop','dragend']) win.document.addEventListener(type,event=>{{
               const dt=event.dataTransfer;
-              if(type==='dragstart') {{dt.setData('text/plain','realm-payload');dt.effectAllowed='copy';}}
-              rows.push([name,type,event instanceof win.DragEvent,dt instanceof win.DataTransfer,dt.items instanceof win.DataTransferItemList,dt.items[0] instanceof win.DataTransferItem,event.view===win,saved.every(old=>old.items.length===0 && old.types.length===0),dt.getData('text/plain')]);
+              if(type==='dragstart') {{sourceView=dt;dt.setData('text/plain','realm-payload');dt.effectAllowed='copy';}}
+              rows.push([name,type,event instanceof win.DragEvent,dt instanceof win.DataTransfer,dt.items instanceof win.DataTransferItemList,dt.items[0] instanceof win.DataTransferItem,event.view===win,saved.every(old=>old===sourceView ? old.items.length===1 && old.getData('text/plain')==='' : old.items.length===0 && old.types.length===0),dt.getData('text/plain')]);
               saved.push(dt);
               if(type==='dragenter'||type==='dragover') {{dt.dropEffect='copy';event.preventDefault();}}
               if(type==='drop') event.preventDefault();

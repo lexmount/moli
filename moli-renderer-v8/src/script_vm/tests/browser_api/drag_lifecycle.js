@@ -50,12 +50,15 @@ globalThis.__installDragLifecycleProbe = function(mode, capture, modifiers) {
     check('pointercancel count',after.filter(e=>e.type==='pointercancel').length,canceled?0:1);
     check('dragend count',ends.length,canceled?0:1);
     if(!canceled) {
-      check('input suppressed during drag',after.filter(e=>['pointermove','pointerrawupdate','pointerup','mousedown','mousemove','mouseup','click','keydown','keyup'].includes(e.type) && e.phase!=='after').map(e=>e.type),[]);
+      const dragEnd=after.findIndex(e=>e.type==='dragend');
+      const duringDrag=dragEnd<0?after:after.slice(0,dragEnd+1);
+      check('input suppressed during drag',duringDrag.filter(e=>['pointermove','pointerrawupdate','pointerup','mousedown','mousemove','mouseup','click','keydown','keyup'].includes(e.type)).map(e=>e.type),[]);
+      if(mode==='escape') check('physical release resumes after drag cancellation',after.slice(dragEnd+1).filter(e=>['pointerup','mouseup','click'].includes(e.type)).map(e=>e.type),['pointerup','mouseup']);
       const cancel=after.findIndex(e=>e.type==='pointercancel'), lost=after.findIndex(e=>e.type==='lostpointercapture'), out=after.findIndex(e=>e.type==='pointerout'&&e.target==='source'), leave=after.findIndex(e=>e.type==='pointerleave'&&e.target==='source');
       const continuation=after.findIndex(e=>['drag','dragenter','dragover','dragleave','drop','dragend'].includes(e.type));
       check('cancel then boundary events before DND continuation',cancel>=0 && out>cancel && leave>out && continuation>leave,true);
       check('capture release before boundary',capture?lost>cancel && out>lost && continuation>out:lost===-1,true);
-      check('pointercancel preserves last pointer geometry',after.filter(e=>e.type==='pointercancel').map(e=>[e.clientX,e.clientY,e.pressure]),[[100,80,0.5]]);
+      check('pointercancel preserves coordinates and clears pressure',after.filter(e=>e.type==='pointercancel').map(e=>[e.clientX,e.clientY,e.pressure]),[[100,80,0]]);
       check('pointercancel uncancelable',after.filter(e=>e.type==='pointercancel').map(e=>[e.cancelable,e.composed,e.trusted]),[[false,true,true]]);
       check('capture released',source.hasPointerCapture(pointerId),false);
       check('native dragend flags',ends.map(e=>[e.button,e.buttons,e.bubbles,e.cancelable,e.composed,e.trusted]),[[0,0,true,false,true,true]]);

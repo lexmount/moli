@@ -162,7 +162,7 @@ pub(crate) use animations::{
     dispatch_animation_start_scan, queue_animation_start_for_listener_target,
 };
 pub(crate) use geometry::{
-    compute_mock_client_rect, compute_mock_intersection_client_rect,
+    InputHit, compute_mock_client_rect, compute_mock_intersection_client_rect,
     compute_mock_intersection_scrollport_client_rect, scroll_node_into_view_if_needed,
 };
 pub(crate) use media::{install_text_track_template_bindings, resort_text_track_cues_for_cue};
@@ -209,8 +209,8 @@ pub(crate) use activation::{
     dispatched_click_activation_target, finish_legacy_activation_for_dispatched_click,
     perform_auxiliary_link_default_action, perform_click_default_action_for_dispatched_event,
     perform_drop_default_action, prepare_legacy_activation_for_dispatched_click,
-    replace_contenteditable_selection, scroll_to_document_fragment_target, scroll_to_url_fragment_or_top,
-    select_contenteditable_contents,
+    replace_contenteditable_selection, scroll_to_document_fragment_target,
+    scroll_to_url_fragment_or_top, select_contenteditable_contents,
 };
 pub(crate) use activation::{document_copy_command_supported, run_document_copy_command};
 pub(super) use activation::{
@@ -283,13 +283,14 @@ use events::construct_click_event;
 pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::construct_focus_event;
 pub(crate) use events::{
-    construct_activation_pointer_event, construct_clipboard_event, construct_form_data_event,
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType, TouchEventPoint,
-    construct_command_event, construct_drag_event_with_related_target, construct_drop_input_event,
-    construct_input_event, construct_interest_event, construct_keyboard_event,
-    construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_for_target,
+    construct_activation_pointer_event, construct_clipboard_event, construct_command_event,
+    construct_drag_event_with_related_target, construct_drop_input_event,
+    construct_form_data_event, construct_input_event, construct_interest_event,
+    construct_keyboard_event, construct_mouse_event_for_target,
+    construct_mouse_event_with_detail_and_modifiers,
     construct_mouse_event_with_related_target_for_target, construct_pointer_event,
-    construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
+    construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_for_target, construct_simple_event,
     construct_simple_event_for_target, construct_submit_event, construct_toggle_event,
     construct_touch_event_with_points, construct_wheel_event_for_target, dispatch_beforeinput,
@@ -297,7 +298,7 @@ pub(crate) use events::{
 };
 pub(crate) use focus::{
     apply_document_focus_fixup, contenteditable_editing_host, contenteditable_editing_host_in_dom,
-    focus_element, focus_live_element_for_inspector, focus_text_control_preserving_selection,
+    focus_element, focus_element_preserving_selection, focus_live_element_for_inspector,
     perform_access_key_default_action_for_dispatched_event,
     perform_hover_interest_default_action_for_dispatched_event, perform_mouse_focus_default_action,
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,
@@ -539,7 +540,7 @@ use html_elements::{
 pub(crate) use images::{
     apply_authorized_image_load_event_in_context, apply_image_attribute_mutation_plan,
     apply_image_relevant_mutations, image_intrinsic_dimensions, image_selected_request_key,
-    plan_image_attribute_mutation, plan_image_attribute_ns_mutation,
+    image_selected_source, plan_image_attribute_mutation, plan_image_attribute_ns_mutation,
     queue_image_load_event_after_document_adoption, queue_image_load_event_for_loading_change,
     queue_image_load_event_if_needed, queue_image_load_event_if_needed_with_initiator,
     queue_image_load_network_terminal_followup, queue_revealed_lazy_image_loads,
@@ -554,15 +555,14 @@ pub(in crate::native_bridge) use images::{
 };
 pub(in crate::native_bridge) use media::queue_text_track_load_if_source;
 pub(crate) use media::{
-    MediaLoadEventPhase, apply_default_text_track_mode_for_track, apply_text_track_load_task,
-    dispatch_media_load_event_phase, dispatch_media_seek_completion, dispatch_media_seeking_event,
-    dispatch_text_track_list_event,
+    MediaLoadEventPhase, apply_default_text_track_mode_for_track, apply_media_resource_selection,
+    apply_text_track_load_task, dispatch_media_load_event_phase, dispatch_media_seek_completion,
+    dispatch_media_seeking_event, dispatch_text_track_list_event,
     queue_default_text_track_mode_if_needed, queue_media_canplay_after_text_tracks,
-    queue_media_load_if_needed, queue_media_load_if_source_or_loading_change,
-    queue_media_load_network_terminal_followup, queue_revealed_lazy_media_loads,
-    queue_text_track_load_if_needed, queue_text_track_terminal_followup,
-    apply_media_resource_selection, queue_media_load_for_explicit_request,
-    seek_media_to,
+    queue_media_load_for_explicit_request, queue_media_load_if_needed,
+    queue_media_load_if_source_or_loading_change, queue_media_load_network_terminal_followup,
+    queue_revealed_lazy_media_loads, queue_text_track_load_if_needed,
+    queue_text_track_terminal_followup, seek_media_to,
 };
 pub(super) use media::{
     apply_default_text_track_modes_for_media, media_add_text_track_callback,

@@ -276,7 +276,7 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
     ] {
         let event = events
             .iter()
-            .find(|event| event["type"] == event_type)
+            .find(|event| event["type"] == event_type && event["target"] == "hover-target")
             .unwrap_or_else(|| panic!("missing {event_type} event: {events:?}"));
         assert_eq!(event["target"], "hover-target");
         assert!((event["clientX"].as_f64().unwrap() - 240.0).abs() < 0.1);

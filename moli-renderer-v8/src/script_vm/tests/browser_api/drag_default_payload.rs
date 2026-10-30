@@ -63,6 +63,7 @@ async fn assert_native_drag_default_payload(in_child: bool) {
                         ..Default::default()
                     },
                     0,
+                    false,
                 )
                 .unwrap();
             }

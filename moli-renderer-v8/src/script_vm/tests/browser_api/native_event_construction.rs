@@ -91,10 +91,21 @@ fn native_event_producers_bypass_author_constructors_dictionaries_and_indexed_se
                     1,
                     0,
                 ),
-                element::construct_pointer_event(scope, "pointerdown", element::InputEventCoordinates::from_root(11.0, 12.0), 0, 1, &pointer),
+                element::construct_pointer_event(
+                    scope,
+                    "pointerdown",
+                    element::InputEventCoordinates::from_root(11.0, 12.0),
+                    0,
+                    1,
+                    &pointer,
+                ),
                 element::construct_drag_event_with_related_target(
-                    scope, "dragstart", element::InputEventCoordinates::from_root(11.0, 12.0),
-                    transfer.into(), None, 0,
+                    scope,
+                    "dragstart",
+                    element::InputEventCoordinates::from_root(11.0, 12.0),
+                    transfer.into(),
+                    None,
+                    0,
                 ),
                 element::construct_wheel_event_for_target(
                     scope,
@@ -474,8 +485,7 @@ fn native_pointer_click_preserves_identity_without_copying_contact_properties() 
             scope,
             runtime_ptr,
             handle,
-            31.0,
-            42.0,
+            element::InputEventCoordinates::from_root(31.0, 42.0),
             0,
             0,
             2,
@@ -581,6 +591,7 @@ fn native_non_primary_releases_dispatch_pointer_activation_events_in_each_world(
                 0.0,
                 pointer,
                 10,
+                false,
             )
             .unwrap();
         }

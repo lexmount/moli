@@ -7,15 +7,30 @@ globalThis.__installDragDataModeProbe = function(mode, capture, modifiers) {
   const checks = [];
   const check = (name, actual, expected) => checks.push({name, actual, expected, pass:JSON.stringify(actual)===JSON.stringify(expected)});
   const exceptionName = action => { try { action(); return 'none'; } catch (error) { return error.name; } };
-  let starts = 0, drops = 0;
+  let starts = 0, drops = 0, sourceView, sourceOpen = false;
   function retain(dt, event) {
     const row = {dt, event, items:dt.items, files:dt.files, types:dt.types, string:dt.items[0], file:dt.items[3]};
     transfers.push(row);
     return row;
   }
-  function disabled(row, label) {
+  function disabled(row, label, currentView) {
     const prefix = label + ':' + row.event + ':' + transfers.indexOf(row);
     const dt = row.dt;
+    if (dt === sourceView && sourceOpen) {
+      check(prefix+':source payload protected', dt.getData('text/plain'), '');
+      check(prefix+':source metadata retained', Array.from(dt.types), expectedTypes);
+      check(prefix+':source items retained', row.items.length, 4);
+      check(prefix+':source file data protected', [row.files.length, row.file.getAsFile()], [0, null]);
+      check(prefix+':source item metadata retained', [row.string.kind,row.string.type,row.file.kind,row.file.type], ['string','text/plain','file','text/plain']);
+      check(prefix+':source writes blocked', row.items.add('no','application/blocked'), null);
+      dt.setData('text/plain','escaped'); dt.clearData(); row.items.clear();
+      check(prefix+':source cannot be mutated', [dt.getData('text/plain'),Array.from(dt.types)], ['',expectedTypes]);
+      return;
+    }
+    if (dt === currentView) {
+      check(prefix+':handoff aliases the active protected target view', [dt.getData('text/plain'),row.items.length], ['',4]);
+      return;
+    }
     check(prefix+':empty getData', dt.getData('text/plain'), '');
     check(prefix+':empty types', Array.from(dt.types), []);
     check(prefix+':new frozen types snapshot', dt.types !== row.types && Object.isFrozen(dt.types), true);
@@ -48,10 +63,13 @@ globalThis.__installDragDataModeProbe = function(mode, capture, modifiers) {
     document.addEventListener(type, event => {
       const dt = event.dataTransfer;
       const prefix = type+':'+rows.length;
-      check(prefix+':fresh event DataTransfer', transfers.every(row=>row.dt!==dt), true);
-      for (const row of transfers) disabled(row, prefix+':previous');
+      const sourceEvent = type === 'drag' || type === 'dragend';
+      const previous = transfers.at(-1);
+      const handoff = type === 'dragleave' && previous?.event === 'dragenter' && previous.items.length > 0;
+      check(prefix+':source identity and distinct target view', sourceEvent ? dt===sourceView : handoff ? dt===previous.dt : transfers.every(row=>row.dt!==dt), true);
+      for (const row of transfers) disabled(row, prefix+':previous', dt);
       if (type==='dragstart') {
-        starts++;
+        starts++; sourceView = dt; sourceOpen = mode !== 'cancel';
         dt.setData('text/plain','payload');
         dt.setData('text/html','<b>payload</b>');
         dt.items.add('extra','application/test');
@@ -106,6 +124,7 @@ globalThis.__installDragDataModeProbe = function(mode, capture, modifiers) {
       if (type==='dragstart' && mode==='cancel') event.preventDefault();
       rows.push({entryAvailable:!!row.file?.webkitGetAsEntry(),type,data:dt.getData('text/plain'),items:dt.items.length,files:dt.files.length,types:Array.from(dt.types),dropEffect:dt.dropEffect,effectAllowed:dt.effectAllowed});
       trace.push(type);
+      if (type === 'dragend') sourceOpen = false;
     });
   }
   if (capture) source.addEventListener('pointerdown', event=>source.setPointerCapture(event.pointerId));

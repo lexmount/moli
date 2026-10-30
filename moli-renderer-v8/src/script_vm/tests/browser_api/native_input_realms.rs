@@ -41,6 +41,7 @@ fn native_mouse_boundary_and_wheel_events_use_target_document_intrinsics() {
                                 ..Default::default()
                             },
                             modifiers,
+                            false,
                         )
                         .unwrap_or_else(|error| {
                             panic!("{context}, {poison}, {pointer_type}, modifiers {modifiers}, {phase}: {error}")

@@ -59,6 +59,7 @@ fn assert_native_click_targets(in_child: bool) {
                             ..Default::default()
                         },
                         0,
+                        false,
                     )
                     .unwrap();
                 }
@@ -130,6 +131,7 @@ fn native_auxclick_resolves_its_target_after_contextmenu_tree_mutation() {
                             ..Default::default()
                         },
                         0,
+                        false,
                     )
                     .unwrap();
                 }
@@ -209,6 +211,7 @@ fn assert_native_chorded_click_targets(context: &str) {
                                     ..Default::default()
                                 },
                                 0,
+                                false,
                             )
                             .unwrap();
                         }
