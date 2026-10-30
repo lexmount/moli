@@ -1,3 +1,6 @@
+#[path = "shadow_dom/split30_cached_registry_serialization.rs"]
+mod split30_cached_registry_serialization;
+
 #[path = "shadow_dom/split30_gethtml_derived_options.rs"]
 mod split30_gethtml_derived_options;
 
