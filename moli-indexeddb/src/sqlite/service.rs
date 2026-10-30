@@ -288,8 +288,19 @@ pub struct ServiceClient {
 impl Service {
     pub fn new(config: ServiceConfig) -> Result<Self, DispatchError> {
         let runtime = Runtime::new()?;
+        let mut service = Self::with_runtime(config, runtime.handle())?;
+        service.runtime = Some(runtime);
+        Ok(service)
+    }
+
+    /// Share a partition-owned executor without transferring its lifetime.
+    /// Closing this service still drains and closes all of its databases.
+    pub fn with_runtime(
+        config: ServiceConfig,
+        runtime: RuntimeHandle,
+    ) -> Result<Self, DispatchError> {
         let client = ServiceClient {
-            runtime: runtime.handle(),
+            runtime,
             registry: Arc::new(Mutex::new(Registry::default())),
             config,
             catalog: None,
@@ -302,7 +313,7 @@ impl Service {
             Arc::downgrade(&client.registry),
         )?;
         Ok(Self {
-            runtime: Some(runtime),
+            runtime: None,
             maintenance: Some(maintenance),
             client,
         })
@@ -460,11 +471,12 @@ impl Service {
                 "cannot shut down SQLite from its own runtime".into(),
             ));
         }
-        let Some(mut runtime) = self.runtime.take() else {
+        if self.client.is_closed() {
             return Ok(());
-        };
+        }
+        let runtime = self.client.runtime.clone();
         let maintained = if let Some(maintenance) = self.maintenance.take() {
-            maintenance.stop(&runtime.handle())
+            maintenance.stop(&runtime)
         } else {
             Ok(())
         };
@@ -479,7 +491,6 @@ impl Service {
         };
         let receipts = owners.iter().map(|owner| owner.stop()).collect::<Vec<_>>();
         let drained = runtime
-            .handle()
             .wait(async move {
                 let mut failure = None;
                 for mut receipt in receipts {
@@ -500,9 +511,11 @@ impl Service {
             })
             .map_err(|error| IndexedDbError::Io(error.to_string()))
             .and_then(|result| result);
-        let stopped = runtime
-            .shutdown()
-            .map_err(|error| IndexedDbError::Io(error.to_string()));
+        let stopped = self.runtime.take().map_or(Ok(()), |mut runtime| {
+            runtime
+                .shutdown()
+                .map_err(|error| IndexedDbError::Io(error.to_string()))
+        });
         self.connection_requests.shutdown();
         maintained.and(drained).and(stopped)
     }

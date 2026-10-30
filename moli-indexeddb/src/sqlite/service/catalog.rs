@@ -26,8 +26,24 @@ impl Service {
     /// V8 realm. Filesystem recovery can block here; every SQLite connection,
     /// including header inspection, still opens and closes on a SQL worker.
     pub fn on_disk(root: PathBuf, config: ServiceConfig) -> Result<Self, IndexedDbError> {
-        let mut service =
-            Self::new(config).map_err(|error| IndexedDbError::Resource(error.to_string()))?;
+        Self::new(config)
+            .map_err(|error| IndexedDbError::Resource(error.to_string()))?
+            .recover(root)
+    }
+
+    /// Recover this namespace on the partition's shared SQL executor.
+    pub fn on_disk_with_runtime(
+        root: PathBuf,
+        config: ServiceConfig,
+        runtime: RuntimeHandle,
+    ) -> Result<Self, IndexedDbError> {
+        Self::with_runtime(config, runtime)
+            .map_err(|error| IndexedDbError::Resource(error.to_string()))?
+            .recover(root)
+    }
+
+    fn recover(mut self, root: PathBuf) -> Result<Self, IndexedDbError> {
+        let service = &mut self;
         let options = service.config.connection;
         let worker = service.client.runtime.clone();
         let (catalog, headers) = service
@@ -92,7 +108,7 @@ impl Service {
                 .map_err(|_| corruption("IndexedDB recovery owner stopped"))?
                 .result?;
         }
-        Ok(service)
+        Ok(self)
     }
 }
 

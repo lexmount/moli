@@ -76,6 +76,7 @@ moli-site = { path = "../moli-site" }
 moli-session-history = { path = "../moli-session-history" }
 moli-history = { path = "../moli-history" }
 moli-stylesheet-blocking = { path = "../moli-stylesheet-blocking" }
+moli-sqlite = { path = "../moli-sqlite" }
 moli-storage-key = { path = "../moli-storage-key" }
 moli-streams = { path = "../moli-streams" }
 moli-structured-clone = { path = "../moli-structured-clone" }

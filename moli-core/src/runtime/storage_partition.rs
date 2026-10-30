@@ -47,6 +47,7 @@ pub struct StoragePartitionState {
     service_worker_resource_store: SharedServiceWorkerResourceStore,
     http_cache_root: Option<PathBuf>,
     profile: Option<Arc<BrowserProfile>>,
+    sqlite_runtime: parking_lot::Mutex<Option<moli_sqlite::Runtime>>,
     // Drop after storage handles: temporary disk backing has partition scope,
     // while an explicit profile keeps its files after the partition closes.
     temporary_directory: Option<tempfile::TempDir>,
@@ -124,6 +125,7 @@ impl StoragePartitionState {
         } else {
             None
         };
+        let sqlite_runtime = moli_sqlite::Runtime::new()?;
         let cookie_store = new_shared_browser_cookie_store();
         let session_storage_store = new_shared_web_storage_store();
         let (
@@ -156,9 +158,10 @@ impl StoragePartitionState {
                     )
                 })?;
             let indexed_db_root = partition.indexed_db_root();
-            let indexed_db_manager = moli_renderer_v8::new_sqlite_indexed_db_manager(
+            let indexed_db_manager = moli_renderer_v8::new_sqlite_indexed_db_manager_with_runtime(
                 Some(indexed_db_root.to_path_buf()),
                 Default::default(),
+                sqlite_runtime.handle(),
             )
             .map_err(|error| anyhow!(error))
             .with_context(|| {
@@ -217,9 +220,10 @@ impl StoragePartitionState {
                 .as_ref()
                 .expect("an ephemeral partition owns its temporary directory")
                 .path();
-            let indexed_db_manager = moli_renderer_v8::new_sqlite_indexed_db_manager(
+            let indexed_db_manager = moli_renderer_v8::new_sqlite_indexed_db_manager_with_runtime(
                 Some(root.join("idb-lite")),
                 Default::default(),
+                sqlite_runtime.handle(),
             )
             .map_err(|error| anyhow!(error))
             .context("failed to initialize temporary IndexedDB")?;
@@ -254,6 +258,7 @@ impl StoragePartitionState {
             service_worker_resource_store,
             http_cache_root,
             profile,
+            sqlite_runtime: parking_lot::Mutex::new(Some(sqlite_runtime)),
             temporary_directory,
         })
     }
@@ -375,11 +380,19 @@ impl StoragePartitionState {
             .map_err(anyhow::Error::new);
         let io = self.storage_service.drain_io().map_err(anyhow::Error::new);
         let flush = self.flush();
+        let runtime = self
+            .sqlite_runtime
+            .lock()
+            .take()
+            .map_or(Ok(()), |mut runtime| {
+                runtime.shutdown().map_err(anyhow::Error::new)
+            });
         maintenance
             .and(sql)
             .and(late_maintenance)
             .and(io)
             .and(flush)
+            .and(runtime)
     }
 }
 

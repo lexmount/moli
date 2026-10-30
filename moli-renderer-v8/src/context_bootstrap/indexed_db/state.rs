@@ -48,6 +48,23 @@ pub fn new_sqlite_indexed_db_manager(
     ))))
 }
 
+/// Initialize a namespace using the enclosing partition's SQL executor.
+pub fn new_sqlite_indexed_db_manager_with_runtime(
+    root: Option<PathBuf>,
+    config: moli_indexeddb::sqlite::service::ServiceConfig,
+    runtime: moli_sqlite::RuntimeHandle,
+) -> std::result::Result<SharedIndexedDbManager, String> {
+    use moli_indexeddb::sqlite::service::Service;
+    let service = match root {
+        Some(root) => Service::on_disk_with_runtime(root, config, runtime)
+            .map_err(|error| error.to_string())?,
+        None => Service::with_runtime(config, runtime).map_err(|error| error.to_string())?,
+    };
+    Ok(Arc::new(Mutex::new(IndexedDbManager::with_sqlite_service(
+        service,
+    ))))
+}
+
 pub fn downgrade_indexed_db_manager(manager: &SharedIndexedDbManager) -> WeakIndexedDbManager {
     WeakIndexedDbManager {
         inner: Arc::downgrade(manager),
