@@ -193,6 +193,11 @@ pub(crate) fn image_bitmap_pixels_for_test<'s>(
     Some(bytes)
 }
 
+mod storage;
+pub(in crate::context_bootstrap) use storage::{
+    read_image_bitmap_storage, write_image_bitmap_storage,
+};
+
 pub(super) struct BitmapData<'s> {
     pub(super) pixels: v8::Local<'s, v8::Uint8ClampedArray>,
     pub(super) width: u32,
