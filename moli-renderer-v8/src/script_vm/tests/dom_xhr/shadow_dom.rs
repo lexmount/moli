@@ -1,3 +1,6 @@
+#[path = "shadow_dom/split30_gethtml_derived_options.rs"]
+mod split30_gethtml_derived_options;
+
 use super::*;
 
 #[test]
