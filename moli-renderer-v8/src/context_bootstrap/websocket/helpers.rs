@@ -241,7 +241,21 @@ pub(super) fn websocket_value_slot<'s>(
     socket: v8::Local<'s, v8::Object>,
     slot_name: &'static str,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let socket = websocket_slot_storage(scope, socket)?;
     get_private_value(scope, socket, slot_name)
+}
+
+fn websocket_slot_storage<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    // Stream source/sink records intentionally have no interface brand. Public
+    // bindings validate receivers; slot storage only resolves native Proxies.
+    if object.is_proxy() {
+        moli_webapi_declare::web_api_object_target(scope, object)
+    } else {
+        Some(object)
+    }
 }
 
 pub(super) fn websocket_object_slot<'s>(
@@ -270,6 +284,10 @@ pub(super) fn set_websocket_value_slot(
     slot_name: &'static str,
     value: v8::Local<'_, v8::Value>,
 ) {
+    let socket = v8::Local::new(scope, socket);
+    let Some(socket) = websocket_slot_storage(scope, socket) else {
+        return;
+    };
     set_private_value(scope, socket, slot_name, value);
 }
 
@@ -278,7 +296,7 @@ fn websocket_number_slot<'s>(
     socket: v8::Local<'s, v8::Object>,
     slot_name: &'static str,
 ) -> Option<f64> {
-    get_private_value(scope, socket, slot_name).and_then(|value| value.number_value(scope))
+    websocket_value_slot(scope, socket, slot_name).and_then(|value| value.number_value(scope))
 }
 
 fn set_websocket_number_slot(

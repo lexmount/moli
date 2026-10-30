@@ -2,8 +2,7 @@ use super::media_queries::{dispatch_simple_event_target_event, simple_object_eve
 use super::shared::{
     READABLE_STREAM_HWM_SLOT, READABLE_STREAM_PENDING_READS_SLOT,
     SIMPLE_EVENT_TARGET_LISTENERS_SLOT, WRITABLE_STREAM_SINK_SLOT,
-    define_non_enumerable_string_property, global_constructor_prototype,
-    new_uint8_array_from_bytes,
+    define_non_enumerable_string_property, new_uint8_array_from_bytes,
 };
 use super::stream_adapter::{
     close_stream, enqueue_chunk, error_stream, error_writable_stream_with_value, stream_slot_array,
