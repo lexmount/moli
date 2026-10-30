@@ -169,7 +169,7 @@ struct AnimationTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLCanvasElement, enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLCanvasElement, enumerable, receiver)]
 struct HtmlCanvasElementTemplateMethodsDeclaration {
     #[webapi(method = "getContext", length = 1, callback = element::canvas_get_context_callback)]
     get_context: (),

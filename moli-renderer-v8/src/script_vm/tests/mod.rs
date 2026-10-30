@@ -2401,3 +2401,5 @@ mod xml_serializer_receivers;
 mod hyperlink_audit_owner;
 
 mod image_bitmap_pixels;
+
+mod bitmap_renderer;
