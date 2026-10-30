@@ -394,6 +394,15 @@ for (const [input, expected] of [
   ['file:////a//b', 'file:///a//b'],
   ['file:////%2F/a', 'file:///%2F/a'],
   ['file:////x/..//a', 'file:////a'],
+  ['file:////..//a', 'file:////a'],
+  ['file:////C|/file', 'file:///C%7C/file'],
+  ['file://///C|/file', 'file:///C%7C/file'],
+  ['file:////C:/..', 'file:///'],
+  ['file://///C:/../file', 'file:///file'],
+  ['file:////./C|/file', 'file:///C%7C/file'],
+  ['file:////x/../C:/..', 'file:///'],
+  ['file:////C|/a%2Fb/%25', 'file:///C%7C/a%2Fb/%25'],
+  ['file:////C|/file?keep=|#raw|', 'file:///C%7C/file?keep=|#raw|'],
   ['file:///.//a', 'file:////a'],
   ['file://server///a', 'file://server///a'],
 ]) {
@@ -407,6 +416,8 @@ for (const [input, expected] of [
 for (const constructor of [URL, frame.contentWindow.URL]) {
   assert(new constructor('/////a', 'file://server/base').href === 'file:///a', 'relative file input');
   assert(constructor.parse('/////a', 'file://server/base').href === 'file:///a', 'relative static parse');
+  assert(new constructor('/////C|/file', 'file://server/base').href === 'file:///C%7C/file', 'relative path is not a drive');
+  assert(constructor.parse('/////C:/..', 'file://server/base').href === 'file:///', 'relative path can traverse the first segment');
   assert(new constructor('child', 'file://///root/base').href === 'file:///root/child', 'base is parsed first');
   assert(constructor.parse('file:////a', 'http://[') === null, 'absolute file input still validates the base');
 

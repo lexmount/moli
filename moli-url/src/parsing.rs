@@ -1,5 +1,5 @@
 use crate::components::strip_tabs_and_newlines;
-use url::Url;
+use url::{Position, Url};
 
 /// Parse external URL input with Chromium's leading file separator handling.
 /// Component setters and stored URL records can still contain empty path segments.
@@ -19,10 +19,14 @@ pub fn parse_url(input: &str, base: Option<&Url>) -> Result<Url, url::ParseError
     if let Some(path) = path {
         let rest = path.trim_start_matches(['/', '\\']);
         if path.len() - rest.len() > 3 {
-            let prefix = &trimmed[..trimmed.len() - path.len()];
-            return Url::options()
-                .base_url(base)
-                .parse(&format!("{prefix}///{rest}"));
+            // Normalize an ordinary special path first. Exposing C: or C| to
+            // the file parser would create a drive root and change .. handling.
+            let normalized = Url::parse(&format!("https://file.invalid/{rest}"))?;
+            return Url::parse(&format!(
+                "file://{}{}",
+                normalized.path().replace('|', "%7C"),
+                &normalized[Position::AfterPath..],
+            ));
         }
     }
     Url::options().base_url(base).parse(input)
@@ -74,6 +78,39 @@ mod tests {
                 expected,
                 "{input:?}"
             );
+        }
+    }
+
+    #[test]
+    fn extra_file_separators_do_not_create_drive_roots() {
+        for (input, expected) in [
+            ("file:////C|/file", "file:///C%7C/file"),
+            ("file://///C|/file", "file:///C%7C/file"),
+            ("file:////C:/..", "file:///"),
+            ("file://///C:/../file", "file:///file"),
+            ("file:////./C|/file", "file:///C%7C/file"),
+            ("file:////x/../C:/..", "file:///"),
+            ("file:////..//a", "file:////a"),
+            ("file:////C%7C/file", "file:///C%7C/file"),
+            ("file:////C|/a%2Fb/%25", "file:///C%7C/a%2Fb/%25"),
+            (
+                "file:////C|/file?keep=|#raw|",
+                "file:///C%7C/file?keep=|#raw|",
+            ),
+            (
+                r"file:////C|/a\..\b?back=\#frag\",
+                r"file:///C%7C/b?back=\#frag\",
+            ),
+        ] {
+            assert_eq!(parse_url(input, None).unwrap().as_str(), expected);
+        }
+
+        let base = Url::parse("file://server/base").unwrap();
+        for (input, expected) in [
+            ("/////C|/file", "file:///C%7C/file"),
+            ("/////C:/..", "file:///"),
+        ] {
+            assert_eq!(parse_url(input, Some(&base)).unwrap().as_str(), expected);
         }
     }
 }
