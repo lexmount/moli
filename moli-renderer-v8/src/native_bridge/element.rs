@@ -325,10 +325,10 @@ pub(crate) use events::{TouchEventPoint, construct_touch_event_with_points};
 pub(crate) use events::{construct_drag_event_with_related_target, construct_pointer_event};
 #[cfg(feature = "devtools")]
 pub(crate) use events::{
-    construct_drop_input_event,
-    construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
-    construct_mouse_event_with_related_target_for_target, construct_pointer_event_with_modifiers,
-    construct_pointer_event_with_related_target_and_modifiers, construct_pointer_event_with_related_target_for_target, construct_wheel_event_for_target,
+    construct_drop_input_event, construct_mouse_event_for_target,
+    construct_mouse_event_with_detail_for_target,
+    construct_mouse_event_with_related_target_for_target,
+    construct_pointer_event_with_related_target_for_target, construct_wheel_event_for_target,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use events::construct_pointer_event_with_related_target;
@@ -336,16 +336,16 @@ pub(crate) use events::construct_pointer_event_with_related_target;
 pub(crate) use focus::focus_live_element_for_inspector;
 pub(crate) use focus::is_disabled_form_control;
 use focus::is_focusable;
+#[cfg(feature = "devtools")]
+pub(crate) use focus::perform_mouse_focus_default_action;
 pub(crate) use focus::{
-    apply_document_focus_fixup, contenteditable_editing_host, focus_element, focus_text_control_preserving_selection,
+    apply_document_focus_fixup, contenteditable_editing_host, focus_element, focus_element_preserving_selection,
     perform_access_key_default_action_for_dispatched_event,
     perform_hover_interest_default_action_for_dispatched_event,
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,
     process_post_parse_autofocus, reset_document_navigation_focus, update_focus,
 };
 pub(super) use focus::{node_blur_callback, node_focus_callback};
-#[cfg(feature = "devtools")]
-pub(crate) use focus::{perform_mouse_focus_default_action, update_focus_preserving_selection};
 #[cfg(feature = "devtools")]
 pub(crate) use forms::cache_input_files_from_selected_files;
 #[cfg(feature = "devtools")]
@@ -587,10 +587,12 @@ use html_elements::{
     marquee_scroll_amount_getter_function, marquee_scroll_amount_setter_function,
     marquee_scroll_delay_getter_function, marquee_scroll_delay_setter_function,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use images::image_selected_source;
 pub(crate) use images::{
     apply_authorized_image_load_event_in_context, apply_image_attribute_mutation_plan,
     apply_image_relevant_mutations, image_intrinsic_dimensions, image_selected_request_key,
-    image_selected_source, plan_image_attribute_mutation, plan_image_attribute_ns_mutation,
+    plan_image_attribute_mutation, plan_image_attribute_ns_mutation,
     queue_image_load_event_after_document_adoption, queue_image_load_event_for_loading_change,
     queue_image_load_event_if_needed, queue_image_load_event_if_needed_with_initiator,
     queue_image_load_network_terminal_followup, queue_revealed_lazy_image_loads,

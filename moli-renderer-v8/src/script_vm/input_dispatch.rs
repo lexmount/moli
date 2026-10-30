@@ -18,8 +18,8 @@ use touch_tap::dispatch_touch_tap_activation;
 
 use super::input_dispatch_outcome;
 use super::input_helpers::{
-    HoverBoundary, HoverTarget, InputTargetPath, MouseFrameCapture, mouse_button_mask,
-    single_changed_mouse_button,
+    HoverBoundary, HoverTarget, InputTargetPath, MouseFrameCapture, MouseFrameCaptureOwner,
+    mouse_button_mask, single_changed_mouse_button,
 };
 use super::inspector::{
     current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,
@@ -42,8 +42,7 @@ use crate::native_bridge::element::{
     construct_drag_event_with_related_target, construct_keyboard_event,
     construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
     construct_mouse_event_with_related_target_for_target, construct_pointer_event,
-    construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
-    construct_pointer_event_with_related_target_and_modifiers,
+    construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_for_target, construct_simple_event,
     construct_touch_event_with_points, construct_wheel_event_for_target,
     contenteditable_editing_host, dispatch_public_event, drag_start_frame_input_surface_hit_test,
@@ -920,8 +919,10 @@ fn dispatch_drag_pointer_suppression_boundaries(
     if !unsafe { &*runtime_ptr }.dom_host().is_connected(target) {
         return;
     }
-    if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
+    if let Some(event) = construct_pointer_event_with_related_target_for_target(
         scope,
+        runtime_ptr,
+        target,
         "pointerout",
         coordinates,
         -1,
@@ -944,8 +945,10 @@ fn dispatch_drag_pointer_suppression_boundaries(
         }
     };
     for ancestor in ancestors {
-        if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
+        if let Some(event) = construct_pointer_event_with_related_target_for_target(
             scope,
+            runtime_ptr,
+            ancestor,
             "pointerleave",
             coordinates,
             -1,
@@ -1379,10 +1382,17 @@ impl ScriptVm {
 
     fn captured_mouse_frame_document(&self, capture: MouseFrameCapture) -> Option<DomHandle> {
         let host = self._context_host.borrow();
-        if host.current_child_frame_lane_task_owner(capture.frame) != Some(capture.owner) {
+        let (frame, owner) = match capture.owner {
+            MouseFrameCaptureOwner::Main(owner) => {
+                return (host.current_main_document_task_owner() == Some(owner))
+                    .then(|| self.document_runtime.document_handle());
+            }
+            MouseFrameCaptureOwner::Child { frame, owner } => (frame, owner),
+        };
+        if host.current_child_frame_lane_task_owner(frame) != Some(owner) {
             return None;
         }
-        let captured_document = host.child_browsing_context_document_handle(capture.frame)?;
+        let captured_document = host.child_browsing_context_document_handle(frame)?;
         let mut document = captured_document;
         let mut visited = HashSet::new();
         while document != self.document_runtime.document_handle() {
@@ -1434,12 +1444,18 @@ impl ScriptVm {
                     .dom_host()
                     .owner_document_handle(input.handle)
                     .and_then(|document| {
-                        host.child_browsing_context_host_for_document_handle(document)
-                    })
-                    .and_then(|frame| {
+                        let owner = if document == self.document_runtime.document_handle() {
+                            MouseFrameCaptureOwner::Main(host.current_main_document_task_owner()?)
+                        } else {
+                            let frame =
+                                host.child_browsing_context_host_for_document_handle(document)?;
+                            MouseFrameCaptureOwner::Child {
+                                frame,
+                                owner: host.current_child_frame_lane_task_owner(frame)?,
+                            }
+                        };
                         Some(MouseFrameCapture {
-                            frame,
-                            owner: host.current_child_frame_lane_task_owner(frame)?,
+                            owner,
                             root_to_frame: input.root_to_frame,
                         })
                     });
@@ -1591,6 +1607,7 @@ impl ScriptVm {
         // These owned snapshots cross synchronous JS callbacks without borrowing
         // ScriptVm fields or holding a context-host RefCell guard.
         let mut pointer_hover = self.hovered_pointers.remove(&pointer_id);
+        let drag_cancel_target = pointer_hover.as_ref().map(|target| target.handle);
         let mut mouse_hover = self.hovered_mouse.take();
         let mut released_mouse_hover = None;
         let release_hit_path = (pointer_event_name == Some("pointerup"))
@@ -1645,7 +1662,6 @@ impl ScriptVm {
                     let point = root_to_frame.map_point(root_point);
                     self.pending_drag_gesture = Some(PendingDragGesture {
                         document,
-
                         x: f64::from(point.x),
                         y: f64::from(point.y),
                         root_to_frame,
@@ -1996,15 +2012,20 @@ impl ScriptVm {
                     unsafe { &mut *runtime_ptr }.clear_mouse_presses();
                     let cancel_target = unsafe { &*runtime_ptr }
                         .active_pointer_capture_target(pointer_id)
-                        .unwrap_or(pointer_dispatch_handle);
-                    let cancel_pointer = pointer.clone();
-                    if let Some(event) = construct_pointer_event_with_modifiers(
+                        .or(drag_cancel_target)
+                        .unwrap_or(drag_start_handle);
+                    let mut cancel_pointer = pointer.clone();
+                    cancel_pointer.pressure = 0.0;
+                    if let Some(event) = construct_pointer_event_with_related_target_for_target(
                         scope,
+                        runtime_ptr,
+                        cancel_target,
                         "pointercancel",
                         coordinates,
                         -1,
                         0,
                         &cancel_pointer,
+                        None,
                         modifiers,
                     ) {
                         let _ = dispatch_public_event(scope, runtime_ptr, cancel_target, event);
@@ -2214,6 +2235,16 @@ impl ScriptVm {
         self.suppress_compat_mouse_events = suppress_compat_mouse_events;
         if !mouse_down_allows_drag.get() {
             self.pending_drag_gesture = None;
+            if matches!(
+                self.mouse_frame_captures
+                    .get(&pointer_id)
+                    .map(|capture| capture.owner),
+                Some(MouseFrameCaptureOwner::Main(_))
+            ) {
+                // A canceled pointerdown produces no compatibility mousedown
+                // that could establish mouse capture in the main frame.
+                self.mouse_frame_captures.remove(&pointer_id);
+            }
         }
         result.map(|mut outcome| {
             outcome.intercepted_drag = intercepted_drag.take();
@@ -2222,12 +2253,13 @@ impl ScriptVm {
     }
 
     fn finish_active_drag(&mut self, reason: DragFinishReason, modifiers: u8) -> Result<()> {
-        let coordinates = self
-            .active_drag_session
-            .as_ref()
-            .map(|session| session.coordinates)
-            .unwrap_or_default();
         self.pending_drag_gesture = None;
+        let Some(session) = self.active_drag_session.as_ref() else {
+            // Ordinary non-primary mouse input also checks for an old drag.
+            // Its independent button presses must survive that no-op check.
+            return Ok(());
+        };
+        let coordinates = session.coordinates;
         self._context_host.borrow_mut().clear_mouse_presses();
         let active = &mut self.active_drag_session as *mut Option<ActiveDragSession>;
         self.with_default_context_scope(|scope, runtime_ptr| {
@@ -3025,6 +3057,12 @@ impl ScriptVm {
         should_insert_text: bool,
         location: u32,
     ) -> Result<RendererInputDispatchOutcome> {
+        if self.active_drag_session.is_some() {
+            if event_name == "keydown" && key == "Escape" {
+                self.finish_active_drag(DragFinishReason::Canceled, modifiers)?;
+            }
+            return self.finish_input_event_dispatch_turn(Ok(input_dispatch_outcome(true)));
+        }
         if event_name == "keypress" && self.suppress_next_keypress_after_canceled_raw_keydown {
             self.suppress_next_keypress_after_canceled_raw_keydown = false;
             return Ok(input_dispatch_outcome(false));

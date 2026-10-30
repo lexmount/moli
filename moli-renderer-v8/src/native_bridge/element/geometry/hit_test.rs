@@ -5,9 +5,9 @@ use crate::dom::native::{DomHost, Node};
 #[cfg(feature = "devtools")]
 use moli_layout::LayoutFragmentKind;
 use moli_layout::{
-    FrozenLayoutTree, LayoutControlSurfaceHit, LayoutError, LayoutHit,
-    LayoutPaintedSurfaceHit, LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
-    LayoutTransform2D, LayoutViewport,
+    FrozenLayoutTree, LayoutControlSurfaceHit, LayoutError, LayoutHit, LayoutPaintedSurfaceHit,
+    LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutTransform2D,
+    LayoutViewport,
 };
 #[cfg(feature = "devtools")]
 use std::collections::HashSet;
@@ -59,6 +59,7 @@ impl InputSurfaceHit {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_or_element(self) -> Option<InputHit> {
         self.input.or(self.viewport_document)
     }
@@ -200,7 +201,7 @@ pub(crate) fn captured_frame_input_surface_hit_test(
         root_point,
         previous_root_to_frame,
         include_scrollbars,
-        true,
+        false,
     )
 }
 
@@ -223,6 +224,7 @@ pub(crate) fn drag_start_frame_input_surface_hit_test(
     )
 }
 
+#[cfg(feature = "devtools")]
 fn frame_input_surface_hit_test(
     runtime: &PageScriptHost,
     document: DomHandle,
@@ -283,6 +285,7 @@ fn frame_input_surface_hit_test(
     Ok(hit)
 }
 
+#[cfg(feature = "devtools")]
 fn published_root_to_frame(
     runtime: &PageScriptHost,
     mut document: DomHandle,

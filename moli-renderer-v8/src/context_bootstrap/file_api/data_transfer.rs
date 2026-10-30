@@ -1022,9 +1022,7 @@ fn data_transfer_drop_effect_setter<'s>(
             return;
         }
     };
-    if data_transfer_mode(scope, args.this()) != DragDataStoreMode::Disabled
-        && !private_bool_property(scope, args.this(), DATA_TRANSFER_CLIPBOARD_SLOT).unwrap_or(false)
-    {
+    if !private_bool_property(scope, args.this(), DATA_TRANSFER_CLIPBOARD_SLOT).unwrap_or(false) {
         native_set_drag_drop_effect(scope, args.this(), &value);
     }
 }

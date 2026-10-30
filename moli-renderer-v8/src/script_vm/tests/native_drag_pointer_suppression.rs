@@ -250,17 +250,9 @@ fn a_finished_drag_restarts_pointer_boundaries_without_resetting_legacy_mouse_ho
                         .unwrap();
                 let target = if different_target { "capture" } else { "leaf" };
                 let ancestors = if different_target {
-                    vec!["#document", "HTML", "BODY", "capture"]
+                    vec!["HTML", "BODY", "capture"]
                 } else {
-                    vec![
-                        "#document",
-                        "HTML",
-                        "BODY",
-                        "outer",
-                        "parent",
-                        "source",
-                        "leaf",
-                    ]
+                    vec!["HTML", "BODY", "outer", "parent", "source", "leaf"]
                 };
                 let mut expected_pointer = vec![serde_json::json!(["pointerover", target, null])];
                 expected_pointer.extend(

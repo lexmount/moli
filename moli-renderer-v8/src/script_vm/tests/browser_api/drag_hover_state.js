@@ -93,7 +93,7 @@ globalThis.__installDragHoverProbe = function (context, pointer, capture, mode, 
       : []);
     // A prevented drag can retain capture until release. Check its complete
     // transition sequence, including the first move after capture is released.
-    const transitionPhases = active ? ['after'] : ['drag', 'up', 'after'];
+    const transitionPhases = active ? (mode === 'escape' ? ['up', 'after'] : ['after']) : ['drag', 'up', 'after'];
     const mouse = rows.filter(row => transitionPhases.includes(row.phase) && !row.type.startsWith('pointer'));
     check('legacy mouse retains its previous target', mouse.map(row => [row.type, row.target, row.related]), [
       ['mouseout', 'source', 'peer'], ['mouseleave', 'source', 'peer'], ['mouseleave', 'outer', 'peer'],

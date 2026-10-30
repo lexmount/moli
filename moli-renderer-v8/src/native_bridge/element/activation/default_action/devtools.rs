@@ -2,8 +2,8 @@ use super::*;
 use crate::context_bootstrap::readonly_data_transfer_for_input;
 use crate::dom::native::SelectedFile;
 use crate::native_bridge::element::{
-    cache_input_files_from_selected_files, construct_drop_input_event,
-    replace_text_control_selection, update_focus_preserving_selection,
+    cache_input_files_from_selected_files, construct_drop_input_event, element_attribute,
+    focus_element_preserving_selection, replace_text_control_selection,
 };
 
 fn data_transfer_selected_files<'s>(
@@ -408,7 +408,7 @@ pub(crate) fn perform_drop_default_action<'s>(
     if let Some(focus_handle) = focus_handle {
         if editing_host.is_some() {
             // Keep the drop's selection when its editing host gains focus.
-            update_focus_preserving_selection(scope, runtime_ptr, Some(focus_handle));
+            focus_element_preserving_selection(scope, runtime_ptr, focus_handle);
         } else {
             update_focus(scope, runtime_ptr, Some(focus_handle));
         }

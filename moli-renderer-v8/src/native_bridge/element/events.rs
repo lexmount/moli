@@ -13,14 +13,16 @@ pub(crate) use self::constructors::{
 };
 #[cfg(any(feature = "devtools", test))]
 pub(crate) use self::constructors::{TouchEventPoint, construct_touch_event_with_points};
-#[cfg(any(test, feature = "devtools"))]
-pub(crate) use self::constructors::{construct_drag_event_with_related_target, construct_pointer_event};
 #[cfg(feature = "devtools")]
 pub(crate) use self::constructors::{
     construct_activation_pointer_event, construct_drop_input_event,
     construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
-    construct_mouse_event_with_related_target_for_target, construct_pointer_event_with_modifiers,
-    construct_pointer_event_with_related_target_and_modifiers, construct_pointer_event_with_related_target_for_target, construct_wheel_event_for_target,
+    construct_mouse_event_with_related_target_for_target,
+    construct_pointer_event_with_related_target_for_target, construct_wheel_event_for_target,
+};
+#[cfg(any(test, feature = "devtools"))]
+pub(crate) use self::constructors::{
+    construct_drag_event_with_related_target, construct_pointer_event,
 };
 #[cfg(test)]
 pub(crate) use self::constructors::{
@@ -28,8 +30,7 @@ pub(crate) use self::constructors::{
 };
 #[cfg(feature = "devtools")]
 pub(crate) use self::constructors::{
-    construct_pointer_event_with_related_target,
-    construct_text_input_event_for_target,
+    construct_pointer_event_with_related_target, construct_text_input_event_for_target,
 };
 pub(crate) use self::dispatch::{
     NodePublicEventDispatchOutcome, dispatch_beforeinput, dispatch_public_event,

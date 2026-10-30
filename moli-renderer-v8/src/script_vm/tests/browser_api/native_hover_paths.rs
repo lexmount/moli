@@ -45,7 +45,8 @@ fn native_hover_boundaries_preserve_common_ancestors_and_target_realms() {
                                 pressure: 0.0,
                                 ..Default::default()
                             },
-                            modifiers, false,
+                            modifiers,
+                            false,
                         )
                         .unwrap_or_else(|error| {
                             panic!("{context}, {poison}, {pointer_type}, modifiers {modifiers}, {phase}: {error}")
