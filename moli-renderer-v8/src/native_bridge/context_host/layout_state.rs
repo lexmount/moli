@@ -212,9 +212,14 @@ impl DocumentLayoutState {
     pub(super) fn publish_latest_layout(
         &mut self,
         document: DomHandle,
+        dom_version: u64,
         tree: FrozenLayoutTree<DomHandle>,
     ) {
-        self.latest_layout.publish(document, tree);
+        self.latest_layout.publish(document, dom_version, tree);
+    }
+
+    pub(super) fn latest_layout_is_current(&self, document: DomHandle, dom_version: u64) -> bool {
+        self.latest_layout.is_current(document, dom_version)
     }
 
     pub(super) fn clear_latest_layout(&mut self) {
