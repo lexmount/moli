@@ -1,0 +1,21 @@
+[package]
+license.workspace = true
+name = "moli-cookie-db"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+moli-cookie-jar = { path = "../moli-cookie-jar" }
+moli-sqlite = { path = "../moli-sqlite" }
+parking_lot = "0.12.5"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+time = "0.3"
+tracing = "0.1.41"
+
+[dev-dependencies]
+moli-cookie-jar = { path = "../moli-cookie-jar", features = ["test-support"] }
+tempfile = "3.23.0"
+url = "2.5.7"
+
+[lints]
+workspace = true

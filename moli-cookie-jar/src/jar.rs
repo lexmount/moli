@@ -1,6 +1,8 @@
 //! Browser cookie store wrapper and cross-crate entry points.
 
+mod persistence;
 mod site_data;
+pub use persistence::{BrowserCookieObserver, StoredCookieIdentity, StoredCookieMutation};
 
 use std::borrow::Cow;
 use std::sync::Arc;

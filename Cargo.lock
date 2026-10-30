@@ -2709,6 +2709,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-cookie-db"
+version = "0.1.0"
+dependencies = [
+ "moli-cookie-jar",
+ "moli-sqlite",
+ "parking_lot",
+ "rusqlite",
+ "tempfile",
+ "time",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "moli-cookie-import"
 version = "0.1.0"
 dependencies = [

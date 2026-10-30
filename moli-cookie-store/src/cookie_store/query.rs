@@ -199,11 +199,21 @@ impl CookieStore {
         partition_key: Option<&crate::CookiePartitionKey>,
     ) -> bool {
         let access_index = self.bump_access_index();
-        self.get_mut_with_partition_key(domain, path, name, partition_key)
+        let observed = self.observer.is_some();
+        let changed = self
+            .get_mut_with_partition_key(domain, path, name, partition_key)
             .map(|cookie| {
                 cookie.touch_with_access_index(access_index);
-            })
-            .is_some()
+                observed.then(|| CookieStoreKey::for_cookie(cookie))
+            });
+        let touched = changed.is_some();
+        if let Some(Some(key)) = changed {
+            self.notify(CookieStoreMutation::Touch {
+                key,
+                last_access_index: access_index,
+            });
+        }
+        touched
     }
 
     /// Specify a public suffix lookup for the `CookieStore` to allow [public suffix
@@ -227,6 +237,7 @@ impl CookieStore {
             next_creation_index: self.next_creation_index,
             next_access_index: self.next_access_index,
             limits: self.limits,
+            observer: self.observer,
             public_suffix_list: Some(psl),
         }
     }
@@ -381,6 +392,13 @@ impl CookieStore {
             map_remove(&mut self.cookies, domain);
         }
 
+        if self.observer.is_some() {
+            if let Some(cookie) = &removed {
+                self.notify(CookieStoreMutation::Delete(CookieStoreKey::for_cookie(
+                    cookie,
+                )));
+            }
+        }
         removed
     }
 

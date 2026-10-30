@@ -8,7 +8,10 @@ mod jar;
 mod model;
 
 pub use cookie_store::CookiePriority;
-pub use jar::{BrowserCookieStore, SharedBrowserCookieStore, new_shared_browser_cookie_store};
+pub use jar::{
+    BrowserCookieObserver, BrowserCookieStore, SharedBrowserCookieStore, StoredCookieIdentity,
+    StoredCookieMutation, new_shared_browser_cookie_store,
+};
 pub use model::{
     BrowserCookieFacadeContext, BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides,
     BrowserCookieStorageAccessStatus, CookieSiteDataClearReport, CookieSiteDataClearScope,

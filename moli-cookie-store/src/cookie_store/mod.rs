@@ -1,4 +1,6 @@
 mod context;
+mod mutations;
+pub use mutations::{CookieStoreKey, CookieStoreMutation, CookieStoreObserver};
 mod policy;
 mod query;
 mod query_policy;
@@ -15,7 +17,7 @@ pub(crate) use self::store::{
     CookieKey, DomainMap, Map, MAX_COOKIE_ATTRIBUTE_VALUE_BYTES, MAX_COOKIE_NAME_VALUE_BYTES,
 };
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 /// An implementation for storing and retrieving [`Cookie`]s per the path and domain matching
 /// rules specified in [RFC6265](https://datatracker.ietf.org/doc/html/rfc6265).
 pub struct CookieStore {
@@ -24,6 +26,7 @@ pub struct CookieStore {
     next_creation_index: u64,
     next_access_index: u64,
     limits: CookieStoreLimits,
+    observer: Option<std::sync::Arc<dyn CookieStoreObserver>>,
     #[cfg(feature = "public_suffix")]
     /// If set, enables [public suffix](https://datatracker.ietf.org/doc/html/rfc6265#section-5.3) rejection based on the provided rule lookup.
     public_suffix_list: Option<std::sync::Arc<dyn crate::CookiePublicSuffixList>>,

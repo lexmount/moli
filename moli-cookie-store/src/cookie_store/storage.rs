@@ -8,7 +8,10 @@ use super::*;
 impl CookieStore {
     /// Clear the contents of the store
     pub fn clear(&mut self) {
-        self.cookies.clear()
+        if !self.cookies.is_empty() {
+            self.cookies.clear();
+            self.notify(CookieStoreMutation::Clear);
+        }
     }
 
     /// An iterator visiting all the __unexpired__ cookies in the store
@@ -133,6 +136,7 @@ impl CookieStore {
             next_creation_index,
             next_access_index,
             limits: CookieStoreLimits::default(),
+            observer: None,
             #[cfg(feature = "public_suffix")]
             public_suffix_list: None,
         })
@@ -144,6 +148,7 @@ impl CookieStore {
             next_creation_index: 0,
             next_access_index: 0,
             limits: CookieStoreLimits::default(),
+            observer: None,
             #[cfg(feature = "public_suffix")]
             public_suffix_list: None,
         }
