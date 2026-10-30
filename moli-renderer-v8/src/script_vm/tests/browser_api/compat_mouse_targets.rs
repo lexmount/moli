@@ -57,7 +57,8 @@ fn assert_compatibility_mouse_targets(in_child: bool) {
                                 pressure: if buttons == 0 { 0.0 } else { 0.5 },
                                 ..Default::default()
                             },
-                            0, false,
+                            0,
+                            false,
                         )
                         .unwrap_or_else(|error| {
                             panic!("{mode}, {trigger}, {pointer_type}, capture {captured}, child {in_child}, phase {phase}: {error}")

@@ -341,7 +341,7 @@ pub(crate) use focus::is_disabled_form_control;
 use focus::is_focusable;
 pub(crate) use focus::{
     apply_document_focus_fixup, contenteditable_editing_host, focus_element,
-    focus_text_control_preserving_selection,
+    focus_element_preserving_selection,
     perform_access_key_default_action_for_dispatched_event,
     perform_hover_interest_default_action_for_dispatched_event,
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,
@@ -349,7 +349,7 @@ pub(crate) use focus::{
 };
 pub(super) use focus::{node_blur_callback, node_focus_callback};
 #[cfg(feature = "devtools")]
-pub(crate) use focus::{perform_mouse_focus_default_action, update_focus_preserving_selection};
+pub(crate) use focus::perform_mouse_focus_default_action;
 #[cfg(feature = "devtools")]
 pub(crate) use forms::cache_input_files_from_selected_files;
 #[cfg(feature = "devtools")]

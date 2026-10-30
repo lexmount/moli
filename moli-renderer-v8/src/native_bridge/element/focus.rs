@@ -626,32 +626,13 @@ pub(crate) fn update_focus(
     update_focus_from_previous(scope, runtime_ptr, previous, next);
 }
 
-#[cfg(feature = "devtools")]
-/// Drop keeps its own insertion range; focusing must not replace it with the
-/// caret that keyboard editing would initialize at the host's beginning.
-pub(crate) fn update_focus_preserving_selection(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    next: Option<DomHandle>,
-) {
-    let previous = unsafe { &*runtime_ptr }.active_element_handle();
-    update_focus_with_selection_behavior(
-        scope,
-        runtime_ptr,
-        previous,
-        next,
-        None,
-        SelectionBehaviorOnFocus::Preserve,
-    );
-}
-
 #[derive(Clone, Copy)]
 enum SelectionBehaviorOnFocus {
     Restore,
     Preserve,
 }
 
-pub(crate) fn focus_text_control_preserving_selection(
+pub(crate) fn focus_element_preserving_selection(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     target: DomHandle,

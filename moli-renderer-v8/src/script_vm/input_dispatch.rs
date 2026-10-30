@@ -2153,19 +2153,22 @@ impl ScriptVm {
     }
 
     fn finish_active_drag(&mut self, reason: DragFinishReason, modifiers: u8) -> Result<()> {
-        let (position, sampled, layout) = if let Some(session) = &self.active_drag_session {
+        self.pending_drag_gesture = None;
+        let Some(session) = self.active_drag_session.as_ref() else {
+            // An unrelated button press survives when there is no drag to finish.
+            return Ok(());
+        };
+        let position = session.position;
+        let (sampled, layout) = {
             let host = self._context_host.borrow();
             let layout = host.ensure_observable_layout();
-            (session.position, host.published_frame_geometry(), layout)
-        } else {
-            (InputPosition::default(), None, Ok(()))
+            (host.published_frame_geometry(), layout)
         };
         let drag_input = DragInput {
             position,
             sampled: sampled.as_deref(),
             modifiers,
         };
-        self.pending_drag_gesture = None;
         self._context_host.borrow_mut().clear_mouse_presses();
         let active = &mut self.active_drag_session as *mut Option<ActiveDragSession>;
         self.with_default_context_scope(|scope, runtime_ptr| {
@@ -2949,6 +2952,12 @@ impl ScriptVm {
         should_insert_text: bool,
         location: u32,
     ) -> Result<RendererInputDispatchOutcome> {
+        if self.active_drag_session.is_some() {
+            if event_name == "keydown" && key == "Escape" {
+                self.finish_active_drag(DragFinishReason::Canceled, modifiers)?;
+            }
+            return self.finish_input_event_dispatch_turn(Ok(input_dispatch_outcome(true)));
+        }
         if event_name == "keypress" && self.suppress_next_keypress_after_canceled_raw_keydown {
             self.suppress_next_keypress_after_canceled_raw_keydown = false;
             return Ok(input_dispatch_outcome(false));
