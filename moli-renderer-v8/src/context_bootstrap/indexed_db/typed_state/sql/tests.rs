@@ -325,6 +325,7 @@ fn transaction<'s>(
         database,
         Some(TX),
         TransactionMode::ReadWrite,
+        &["records".into()],
         started,
     );
     let id = indexed_db_typed_state_id(scope, transaction).unwrap();
