@@ -2403,3 +2403,5 @@ mod hyperlink_audit_owner;
 mod canvas_pixel_geometry;
 
 mod image_data_native;
+
+mod canvas_pixel_settings;
