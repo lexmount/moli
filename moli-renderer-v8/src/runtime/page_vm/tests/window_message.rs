@@ -1,3 +1,6 @@
+#[path = "window_message/split30_window_transfer_admission.rs"]
+mod split30_window_transfer_admission;
+
 #[path = "window_message/split30_window_postmessage_derived_inputs.rs"]
 mod split30_window_postmessage_derived_inputs;
 

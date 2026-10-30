@@ -36,6 +36,56 @@ fn failed_message_serialization_does_not_transfer_readable_stream() {
 }
 
 #[test]
+fn rejected_window_message_preparations_release_private_stream_channels() {
+    for phase in ["origin", "buffer", "port", "payload"] {
+        let mut vm = new_storage_test_vm("https://stream-message-prepare.test/");
+        vm.eval(
+            r#"
+const channel = new MessageChannel();
+const neuteredPort = channel.port2;
+const movedPort = structuredClone(neuteredPort, {transfer: [neuteredPort]});
+movedPort.close(); channel.port1.close();
+"#,
+        )
+        .expect("detached transfer port should be prepared");
+        let registry = vm._context_host.borrow().message_port_registry();
+        let previous_endpoints = registry.endpoint_count();
+        vm.eval(&format!("globalThis.failurePhase = {phase:?}"))
+            .expect("failure phase should bind");
+        let result = vm.eval(r#"
+(() => {
+  const readable = new ReadableStream();
+  const writable = new WritableStream();
+  const transform = new TransformStream();
+  const buffer = new ArrayBuffer(8);
+  const transfers = [readable, writable, transform];
+  if (failurePhase === 'buffer') transfers.push(buffer);
+  if (failurePhase === 'port') transfers.push(neuteredPort);
+  const payload = {get value() {
+    if (failurePhase === 'buffer') structuredClone(buffer, {transfer: [buffer]});
+    return failurePhase === 'payload' ? () => {} : 7;
+  }};
+  let error = null;
+  try { postMessage(payload, failurePhase === 'origin' ? 'not a URL' : '*', transfers); }
+  catch (caught) { error = caught.name; }
+  return [error, readable.locked, writable.locked, transform.readable.locked, transform.writable.locked].join(':');
+})()
+"#).expect("rejected stream message preparation should evaluate");
+        let expected = match phase {
+            "origin" => "SyntaxError:true:true:true:true",
+            "payload" => "DataCloneError:false:false:false:false",
+            _ => "DataCloneError:true:true:true:true",
+        };
+        assert_eq!(result, expected, "{phase}");
+        assert_eq!(
+            registry.endpoint_count(),
+            previous_endpoints,
+            "{phase} leaked private stream-transfer channels"
+        );
+    }
+}
+
+#[test]
 fn transfer_list_transfers_readable_stream_absent_from_message_data() {
     let mut vm = new_storage_test_vm("https://stream-transfer-list.test/");
 
