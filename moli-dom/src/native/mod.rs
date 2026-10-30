@@ -25,11 +25,12 @@ use host::StylesheetCandidateRegistries;
 pub use host::{
     ConnectedShadowRootSnapshot, DomAdoptionTarget, DomAssociatedTreeEdgeKind,
     DomAttributeMutation, DomAttributeMutationOutcome, DomChildListMutation, DomHost,
-    DomMutationEffects, DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind,
-    DomScriptMutationEffects, DomSlotAssignmentChange, DomSlotMutationEffects,
-    DomStyleInvalidationInputs, DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind,
-    DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes, DomTreeMutationEffects,
-    ScriptPrepareTrigger, ScriptPrepareTriggerKind, StylesheetCandidateTreeScopeSnapshots,
+    DomMutationEffects, DomMutationObserverEffect, DomMutationRecord, DomMutationRecordBatch,
+    DomMutationRecordKind, DomScriptMutationEffects, DomSlotAssignmentChange,
+    DomSlotMutationEffects, DomStyleInvalidationInputs, DomStylesheetOwnerChange,
+    DomStylesheetOwnerChangeKind, DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes,
+    DomTreeMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind,
+    StylesheetCandidateTreeScopeSnapshots,
 };
 pub use host::{
     HostElementSnapshot, ShadowRootBindingSnapshot, ShadowRootInclusion, ShadowRootInit,
@@ -948,6 +949,64 @@ mod tests {
         host.set_mutation_observer_records_enabled(false);
         let effects = host.set_attribute_effects(element, "data-disabled", "3");
         assert!(effects.observer_records().records().is_empty());
+    }
+
+    #[test]
+    fn self_replacement_preserves_observer_removal_ancestry_and_both_public_records() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let parent = host.create_element("section");
+        let child = host.create_element("span");
+        assert!(host.append_child(parent, child));
+        host.set_mutation_observer_records_enabled(true);
+        let effects = host.replace_child_with_self_effects(parent, child);
+        let steps = effects.observer_records().effects().collect::<Vec<_>>();
+        assert_eq!(effects.observer_records().records().len(), 2);
+        assert!(
+            matches!(steps[0], DomMutationObserverEffect::SubtreeRemoval { node, ancestors } if node == child && ancestors == [parent])
+        );
+        assert_eq!(host.parent_node(child), Some(parent));
+    }
+
+    #[test]
+    fn observer_removals_capture_the_original_ancestors_before_moves_and_suppression() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let parent = host.create_element("div");
+        let branch = host.create_element("section");
+        let leaf = host.create_element("span");
+        let destination = host.create_element("aside");
+        assert!(host.append_child(parent, branch));
+        assert!(host.append_child(branch, leaf));
+        host.set_mutation_observer_records_enabled(true);
+
+        let mut effects = host.remove_child_effects(branch, leaf);
+        effects.suppress_child_list_mutations_for_target(branch);
+        assert!(host.append_child(destination, branch));
+        let removal = effects.observer_records().effects().collect::<Vec<_>>();
+        assert_eq!(removal.len(), 1);
+        assert!(
+            matches!(removal[0], DomMutationObserverEffect::SubtreeRemoval { node, ancestors } if node == leaf && ancestors == [branch, parent])
+        );
+
+        let effects = host.append_child_effects(parent, branch);
+        let removal = effects.observer_records().effects().next().unwrap();
+        assert!(
+            matches!(removal, DomMutationObserverEffect::SubtreeRemoval { node, ancestors } if node == branch && ancestors == [destination])
+        );
+
+        host.set_mutation_observer_records_enabled(false);
+        let effects = host.remove_child_effects(parent, branch);
+        assert_eq!(effects.observer_records().effects().count(), 0);
+
+        assert!(host.append_child(parent, branch));
+        host.set_devtools_mutation_records_enabled(true);
+        let effects = host.remove_child_effects(parent, branch);
+        assert_eq!(effects.observer_records().records().len(), 1);
+        assert!(
+            effects
+                .observer_records()
+                .effects()
+                .all(|effect| matches!(effect, DomMutationObserverEffect::Record(_)))
+        );
     }
 
     #[test]

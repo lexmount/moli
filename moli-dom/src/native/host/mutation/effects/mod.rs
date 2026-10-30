@@ -9,7 +9,9 @@ mod style;
 mod stylesheet;
 mod tree;
 
-pub use observer::{DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind};
+pub use observer::{
+    DomMutationObserverEffect, DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind,
+};
 pub use script::{DomScriptMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind};
 pub use slot::{DomSlotAssignmentChange, DomSlotMutationEffects};
 pub use style::{DomAttributeMutation, DomChildListMutation, DomStyleInvalidationInputs};
