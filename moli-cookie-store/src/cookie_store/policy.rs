@@ -288,19 +288,12 @@ pub(super) fn path_overlap(left: &str, right: &str) -> bool {
 /// that behavior for callers that still use those helpers, while new code
 /// should prefer explicit `InsertContext` constructors.
 pub(super) fn inferred_insert_context(url: &Url) -> InsertContext<'_> {
-    if is_http_scheme(url) {
-        InsertContext {
-            url,
-            source: CookieAccessSource::Http,
-            browser_context: BrowserSiteContext::empty(),
-            enforce_browser_policy: false,
-        }
-    } else {
-        InsertContext {
-            url,
-            source: CookieAccessSource::Document,
-            browser_context: BrowserSiteContext::empty(),
-            enforce_browser_policy: false,
+    InsertContext {
+        enforce_browser_policy: false,
+        ..if is_http_scheme(url) {
+            InsertContext::http(url)
+        } else {
+            InsertContext::document(url)
         }
     }
 }

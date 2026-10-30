@@ -636,28 +636,25 @@ fn request_url_for_stored_cookie(cookie: &StoredCookie) -> Option<Url> {
     Url::parse(&format!("{scheme}://{host}{}", cookie.path)).ok()
 }
 
+fn core_same_site_request_context(context: NetworkSameSiteContext) -> SameSiteRequestContext {
+    match context {
+        NetworkSameSiteContext::SameSiteStrict => SameSiteRequestContext::SameSiteStrict,
+        NetworkSameSiteContext::SameSiteLax => SameSiteRequestContext::SameSiteLax,
+        NetworkSameSiteContext::SameSiteLaxMethodUnsafe => {
+            SameSiteRequestContext::SameSiteLaxMethodUnsafe
+        }
+        NetworkSameSiteContext::CrossSite => SameSiteRequestContext::CrossSite,
+    }
+}
+
 pub(super) fn network_query_context<'a>(
     url: &'a Url,
     request_context: NetworkCookieRequestContext,
 ) -> QueryContext<'a> {
     let mut context = QueryContext::http(url);
     context.same_site_context = SameSiteContext::new(
-        match request_context.site_context.context {
-            NetworkSameSiteContext::SameSiteStrict => SameSiteRequestContext::SameSiteStrict,
-            NetworkSameSiteContext::SameSiteLax => SameSiteRequestContext::SameSiteLax,
-            NetworkSameSiteContext::SameSiteLaxMethodUnsafe => {
-                SameSiteRequestContext::SameSiteLaxMethodUnsafe
-            }
-            NetworkSameSiteContext::CrossSite => SameSiteRequestContext::CrossSite,
-        },
-        match request_context.site_context.schemeful_context {
-            NetworkSameSiteContext::SameSiteStrict => SameSiteRequestContext::SameSiteStrict,
-            NetworkSameSiteContext::SameSiteLax => SameSiteRequestContext::SameSiteLax,
-            NetworkSameSiteContext::SameSiteLaxMethodUnsafe => {
-                SameSiteRequestContext::SameSiteLaxMethodUnsafe
-            }
-            NetworkSameSiteContext::CrossSite => SameSiteRequestContext::CrossSite,
-        },
+        core_same_site_request_context(request_context.site_context.context),
+        core_same_site_request_context(request_context.site_context.schemeful_context),
     );
     context.browser_context =
         core_browser_site_context_from_facade(&request_context.browser_context);
@@ -715,23 +712,32 @@ fn document_query_context<'a>(
     context.browser_context = core_browser_site_context_from_facade(browser_context);
     context.browser_context.cookie_partition_key =
         Some(core_cookie_partition_key_for_url(browser_context, url));
+    context.same_site_context = document_site_context(url, browser_context);
+    context
+}
+
+fn document_site_context(
+    url: &Url,
+    browser_context: &BrowserCookieFacadeContext,
+) -> SameSiteContext {
     if let Some(site_basis_url) = browser_context.site_basis_url() {
         let schemeless_same_site = same_site_urls(url, site_basis_url, false);
         let schemeful_same_site = same_site_urls(url, site_basis_url, true);
-        context.same_site_context = SameSiteContext::new(
+        SameSiteContext::new(
             if schemeless_same_site {
-                SameSiteRequestContext::SameSiteLax
+                SameSiteRequestContext::SameSiteStrict
             } else {
                 SameSiteRequestContext::CrossSite
             },
             if schemeful_same_site {
-                SameSiteRequestContext::SameSiteLax
+                SameSiteRequestContext::SameSiteStrict
             } else {
                 SameSiteRequestContext::CrossSite
             },
-        );
+        )
+    } else {
+        SameSiteContext::same_site()
     }
-    context
 }
 
 fn effective_document_cookie_url(url: &Url) -> Cow<'_, Url> {
@@ -748,6 +754,7 @@ fn document_insert_context<'a>(
     browser_context: &BrowserCookieFacadeContext,
 ) -> InsertContext<'a> {
     let mut context = InsertContext::document(url);
+    context.same_site_context = document_site_context(url, browser_context);
     context.browser_context = core_browser_site_context_from_facade(browser_context);
     context.browser_context.cookie_partition_key =
         Some(core_cookie_partition_key_for_url(browser_context, url));
@@ -759,6 +766,14 @@ fn network_insert_context<'a>(
     request_context: &NetworkCookieRequestContext,
 ) -> InsertContext<'a> {
     let mut context = InsertContext::http(url);
+    context.same_site_context = SameSiteContext::new(
+        core_same_site_request_context(request_context.site_context.context),
+        core_same_site_request_context(request_context.site_context.schemeful_context),
+    );
+    context.request_type = match request_context.request_type {
+        NetworkCookieRequestType::Subresource => HttpRequestType::Subresource,
+        NetworkCookieRequestType::TopLevelNavigation => HttpRequestType::TopLevelNavigation,
+    };
     context.browser_context =
         core_browser_site_context_from_facade(&request_context.browser_context);
     context.browser_context.cookie_partition_key = Some(core_cookie_partition_key_for_url(

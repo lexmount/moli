@@ -304,6 +304,155 @@ fn document_cookie_set_report_accepts_blob_http_url_like_underlying_origin() {
 }
 
 #[test]
+fn cross_site_document_writes_preserve_existing_cookies_and_generation() {
+    let url = parse("https://cookie.test/");
+    let embedder = parse("https://other.test/");
+    for grant in [
+        NetworkStorageAccessStatus::None,
+        NetworkStorageAccessStatus::Granted,
+    ] {
+        let context = super::BrowserCookieFacadeContext::default()
+            .with_site_for_cookies_url(&embedder)
+            .with_top_frame_origin_url(&embedder)
+            .with_storage_access_status(grant);
+        for (attribute, reason) in [
+            (
+                "; SameSite=Strict",
+                StoredCookieSetRejectionReason::SameSiteStrict,
+            ),
+            (
+                "; SameSite=Lax",
+                StoredCookieSetRejectionReason::SameSiteLax,
+            ),
+            (
+                "",
+                StoredCookieSetRejectionReason::SameSiteUnspecifiedTreatedAsLax,
+            ),
+        ] {
+            let mut store = BrowserCookieStore::default();
+            store.store_response_headers(
+                &url,
+                &[(
+                    "Set-Cookie".into(),
+                    b"sid=old; Secure; SameSite=None; Path=/".to_vec(),
+                )],
+            );
+            let generation = store.document_cookie_generation();
+            for attempt in [
+                format!("fresh=1; Secure; Path=/{attribute}"),
+                format!("sid=replaced; Secure; Path=/{attribute}"),
+                format!("sid=deleted; Secure; Path=/; Max-Age=0{attribute}"),
+            ] {
+                let report =
+                    store.set_document_cookie_with_context_report(&url, &attempt, &context);
+                assert!(!report.is_accepted(), "{attempt} unexpectedly accepted");
+                assert_eq!(report.rejection_reasons, vec![reason]);
+                assert_eq!(store.document_cookie(&url), "sid=old");
+                assert_eq!(store.document_cookie_generation(), generation);
+            }
+            assert!(
+                store
+                    .set_document_cookie_with_context_report(
+                        &url,
+                        "sid=allowed; Secure; Path=/; SameSite=None",
+                        &context
+                    )
+                    .is_accepted()
+            );
+            assert_eq!(store.document_cookie(&url), "sid=allowed");
+            assert!(store.document_cookie_generation() > generation);
+        }
+    }
+}
+
+#[test]
+fn cross_site_response_cookie_creation_preserves_top_level_navigation_allowance() {
+    let url = parse("https://cookie.test/");
+    let embedder = parse("https://other.test/");
+    let headers = vec![
+        (
+            "Set-Cookie".into(),
+            b"strict=1; Secure; Path=/; SameSite=Strict".to_vec(),
+        ),
+        (
+            "Set-Cookie".into(),
+            b"lax=1; Secure; Path=/; SameSite=Lax".to_vec(),
+        ),
+        (
+            "Set-Cookie".into(),
+            b"unspecified=1; Secure; Path=/".to_vec(),
+        ),
+        (
+            "Set-Cookie".into(),
+            b"none=1; Secure; Path=/; SameSite=None".to_vec(),
+        ),
+    ];
+    let mut store = BrowserCookieStore::default();
+    let cross_site =
+        NetworkCookieRequestContext::subresource("GET").with_initiator_url(&url, &embedder);
+    let reports = store.store_response_headers_with_context_reports(&url, &headers, &cross_site);
+    assert_eq!(
+        reports
+            .iter()
+            .map(|report| report.is_accepted())
+            .collect::<Vec<_>>(),
+        vec![false, false, false, true]
+    );
+    assert_eq!(store.document_cookie(&url), "none=1");
+
+    let reasons = [
+        StoredCookieSetRejectionReason::SameSiteStrict,
+        StoredCookieSetRejectionReason::SameSiteLax,
+        StoredCookieSetRejectionReason::SameSiteUnspecifiedTreatedAsLax,
+    ];
+    for (report, reason) in reports.iter().zip(reasons) {
+        assert_eq!(report.rejection_reasons, vec![reason]);
+    }
+    let generation = store.document_cookie_generation();
+    for (attribute, reason) in [
+        (
+            "; SameSite=Strict",
+            StoredCookieSetRejectionReason::SameSiteStrict,
+        ),
+        (
+            "; SameSite=Lax",
+            StoredCookieSetRejectionReason::SameSiteLax,
+        ),
+        (
+            "",
+            StoredCookieSetRejectionReason::SameSiteUnspecifiedTreatedAsLax,
+        ),
+    ] {
+        for suffix in ["", "; Max-Age=0"] {
+            let line = format!("none=blocked; Secure; Path=/{attribute}{suffix}");
+            let reports = store.store_response_headers_with_context_reports(
+                &url,
+                &[("Set-Cookie".into(), line.into_bytes())],
+                &cross_site,
+            );
+            assert_eq!(reports[0].rejection_reasons, vec![reason]);
+            assert_eq!(store.document_cookie(&url), "none=1");
+            assert_eq!(store.document_cookie_generation(), generation);
+        }
+    }
+
+    for method in ["GET", "POST"] {
+        let navigation = NetworkCookieRequestContext::top_level_navigation(method)
+            .with_initiator_url(&url, &embedder);
+        let reports =
+            store.store_response_headers_with_context_reports(&url, &headers, &navigation);
+        assert!(
+            reports.iter().all(|report| report.is_accepted()),
+            "{method}: {reports:?}"
+        );
+        assert_eq!(
+            store.document_cookie(&url),
+            "none=1; strict=1; lax=1; unspecified=1"
+        );
+    }
+}
+
+#[test]
 fn document_cookie_access_report_projects_httponly_exclusion() {
     let mut store = BrowserCookieStore::default();
     let url = parse("https://example.com/app/index.html");
@@ -346,7 +495,7 @@ fn document_cookie_access_report_projects_httponly_exclusion() {
 }
 
 #[test]
-fn document_cookie_access_report_projects_schemeful_downgrade_like_chromium_script_set() {
+fn document_cookie_access_report_projects_schemeful_downgrade_like_chromium_script_get() {
     let mut store = BrowserCookieStore::default();
     let document_url = parse("https://example.com/app/index.html");
     let browser_context = super::BrowserCookieFacadeContext::default()
@@ -364,10 +513,13 @@ fn document_cookie_access_report_projects_schemeful_downgrade_like_chromium_scri
     let report = store.document_cookie_access_report_with_context(&document_url, &browser_context);
     let lax = find_cookie(&report, "lax").expect("lax cookie should be present");
 
-    assert!(lax.exclusion_reasons.is_empty());
+    assert_eq!(
+        lax.exclusion_reasons,
+        vec![StoredCookieExclusionReason::SameSiteLax]
+    );
     assert_eq!(
         lax.same_site_context,
-        StoredCookieRequestSameSiteContext::SameSiteLax
+        StoredCookieRequestSameSiteContext::SameSiteStrict
     );
     assert_eq!(
         lax.schemeful_same_site_context,
@@ -376,7 +528,7 @@ fn document_cookie_access_report_projects_schemeful_downgrade_like_chromium_scri
 }
 
 #[test]
-fn document_cookie_access_report_treats_wss_and_https_as_schemefully_same_site_like_chromium_script_set()
+fn document_cookie_access_report_treats_wss_and_https_as_schemefully_same_site_like_chromium_script_get()
  {
     let mut store = BrowserCookieStore::default();
     let document_url = parse("wss://api.example.com/socket");
@@ -398,16 +550,16 @@ fn document_cookie_access_report_treats_wss_and_https_as_schemefully_same_site_l
     assert!(lax.exclusion_reasons.is_empty());
     assert_eq!(
         lax.same_site_context,
-        StoredCookieRequestSameSiteContext::SameSiteLax
+        StoredCookieRequestSameSiteContext::SameSiteStrict
     );
     assert_eq!(
         lax.schemeful_same_site_context,
-        StoredCookieRequestSameSiteContext::SameSiteLax
+        StoredCookieRequestSameSiteContext::SameSiteStrict
     );
 }
 
 #[test]
-fn document_cookie_access_report_projects_cross_site_when_site_for_cookies_is_cross_site_like_chromium_script_set()
+fn document_cookie_access_report_projects_cross_site_when_site_for_cookies_is_cross_site_like_chromium_script_get()
  {
     let mut store = BrowserCookieStore::default();
     let document_url = parse("https://example.com/app/index.html");
@@ -437,7 +589,7 @@ fn document_cookie_access_report_projects_cross_site_when_site_for_cookies_is_cr
 }
 
 #[test]
-fn document_cookie_access_report_treats_ws_and_http_as_schemefully_same_site_like_chromium_script_set()
+fn document_cookie_access_report_treats_ws_and_http_as_schemefully_same_site_like_chromium_script_get()
  {
     let mut store = BrowserCookieStore::default();
     let document_url = parse("ws://api.example.com/socket");
@@ -459,11 +611,11 @@ fn document_cookie_access_report_treats_ws_and_http_as_schemefully_same_site_lik
     assert!(lax.exclusion_reasons.is_empty());
     assert_eq!(
         lax.same_site_context,
-        StoredCookieRequestSameSiteContext::SameSiteLax
+        StoredCookieRequestSameSiteContext::SameSiteStrict
     );
     assert_eq!(
         lax.schemeful_same_site_context,
-        StoredCookieRequestSameSiteContext::SameSiteLax
+        StoredCookieRequestSameSiteContext::SameSiteStrict
     );
 }
 
@@ -487,11 +639,11 @@ fn document_cookie_access_report_treats_local_file_urls_as_same_site_like_chromi
     assert!(lax.exclusion_reasons.is_empty());
     assert_eq!(
         lax.same_site_context,
-        StoredCookieRequestSameSiteContext::SameSiteLax
+        StoredCookieRequestSameSiteContext::SameSiteStrict
     );
     assert_eq!(
         lax.schemeful_same_site_context,
-        StoredCookieRequestSameSiteContext::SameSiteLax
+        StoredCookieRequestSameSiteContext::SameSiteStrict
     );
 }
 
@@ -545,11 +697,11 @@ fn document_cookie_access_report_treats_secure_blob_urls_as_same_site_like_chrom
     assert!(lax.exclusion_reasons.is_empty());
     assert_eq!(
         lax.same_site_context,
-        StoredCookieRequestSameSiteContext::SameSiteLax
+        StoredCookieRequestSameSiteContext::SameSiteStrict
     );
     assert_eq!(
         lax.schemeful_same_site_context,
-        StoredCookieRequestSameSiteContext::SameSiteLax
+        StoredCookieRequestSameSiteContext::SameSiteStrict
     );
 }
 
@@ -573,10 +725,13 @@ fn document_cookie_access_report_treats_insecure_blob_urls_as_schemeful_cross_si
     let report = store.document_cookie_access_report_with_context(&document_url, &browser_context);
     let lax = find_cookie(&report, "lax").expect("lax cookie should be present");
 
-    assert!(lax.exclusion_reasons.is_empty());
+    assert_eq!(
+        lax.exclusion_reasons,
+        vec![StoredCookieExclusionReason::SameSiteLax]
+    );
     assert_eq!(
         lax.same_site_context,
-        StoredCookieRequestSameSiteContext::SameSiteLax
+        StoredCookieRequestSameSiteContext::SameSiteStrict
     );
     assert_eq!(
         lax.schemeful_same_site_context,
@@ -604,10 +759,13 @@ fn document_cookie_access_report_treats_secure_blob_urls_with_insecure_site_for_
     let report = store.document_cookie_access_report_with_context(&document_url, &browser_context);
     let lax = find_cookie(&report, "lax").expect("lax cookie should be present");
 
-    assert!(lax.exclusion_reasons.is_empty());
+    assert_eq!(
+        lax.exclusion_reasons,
+        vec![StoredCookieExclusionReason::SameSiteLax]
+    );
     assert_eq!(
         lax.same_site_context,
-        StoredCookieRequestSameSiteContext::SameSiteLax
+        StoredCookieRequestSameSiteContext::SameSiteStrict
     );
     assert_eq!(
         lax.schemeful_same_site_context,
@@ -680,11 +838,11 @@ fn document_cookie_access_report_treats_blob_file_urls_as_same_site_like_chromiu
     assert!(lax.exclusion_reasons.is_empty());
     assert_eq!(
         lax.same_site_context,
-        StoredCookieRequestSameSiteContext::SameSiteLax
+        StoredCookieRequestSameSiteContext::SameSiteStrict
     );
     assert_eq!(
         lax.schemeful_same_site_context,
-        StoredCookieRequestSameSiteContext::SameSiteLax
+        StoredCookieRequestSameSiteContext::SameSiteStrict
     );
 }
 

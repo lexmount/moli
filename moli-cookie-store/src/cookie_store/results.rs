@@ -25,6 +25,12 @@ pub enum CookieSetRejectionReason {
     DomainMismatch,
     /// `SameSite=None` cookies must also specify `Secure`.
     SameSiteNoneRequiresSecure,
+    /// A `SameSite=Strict` cookie was written from a cross-site context.
+    SameSiteStrict,
+    /// A `SameSite=Lax` cookie was written from a cross-site context.
+    SameSiteLax,
+    /// A default-Lax cookie was written from a cross-site context.
+    SameSiteUnspecifiedTreatedAsLax,
     /// The cookie violated one of the protected prefix rules.
     PrefixViolation,
     /// An insecure write attempted to overlap an existing secure cookie.
@@ -61,6 +67,9 @@ impl From<CookieError> for CookieSetRejectionReason {
             CookieError::NonRelativeScheme => Self::NonRelativeScheme,
             CookieError::DomainMismatch => Self::DomainMismatch,
             CookieError::SameSiteNoneRequiresSecure => Self::SameSiteNoneRequiresSecure,
+            CookieError::SameSiteStrict => Self::SameSiteStrict,
+            CookieError::SameSiteLax => Self::SameSiteLax,
+            CookieError::SameSiteUnspecifiedTreatedAsLax => Self::SameSiteUnspecifiedTreatedAsLax,
             CookieError::PrefixViolation => Self::PrefixViolation,
             CookieError::SecureOverlay => Self::SecureOverlay,
             CookieError::NameValueTooLarge => Self::NameValueTooLarge,
@@ -188,6 +197,9 @@ impl CookieSetRejectionReason {
             Self::NonRelativeScheme => CookieError::NonRelativeScheme,
             Self::DomainMismatch => CookieError::DomainMismatch,
             Self::SameSiteNoneRequiresSecure => CookieError::SameSiteNoneRequiresSecure,
+            Self::SameSiteStrict => CookieError::SameSiteStrict,
+            Self::SameSiteLax => CookieError::SameSiteLax,
+            Self::SameSiteUnspecifiedTreatedAsLax => CookieError::SameSiteUnspecifiedTreatedAsLax,
             Self::PrefixViolation => CookieError::PrefixViolation,
             Self::SecureOverlay => CookieError::SecureOverlay,
             Self::NameValueTooLarge => CookieError::NameValueTooLarge,
