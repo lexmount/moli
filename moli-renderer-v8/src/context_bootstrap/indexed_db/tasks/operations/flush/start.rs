@@ -56,7 +56,19 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
         let Some(mode) = indexed_db_transaction_mode(scope, transaction) else {
             return;
         };
+        let durability =
+            match crate::context_bootstrap::indexed_db::transaction_durability_for_begin(
+                scope,
+                transaction,
+            ) {
+                Ok(durability) => durability,
+                Err(error) => {
+                    fail::fail_regular_transaction_start(scope, transaction, &error);
+                    return;
+                }
+            };
         let command = Command::Begin {
+            durability,
             transaction: handle,
             mode,
             stores: request.store_names().into_iter().collect(),

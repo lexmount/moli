@@ -455,6 +455,11 @@ fn begin_upgrade<'s>(
             state.connection.clone().expect("registered SQL connection"),
         )
     };
+    let durability = resolve_transaction_durability(
+        scope,
+        &payload.borrow().storage_scope,
+        IdbTransactionDurability::Default,
+    )?;
     let transaction = client.allocate_transaction_handle()?;
     let rollback = sql::SqlTransactionRollback::new(client.clone(), transaction);
     payload.borrow_mut().rollback = Some(rollback);
@@ -464,7 +469,12 @@ fn begin_upgrade<'s>(
         scope,
         request,
         move |completion| {
-            connection.begin_upgrade(transaction, version, completion)?;
+            connection.begin_upgrade_with_durability(
+                transaction,
+                version,
+                durability,
+                completion,
+            )?;
             Ok(client)
         },
         move |scope, request, reply| {
@@ -630,6 +640,7 @@ fn materialize<'s>(
             database,
             None,
             TransactionMode::VersionChange,
+            IdbTransactionDurability::Default,
             &store_names,
         )
         .ok_or_else(|| {

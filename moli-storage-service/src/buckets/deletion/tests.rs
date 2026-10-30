@@ -51,6 +51,7 @@ impl Fixture {
         execute(
             &client,
             Command::Begin {
+                durability: moli_indexeddb::TransactionDurability::default(),
                 transaction: TX,
                 mode: TransactionMode::VersionChange,
                 stores: BTreeSet::new(),
@@ -188,6 +189,7 @@ fn deletion_waits_for_quota_without_blocking_sql_and_releases_results_after_deli
     execute(
         &client,
         Command::Begin {
+            durability: moli_indexeddb::TransactionDurability::default(),
             transaction: TX,
             mode: TransactionMode::ReadOnly,
             stores: BTreeSet::from(["records".into()]),

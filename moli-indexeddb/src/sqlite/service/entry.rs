@@ -165,6 +165,7 @@ impl Entry {
         }
         match command {
             Command::Begin {
+                durability,
                 transaction,
                 mode,
                 stores,
@@ -204,7 +205,8 @@ impl Entry {
                         "upgrade transaction cannot reuse regular admission".into(),
                     ));
                 }
-                match database.begin(transaction, mode, stores, version) {
+                match database.begin_with_durability(transaction, mode, stores, version, durability)
+                {
                     Ok(()) => {
                         entry.transactions.insert(
                             transaction,

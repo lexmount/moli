@@ -75,6 +75,7 @@ impl Fixture {
         execute(
             &client,
             Command::Begin {
+                durability: moli_indexeddb::TransactionDurability::default(),
                 transaction: TX,
                 mode: TransactionMode::VersionChange,
                 stores: BTreeSet::new(),
@@ -100,6 +101,7 @@ impl Fixture {
         execute(
             &client,
             Command::Begin {
+                durability: moli_indexeddb::TransactionDurability::default(),
                 transaction: TX,
                 mode: TransactionMode::VersionChange,
                 stores: BTreeSet::new(),
@@ -282,6 +284,7 @@ fn aborting_during_quota_wait_prevents_a_delayed_commit_from_publishing_data() {
     execute(
         &client,
         Command::Begin {
+            durability: moli_indexeddb::TransactionDurability::default(),
             transaction: TX,
             mode: TransactionMode::VersionChange,
             stores: BTreeSet::new(),

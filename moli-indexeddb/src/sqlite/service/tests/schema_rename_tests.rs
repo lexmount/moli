@@ -6,6 +6,7 @@ fn begin_upgrade(client: &DatabaseClient, version: u64) {
         Command::Begin {
             transaction: TX,
             mode: TransactionMode::VersionChange,
+            durability: crate::TransactionDurability::default(),
             stores: BTreeSet::new(),
             version: Some(version),
             admission: None,

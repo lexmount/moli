@@ -53,5 +53,5 @@ pub use types::{
     DatabaseHandle, IndexInfo, IndexOptions, IndexedDbExternalObject,
     IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind, IndexedDbQuotaCheck,
     IndexedDbValue, KeyRange, ObjectStoreInfo, ObjectStoreOptions, RecordSnapshot,
-    TransactionHandle, TransactionMode,
+    TransactionDurability, TransactionHandle, TransactionMode,
 };

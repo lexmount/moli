@@ -125,6 +125,7 @@ fn initialize(client: &DatabaseClient) {
     execute(
         client,
         Command::Begin {
+            durability: crate::TransactionDurability::default(),
             transaction: TX,
             mode: TransactionMode::VersionChange,
             stores: BTreeSet::new(),
@@ -178,6 +179,7 @@ fn start(
     execute(
         client,
         Command::Begin {
+            durability: crate::TransactionDurability::default(),
             transaction: TX,
             mode,
             stores: BTreeSet::from([store.into()]),
@@ -430,6 +432,7 @@ fn readers_overlap_without_committing_or_aborting_a_disjoint_writer() {
         let started = reply(
             &client,
             Command::Begin {
+                durability: crate::TransactionDurability::default(),
                 transaction,
                 mode: TransactionMode::ReadOnly,
                 stores: BTreeSet::from(["b".into()]),
@@ -874,6 +877,7 @@ fn stale_or_foreign_admission_cannot_start_another_database() {
     initialize(&second);
     let first_lease = queue(&first, "a", TransactionMode::ReadWrite);
     let wrong = || Command::Begin {
+        durability: crate::TransactionDurability::default(),
         transaction: TX,
         mode: TransactionMode::ReadWrite,
         stores: BTreeSet::from(["a".into()]),
@@ -1302,6 +1306,7 @@ fn stale_request_receipt_identifies_but_does_not_end_the_successor_sql_owner() {
     execute(
         &client,
         Command::Begin {
+            durability: crate::TransactionDurability::default(),
             transaction: current,
             mode: TransactionMode::ReadWrite,
             stores: BTreeSet::from(["a".into()]),

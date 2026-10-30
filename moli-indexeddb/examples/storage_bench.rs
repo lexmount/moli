@@ -47,6 +47,7 @@ fn begin(
     execute(
         client,
         Command::Begin {
+            durability: moli_indexeddb::TransactionDurability::default(),
             transaction,
             mode,
             stores: BTreeSet::from(["store".into()]),

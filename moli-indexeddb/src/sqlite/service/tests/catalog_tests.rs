@@ -75,6 +75,7 @@ fn catalog_recovers_the_largest_webidl_version_without_changing_generation_or_re
             execute(
                 &client,
                 Command::Begin {
+                    durability: crate::TransactionDurability::default(),
                     transaction: TX,
                     mode: TransactionMode::VersionChange,
                     stores: BTreeSet::new(),
@@ -167,6 +168,7 @@ fn catalog_lists_committed_metadata_and_snapshots_survive_upgrade_and_shutdown()
     execute(
         &astral,
         Command::Begin {
+            durability: crate::TransactionDurability::default(),
             transaction: TX,
             mode: TransactionMode::VersionChange,
             stores: BTreeSet::new(),
@@ -790,6 +792,7 @@ fn utf16_database_name_quota_rollback_preserves_other_database_versions_and_usag
             Command::Begin {
                 transaction: TX,
                 mode: TransactionMode::VersionChange,
+                durability: crate::TransactionDurability::default(),
                 stores: BTreeSet::new(),
                 version: Some(1),
                 admission: None,
@@ -813,6 +816,7 @@ fn utf16_database_name_quota_rollback_preserves_other_database_versions_and_usag
         Command::Begin {
             transaction: TX,
             mode: TransactionMode::VersionChange,
+            durability: crate::TransactionDurability::default(),
             stores: BTreeSet::new(),
             version: Some(2),
             admission: None,

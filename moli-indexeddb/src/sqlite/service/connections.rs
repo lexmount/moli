@@ -356,7 +356,23 @@ impl DatabaseConnection {
         version: u64,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<(), DispatchError> {
+        self.begin_upgrade_with_durability(
+            transaction,
+            version,
+            TransactionDurability::default(),
+            completion,
+        )
+    }
+
+    pub fn begin_upgrade_with_durability(
+        &self,
+        transaction: TransactionHandle,
+        version: u64,
+        durability: TransactionDurability,
+        completion: impl FnOnce(Completion) + Send + 'static,
+    ) -> Result<(), DispatchError> {
         let command = Command::Begin {
+            durability,
             transaction,
             mode: TransactionMode::VersionChange,
             stores: Default::default(),

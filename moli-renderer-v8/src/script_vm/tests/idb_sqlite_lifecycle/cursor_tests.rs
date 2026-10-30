@@ -274,6 +274,7 @@ async fn idb_sqlite_key_cursor_never_decodes_wire_and_value_cursor_propagates_de
         )
         .unwrap();
     backend.execute(Command::Begin {
+        durability: moli_indexeddb::TransactionDurability::default(),
         transaction: handle,
         mode: TransactionMode::ReadWrite,
         stores: BTreeSet::from(["records".into()]),
@@ -413,6 +414,7 @@ async fn idb_sqlite_cursor_listener_termination_rolls_back_only_automatic_commit
         );
         let handle = backend.client.allocate_transaction_handle().unwrap();
         backend.execute(Command::Begin {
+            durability: moli_indexeddb::TransactionDurability::default(),
             transaction: handle,
             mode: TransactionMode::ReadOnly,
             stores: BTreeSet::from(["records".into()]),

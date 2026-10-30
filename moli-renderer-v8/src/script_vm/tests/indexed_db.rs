@@ -1,6 +1,8 @@
 use super::*;
 use moli_url::origin_ascii_serialization;
 
+mod durability;
+
 #[test]
 fn indexed_db_first_use_ignores_public_constructor_overrides() {
     let fixture = include_str!("../../../tests/fixtures/indexeddb-first-use.js");

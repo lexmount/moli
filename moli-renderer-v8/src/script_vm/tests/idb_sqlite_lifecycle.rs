@@ -33,6 +33,7 @@ impl SqlBackend {
         let handle = self.client.allocate_transaction_handle().unwrap();
         let version = self.client.committed().unwrap().version + 1;
         self.execute(Command::Begin {
+            durability: moli_indexeddb::TransactionDurability::default(),
             transaction: handle,
             mode: TransactionMode::VersionChange,
             stores: BTreeSet::new(),
@@ -105,6 +106,7 @@ impl SqlBackend {
         };
         let transaction = backend.client.allocate_transaction_handle().unwrap();
         backend.execute(Command::Begin {
+            durability: moli_indexeddb::TransactionDurability::default(),
             transaction,
             mode: TransactionMode::VersionChange,
             stores: BTreeSet::new(),
@@ -700,6 +702,7 @@ async fn idb_sqlite_schema_corrupt_wire_aborts_backfill_instead_of_skipping_a_ro
         )
         .unwrap();
     backend.execute(Command::Begin {
+        durability: moli_indexeddb::TransactionDurability::default(),
         transaction: handle,
         mode: TransactionMode::ReadWrite,
         stores: BTreeSet::from(["records".into()]),

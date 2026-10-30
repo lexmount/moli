@@ -148,6 +148,7 @@ mod tests {
             };
             let transaction = client.allocate_transaction_handle().unwrap();
             execute(Command::Begin {
+                durability: moli_indexeddb::TransactionDurability::default(),
                 transaction,
                 mode: TransactionMode::VersionChange,
                 stores: Default::default(),

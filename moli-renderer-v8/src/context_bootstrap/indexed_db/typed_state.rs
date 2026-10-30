@@ -316,6 +316,7 @@ struct IndexedDbRequestLifecycleState {
 
 struct IndexedDbTransactionLifecycleState {
     mode: TransactionMode,
+    durability: IdbTransactionDurability,
     database: Option<RealmValueHandle>,
     upgrade_open_request: Option<RealmValueHandle>,
     handle: Option<TransactionHandle>,
@@ -344,9 +345,11 @@ impl IndexedDbTransactionLifecycleState {
         handle: Option<TransactionHandle>,
         mode: TransactionMode,
         started: bool,
+        durability: IdbTransactionDurability,
     ) -> Self {
         Self {
             mode,
+            durability,
             database: Some(database),
             upgrade_open_request: None,
             handle,
@@ -780,6 +783,7 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     handle: Option<TransactionHandle>,
     mode: TransactionMode,
     started: bool,
+    durability: IdbTransactionDurability,
 ) {
     let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
         return;
@@ -789,6 +793,7 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
         handle,
         mode,
         started,
+        durability,
     );
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     table.borrow_mut().transactions.insert(id, state);
@@ -2813,4 +2818,17 @@ pub(crate) use metadata_sharing_tests::{
 pub(crate) fn indexed_db_native_cursor_count_for_test(scope: &mut v8::PinScope<'_, '_>) -> usize {
     let table = ensure_indexed_db_runtime_state_table(scope);
     table.borrow().cursors.len()
+}
+
+pub(super) fn indexed_db_transaction_durability(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> Option<IdbTransactionDurability> {
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table
+        .borrow()
+        .transactions
+        .get(&id)
+        .map(|state| state.durability)
 }
