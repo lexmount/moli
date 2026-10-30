@@ -158,6 +158,7 @@ fn messageerror_callback<'s>(
             "Failed to deserialize transferred stream chunk.",
             "DataCloneError",
         );
+        let _ = protocol::post(scope, state, MessageKind::Error, error);
         error_stream(scope, stream, error);
         state::finish(scope, state);
     }

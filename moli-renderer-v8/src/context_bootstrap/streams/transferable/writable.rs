@@ -209,6 +209,9 @@ fn messageerror_callback<'s>(
             "Failed to deserialize transferred WritableStream control message.",
             "DataCloneError",
         );
+        if let Some(port) = writable_state::port(scope, state) {
+            let _ = protocol::post_to_port(scope, port, MessageKind::Error, error);
+        }
         error_local_stream_and_pending(scope, state, error);
         writable_state::finish(scope, state);
     }
