@@ -75,3 +75,83 @@ fn image_bitmap_owns_native_pixels_independently_of_source_and_globals() {
     })
     .unwrap();
 }
+
+#[test]
+fn indexed_db_image_bitmap_pixels_survive_sqlite_profile_restart() {
+    let root = indexed_db_test_root("image-bitmap-profile-restart");
+    for write in [true, false] {
+        let manager = crate::new_indexed_db_manager(Some(root.clone())).unwrap();
+        let mut vm = new_storage_page_task_executor_test_vm(
+            "https://indexeddb-image-bitmap-profile-restart.test/",
+        );
+        vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+        vm.set_storage_bucket_store(
+            crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+        );
+        vm.eval(&format!("globalThis.writeBitmap = {write};"))
+            .unwrap();
+        vm.eval(
+            r#"
+globalThis.bitmapProfile = 'pending';
+(async () => {
+  const result = request => new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  const complete = transaction => new Promise((resolve, reject) => {
+    transaction.oncomplete = resolve;
+    transaction.onabort = () => reject(transaction.error);
+  });
+  const open = indexedDB.open('bitmaps', 1);
+  open.onupgradeneeded = () => open.result.createObjectStore('records');
+  const db = await result(open);
+  if (writeBitmap) {
+    const canvas = new OffscreenCanvas(2, 1);
+    canvas.getContext('2d').putImageData(
+      new ImageData(new Uint8ClampedArray([11,22,33,255,51,102,0,85]), 2, 1), 0, 0);
+    const bitmap = canvas.transferToImageBitmap();
+    Object.defineProperty(bitmap, 'width', {get() {throw Error('author width');}});
+    const graph = {bitmap, alias:bitmap};
+    graph.self = graph;
+    const transaction = db.transaction('records', 'readwrite');
+    const done = complete(transaction);
+    transaction.objectStore('records').put(graph, 1);
+    bitmap.close();
+    await done;
+  }
+  const transaction = db.transaction('records');
+  const done = complete(transaction);
+  const graph = await result(transaction.objectStore('records').get(1));
+  await done;
+  db.close();
+  globalThis.persistedBitmap = graph.bitmap;
+  return [graph.bitmap instanceof ImageBitmap, graph.bitmap.width, graph.bitmap.height,
+    graph.bitmap === graph.alias, graph.self === graph];
+})().then(result => bitmapProfile = JSON.stringify(result),
+          error => bitmapProfile = String(error));
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            vm.eval_after_selected_page_tasks("bitmapProfile").unwrap(),
+            "[true,2,1,true,true]",
+            "profile write: {write}"
+        );
+        let context_ptr = &vm.page_default_runtime.context as *const _;
+        vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let bitmap = global
+                .get(scope, crate::util::v8str(scope, "persistedBitmap").into())
+                .unwrap();
+            let bitmap = v8::Local::<v8::Object>::try_from(bitmap).unwrap();
+            assert_eq!(
+                crate::context_bootstrap::image_bitmap_pixels_for_test(scope, bitmap),
+                Some(vec![11, 22, 33, 255, 51, 102, 0, 85]),
+                "native RGBA pixels, profile write: {write}"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

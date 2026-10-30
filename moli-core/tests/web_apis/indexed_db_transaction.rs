@@ -500,3 +500,24 @@ async fn indexed_db_cursors_observe_writes_without_changing_pending_values() -> 
     server.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_imagebitmap_storage_preserves_pixels_and_receiver_graphs() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-imagebitmap-storage.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nbitmapStorageProbe('bitmap-storage-{target}').then(finish, error => finish({{state:'error', error:String(error), checks:bitmapStorageChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            7,
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}

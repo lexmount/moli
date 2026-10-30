@@ -1,4 +1,6 @@
 use super::*;
+use crate::context_bootstrap::canvas::{read_image_bitmap_storage, write_image_bitmap_storage};
+use crate::structured_clone::HOST_OBJECT_TAG_IMAGE_BITMAP;
 use crate::structured_clone::{
     HOST_OBJECT_TAG_DOM_EXCEPTION, HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR,
     read_dom_exception_payload, read_quota_exceeded_error_payload, write_dom_exception_payload,
@@ -57,6 +59,7 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
         serializer: &dyn v8::ValueSerializerHelper,
     ) -> Option<bool> {
         match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
+            Some("ImageBitmap") => return write_image_bitmap_storage(scope, object, serializer),
             Some("DOMException")
                 if write_dom_exception_payload(scope, object, serializer).is_some() =>
             {
@@ -308,6 +311,14 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer<'_> {
             return None;
         }
         match tag {
+            HOST_OBJECT_TAG_IMAGE_BITMAP => {
+                read_image_bitmap_storage(scope, deserializer).or_else(|| {
+                    let error =
+                        dom_exception_value(scope, "Invalid stored ImageBitmap.", "DataCloneError");
+                    scope.throw_exception(error);
+                    None
+                })
+            }
             HOST_OBJECT_TAG_DOM_EXCEPTION => read_dom_exception_payload(scope, deserializer),
             HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR => {
                 read_quota_exceeded_error_payload(scope, deserializer)

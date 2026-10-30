@@ -199,6 +199,9 @@ mod constructors;
 mod context2d;
 mod helpers;
 mod image_bitmap;
+pub(in crate::context_bootstrap) use image_bitmap::{
+    read_image_bitmap_storage, write_image_bitmap_storage,
+};
 mod objects;
 mod offscreen;
 mod path;

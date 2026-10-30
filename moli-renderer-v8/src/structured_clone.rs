@@ -41,6 +41,7 @@ use v8::{ValueDeserializerHelper, ValueSerializerHelper};
 
 const HOST_OBJECT_TAG_MESSAGE_PORT: u32 = 1;
 pub(crate) const HOST_OBJECT_TAG_IMAGE_DATA: u32 = 2;
+pub(crate) const HOST_OBJECT_TAG_IMAGE_BITMAP: u32 = 20;
 pub(crate) const HOST_OBJECT_TAG_CRYPTO_KEY: u32 = 3;
 const HOST_OBJECT_TAG_READABLE_STREAM: u32 = 4;
 pub(crate) const HOST_OBJECT_TAG_BLOB: u32 = 5;
