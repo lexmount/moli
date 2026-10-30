@@ -221,7 +221,7 @@ impl TransferSnapshot {
     #[must_use]
     pub const fn plan_sender_failure(self) -> SenderFailurePlan {
         if self.active {
-            SenderFailurePlan::ErrorSourcePostErrorAndFinish
+            SenderFailurePlan::PostErrorCancelSourceAndFinish
         } else {
             SenderFailurePlan::Ignore
         }
@@ -338,7 +338,7 @@ pub enum SenderDrainPlan {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SenderFailurePlan {
     Ignore,
-    ErrorSourcePostErrorAndFinish,
+    PostErrorCancelSourceAndFinish,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -757,7 +757,7 @@ mod tests {
         );
         assert_eq!(
             active.plan_sender_failure(),
-            SenderFailurePlan::ErrorSourcePostErrorAndFinish
+            SenderFailurePlan::PostErrorCancelSourceAndFinish
         );
         let inactive = snapshot(false, false, 0, false);
         assert_eq!(
