@@ -82,11 +82,11 @@ impl ProtocolServer {
         initial_cookies: Vec<StoredCookie>,
     ) -> Self {
         let storage_partition = Arc::new(
-            StoragePartitionState::open(None).expect("in-memory storage partition should open"),
+            StoragePartitionState::open(None).expect("temporary storage partition should open"),
         );
         storage_partition
             .import_cookies(initial_cookies)
-            .expect("in-memory cookie import should succeed");
+            .expect("initial cookie import should succeed");
         Self::new_with_storage_partition(config, storage_partition)
     }
 

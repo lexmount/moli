@@ -31,6 +31,7 @@ moli-fetch = { path = "../moli-fetch" }
 parking_lot = "0.12"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+tempfile = "3.27.0"
 tokio = { version = "1.51.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 thiserror = "2.0.17"
 tracing = "0.1.41"

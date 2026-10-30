@@ -1002,8 +1002,15 @@ pub struct CdpInitialStoragePartition {
 }
 
 impl CdpInitialStoragePartition {
+    /// Explicit in-memory backing for embedders and backend-focused tests.
     pub fn memory() -> Self {
         Self::new(BrowserContextStoragePartitionHandles::memory())
+    }
+
+    pub fn temporary() -> anyhow::Result<Self> {
+        Ok(Self::new(
+            BrowserContextStoragePartitionHandles::temporary()?
+        ))
     }
 
     pub fn with_cookies(cookies: Vec<StoredCookie>) -> Self {
@@ -1383,6 +1390,10 @@ impl Drop for CdpConnection {
             contexts.push(context);
         }
         contexts.append(&mut self.inactive_browser_contexts);
+        let storage_partitions = contexts
+            .iter()
+            .map(BrowserContext::retain_storage_for_teardown)
+            .collect::<Vec<_>>();
         let roots = contexts
             .iter_mut()
             .filter_map(BrowserContext::take_renderer_runtime_owner_for_teardown)
@@ -1407,12 +1418,16 @@ impl Drop for CdpConnection {
             root.shutdown_network_and_join();
         }
         drop(roots);
+        drop(storage_partitions);
     }
 }
 
 impl CdpConnection {
     pub fn new() -> Self {
-        Self::new_with_initial_storage_partition(CdpInitialStoragePartition::memory())
+        Self::new_with_initial_storage_partition(
+            CdpInitialStoragePartition::temporary()
+                .expect("temporary browser storage should initialize"),
+        )
     }
 
     pub(crate) fn layout_policy(&self) -> LayoutPolicy {
@@ -1493,7 +1508,8 @@ impl CdpConnection {
 
     pub fn new_with_fetch_config(fetch_config: FetchConfig) -> Self {
         Self::new_with_initial_storage_partition_and_fetch_config(
-            CdpInitialStoragePartition::memory(),
+            CdpInitialStoragePartition::temporary()
+                .expect("temporary browser storage should initialize"),
             fetch_config,
         )
     }
@@ -3195,7 +3211,10 @@ impl CdpConnection {
         browser_context.global_geolocation_override = self.global_geolocation_override.clone();
     }
 
-    pub(crate) fn new_ephemeral_browser_context(&self, id: String) -> BrowserContext {
+    pub(crate) fn new_ephemeral_browser_context(
+        &self,
+        id: String,
+    ) -> Result<BrowserContext, String> {
         let mut browser_context = BrowserContext::new_ephemeral_with_http_cache(
             id,
             self.fetch_config().http_cache_dir().map(PathBuf::from),
@@ -3203,9 +3222,9 @@ impl CdpConnection {
             self.standalone_navigation_engine
                 .runtime_config()
                 .debugger_enabled(),
-        );
+        )?;
         self.apply_global_browser_context_state(&mut browser_context);
-        browser_context
+        Ok(browser_context)
     }
 
     pub fn snapshot_cookies(&mut self) -> Vec<StoredCookie> {

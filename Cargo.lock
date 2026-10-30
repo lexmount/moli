@@ -2781,6 +2781,7 @@ dependencies = [
  "serde_json",
  "static_assertions",
  "strip-ansi-escapes",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",

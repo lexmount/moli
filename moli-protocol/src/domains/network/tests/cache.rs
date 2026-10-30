@@ -606,7 +606,9 @@ fn new_ephemeral_browser_context_inherits_effective_http_cache_owner() {
     fetch_config.set_http_cache_max_bytes(Some(77));
 
     let conn = crate::conn::CdpConnection::new_with_fetch_config(fetch_config);
-    let browser_context = conn.new_ephemeral_browser_context("BID-ephemeral".to_owned());
+    let browser_context = conn
+        .new_ephemeral_browser_context("BID-ephemeral".to_owned())
+        .expect("temporary context");
 
     assert_eq!(
         browser_context.http_cache_root.as_deref(),

@@ -218,8 +218,14 @@ fn partition_shutdown_finishes_accepted_bucket_cleanup_before_closing_sql() {
 }
 
 #[test]
-fn default_memory_partition_uses_sql_and_retained_clients_cannot_keep_its_data_alive() {
+fn temporary_partition_stores_sql_on_disk_and_retires_retained_clients_before_cleanup() {
     let partition = StoragePartitionState::open(None).unwrap();
+    let root = partition
+        .temporary_directory
+        .as_ref()
+        .unwrap()
+        .path()
+        .to_path_buf();
     let service = partition.indexed_db_manager.lock().sqlite_service();
     let client = database(&service, b"default-memory");
     upgrade(&client, 1, "kept");
@@ -230,9 +236,34 @@ fn default_memory_partition_uses_sql_and_retained_clients_cannot_keep_its_data_a
             quota: None,
         },
     );
+    let mut directories = vec![root.join("idb-lite")];
+    let mut databases = Vec::new();
+    while let Some(directory) = directories.pop() {
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "sqlite")
+            {
+                databases.push(path);
+            }
+        }
+    }
+    assert_eq!(databases.len(), 1);
+    assert!(
+        fs::read(&databases[0])
+            .unwrap()
+            .starts_with(b"SQLite format 3\0")
+    );
     drop(partition);
     assert!(service.is_closed());
     assert!(client.is_retired());
+    assert!(
+        !root.exists(),
+        "retained SQL clients must not pin temporary files"
+    );
     let partition = StoragePartitionState::open(None).unwrap();
     let service = partition.indexed_db_manager.lock().sqlite_service();
     assert_eq!(

@@ -292,7 +292,9 @@ pub(super) fn execute_devtools_create_browser_context_command(
         ));
     }
 
-    let mut browser_context = conn.new_ephemeral_browser_context(id.clone());
+    let mut browser_context = conn
+        .new_ephemeral_browser_context(id.clone())
+        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
     browser_context.default_tls_verify_host_override =
         command.accept_insecure_certs.map(|accept| !accept);
     browser_context.default_http_proxy_override = command.proxy_server;
@@ -505,7 +507,10 @@ pub(super) fn create_browser_context(conn: &mut CdpConnection, cmd: &Cmd<'_>) ->
         return CommandOutputPlan::error_without_session(-32602, message);
     }
     let id = conn.gen_bc_id();
-    let mut browser_context = conn.new_ephemeral_browser_context(id.clone());
+    let mut browser_context = match conn.new_ephemeral_browser_context(id.clone()) {
+        Ok(context) => context,
+        Err(error) => return CommandOutputPlan::error_without_session(-32000, &error),
+    };
     browser_context.default_http_proxy_override = params.proxy_server;
     browser_context.default_http_no_proxy_override =
         normalize_proxy_bypass_list_for_loader(params.proxy_bypass_list.as_deref());

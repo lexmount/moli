@@ -31,7 +31,7 @@ use crate::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StoragePartitionPersistence {
-    Memory,
+    Ephemeral,
     ProfileBacked,
 }
 
@@ -47,6 +47,9 @@ pub struct StoragePartitionState {
     service_worker_resource_store: SharedServiceWorkerResourceStore,
     http_cache_root: Option<PathBuf>,
     profile: Option<Arc<BrowserProfile>>,
+    // Drop after storage handles: temporary disk backing has partition scope,
+    // while an explicit profile keeps its files after the partition closes.
+    temporary_directory: Option<tempfile::TempDir>,
 }
 
 #[derive(Clone)]
@@ -90,6 +93,13 @@ impl fmt::Debug for StoragePartitionState {
             )
             .field("http_cache_root", &self.http_cache_root)
             .field("profile_backed", &self.profile.is_some())
+            .field(
+                "temporary_root",
+                &self
+                    .temporary_directory
+                    .as_ref()
+                    .map(tempfile::TempDir::path),
+            )
             .finish()
     }
 }
@@ -104,6 +114,16 @@ impl StoragePartitionState {
     }
 
     fn from_profile(profile: Option<Arc<BrowserProfile>>) -> Result<Self> {
+        let temporary_directory = if profile.is_none() {
+            Some(
+                tempfile::Builder::new()
+                    .prefix("moli-storage-")
+                    .tempdir()
+                    .context("failed to create temporary browser storage directory")?,
+            )
+        } else {
+            None
+        };
         let cookie_store = new_shared_browser_cookie_store();
         let session_storage_store = new_shared_web_storage_store();
         let (
@@ -193,18 +213,26 @@ impl StoragePartitionState {
                 Some(partition.http_cache_root().to_path_buf()),
             )
         } else {
-            let indexed_db_manager =
-                moli_renderer_v8::new_sqlite_indexed_db_manager(None, Default::default())
-                    .map_err(|error| anyhow!(error))
-                    .context("failed to initialize in-memory IndexedDB")?;
-            let storage_service = StorageService::in_memory();
+            let root = temporary_directory
+                .as_ref()
+                .expect("an ephemeral partition owns its temporary directory")
+                .path();
+            let indexed_db_manager = moli_renderer_v8::new_sqlite_indexed_db_manager(
+                Some(root.join("idb-lite")),
+                Default::default(),
+            )
+            .map_err(|error| anyhow!(error))
+            .context("failed to initialize temporary IndexedDB")?;
+            let storage_service = StorageService::on_disk(root.join("opfs"))
+                .map_err(|error| anyhow!(error))
+                .context("failed to initialize temporary OPFS")?;
             let storage_bucket_store =
                 new_shared_storage_bucket_store_with_storage_service_and_indexed_db_manager(
                     storage_service.clone(),
                     &indexed_db_manager,
                 );
             (
-                StoragePartitionPersistence::Memory,
+                StoragePartitionPersistence::Ephemeral,
                 "default",
                 new_shared_web_storage_store(),
                 indexed_db_manager,
@@ -226,6 +254,7 @@ impl StoragePartitionState {
             service_worker_resource_store,
             http_cache_root,
             profile,
+            temporary_directory,
         })
     }
 
@@ -503,22 +532,72 @@ mod tests {
     }
 
     #[test]
-    fn memory_partition_owns_ephemeral_stores() -> Result<()> {
+    fn ephemeral_partition_owns_temporary_stores() -> Result<()> {
         let partition = StoragePartitionState::open(None)?;
+        let root = partition
+            .temporary_directory
+            .as_ref()
+            .unwrap()
+            .path()
+            .to_path_buf();
 
-        assert_eq!(partition.persistence(), StoragePartitionPersistence::Memory);
+        assert_eq!(
+            partition.persistence(),
+            StoragePartitionPersistence::Ephemeral
+        );
         assert_eq!(partition.id(), "default");
         assert!(partition.http_cache_root().is_none());
         assert!(partition.profile_cookie_cache_paths().is_empty());
         let service = partition.storage_service.clone();
         let facade_service = partition.storage_bucket_store().lock().storage_service();
         assert!(Arc::ptr_eq(&service, &facade_service));
+        assert!(root.join("idb-lite/format.json").is_file());
+        assert!(!root.join("opfs").exists(), "OPFS remains lazy");
+
+        drop(partition);
+        assert!(
+            !root.exists(),
+            "normal partition teardown removes temporary data"
+        );
 
         Ok(())
     }
 
     #[test]
-    fn memory_partition_flush_is_noop() -> Result<()> {
+    fn ephemeral_partition_opfs_is_disk_backed_and_partition_isolated() -> Result<()> {
+        let first = StoragePartitionState::open(None)?;
+        let second = StoragePartitionState::open(None)?;
+        let root = first.temporary_directory.as_ref().unwrap().path();
+        assert_ne!(root, second.temporary_directory.as_ref().unwrap().path());
+        let locator = StorageBucketLocator::default_bucket("https://temporary-opfs.test");
+        let key = moli_storage_service::StorageService::opfs_bucket_key(&locator)?;
+        let directory = first.storage_service.ensure_opfs_root(&locator)?;
+        let file = first.storage_service.with_opfs(|opfs| {
+            let file = opfs.get_file(&key, &directory, "entry.txt", true)?;
+            opfs.write_file(&key, &file, b"temporary bytes", None)?;
+            Ok::<_, moli_storage_service::OpfsError>(file)
+        })?;
+        // A separate backend must see the bytes through the host filesystem,
+        // without sharing the first service's in-memory namespace.
+        let reopened = moli_storage_service::StorageService::on_disk(root.join("opfs"))?;
+        assert_eq!(
+            reopened
+                .with_opfs(|opfs| opfs.read_file(&key, &file))?
+                .bytes,
+            b"temporary bytes",
+        );
+        let other_directory = second.storage_service.ensure_opfs_root(&locator)?;
+        assert!(
+            second
+                .storage_service
+                .with_opfs(|opfs| { opfs.get_file(&key, &other_directory, "entry.txt", false) })
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ephemeral_partition_cookie_flush_is_noop() -> Result<()> {
         let partition = StoragePartitionState::open(None)?;
 
         partition.import_cookies(vec![stored_cookie("sid", "memory")])?;

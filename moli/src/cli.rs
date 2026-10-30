@@ -558,6 +558,7 @@ pub struct CommonArgs {
     #[arg(long)]
     pub http_cache_dir: Option<String>,
 
+    /// Persist browser storage in this directory. Without it, IndexedDB and OPFS use temporary files.
     #[arg(short = 'P', long)]
     pub profile_dir: Option<String>,
 
