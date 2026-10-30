@@ -82,7 +82,7 @@ async fn native_completion_and_discarded_ready_recovery_use_direct_state() {
         };
         let (events, _, predecessor) = outcome.into_protocol_event_parts();
         assert!(
-            predecessor.is_some(),
+            !predecessor.is_empty(),
             "the renderer terminal retains its exact predecessor"
         );
         assert!(
@@ -502,7 +502,7 @@ async fn discarded_input_workflow_result_keeps_the_original_native_output() {
     };
     let (events, _, predecessor) = outcome.into_protocol_event_parts();
     assert!(
-        predecessor.is_some(),
+        !predecessor.is_empty(),
         "accepted Native output survives the discarded workflow result"
     );
     let messages: Vec<_> = events

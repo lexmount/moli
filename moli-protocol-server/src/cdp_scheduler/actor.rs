@@ -632,17 +632,19 @@ async fn handle_scheduler_input(
             let (output, post_output, boundary, predecessor) =
                 scheduler.materialize_renderer_owner_turn_outcome(outcome);
             assert!(boundary.is_none() && post_output.is_empty());
-            if !flush_renderer_publication_predecessor(
-                frontend_router,
-                scheduler,
-                scheduler_input_rx,
-                pending_runtime_deferred_replies,
-                adapter_scheduler,
-                predecessor.as_ref(),
-            )
-            .await
-            {
-                return false;
+            for predecessor in predecessor.iter() {
+                if !flush_renderer_publication_predecessor(
+                    frontend_router,
+                    scheduler,
+                    scheduler_input_rx,
+                    pending_runtime_deferred_replies,
+                    adapter_scheduler,
+                    Some(predecessor),
+                )
+                .await
+                {
+                    return false;
+                }
             }
             flush_protocol_output_with_runtime_deferred_reply_routing(
                 frontend_router,
@@ -938,7 +940,7 @@ impl PendingRuntimeDeferredReplyState {
 
 impl RuntimeDeferredReplyCompletion {
     async fn settle_exact_outputs_before_response(mut self, scheduler: &mut CdpScheduler) -> Self {
-        if let Some(predecessor) = self.output.take_renderer_output_predecessor() {
+        for predecessor in self.output.take_renderer_output_dependencies() {
             assert!(
                 scheduler
                     .state
@@ -975,7 +977,7 @@ impl RuntimeDeferredReplyCompletion {
             output_release_permit,
         ) = self.output.into_parts();
         debug_assert!(
-            renderer_output_predecessor.is_none(),
+            renderer_output_predecessor.is_empty(),
             "deferred Runtime response consumed its renderer output predecessor"
         );
         debug_assert!(
@@ -1317,8 +1319,8 @@ fn complete_runtime_deferred_reply_state(
         CommandTaskStep::Complete(output) => {
             RuntimeDeferredReplyAdvance::Complete(Box::new(RuntimeDeferredReplyCompletion {
                 output: (*output)
-                    .with_renderer_output_predecessor(
-                        pending.command_context.take_renderer_output_predecessor(),
+                    .with_renderer_output_dependencies(
+                        pending.command_context.take_renderer_output_dependencies(),
                     )
                     .with_renderer_output_predecessor(renderer_output_predecessor)
                     .with_output_release_permit(pending.output_release_permit),
@@ -1348,8 +1350,8 @@ fn complete_runtime_deferred_reply_state(
                     session_id.as_deref(),
                     pending_kind,
                 ))
-                .with_renderer_output_predecessor(
-                    pending.command_context.take_renderer_output_predecessor(),
+                .with_renderer_output_dependencies(
+                    pending.command_context.take_renderer_output_dependencies(),
                 )
                 .with_renderer_output_predecessor(renderer_output_predecessor)
                 .with_output_release_permit(pending.output_release_permit),
@@ -1750,8 +1752,8 @@ async fn start_ready_command_dispatch(
         CommandTaskStep::Complete(output) => {
             trace_command(command, "command_dispatch_complete_sync", None, None, None);
             let output = (*output)
-                .with_renderer_output_predecessor(
-                    command_context.take_renderer_output_predecessor(),
+                .with_renderer_output_dependencies(
+                    command_context.take_renderer_output_dependencies(),
                 )
                 .with_output_release_permit(output_release_permit);
             let ok = flush_completed_command_output(
@@ -1917,22 +1919,24 @@ async fn flush_completed_command_output(
     metadata: &InFlightCommandMetadata,
     mut output: CommandTurnOutput,
 ) -> bool {
-    let renderer_output_predecessor = output.take_renderer_output_predecessor();
-    if !flush_renderer_publication_predecessor(
-        frontend_router,
-        scheduler,
-        scheduler_input_rx,
-        pending_runtime_deferred_replies,
-        adapter_scheduler,
-        renderer_output_predecessor.as_ref(),
-    )
-    .await
-    {
-        return false;
+    let renderer_output_dependencies = output.take_renderer_output_dependencies();
+    for predecessor in renderer_output_dependencies.iter() {
+        if !flush_renderer_publication_predecessor(
+            frontend_router,
+            scheduler,
+            scheduler_input_rx,
+            pending_runtime_deferred_replies,
+            adapter_scheduler,
+            Some(predecessor),
+        )
+        .await
+        {
+            return false;
+        }
     }
 
     let mut causal_prefix = ProtocolOutputSequence::empty();
-    if let Some(predecessor) = renderer_output_predecessor {
+    for predecessor in renderer_output_dependencies {
         causal_prefix.append(
             scheduler.complete_renderer_output_predecessor_before_runtime_response(&predecessor),
         );
@@ -1953,7 +1957,7 @@ async fn flush_completed_command_output(
         output_release_permit,
     ) = output.into_parts();
     debug_assert!(
-        renderer_output_predecessor.is_none(),
+        renderer_output_predecessor.is_empty(),
         "command response consumed its exact renderer output predecessor before decomposition"
     );
     let internal_response =
@@ -2365,8 +2369,8 @@ async fn handle_pending_command_completion(
                 );
             }
             let output = (*output)
-                .with_renderer_output_predecessor(
-                    state.command_context.take_renderer_output_predecessor(),
+                .with_renderer_output_dependencies(
+                    state.command_context.take_renderer_output_dependencies(),
                 )
                 .with_output_release_permit(state.output_release_permit);
             let ok = flush_completed_command_output(
@@ -2504,6 +2508,110 @@ mod tests {
             background_navigation_completion_rx,
             renderer_publication_rx,
         })
+    }
+
+    #[tokio::test]
+    async fn multi_stream_command_keeps_response_and_flush_permit_until_every_dependency() {
+        use moli_core::{
+            PageId, RendererOutputCursor, RendererOutputItem, RendererOutputPublication,
+            RendererOutputRecord, RendererOutputStreamControl, RendererOutputStreamIdentity,
+            RendererProtocolObservation,
+        };
+        use moli_protocol::RendererOutputDependencies;
+
+        tokio::task::LocalSet::new().run_until(async {
+            for internal in [false, true] {
+                let router = CdpFrontendRouter::new();
+                let (sink, mut writer) = crate::cdp_writer::CdpSocketSink::with_stalled_writer_for_test(8);
+                router.register_browser_frontend(1, "browser-session".into(), sink).unwrap();
+                let command = ParsedCdpCommand::parse_str(r#"{"id":42,"method":"Target.detachFromTarget"}"#).unwrap();
+                let command = if internal {
+                    command
+                } else {
+                    let Some(CdpPreparedFrontendCommand::Command(command)) = router.prepare_command(1, Ok(command)) else {
+                        panic!("frontend command must be admitted");
+                    };
+                    command
+                };
+                let mut metadata = command_metadata(&command);
+                let (internal_tx, mut internal_rx) = oneshot::channel();
+                let (owner, _owner_rx) = mpsc::unbounded_channel();
+                if internal {
+                    metadata.internal_response = Some(Rc::new(RefCell::new(Some(InternalCommandResponse {
+                        sender: internal_tx,
+                        registration: None,
+                        owner: owner.downgrade(),
+                    }))));
+                }
+                let streams = [71, 72].map(|page| RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(page)));
+                let mut connection = CdpConnection::new();
+                for stream in streams {
+                    moli_protocol::test_support::bind_renderer_page_output_stream_to_retired_owner(&mut connection, stream);
+                }
+                let (mut scheduler, protocol_completions) = CdpScheduler::new(connection);
+                let state = scheduler.state.handle();
+                let (permit, context) = state.with_state(|state| state.begin_command_response_flush_permit()).unwrap();
+                let flushed = moli_protocol::test_support::command_response_flush_observer(&context);
+                for stream in streams {
+                    assert!(scheduler.ingest_renderer_publication_now(RendererOutputStreamControl::Opened { stream }.into()).is_empty());
+                }
+                let first = RendererOutputCursor::new_for_test(streams[0], 3);
+                let second = RendererOutputCursor::new_for_test(streams[1], 1);
+                let mut dependencies = RendererOutputDependencies::default();
+                dependencies.extend([first, second].map(RendererOutputFence::new_for_test));
+                let output = CommandTurnOutput::new(
+                    ProtocolOutputSequence::from_background_event(BackgroundProtocolEvent::command_success(metadata.id, metadata.session_id.as_deref(), json!({}))),
+                    Vec::new(),
+                ).with_renderer_output_dependencies(dependencies)
+                    .with_output_release_permit(CommandOutputReleasePermit::new(permit, None));
+                let publication = |cursor| RendererOutputTransportMessage::Publication(RendererOutputPublication::new_for_test(
+                    cursor,
+                    vec![RendererOutputRecord::new_for_test(RendererOutputItem::Observation(RendererProtocolObservation::RuntimeLifecycleError {
+                        text: "historical renderer output".into(), execution_context_id: None,
+                    }))],
+                ));
+                let (renderer_tx, renderer_rx) = moli_core::renderer_output_transport_channel();
+                for sequence in 1..=3 {
+                    renderer_tx.send(publication(RendererOutputCursor::new_for_test(streams[0], sequence))).unwrap();
+                }
+                let mut inputs = empty_scheduler_inputs();
+                inputs.state_events_ready = scheduler.state.scheduler_events_ready();
+                inputs.protocol_work_completion_rx = protocol_completions;
+                inputs.renderer_publication_rx = renderer_rx;
+                let mut deferred = VecDeque::new();
+                let mut adapter = ProtocolAdapterScheduler::default();
+                let flush = flush_completed_command_output(&router, &mut scheduler, &mut inputs, &mut deferred, &mut adapter, &metadata, output);
+                tokio::pin!(flush);
+                tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    loop {
+                        tokio::select! {
+                            result = &mut flush => panic!("response completed with a missing Page dependency: {result}"),
+                            _ = tokio::task::yield_now() => {
+                                if state.with_state(|state| state.renderer_output_cursor_is_projected(first)).unwrap() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }).await.expect("first Page output is projected");
+                assert!(!*flushed.borrow(), "the command still owns its flush permit");
+                assert!(writer.is_empty(), "no response may reach the frontend yet");
+                if internal {
+                    assert!(matches!(internal_rx.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+                }
+                renderer_tx.send(publication(second)).unwrap();
+                assert!(tokio::time::timeout(std::time::Duration::from_secs(2), &mut flush).await.unwrap());
+                assert!(*flushed.borrow());
+                if internal {
+                    let result = internal_rx.try_recv().expect("internal response is delivered before flush completes").expect("internal command retains its original response");
+                    assert_eq!(result.response, json!({"id": 42, "result": {}}));
+                    assert!(writer.is_empty(), "private response must not leak to the frontend");
+                } else {
+                    assert_eq!(writer.take_message(), json!({"id": 42, "result": {}}));
+                    assert!(writer.is_empty(), "the command response is emitted once");
+                }
+            }
+        }).await;
     }
 
     #[tokio::test]
@@ -2758,7 +2866,7 @@ mod tests {
                 "id": 1, "method": "Target.attachToTarget",
                 "params": {"targetId": moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID, "flatten": true},
             }).to_string()).await.unwrap().into_protocol_event_parts();
-            assert!(predecessor.is_none());
+            assert!(predecessor.is_empty());
             let attached: Vec<_> = attached.into_iter().map(BackgroundProtocolEvent::into_protocol_message).collect();
             let session_id = attached.iter().find(|message| message["id"] == 1).unwrap()["result"]["sessionId"].as_str().unwrap().to_owned();
             let enable = json!({"id": 2, "sessionId": session_id, "method": "Fetch.enable", "params": {
@@ -2769,7 +2877,7 @@ mod tests {
                 "id": 3, "sessionId": session_id, "method": "Page.navigate",
                 "params": {"url": "http://unused.example/held"},
             }).to_string()).await.unwrap().into_protocol_event_parts();
-            assert!(predecessor.is_none());
+            assert!(predecessor.is_empty());
             let paused: Vec<_> = paused.into_iter().map(BackgroundProtocolEvent::into_protocol_message).collect();
             let request_id = paused.iter().find(|message| message["method"] == "Fetch.requestPaused").unwrap()["params"]["requestId"].clone();
             let mut command = json!({

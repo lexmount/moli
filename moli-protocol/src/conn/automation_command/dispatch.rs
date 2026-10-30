@@ -213,7 +213,7 @@ impl CdpConnection {
                         prefix, post, scheduler,
                     )
                     .with_renderer_output_boundary(boundary, after)
-                    .with_renderer_output_predecessor(predecessor);
+                    .with_renderer_output_dependencies(predecessor);
                 AutomationCommandTaskStep::Complete(Box::new(AutomationCommandDispatchOutcome {
                     result,
                     output,

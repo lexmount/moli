@@ -369,6 +369,10 @@ pub(crate) struct StalledCdpSocketWriter {
 
 #[cfg(test)]
 impl StalledCdpSocketWriter {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.output_rx.is_empty()
+    }
+
     pub(crate) fn take_message(&mut self) -> serde_json::Value {
         let command = self
             .output_rx

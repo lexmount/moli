@@ -1559,7 +1559,7 @@ mod tests {
                         );
                         if is_input {
                             assert!(
-                                predecessor.is_some(),
+                                !predecessor.is_empty(),
                                 "the accepted Native input turn retains its exact cursor"
                             );
                         }

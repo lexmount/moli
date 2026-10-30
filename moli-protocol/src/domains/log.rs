@@ -352,7 +352,7 @@ mod tests {
                 .expect("live protocol owner")
         };
         let (events, _, renderer_output_predecessor) = outcome.into_protocol_event_parts();
-        assert!(renderer_output_predecessor.is_none());
+        assert!(renderer_output_predecessor.is_empty());
 
         assert_eq!(events.len(), 2, "expected response and replay event");
         let (log_message, log_sidecar) = events[0].clone().into_parts();

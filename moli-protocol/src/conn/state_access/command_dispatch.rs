@@ -556,9 +556,7 @@ fn retain_step(
                     ),
                 );
             }
-            if let Some(predecessor) = predecessor {
-                output.set_renderer_output_predecessor(predecessor);
-            }
+            output.extend_renderer_output_dependencies(predecessor);
             // Cancellation and recovery must preserve the accepted terminal
             // and its exact renderer output fence.
             context.retain_finalized_command(output);
@@ -751,9 +749,7 @@ impl ProtocolWorkflowState<'_> {
         }
         output.extend_background_events(after);
         output.extend_background_events(post);
-        if let Some(predecessor) = predecessor {
-            output.set_renderer_output_predecessor(predecessor);
-        }
+        output.extend_renderer_output_dependencies(predecessor);
         context.retain_output(output);
         context.context_mut().take_command_failure_cleanup();
         self.connection.extend_scheduler_events(scheduler);
@@ -798,9 +794,7 @@ impl ProtocolWorkflowState<'_> {
         }
         output.extend_background_events(after);
         output.extend_background_events(post_response);
-        if let Some(predecessor) = predecessor {
-            output.set_renderer_output_predecessor(predecessor);
-        }
+        output.extend_renderer_output_dependencies(predecessor);
         self.connection.extend_scheduler_events(scheduler);
         context.retain_finalized_command(output);
         context.context_mut().take_command_failure_cleanup();

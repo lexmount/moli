@@ -179,7 +179,7 @@ async fn background_protocol_completion_rejoins_waits_and_keeps_its_original_pub
                     let native = completions.recv().await.unwrap();
                     let started = ctx.with_fixture(|conn| conn.admit_background_navigation_completion(native)) ;
                     let (events, scheduler_events, predecessor) = started.into_protocol_event_parts();
-                    assert!(predecessor.is_none());
+                    assert!(predecessor.is_empty());
                     assert!(events.is_empty(), "the finite admission does not publish a source result");
                     let mut work = None;
                     let mut other_events = Vec::new();

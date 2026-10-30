@@ -382,9 +382,7 @@ pub(super) fn append_command_output_plan(
     command_id: Option<u64>,
     session_id: Option<&str>,
 ) {
-    if let Some(predecessor) = plan.take_renderer_output_predecessor() {
-        command_context.set_renderer_output_predecessor(predecessor);
-    }
+    command_context.extend_renderer_output_dependencies(plan.take_renderer_output_dependencies());
     let (events, renderer_output_boundary, post_renderer_output_events, post_response_events) =
         plan.into_renderer_fenced_background_and_post_response_events(command_id, session_id);
     command_context
@@ -450,7 +448,7 @@ impl CdpConnection {
                 self.take_scheduler_events(),
             )
             .with_renderer_output_boundary(renderer_output_boundary, post_renderer_output_events)
-            .with_renderer_output_predecessor(command_context.take_renderer_output_predecessor()),
+            .with_renderer_output_dependencies(command_context.take_renderer_output_dependencies()),
         )
     }
 
@@ -1648,7 +1646,7 @@ impl CdpConnection {
                 scheduler_events,
             )
             .with_renderer_output_boundary(renderer_output_boundary, post_renderer_output_events)
-            .with_renderer_output_predecessor(command_context.take_renderer_output_predecessor()),
+            .with_renderer_output_dependencies(command_context.take_renderer_output_dependencies()),
         )
     }
 }

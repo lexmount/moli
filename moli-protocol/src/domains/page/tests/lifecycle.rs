@@ -3597,7 +3597,7 @@ async fn close_command_background_events_keep_target_detached_sidecar() {
     ) = outcome.into_renderer_owner_turn_parts();
     assert!(renderer_output_boundary.is_none());
     assert!(post_renderer_output_events.is_empty());
-    assert!(renderer_output_predecessor.is_none());
+    assert!(renderer_output_predecessor.is_empty());
     events.extend(post_response_events);
     let [CdpSchedulerEvent::ProtocolWorkPublished { work }] = <[_; 1]>::try_from(scheduler_events)
         .expect("Page.close should publish exactly one target-termination owner action")

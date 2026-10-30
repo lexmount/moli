@@ -162,7 +162,7 @@ async fn context_disposal_owns_native_close_through_cancellation_and_ready_loss(
         };
         let (events, _, predecessor) = outcome.into_protocol_event_parts();
         assert!(
-            predecessor.is_none(),
+            predecessor.is_empty(),
             "a Browser ACK cannot join unrelated Page streams"
         );
         let messages = events

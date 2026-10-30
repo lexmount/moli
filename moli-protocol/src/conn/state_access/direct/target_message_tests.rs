@@ -217,7 +217,7 @@ async fn attached_command_recovers_its_original_output(internal: bool) {
                     terminals[0]["result"]["result"]["value"], 42,
                     "{phase}: {messages:?}"
                 );
-                assert!(predecessor.is_some());
+                assert!(!predecessor.is_empty());
             } else {
                 assert_eq!(
                     terminals[0]["error"]["code"], -32000,
@@ -249,7 +249,7 @@ async fn attached_command_recovers_its_original_output(internal: bool) {
                     nested[0]["result"]["result"]["value"], 42,
                     "{phase}: {messages:?}"
                 );
-                assert!(predecessor.is_some());
+                assert!(!predecessor.is_empty());
             } else {
                 assert_eq!(nested[0]["error"]["code"], -32000, "{phase}: {messages:?}");
             }

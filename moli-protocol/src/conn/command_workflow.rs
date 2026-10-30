@@ -266,9 +266,7 @@ impl CommandWorkflowContext {
         for permit in local.take_runtime_output_projection_permits() {
             target.retain_runtime_output_projection_permit(permit);
         }
-        if let Some(predecessor) = local.take_renderer_output_predecessor() {
-            target.set_renderer_output_predecessor(predecessor);
-        }
+        target.extend_renderer_output_dependencies(local.take_renderer_output_dependencies());
     }
 
     /// Borrow the command context only for this synchronous state operation.

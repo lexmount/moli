@@ -227,8 +227,6 @@ pub(crate) fn retain_target_message_output(
             BackgroundProtocolEvent::target_received_message_from_target(&session_id, event, strip)
         }));
     }
-    if let Some(predecessor) = predecessor {
-        response.set_renderer_output_predecessor(predecessor);
-    }
+    response.extend_renderer_output_dependencies(predecessor);
     response
 }

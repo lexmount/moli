@@ -6,13 +6,40 @@
 //! callers must obtain these values from their owning connection, navigation,
 //! lifecycle observer, or publication boundary.
 
-use moli_core::{RendererDocumentLifecycleIdentity, RendererOutputResidenceIdentity};
+use moli_core::{
+    RendererDocumentLifecycleIdentity, RendererOutputResidenceIdentity,
+    RendererOutputStreamIdentity,
+};
 
 use crate::{
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
     ProtocolSchedulerWork,
     conn::{CdpConnection, DocumentNavigationToken, RendererPageResidenceIdentity},
 };
+
+pub fn command_response_flush_observer(
+    context: &crate::CommandResponseFlushContext,
+) -> tokio::sync::watch::Receiver<bool> {
+    context
+        .receiver()
+        .expect("test command owns a flush permit")
+}
+
+/// Binds a synthetic Page stream to a retired protocol Page owner, allowing
+/// scheduler tests to project historical output without a live Page.
+pub fn bind_renderer_page_output_stream_to_retired_owner(
+    conn: &mut CdpConnection,
+    stream: RendererOutputStreamIdentity,
+) {
+    let renderer_page = RendererPageResidenceIdentity::from_residence(stream.residence())
+        .expect("a synthetic Page output stream requires a Page residence");
+    let page_owner = crate::conn::TargetPageResidenceIdentity::new(
+        "BID-retired-scheduler-fixture".into(),
+        Some("TID-retired-scheduler-fixture".into()),
+        crate::conn::TargetPageAttachmentId::allocate(),
+    );
+    conn.bind_renderer_page_output_owner(renderer_page, page_owner);
+}
 
 /// Opaque exact-token fixture for scheduler tests that need a real
 /// target-owned background navigation request.

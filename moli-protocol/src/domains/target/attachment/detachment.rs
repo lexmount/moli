@@ -243,7 +243,7 @@ impl TargetDetachmentOutput {
             let cleanup_error = match session.result {
                 Ok(predecessor) => {
                     if let Some(predecessor) = predecessor {
-                        command_context.set_renderer_output_predecessor(predecessor);
+                        command_context.add_renderer_output_dependency(predecessor);
                     }
                     None
                 }
@@ -335,8 +335,170 @@ fn route_target_id(route: &CdpSessionRoute) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::BrowserContext;
+    use crate::conn::{BrowserContext, RendererPageResidenceIdentity};
     use crate::testing::TestContext;
+
+    #[tokio::test]
+    async fn multi_page_detachment_waits_for_every_original_output_prefix() {
+        use moli_core::{
+            PageId, RendererOutputCursor, RendererOutputFence, RendererOutputItem,
+            RendererOutputPublication, RendererOutputRecord, RendererOutputStreamControl,
+            RendererOutputStreamIdentity, RendererOutputTransportMessage,
+            RendererProtocolObservation,
+        };
+
+        let mut browser = BrowserContext::new("BID-detach-prefixes".into());
+        browser.set_active_target_id("TID-first");
+        browser.attach_active_session("SID-first");
+        browser.stage_background_target(
+            "TID-second".into(),
+            Some("SID-second".into()),
+            "about:blank".into(),
+            None,
+            None,
+        );
+        let mut context = TestContext::new();
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+        let prefixes = [
+            ("TID-first", "SID-first", 71, 3),
+            ("TID-second", "SID-second", 72, 1),
+        ]
+        .map(|(target, session, page, sequence)| {
+            let stream = RendererOutputStreamIdentity::new_page_for_protocol_test(
+                PageId::new_for_testing(page),
+            );
+            context.with_fixture(|conn| {
+                let residence =
+                    RendererPageResidenceIdentity::from_residence(stream.residence()).unwrap();
+                conn.bind_renderer_page_output_owner(
+                    residence,
+                    crate::conn::TargetPageResidenceIdentity::new_for_test(
+                        "BID-detach-prefixes".into(),
+                        Some(target.into()),
+                        page,
+                    ),
+                );
+                conn.apply_renderer_output_stream_control(RendererOutputStreamControl::Opened {
+                    stream,
+                });
+            });
+            (target, session, stream, sequence)
+        });
+        let (output, dependencies) = context.with_fixture(|conn| {
+            let sessions = prefixes
+                .iter()
+                .map(|&(target, session, stream, sequence)| {
+                    let route = conn.session_route(Some(session)).unwrap();
+                    let plan = SessionDisposalPlan::for_session_route(session, &route).unwrap();
+                    let identity = SessionDisposalIdentity::capture(conn, plan.clone());
+                    conn.mark_session_closing(&plan);
+                    SessionDetachmentOutput {
+                        identity,
+                        commit: SessionDetachmentCommit::Target(
+                            TargetSessionDetachCleanupPlan::new(target, session, None, None),
+                        ),
+                        child: true,
+                        response_before_event: false,
+                        background_events: Vec::new(),
+                        protocol_events: Vec::new(),
+                        result: Ok(Some(RendererOutputFence::new_for_test(
+                            RendererOutputCursor::new_for_test(stream, sequence),
+                        ))),
+                    }
+                })
+                .collect();
+            let mut command_context = CommandDispatchContext::default();
+            let output = TargetDetachmentOutput { sessions }.finish(conn, &mut command_context);
+            assert!(
+                !output.is_empty(),
+                "the original response must remain in the command output plan"
+            );
+            assert!(command_context.take_protocol_events().is_empty());
+            assert!(
+                conn.take_scheduler_events()
+                    .into_iter()
+                    .all(|event| !matches!(
+                        event,
+                        crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { .. }
+                    )),
+                "Target cleanup must not publish the command response as background work"
+            );
+            (output, command_context.take_renderer_output_dependencies())
+        });
+        assert_eq!(dependencies.iter().count(), 2);
+        for (index, &(_, _, stream, sequence)) in prefixes.iter().enumerate() {
+            context.with_fixture(|conn| {
+                assert!(
+                    !dependencies
+                        .iter()
+                        .all(|fence| conn.renderer_output_cursor_is_projected(fence.cursor()))
+                )
+            });
+            for sequence in 1..=sequence {
+                let outcome = context
+                    .handle()
+                    .with_state(|state| {
+                        state.admit_renderer_output(RendererOutputTransportMessage::Publication(
+                            RendererOutputPublication::new_for_test(
+                                RendererOutputCursor::new_for_test(stream, sequence),
+                                vec![RendererOutputRecord::new_for_test(
+                                    RendererOutputItem::Observation(
+                                        RendererProtocolObservation::RuntimeLifecycleError {
+                                            text: "historical renderer output".into(),
+                                            execution_context_id: None,
+                                        },
+                                    ),
+                                )],
+                            ),
+                        ))
+                    })
+                    .unwrap();
+                let (events, scheduler) = outcome.into_protocol_event_parts();
+                assert!(events.is_empty());
+                for event in scheduler {
+                    let crate::conn::CdpSchedulerEvent::RendererOutputProjectionPrepared {
+                        pending,
+                    } = event
+                    else {
+                        panic!("expected the exact renderer projection");
+                    };
+                    let completed = context.drive_owned_wait(pending.wait()).await;
+                    let outcome = context
+                        .handle()
+                        .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+                        .unwrap();
+                    assert!(outcome.into_protocol_event_parts().0.is_empty());
+                }
+            }
+            context.with_fixture(|conn| {
+                assert_eq!(
+                    dependencies
+                        .iter()
+                        .all(|fence| conn.renderer_output_cursor_is_projected(fence.cursor())),
+                    index == 1
+                );
+            });
+        }
+        let events = output
+            .into_background_events(Some(91), Some("SID-browser-command"))
+            .into_iter()
+            .map(BackgroundProtocolEvent::into_protocol_message)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            events.len(),
+            3,
+            "each detach and the response appear once: {events:?}"
+        );
+        assert!(
+            events[..2]
+                .iter()
+                .all(|event| event["method"] == "Target.detachedFromTarget")
+        );
+        assert_eq!(
+            events[2],
+            json!({"id": 91, "sessionId": "SID-browser-command", "result": {}})
+        );
+    }
 
     #[tokio::test]
     async fn rebound_session_keeps_new_scripts_and_binding_after_old_cleanup_or_recovery() {

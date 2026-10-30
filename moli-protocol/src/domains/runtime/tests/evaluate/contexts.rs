@@ -182,7 +182,9 @@ async fn runtime_enable_retired_owner_error_keeps_journal_order_and_single_termi
     assert!(scheduler_events.is_empty());
     let sent_start = ctx.sent.len();
     ctx.route_direct_command_renderer_predecessor_for_test(
-        predecessor.expect("the adapter must acknowledge its published terminal"),
+        predecessor
+            .into_single_stream()
+            .expect("the adapter must acknowledge its published terminal"),
     )
     .await;
     assert!(
@@ -247,7 +249,9 @@ async fn runtime_disable_retired_owner_keeps_committed_success_and_single_termin
     let (messages, scheduler_events, predecessor) = outcome.into_protocol_event_parts();
     assert!(messages.is_empty() && scheduler_events.is_empty());
     ctx.route_direct_command_renderer_predecessor_for_test(
-        predecessor.expect("the adapter must acknowledge the committed disable"),
+        predecessor
+            .into_single_stream()
+            .expect("the adapter must acknowledge the committed disable"),
     )
     .await;
     // wait_for_scheduler_message removed the original response above.

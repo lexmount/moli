@@ -59,7 +59,7 @@ fn command_wait_failure_preserves_context_events_and_does_not_ack_early() {
     let (before, renderer_tail, boundary, after, _, predecessor) =
         outcome.into_renderer_owner_turn_parts();
     assert!(renderer_tail.is_empty());
-    assert!(boundary.is_none() && predecessor.is_none());
+    assert!(boundary.is_none() && predecessor.is_empty());
     let before = before
         .into_iter()
         .map(BackgroundProtocolEvent::into_protocol_message)
