@@ -194,10 +194,7 @@ mod tests {
         assert_eq!(source.get(), Some("no-referrer"));
         assert_eq!(cloned_source.get(), Some("origin"));
         assert_eq!(
-            cloned
-                .clone_for_node()
-                .meta_referrer_policy_source()
-                .get(),
+            cloned.clone_for_node().meta_referrer_policy_source().get(),
             None
         );
         drop(host);

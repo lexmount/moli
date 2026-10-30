@@ -116,7 +116,10 @@ fn take_frame(
             Some(true)
         )
     });
-    (event.as_json().expect("scalar protocol fixture")["params"].clone(), visual_state)
+    (
+        event.as_json().expect("scalar protocol fixture")["params"].clone(),
+        visual_state,
+    )
 }
 
 fn png(data: &Value) -> Vec<u8> {

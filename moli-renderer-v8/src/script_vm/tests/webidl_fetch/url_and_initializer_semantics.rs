@@ -1587,14 +1587,18 @@ async fn filtered_response_materialization_preserves_internal_head_across_clone_
             ("vary".to_owned(), "*".to_owned()),
         ];
         let internal_headers = moli_fetch::headers_from_byte_strings(&internal_headers).unwrap();
-        let mut vm = new_storage_page_task_executor_test_vm_with_loader("https://response-materialize-filtered.test/", &loader);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://response-materialize-filtered.test/",
+            &loader,
+        );
         let document_url = Url::parse("https://response-materialize-filtered.test/")
             .expect("document URL should parse");
         let final_url = Url::parse(
             "https://cross-response-materialize-filtered.test/redirect-start?x=%23#hidden",
         )
         .expect("final URL should parse");
-        let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+        let context_ptr: *const v8::Global<v8::Context> =
+            &vm.page_default_runtime.context as *const _;
 
         vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
@@ -1706,7 +1710,8 @@ redirect_mode: moli_fetch::RequestRedirectMode::Follow, method: "GET", mode: mol
             expected_url
         );
 
-        let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+        let context_ptr: *const v8::Global<v8::Context> =
+            &vm.page_default_runtime.context as *const _;
         vm.renderer_document_isolate
             .with_entered_renderer_document_isolate(move |isolate| {
                 let scope = std::pin::pin!(v8::HandleScope::new(isolate));

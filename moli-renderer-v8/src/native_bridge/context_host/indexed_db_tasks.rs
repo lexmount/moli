@@ -1,6 +1,4 @@
-use super::{
-    JsContextHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
-};
+use super::{JsContextHost, RuntimeObservableContextToken, WindowExecutionContextIdentity};
 use moli_indexeddb::{
     DatabaseHandle,
     sqlite::service::{DatabaseConnection, WeakDatabaseConnection},
@@ -89,5 +87,4 @@ impl JsContextHost {
         self.signal_page_indexed_db_task_reconsideration_if_installed();
         retired
     }
-
 }

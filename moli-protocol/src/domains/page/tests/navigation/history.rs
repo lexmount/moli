@@ -638,7 +638,6 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
         )
     });
 
-
     ctx.process_async(json!({
         "id": 16,
         "method": "Runtime.evaluate",

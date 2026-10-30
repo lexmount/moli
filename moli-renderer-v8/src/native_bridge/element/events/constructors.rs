@@ -789,7 +789,11 @@ pub(crate) fn construct_drag_event_with_related_target<'s>(
         coordinates.client_x,
         coordinates.client_y,
         0,
-        if matches!(event_type, "drop" | "dragend") { 0 } else { 1 },
+        if matches!(event_type, "drop" | "dragend") {
+            0
+        } else {
+            1
+        },
         modifier_keys.alt,
         modifier_keys.ctrl,
         modifier_keys.meta,
@@ -960,7 +964,13 @@ pub(crate) fn construct_drop_input_event<'s>(
     event_type: &str,
     data_transfer: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    construct_editing_input_event(scope, event_type, TextEditInputType::InsertFromDrop.as_str(), None, Some(data_transfer))
+    construct_editing_input_event(
+        scope,
+        event_type,
+        TextEditInputType::InsertFromDrop.as_str(),
+        None,
+        Some(data_transfer),
+    )
 }
 
 pub(crate) fn construct_simple_event<'s>(
@@ -1107,7 +1117,16 @@ pub(crate) fn construct_activation_pointer_event<'s>(
     // and windowless Documents, rather than the realm of a borrowed click().
     let context = node_owner_document_relevant_context(scope, runtime_ptr, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
-    let init = mouse_event_init(scope, event_type, coordinates, detail, button, buttons, modifiers, None)?;
+    let init = mouse_event_init(
+        scope,
+        event_type,
+        coordinates,
+        detail,
+        button,
+        buttons,
+        modifiers,
+        None,
+    )?;
     // Activation keeps only the source pointer's identity. Pressure, tilt and all
     // other PointerEvent-specific attributes retain their dictionary defaults.
     let pointer_type = v8_string(scope, pointer.map_or("", |pointer| &pointer.pointer_type))?;

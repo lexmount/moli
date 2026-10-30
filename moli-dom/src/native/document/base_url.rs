@@ -191,7 +191,8 @@ impl NativeDom {
             .filter_map(|handle| {
                 self.node_mut(handle)
                     .and_then(|node| node.data_mut().as_document_mut())?
-                    .metadata.base_url_state
+                    .metadata
+                    .base_url_state
                     .pending_policy_check
                     .take()
             })

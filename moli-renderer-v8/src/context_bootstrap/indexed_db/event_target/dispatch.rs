@@ -64,7 +64,9 @@ pub(super) fn dispatch_idb_event_object_with_result<'s>(
     };
     let mut parents = Vec::new();
     let mut current = target;
-    while let Some(parent) = crate::util::get_private_object(scope, current, super::EVENT_PARENT_SLOT) {
+    while let Some(parent) =
+        crate::util::get_private_object(scope, current, super::EVENT_PARENT_SLOT)
+    {
         parents.push(parent);
         current = parent;
     }

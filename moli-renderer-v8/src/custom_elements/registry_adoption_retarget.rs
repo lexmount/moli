@@ -82,7 +82,10 @@ fn should_preserve_same_document_registry_association(
 ) -> bool {
     let runtime = unsafe { &*host_ptr };
     let host = runtime.dom_host();
-    if host.owner_document_handle(root).is_some_and(|document| runtime.document_uses_scoped_custom_element_registries(document)) {
+    if host
+        .owner_document_handle(root)
+        .is_some_and(|document| runtime.document_uses_scoped_custom_element_registries(document))
+    {
         return true;
     }
     host.node(root)

@@ -86,17 +86,32 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_clear_callback<
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let store = args.this();
-    let Some(transaction) = object_store_active_transaction(scope, store) else { return; };
+    let Some(transaction) = object_store_active_transaction(scope, store) else {
+        return;
+    };
     if indexed_db_transaction_mode(scope, transaction) == Some(TransactionMode::ReadOnly) {
         let error = dom_exception_value(scope, "The transaction is readonly.", "ReadOnlyError");
         scope.throw_exception(error);
         return;
     }
-    let Some(store_name) = indexed_db_object_store_name(scope, store) else { return; };
-    let Some(context) = store.get_creation_context(scope) else { return; };
+    let Some(store_name) = indexed_db_object_store_name(scope, store) else {
+        return;
+    };
+    let Some(context) = store.get_creation_context(scope) else {
+        return;
+    };
     let scope = &mut v8::ContextScope::new(scope, context);
-    let Some(request) = create_request_object(scope, store.into(), transaction) else { return; };
+    let Some(request) = create_request_object(scope, store.into(), transaction) else {
+        return;
+    };
     queue_transaction_request(scope, transaction, request);
-    schedule_transaction_operation(scope, transaction, store, request, &store_name, IndexedDbTransactionOperation::ObjectStoreClear);
+    schedule_transaction_operation(
+        scope,
+        transaction,
+        store,
+        request,
+        &store_name,
+        IndexedDbTransactionOperation::ObjectStoreClear,
+    );
     rv.set(request.into());
 }

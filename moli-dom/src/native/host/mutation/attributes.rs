@@ -328,7 +328,9 @@ impl DomHost {
             Some(attribute) => (
                 attribute.local_name().to_owned(),
                 (!attribute.namespace().is_empty()).then(|| attribute.namespace().to_owned()),
-                self.dom.get_attribute_dom_string_value(handle, name).map(Arc::new),
+                self.dom
+                    .get_attribute_dom_string_value(handle, name)
+                    .map(Arc::new),
             ),
             None => (normalized_name, None, None),
         };
@@ -361,11 +363,18 @@ impl DomHost {
             }
             let mut effects = self.node_update_effects(handle);
             self.mark_stylesheet_owner_attribute_change(
-                &mut effects, handle, namespace.as_deref(), &local_name,
+                &mut effects,
+                handle,
+                namespace.as_deref(),
+                &local_name,
             );
             self.mark_script_attribute_set_trigger(
-                &mut effects, handle, namespace.as_deref(), &local_name,
-                prior_value.as_deref().map(DomStringValue::as_str_lossy), value,
+                &mut effects,
+                handle,
+                namespace.as_deref(),
+                &local_name,
+                prior_value.as_deref().map(DomStringValue::as_str_lossy),
+                value,
             );
             effects.mark_attribute_change(
                 handle,
@@ -557,7 +566,11 @@ impl DomHost {
             );
             return DomAttributeMutationOutcome::new(effects, prior_value, Some(new_value));
         }
-        DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value, Some(new_value))
+        DomAttributeMutationOutcome::new(
+            DomMutationEffects::default(),
+            prior_value,
+            Some(new_value),
+        )
     }
 
     fn same_value_attribute_effects(

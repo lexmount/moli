@@ -33,7 +33,11 @@ pub(crate) fn build_clipboard_data_transfer<'s>(
         }
     }
     let store = create_external_drag_data_store(scope, &data)?;
-    let mode = if read_only { DragDataStoreMode::ReadOnly } else { DragDataStoreMode::ReadWrite };
+    let mode = if read_only {
+        DragDataStoreMode::ReadOnly
+    } else {
+        DragDataStoreMode::ReadWrite
+    };
     let transfer = create_drag_data_transfer_view(scope, &store, mode, "none")?;
     set_private_value(
         scope,

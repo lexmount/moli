@@ -945,7 +945,10 @@ async fn devtools_session_output_restores_only_the_exact_registered_frontend_res
     let RendererRuntimeInspectorMessage::Protocol(response) = &messages[1] else {
         panic!("expected a protocol response");
     };
-    assert_eq!(response.value().as_json().expect("scalar protocol fixture")["id"], json!(44));
+    assert_eq!(
+        response.value().as_json().expect("scalar protocol fixture")["id"],
+        json!(44)
+    );
     ctx.with_fixture(|conn| {
         assert_eq!(
             conn.runtime_remote_object_group_for_session_owner(
@@ -1816,8 +1819,14 @@ async fn terminal_session_cleanup_completes_non_await_once_and_releases_frontend
         .output
         .protocol_response(completion.call_id)
         .expect("terminal response payload");
-    assert_eq!(terminal.as_json().expect("scalar protocol fixture")["error"]["code"], json!(-32000));
-    assert_eq!(terminal.as_json().expect("scalar protocol fixture")["error"]["message"], json!("Inspector detached"));
+    assert_eq!(
+        terminal.as_json().expect("scalar protocol fixture")["error"]["code"],
+        json!(-32000)
+    );
+    assert_eq!(
+        terminal.as_json().expect("scalar protocol fixture")["error"]["message"],
+        json!("Inspector detached")
+    );
     ctx.with_fixture(|conn| {
         assert!(
             conn.try_register_renderer_call_for_session_owner(
