@@ -1386,6 +1386,7 @@ fn stored_cookie_from_cdp_json(cookie: &Value) -> Option<StoredCookie> {
             .and_then(|port| i32::try_from(port).ok())
             .unwrap_or(-1),
         creation_index: 0,
+        creation_time: None,
         last_access_index: 0,
     })
 }
@@ -1444,6 +1445,9 @@ fn cookie_exclusion_reason_from_json(value: &str) -> Option<StoredCookieExclusio
         "SchemeMismatch" => StoredCookieExclusionReason::SchemeMismatch,
         "SameSiteStrict" => StoredCookieExclusionReason::SameSiteStrict,
         "SameSiteLax" => StoredCookieExclusionReason::SameSiteLax,
+        "SameSiteUnspecifiedTreatedAsLax" => {
+            StoredCookieExclusionReason::SameSiteUnspecifiedTreatedAsLax
+        }
         _ => return None,
     })
 }
@@ -1489,6 +1493,7 @@ fn cookie_warning_reason_from_json(value: &str) -> Option<StoredCookieWarningRea
 fn cookie_effective_same_site_from_json(value: Option<&str>) -> StoredCookieEffectiveSameSite {
     match value {
         Some("Lax") => StoredCookieEffectiveSameSite::Lax,
+        Some("LaxAllowUnsafe") => StoredCookieEffectiveSameSite::LaxAllowUnsafe,
         Some("Strict") => StoredCookieEffectiveSameSite::Strict,
         _ => StoredCookieEffectiveSameSite::NoRestriction,
     }

@@ -520,6 +520,7 @@ mod tests {
             source_scheme: StoredCookieSourceScheme::NonSecure,
             source_port: -1,
             creation_index: 0,
+            creation_time: None,
             last_access_index: 0,
         }
     }
@@ -764,6 +765,7 @@ mod tests {
         let initial_cookies = vec![stored_cookie("sid", "old"), stored_cookie("theme", "dark")];
 
         partition.import_cookies(initial_cookies.clone())?;
+        let initial_cookies = partition.cookies()?;
         partition
             .commit_cookie_delta(&initial_cookies, Some(vec![stored_cookie("theme", "dark")]))?;
 
@@ -785,6 +787,7 @@ mod tests {
         let initial_cookies = vec![root.clone(), app.clone(), subdomain.clone()];
 
         partition.import_cookies(initial_cookies.clone())?;
+        let initial_cookies = partition.cookies()?;
         partition.commit_cookie_delta(
             &initial_cookies,
             Some(vec![
@@ -818,6 +821,7 @@ mod tests {
         let initial_cookies = vec![stored_cookie("sid", "old")];
 
         partition.import_cookies(initial_cookies.clone())?;
+        let initial_cookies = partition.cookies()?;
         partition.import_cookies(vec![stored_cookie("sid", "newer")])?;
         partition.commit_cookie_delta(&initial_cookies, Some(Vec::new()))?;
 

@@ -188,6 +188,7 @@ pub(crate) fn stored_cookie_from_netscape_cookie(
         },
         source_port: -1,
         creation_index,
+        creation_time: None,
         last_access_index: 0,
     })
 }

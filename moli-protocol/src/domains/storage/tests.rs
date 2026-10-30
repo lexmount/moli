@@ -1259,7 +1259,7 @@ async fn storage_set_cookies_reports_secure_access_warning_for_localhost_http() 
             "cookieReports": [{
                 "status": { "kind": "Accepted", "storeAction": "Inserted" },
                 "rejectionReasons": [],
-                "effectiveSameSite": "NoRestriction",
+                "effectiveSameSite": "LaxAllowUnsafe",
                 "warningReasons": ["SecureAccessGrantedNonCryptographic"]
             }]
         }),
@@ -1391,7 +1391,7 @@ async fn storage_set_cookies_reports_public_suffix_rejection() {
                     "reason": "PublicSuffix"
                 },
                 "rejectionReasons": ["PublicSuffix"],
-                "effectiveSameSite": "NoRestriction",
+                "effectiveSameSite": "LaxAllowUnsafe",
                 "warningReasons": []
             }]
         }),
@@ -1732,7 +1732,7 @@ async fn storage_set_cookies_keeps_cookie_store_available_after_lock_holder_pani
             "cookieReports": [{
                 "status": { "kind": "Accepted", "storeAction": "Inserted" },
                 "rejectionReasons": [],
-                "effectiveSameSite": "NoRestriction",
+                "effectiveSameSite": "LaxAllowUnsafe",
                 "warningReasons": []
             }]
         }),
@@ -1797,7 +1797,7 @@ async fn storage_set_cookies_accepts_leading_dot_domain() {
                     "storeAction": "Inserted"
                 },
                 "rejectionReasons": [],
-                "effectiveSameSite": "NoRestriction",
+                "effectiveSameSite": "LaxAllowUnsafe",
                 "warningReasons": []
             }]
         }),
@@ -1847,7 +1847,7 @@ async fn storage_set_cookies_reports_invalid_path_and_url_as_facade_rejections()
                         "reason": "PathMustStartWithSlash"
                     },
                     "rejectionReasons": ["PathMustStartWithSlash"],
-                    "effectiveSameSite": "NoRestriction",
+                    "effectiveSameSite": "LaxAllowUnsafe",
                     "warningReasons": []
                 },
                 {
@@ -1856,7 +1856,7 @@ async fn storage_set_cookies_reports_invalid_path_and_url_as_facade_rejections()
                         "reason": "InvalidUrl"
                     },
                     "rejectionReasons": ["InvalidUrl", "UnspecifiedDomain"],
-                    "effectiveSameSite": "NoRestriction",
+                    "effectiveSameSite": "LaxAllowUnsafe",
                     "warningReasons": []
                 }
             ]
@@ -1910,7 +1910,7 @@ async fn storage_set_cookies_reports_structured_name_value_facade_rejections() {
                         "reason": "EmptyNameAndValue"
                     },
                     "rejectionReasons": ["EmptyNameAndValue", "MissingCookieUrl"],
-                    "effectiveSameSite": "NoRestriction",
+                    "effectiveSameSite": "LaxAllowUnsafe",
                     "warningReasons": []
                 },
                 {
@@ -1919,7 +1919,7 @@ async fn storage_set_cookies_reports_structured_name_value_facade_rejections() {
                         "reason": "EmptyNameValueContainsEquals"
                     },
                     "rejectionReasons": ["EmptyNameValueContainsEquals"],
-                    "effectiveSameSite": "NoRestriction",
+                    "effectiveSameSite": "LaxAllowUnsafe",
                     "warningReasons": []
                 },
                 {
@@ -1928,7 +1928,7 @@ async fn storage_set_cookies_reports_structured_name_value_facade_rejections() {
                         "reason": "NameContainsEquals"
                     },
                     "rejectionReasons": ["NameContainsEquals"],
-                    "effectiveSameSite": "NoRestriction",
+                    "effectiveSameSite": "LaxAllowUnsafe",
                     "warningReasons": []
                 }
             ]
@@ -1963,7 +1963,7 @@ async fn storage_set_cookies_uses_browser_context_default_cookie_url_when_missin
             "cookieReports": [{
                 "status": { "kind": "Accepted", "storeAction": "Inserted" },
                 "rejectionReasons": [],
-                "effectiveSameSite": "NoRestriction",
+                "effectiveSameSite": "LaxAllowUnsafe",
                 "warningReasons": []
             }]
         }),
@@ -2028,7 +2028,7 @@ async fn storage_cookie_methods_accept_inactive_browser_context_ids() {
             "cookieReports": [{
                 "status": { "kind": "Accepted", "storeAction": "Inserted" },
                 "rejectionReasons": [],
-                "effectiveSameSite": "NoRestriction",
+                "effectiveSameSite": "LaxAllowUnsafe",
                 "warningReasons": []
             }]
         }),
@@ -3789,7 +3789,7 @@ async fn storage_set_cookies_reports_missing_cookie_url_when_no_default_scope_ex
                     "reason": "MissingCookieUrl"
                 },
                 "rejectionReasons": ["MissingCookieUrl"],
-                "effectiveSameSite": "NoRestriction",
+                "effectiveSameSite": "LaxAllowUnsafe",
                 "warningReasons": []
             }]
         }),

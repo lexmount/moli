@@ -15,8 +15,85 @@ use time::OffsetDateTime;
 use super::*;
 use crate::{atomic_file::write_file_atomically, netscape::parse_netscape_cookie_file};
 
+#[test]
+fn cookie_cache_preserves_the_creation_time_used_by_default_same_site_policy() -> Result<()> {
+    let temp = TempDir::new("same-site-age");
+    let file = temp.path.join("cookies.json");
+    let created =
+        OffsetDateTime::from_unix_timestamp(1_000_000_000)? + time::Duration::nanoseconds(123);
+    let mut cookie = stored_cookie("sid", "old");
+    cookie.creation_time = Some(created);
+    save_cookie_cache(&file, vec![cookie])?;
+    let restored = load_cookie_cache(&file)?;
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].creation_time, Some(created));
+    let mut store = BrowserCookieStore::default();
+    let url = "http://example.com/".parse()?;
+    assert!(
+        store
+            .upsert_with_request_url_report(restored[0].clone(), Some(&url), CookieSource::Cdp)
+            .is_accepted()
+    );
+    let initiator = "http://other.test/".parse()?;
+    let context = NetworkCookieRequestContext::top_level_navigation("POST")
+        .with_initiator_url(&url, &initiator);
+    let report = store.cookie_access_report_for_request(&url, context);
+    assert!(report.included_cookies.is_empty());
+    assert_eq!(report.excluded_cookies.len(), 1);
+    assert_eq!(
+        report.excluded_cookies[0].cookie.creation_time,
+        Some(created)
+    );
+    assert_eq!(
+        report.excluded_cookies[0].exclusion_reasons,
+        vec![StoredCookieExclusionReason::SameSiteUnspecifiedTreatedAsLax]
+    );
+    Ok(())
+}
+
 struct TempDir {
     path: PathBuf,
+}
+
+#[test]
+fn legacy_cookie_cache_does_not_reset_the_default_cookie_age() -> Result<()> {
+    let temp = TempDir::new("legacy-same-site-age");
+    let file = temp.path.join("cookies.json");
+    fs::create_dir_all(&temp.path)?;
+    fs::write(
+        &file,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "cookies": [{
+                "name": "sid", "value": "legacy", "domain": "example.com",
+                "host_only": true, "path": "/", "secure": false, "http_only": false,
+                "expires_unix": null, "same_site": "unspecified", "priority": null,
+                "source_scheme": "nonsecure", "source_port": -1
+            }]
+        }))?,
+    )?;
+    let restored = load_cookie_cache(&file)?;
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].creation_time, None);
+    let mut store = BrowserCookieStore::default();
+    let url = "http://example.com/".parse()?;
+    assert!(
+        store
+            .upsert_with_request_url_report(restored[0].clone(), Some(&url), CookieSource::Cdp)
+            .is_accepted()
+    );
+    let initiator = "http://other.test/".parse()?;
+    let context = NetworkCookieRequestContext::top_level_navigation("POST")
+        .with_initiator_url(&url, &initiator);
+    let report = store.cookie_access_report_for_request(&url, context);
+    assert!(report.included_cookies.is_empty());
+    assert_eq!(report.excluded_cookies.len(), 1);
+    assert_eq!(report.excluded_cookies[0].cookie.creation_time, None);
+    assert_eq!(
+        report.excluded_cookies[0].exclusion_reasons,
+        vec![StoredCookieExclusionReason::SameSiteUnspecifiedTreatedAsLax]
+    );
+    Ok(())
 }
 
 impl TempDir {
@@ -681,6 +758,7 @@ fn stored_cookie(name: &str, value: &str) -> StoredCookie {
         source_scheme: StoredCookieSourceScheme::NonSecure,
         source_port: -1,
         creation_index: 0,
+        creation_time: None,
         last_access_index: 0,
     }
 }
