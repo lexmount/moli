@@ -189,8 +189,15 @@ struct DomPointPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMPointReadOnly, receiver)]
+#[webapi(interface = web_api_interfaces::DOMPointReadOnly, enumerable, receiver)]
 struct DomPointReadOnlyPrototypeMethodsDeclaration {
+    #[webapi(
+        method = "matrixTransform",
+        length = 0,
+        callback = dom_point_matrix_transform_callback
+    )]
+    matrix_transform: (),
+
     #[webapi(method = "toJSON", enumerable, callback = dom_point_to_json_callback)]
     to_json: (),
 }
@@ -461,7 +468,11 @@ struct DomMatrixPrototypeMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "DOMMatrix", enumerable)]
 struct DomMatrixWindowPrototypeMethodsDeclaration {
-    #[webapi(method = "setMatrixValue", length = 1, callback = dom_matrix_set_matrix_value_callback)]
+    #[webapi(
+        method = "setMatrixValue",
+        length = 1,
+        callback = dom_matrix_set_matrix_value_callback
+    )]
     set_matrix_value: (),
 }
 
@@ -1037,6 +1048,41 @@ fn dom_point_readonly_from_point_callback<'s>(
         return;
     };
     rv.set(build_dom_point_readonly_object(scope, init.x, init.y, init.z, init.w).into());
+}
+
+fn dom_point_matrix_transform_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(matrix) = dom_matrix_init_arg(scope, &args, 0, "DOMPointReadOnly.matrixTransform")
+    else {
+        return;
+    };
+    let matrix = matrix.components;
+    let point = dom_point_init_from_object(scope, args.this());
+    rv.set(
+        build_dom_point_object(
+            scope,
+            matrix.m11 * point.x
+                + matrix.m21 * point.y
+                + matrix.m31 * point.z
+                + matrix.m41 * point.w,
+            matrix.m12 * point.x
+                + matrix.m22 * point.y
+                + matrix.m32 * point.z
+                + matrix.m42 * point.w,
+            matrix.m13 * point.x
+                + matrix.m23 * point.y
+                + matrix.m33 * point.z
+                + matrix.m43 * point.w,
+            matrix.m14 * point.x
+                + matrix.m24 * point.y
+                + matrix.m34 * point.z
+                + matrix.m44 * point.w,
+        )
+        .into(),
+    );
 }
 
 fn dom_matrix_init_arg<'s>(
