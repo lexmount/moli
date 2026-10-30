@@ -292,3 +292,6 @@ pub(super) fn install_canvas_template_bindings<'s>(
         _ => {}
     }
 }
+
+#[cfg(test)]
+pub(crate) use image_bitmap::image_bitmap_pixels_for_test;
