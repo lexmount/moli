@@ -1036,13 +1036,15 @@ async fn websocket_cdp_prepared_document_script_navigation_replaces_pending_adop
                 replacement,
                 "{crashed}/{action}: {history:?}"
             );
+            // Without activation, navigation before load replaces the
+            // current entry for both assign() and replace().
             assert_eq!(
                 entries
                     .iter()
                     .filter(|entry| entry["url"] == fixture.url)
                     .count(),
-                usize::from(action == "assign"),
-                "{history:?}"
+                0,
+                "{crashed}/{action}: {history:?}"
             );
             for id in [20, 21] {
                 if !observed.iter().any(|message| message["id"] == id) {

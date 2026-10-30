@@ -56,7 +56,9 @@ impl PreparedCapturedNavigationResponse {
             ));
         }
         if super::super::downloads::response_headers_indicate_download(&self.head.headers)
-            || !moli_web_mime::is_supported_document_mime_type(&captured_navigation_mime_type(&self.head, &self.body)?)
+            || !moli_web_mime::is_supported_document_mime_type(&captured_navigation_mime_type(
+                &self.head, &self.body,
+            )?)
         {
             complete_auxiliary_download_response(&self.load_inputs, self.head.clone());
             let body = self
@@ -168,7 +170,8 @@ impl CdpConnection {
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: false,
-            cache_state: Default::default(),
+            cache_state: moli_fetch::ResponseCacheState::None,
+            preload_state: moli_fetch::ResponsePreloadState::None,
             negotiated_http_version: None,
         };
         Ok(self.prepare_captured_navigation_response_with_load_inputs(

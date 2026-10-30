@@ -4153,6 +4153,7 @@ mod tests {
             security_origin: "null".into(),
             secure_context_type: "InsecureScheme".into(),
             document_referrer: None,
+            navigation_policy: None,
             timestamp: 1.0,
             session_history_position: None,
             browsing_context_group: None,

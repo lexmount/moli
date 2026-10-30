@@ -75,6 +75,7 @@ struct RecordedDocumentStartScript {
 }
 
 enum PendingCreateIsolatedWorldPhase {
+    BeforeUnload(Box<super::navigation::PendingBeforeUnloadNavigationCommand>),
     InitialDocumentNavigation(Box<super::navigation::PendingNavigateLoadCommand>),
     InitialDocumentNavigationContinue(
         Box<super::navigation::PendingContinueNavigationWithoutRequestPauseCommand>,
@@ -83,6 +84,7 @@ enum PendingCreateIsolatedWorldPhase {
 }
 
 enum CompletedCreateIsolatedWorldPhase {
+    BeforeUnload(Box<super::navigation::CompletedBeforeUnloadNavigationCommand>),
     InitialDocumentNavigation(Box<super::navigation::CompletedNavigateLoadCommand>),
     InitialDocumentNavigationContinue(
         Box<super::navigation::CompletedContinueNavigationWithoutRequestPauseCommand>,
@@ -101,6 +103,9 @@ pub(crate) struct CreateIsolatedWorldCommandTask {
 impl PendingCreateIsolatedWorldCommand {
     pub(super) async fn wait(self) -> CompletedCreateIsolatedWorldCommand {
         let completed = match self.pending {
+            PendingCreateIsolatedWorldPhase::BeforeUnload(pending) => {
+                CompletedCreateIsolatedWorldPhase::BeforeUnload(Box::new(pending.wait().await))
+            }
             PendingCreateIsolatedWorldPhase::InitialDocumentNavigation(pending) => {
                 CompletedCreateIsolatedWorldPhase::InitialDocumentNavigation(Box::new(
                     pending.wait().await,
@@ -863,6 +868,14 @@ fn start_create_isolated_world_initial_navigation_or_renderer_phase(
         super::navigation::NavigateCommandStart::CompletePlan(plan) => {
             PageCommandTaskStep::Complete(plan)
         }
+        super::navigation::NavigateCommandStart::PendingBeforeUnload(pending) => {
+            pending_create_isolated_world_command_for_session(
+                command_id,
+                owner,
+                task,
+                PendingCreateIsolatedWorldPhase::BeforeUnload(pending),
+            )
+        }
         super::navigation::NavigateCommandStart::PendingLoad(pending) => {
             pending_create_isolated_world_command_for_session(
                 command_id,
@@ -1088,6 +1101,59 @@ pub(super) async fn complete_create_isolated_world_using(
     loop {
         let task = completed.task;
         let step = match completed.completed {
+            CompletedCreateIsolatedWorldPhase::BeforeUnload(check) => {
+                let prepared = context.with_state(driver, move |state, context| {
+                    state.prepare_before_unload_navigation(*check, context)
+                })?;
+                let step = Box::pin(prepared.run(
+                    driver,
+                    context,
+                    super::NavigationCommandOutput::Composite,
+                ))
+                .await?;
+                if context.has_retained_terminal() {
+                    return Ok(CommandOutputPlan::default());
+                }
+                match step {
+                    PageCommandTaskStep::Complete(plan) => {
+                        if plan.command_status().is_some_and(|status| status.is_err()) {
+                            return Ok(plan);
+                        }
+                        let mut task = task;
+                        task.prefix_output
+                            .extend(plan.into_composite_command_prefix());
+                        context.materialize_projection_output();
+                        let owner = owner.clone();
+                        driver.with_state(move |state| {
+                            state.start_page_isolated_world(command_id, owner, task)
+                        })?
+                    }
+                    PageCommandTaskStep::Pending(pending) => {
+                        let phase = match *pending.kind {
+                            PendingPageCommandKind::Navigate(pending) => {
+                                CompletedCreateIsolatedWorldPhase::InitialDocumentNavigation(
+                                    Box::new(pending.wait().await),
+                                )
+                            }
+                            PendingPageCommandKind::ContinueNavigationWithoutRequestPause(
+                                pending,
+                            ) => {
+                                CompletedCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(
+                                    Box::new(pending.wait().await),
+                                )
+                            }
+                            _ => unreachable!(
+                                "a checked initial navigation continues only its prepared request"
+                            ),
+                        };
+                        completed = CompletedCreateIsolatedWorldCommand {
+                            task,
+                            completed: phase,
+                        };
+                        continue;
+                    }
+                }
+            }
             CompletedCreateIsolatedWorldPhase::InitialDocumentNavigation(completed) => {
                 let prepared =
                     driver.with_state(move |state| state.prepare_page_navigation(*completed))?;

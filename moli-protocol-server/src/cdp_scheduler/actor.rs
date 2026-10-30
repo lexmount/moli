@@ -612,7 +612,7 @@ async fn handle_scheduler_input(
             input = input_kind,
         );
     }
-    let ok = match input {
+    let mut ok = match input {
         SchedulerInput::ProtocolWorkCompletion(completion) => {
             flush_owned_protocol_work(
                 frontend_router,
@@ -735,6 +735,16 @@ async fn handle_scheduler_input(
             .await
         }
     };
+    if ok {
+        let output = scheduler.complete_ready_renderer_output_continuations();
+        ok = flush_protocol_output_with_runtime_deferred_reply_routing(
+            frontend_router,
+            scheduler,
+            pending_runtime_deferred_replies,
+            output,
+        )
+        .await;
+    }
     if let Some(started) = trace_started {
         tracing::info!(
             target: "moli_cdp_runtime",
@@ -1015,8 +1025,10 @@ async fn flush_protocol_output_with_runtime_deferred_reply_routing(
                     ) {
                         Ok(advance) => advance,
                         Err(response) => {
-                            let mut routed =
-                                route_unmatched_runtime_inspector_response(scheduler, response);
+                            let mut routed = prefix;
+                            routed.append(route_unmatched_runtime_inspector_response(
+                                scheduler, response,
+                            ));
                             routed.append(output);
                             if !routed.is_empty() {
                                 pending_flush
@@ -1040,15 +1052,18 @@ async fn flush_protocol_output_with_runtime_deferred_reply_routing(
                             pending_runtime_deferred_replies.push_back(*pending);
                         }
                         RuntimeDeferredReplyAdvance::Complete(completion) => {
-                            let completion = (*completion)
+                            let mut completion = (*completion)
                                 .settle_exact_outputs_before_response(scheduler)
                                 .await;
-                            let mut remaining_output = prefix;
-                            remaining_output.append(output);
+                            // This prefix was already ordered before the
+                            // renderer response in the same concrete batch.
+                            // Keep it before the wire reply when completing
+                            // the deferred command, including timer output.
+                            completion.output.prepend_protocol_output(prefix);
                             enqueue_runtime_deferred_reply_completion_flush(
                                 &mut pending_flush,
                                 completion,
-                                remaining_output,
+                                output,
                             );
                             break;
                         }
@@ -2136,7 +2151,17 @@ fn take_internal_command_response(
     }
     *output = ProtocolOutputSequence::from_background_events(passthrough);
     Some((|| {
-        let response = response.context("CDP internal command returned no response")?;
+        // This control API returns scalar JSON. Frontend/Inspector delivery
+        // keeps CdpMessage all the way to the socket; an unrepresentable
+        // internal control result is an explicit error at this API boundary.
+        let response = response
+            .context("CDP internal command returned no response")?
+            .into_json()
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "internal control result cannot be represented by the scalar JSON adapter"
+                )
+            })?;
         let resource = match metadata.method.as_deref() {
             Some("Target.attachToBrowserTarget" | "Target.attachToTarget") => response
                 .pointer("/result/sessionId")
@@ -2521,7 +2546,9 @@ mod tests {
                 .into_iter()
                 .find(|event| event.protocol_message_id() == Some(1))
                 .unwrap()
-                .into_protocol_message();
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture");
             let session_id = response["result"]["sessionId"].as_str().unwrap();
             if phase == "closed" {
                 let _ = scheduler.state.handle().process_message_for_test(
@@ -2755,7 +2782,7 @@ mod tests {
                 "params": {"targetId": moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID, "flatten": true},
             }).to_string()).await.unwrap().into_protocol_event_parts();
             assert!(predecessor.is_none());
-            let attached: Vec<_> = attached.into_iter().map(BackgroundProtocolEvent::into_protocol_message).collect();
+            let attached: Vec<_> = attached.into_iter().map(|event| event.into_protocol_message().into_json().expect("scalar protocol fixture")).collect();
             let session_id = attached.iter().find(|message| message["id"] == 1).unwrap()["result"]["sessionId"].as_str().unwrap().to_owned();
             let enable = json!({"id": 2, "sessionId": session_id, "method": "Fetch.enable", "params": {
                 "patterns": [{"urlPattern": "*held", "requestStage": "Request"}],
@@ -2766,7 +2793,7 @@ mod tests {
                 "params": {"url": "http://unused.example/held"},
             }).to_string()).await.unwrap().into_protocol_event_parts();
             assert!(predecessor.is_none());
-            let paused: Vec<_> = paused.into_iter().map(BackgroundProtocolEvent::into_protocol_message).collect();
+            let paused: Vec<_> = paused.into_iter().map(|event| event.into_protocol_message().into_json().expect("scalar protocol fixture")).collect();
             let request_id = paused.iter().find(|message| message["method"] == "Fetch.requestPaused").unwrap()["params"]["requestId"].clone();
             let mut command = json!({
                 "id": 4, "sessionId": session_id, "method": "Fetch.fulfillRequest", "params": {

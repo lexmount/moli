@@ -6,7 +6,7 @@ use super::*;
 #[error("InvalidChannelArgument")]
 pub(super) struct InvalidBidiChannelArgument;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, serde::Deserialize)]
 #[error("BiDi preload channel Inspector error {code}: {message}")]
 struct BidiPreloadChannelInspectorError {
     code: i32,
@@ -327,6 +327,30 @@ pub(super) async fn bidi_preload_channel_proxy_handle_using(
     }
     let response = output.response?;
     match response {
+        BackgroundCommandResponsePayload::Inspector(message) => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct ProxyResult {
+                exception_details: Option<Box<serde_json::value::RawValue>>,
+                result: Option<ProxyObject>,
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct ProxyObject {
+                object_id: Option<String>,
+            }
+            // Decode only Inspector metadata. JavaScript descriptions and
+            // exception payloads remain opaque UTF-16 JSON.
+            if let Some(error) = message.field::<BidiPreloadChannelInspectorError>("error")? {
+                return Err(error.into());
+            }
+            let result = message.field::<ProxyResult>("result")?;
+            Ok(result
+                .filter(|result| result.exception_details.is_none())
+                .and_then(|result| result.result)
+                .and_then(|result| result.object_id)
+                .map(DevToolsRemoteHandleId::from))
+        }
         BackgroundCommandResponsePayload::Error { code, message, .. } => {
             Err(BidiPreloadChannelInspectorError { code, message }.into())
         }

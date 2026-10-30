@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Instant};
 
 use anyhow::Result;
 use moli_protocol::ParsedCdpCommand;
-use moli_protocol_cdp::CdpCommandParseError;
+use moli_protocol_cdp::{CdpCommandParseError, CdpMessage};
 use parking_lot::Mutex;
 use serde_json::Value;
 
@@ -16,12 +16,12 @@ pub(crate) enum CdpPreparedFrontendCommand {
     Command(ParsedCdpCommand),
     TargetMessage {
         frontend_id: u64,
-        acknowledgements: Vec<Value>,
+        acknowledgements: Vec<CdpMessage>,
         command: Option<ParsedCdpCommand>,
     },
     ImmediateResponse {
         frontend_id: u64,
-        message: Value,
+        message: CdpMessage,
     },
 }
 
@@ -47,7 +47,11 @@ impl CdpFrontendRouter {
             .prepare_parsed_command(frontend_id, command)
     }
 
-    pub(crate) fn enqueue_immediate_response(&self, frontend_id: u64, message: Value) {
+    pub(crate) fn enqueue_immediate_response(
+        &self,
+        frontend_id: u64,
+        message: impl Into<CdpMessage>,
+    ) {
         let frontend = self.routing.lock().frontend_by_id(frontend_id);
         if let Some(frontend) = frontend {
             frontend.enqueue_message(message);

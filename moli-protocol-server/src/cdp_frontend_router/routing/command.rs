@@ -25,7 +25,7 @@ fn immediate_error_response(
     }
     CdpPreparedFrontendCommand::ImmediateResponse {
         frontend_id,
-        message,
+        message: message.into(),
     }
 }
 
@@ -67,18 +67,24 @@ impl CdpFrontendRoutingState {
             .and_then(|session| self.frontends.session(session))
             .filter(|session| session.frontend_id == frontend_id)
             .map(|session| session.output.clone());
-        let mut prepared = if command.method() == "Target.sendMessageToTarget" {
+        let prepared = if command.method() == "Target.sendMessageToTarget" {
             self.prepare_target_message(frontend_id, command)?
         } else {
             self.prepare_command_core(frontend_id, command)?
         };
-        if let Some(output) = output
-            && let CdpPreparedFrontendCommand::ImmediateResponse { message, .. } = &mut prepared
-            && message.get("sessionId").is_some()
-        {
-            *message = output.encode(std::mem::take(message));
-        }
-        Some(prepared)
+        Some(match (output, prepared) {
+            (
+                Some(output),
+                CdpPreparedFrontendCommand::ImmediateResponse {
+                    frontend_id,
+                    message,
+                },
+            ) if message.session_id().is_some() => CdpPreparedFrontendCommand::ImmediateResponse {
+                frontend_id,
+                message: output.encode(message),
+            },
+            (_, prepared) => prepared,
+        })
     }
 
     fn prepare_command_core(

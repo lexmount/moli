@@ -49,6 +49,21 @@ use super::{
     },
 };
 
+mod before_unload;
+pub(super) use before_unload::PendingBeforeUnloadNavigationCommand;
+pub(crate) use before_unload::{
+    BeforeUnloadNavigationStep, CompletedBeforeUnloadNavigationCommand,
+    PreparedBeforeUnloadNavigation,
+};
+
+struct PreparedMainDocumentNavigation {
+    token: DocumentNavigationToken,
+    state: NavigationDispatchState,
+    pending_fetch: Option<PendingFetchNavigation>,
+    fetch_request_stage: FetchRequestStage,
+    allow_background_navigation: bool,
+}
+
 mod automation;
 pub(crate) use automation::{AutomationNavigationResult, prepare_automation_navigation};
 
@@ -195,7 +210,7 @@ impl CompletedSameDocumentHistoryTraversalCommand {
 
 impl PendingNavigateLoadCommand {
     pub(super) async fn wait(self) -> CompletedNavigateLoadCommand {
-        let (navigation, _early_result_sent) = self.job.run(None).await;
+        let (navigation, _early_result_sent) = Box::pin(self.job.run(None)).await;
         CompletedNavigateLoadCommand {
             prefix_events: self.prefix_events,
             token: self.token,
@@ -250,6 +265,7 @@ pub(super) enum NavigateCommandStart {
     CompletePlan(CommandOutputPlan),
     CompleteImmediate(CommandOutputPlan),
     PendingLoad(Box<PendingNavigateLoadCommand>),
+    PendingBeforeUnload(Box<PendingBeforeUnloadNavigationCommand>),
     PendingChildFrame(Box<PendingChildFrameNavigateCommand>),
     PendingSameDocument(Box<PendingSameDocumentNavigateCommand>),
     PendingContinueWithoutRequestPause(Box<PendingContinueNavigationWithoutRequestPauseCommand>),
@@ -1787,6 +1803,12 @@ pub(super) fn finish_started_navigation_command_for_parts(
                 reloaded_after_crash_session_ids,
             )
         }
+        NavigateCommandStart::PendingBeforeUnload(pending) => clear_crash_state_after_navigation(
+            conn,
+            &mut pending.prefix_events,
+            &owner,
+            reloaded_after_crash_session_ids,
+        ),
         NavigateCommandStart::PendingLoad(pending) => clear_crash_state_after_navigation(
             conn,
             &mut pending.prefix_events,
@@ -1807,6 +1829,15 @@ pub(super) fn finish_started_navigation_command_for_parts(
     match start {
         NavigateCommandStart::CompletePlan(plan) => PageCommandTaskStep::Complete(plan),
         NavigateCommandStart::CompleteImmediate(plan) => PageCommandTaskStep::Complete(plan),
+        NavigateCommandStart::PendingBeforeUnload(pending) => {
+            PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
+                command_id,
+                owner_scope: owner.clone(),
+                kind: Box::new(super::PendingPageCommandKind::BeforeUnloadNavigation(
+                    pending,
+                )),
+            })
+        }
         NavigateCommandStart::PendingLoad(pending) => {
             PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
                 command_id,
@@ -2552,6 +2583,12 @@ fn clear_crash_state_for_renderer_navigation(
                 reloaded_after_crash_session_ids,
             )
         }
+        NavigateCommandStart::PendingBeforeUnload(pending) => clear_crash_state_after_navigation(
+            conn,
+            &mut pending.prefix_events,
+            owner,
+            reloaded_after_crash_session_ids,
+        ),
         NavigateCommandStart::PendingLoad(pending) => clear_crash_state_after_navigation(
             conn,
             &mut pending.prefix_events,
@@ -2847,6 +2884,39 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         );
     }
 
+    let navigation = PreparedMainDocumentNavigation {
+        token: document_navigation_token,
+        state: navigation_state,
+        pending_fetch: pending_fetch_navigation,
+        fetch_request_stage,
+        allow_background_navigation,
+    };
+    if beforeunload == BeforeUnloadCheck::Required
+        && requested_url.scheme() != "javascript"
+        && let Some(source) = conn.target_page_residence_identity_for_owner(owner)
+        && let Some(page) = conn.loaded_page_mut_for_owner(owner)
+    {
+        let pending = page.start_check_main_document_beforeunload();
+        return NavigateCommandStart::PendingBeforeUnload(Box::new(
+            PendingBeforeUnloadNavigationCommand::new(conn, source, navigation, pending, out),
+        ));
+    }
+    start_prepared_main_document_navigation(conn, navigation, out)
+}
+
+fn start_prepared_main_document_navigation(
+    conn: &mut CdpConnection,
+    navigation: PreparedMainDocumentNavigation,
+    mut out: Vec<BackgroundProtocolEvent>,
+) -> NavigateCommandStart {
+    let PreparedMainDocumentNavigation {
+        token: document_navigation_token,
+        state: mut navigation_state,
+        pending_fetch: pending_fetch_navigation,
+        fetch_request_stage,
+        allow_background_navigation,
+    } = navigation;
+    let owner = &navigation_state.owner.clone();
     if let Some(mut pending) = pending_fetch_navigation {
         if fetch_request_stage == FetchRequestStage::Request {
             pending.request_cookie_report = navigation_cookie_access_report_for_owner(

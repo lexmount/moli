@@ -371,18 +371,7 @@ impl WorkerRuntimeContinuation {
         if self.succeeded && self.meta.action == "enable" && self.scope.can_configure(conn) {
             let mut plan = CommandOutputPlan::default();
             if self.service {
-                append_service_worker_runtime_console_messages(
-                    conn,
-                    self.meta.session_id(),
-                    &mut plan,
-                );
                 append_service_worker_runtime_exception_messages(
-                    conn,
-                    self.meta.session_id(),
-                    &mut plan,
-                );
-            } else {
-                append_shared_worker_runtime_console_messages(
                     conn,
                     self.meta.session_id(),
                     &mut plan,
@@ -533,7 +522,12 @@ mod tests {
             let (events, _, _) = outcome.into_protocol_event_parts();
             let messages = events
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message)
+                .map(|event| {
+                    event
+                        .into_protocol_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                })
                 .collect::<Vec<_>>();
             let replies = messages
                 .iter()
@@ -578,7 +572,12 @@ mod tests {
         let (events, _, _) = outcome.into_protocol_event_parts();
         let messages = events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
         ctx.with_fixture(|conn| {
             assert!(

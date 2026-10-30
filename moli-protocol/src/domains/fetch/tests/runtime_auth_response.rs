@@ -2048,7 +2048,12 @@ async fn run_cdp_fetch_then_bidi_network_auth_required_terminal_credentials_comp
         &ctx.handle(),
         &mut continue_output,
         continue_scheduler_events,
-        crate::conn::BackgroundProtocolEvent::into_protocol_message,
+        |event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        },
     )
     .await;
     ctx.sent.extend(continue_output);

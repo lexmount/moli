@@ -205,7 +205,12 @@ async fn assert_owned_page_wait(method: &str) {
         }
         let messages = events
             .into_iter()
-            .map(|event| event.into_protocol_message())
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
         let replies = messages
             .iter()
@@ -269,8 +274,7 @@ async fn stop_loading_captures_original_navigation_at_admission_before_a_success
         .as_str()
         .unwrap()
         .to_owned();
-    let owner = fixture.state;
-    let handle = owner.handle();
+    let handle = fixture.handle();
     let mut context = CommandDispatchContext::default();
     let CdpCommandTaskStep::Pending(pending) = start(
         &handle,
@@ -297,25 +301,48 @@ async fn stop_loading_captures_original_navigation_at_admission_before_a_success
         .unwrap();
     // Deliberately leave the original task unpolled until the successor has
     // been accepted. Its later cleanup must keep that newer request intact.
-    let CdpCommandTaskStep::Complete(paused) = start(
+    let mut successor_context = CommandDispatchContext::default();
+    let mut successor = start(
         &handle,
         json!({"id":2105,"method":"Page.navigate","sessionId":"SID-page-owned","params":{"url":"http://example.test/stop-newer"}}),
-        &mut Default::default(),
-    ) else {
-        panic!("successor request can pause independently");
+        &mut successor_context,
+    );
+    let paused = loop {
+        match successor {
+            CdpCommandTaskStep::Complete(outcome) => break outcome,
+            CdpCommandTaskStep::Pending(next) => {
+                let completed = fixture.drive_owned_wait(next.wait()).await;
+                successor = handle
+                    .with_state(|state| {
+                        state.complete_command_dispatch_with_context(
+                            completed,
+                            &mut successor_context,
+                        )
+                    })
+                    .unwrap();
+            }
+        }
     };
     let (events, _, _) = paused.into_protocol_event_parts();
     let newer = events
         .into_iter()
-        .map(|event| event.into_protocol_message())
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .find(|message| message["method"] == "Fetch.requestPaused")
         .expect("successor request pauses")["params"]["requestId"]
         .as_str()
         .unwrap()
         .to_owned();
-    let completed = tokio::time::timeout(std::time::Duration::from_secs(5), pending.wait())
-        .await
-        .unwrap();
+    let completed = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fixture.drive_owned_wait(pending.wait()),
+    )
+    .await
+    .unwrap();
     let CdpCommandTaskStep::Complete(outcome) = handle
         .with_state(|state| state.complete_command_dispatch_with_context(completed, &mut context))
         .unwrap()
@@ -325,7 +352,12 @@ async fn stop_loading_captures_original_navigation_at_admission_before_a_success
     let (events, _, _) = outcome.into_protocol_event_parts();
     let messages = events
         .into_iter()
-        .map(|event| event.into_protocol_message())
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         messages

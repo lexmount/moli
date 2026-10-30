@@ -192,7 +192,12 @@ async fn attached_command_recovers_its_original_output(internal: bool) {
         let (events, _, predecessor) = outcome.into_protocol_event_parts();
         let messages: Vec<_> = events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect();
         assert_eq!(
             messages.iter().filter(|m| **m == prefix).count(),
@@ -272,7 +277,12 @@ async fn direct_internal_command(handle: &ProtocolStateHandle, command: Value) -
                     .into_protocol_event_parts()
                     .0
                     .into_iter()
-                    .map(BackgroundProtocolEvent::into_protocol_message)
+                    .map(|event| {
+                        event
+                            .into_protocol_message()
+                            .into_json()
+                            .expect("scalar protocol fixture")
+                    })
                     .collect();
             }
             CdpCommandTaskStep::Pending(pending) => {

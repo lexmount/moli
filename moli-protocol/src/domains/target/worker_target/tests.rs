@@ -3727,7 +3727,9 @@ async fn native_worker_console_packets_preserve_utf16_and_session_owned_handles(
     let projection = WorkerTargetOutputProjection::take(&mut prepared).unwrap();
     ctx.run_fixture_projection(&mut command, move |driver, context| {
         Box::pin(projection.run(driver, context))
-    }).await;
+    })
+    .await
+    .expect("project native worker console output");
     let events = command.take_protocol_events();
     assert_eq!(events.len(), 1);
     let message = events.into_iter().next().unwrap().into_protocol_message();
@@ -3736,14 +3738,18 @@ async fn native_worker_console_packets_preserve_utf16_and_session_owned_handles(
     let wire = serde_json::to_string(&message).unwrap();
     assert!(wire.contains(r#""value":"\ud800""#));
     assert!(wire.contains(r#""description":"\ud801""#));
-    assert!(ctx.with_fixture(|conn| conn.runtime_remote_object_id_known_for_session_owner(
-        Some("SID-first"),
-        "native-console-object"
-    )));
-    assert!(!ctx.with_fixture(|conn| conn.runtime_remote_object_id_known_for_session_owner(
-        Some("SID-second"),
-        "native-console-object"
-    )));
+    assert!(ctx.with_fixture(
+        |conn| conn.runtime_remote_object_id_known_for_session_owner(
+            Some("SID-first"),
+            "native-console-object"
+        )
+    ));
+    assert!(!ctx.with_fixture(
+        |conn| conn.runtime_remote_object_id_known_for_session_owner(
+            Some("SID-second"),
+            "native-console-object"
+        )
+    ));
 }
 
 mod retirement_workflow;

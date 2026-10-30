@@ -710,7 +710,12 @@ async fn intercepted_target_close_retains_cleanup_across_cancelled_and_discarded
             );
             let messages: Vec<_> = events
                 .into_iter()
-                .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+                .map(|event| {
+                    event
+                        .into_protocol_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                })
                 .collect();
             let response = messages.iter().find(|message| message["id"] == 80).unwrap();
             if failure_phase.is_some() {

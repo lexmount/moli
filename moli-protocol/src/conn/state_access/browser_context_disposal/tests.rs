@@ -167,7 +167,12 @@ async fn context_disposal_owns_native_close_through_cancellation_and_ready_loss(
         );
         let messages = events
             .into_iter()
-            .map(|event| event.into_protocol_message())
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
         let replies = messages
             .iter()

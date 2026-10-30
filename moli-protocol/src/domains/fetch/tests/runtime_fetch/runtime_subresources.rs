@@ -1278,7 +1278,13 @@ async fn bidi_add_network_intercept_pauses_matching_fetch_subresources() {
         &ctx.handle(),
         &mut scheduler_output,
         scheduler_events,
-        |event| event.into_parts().0,
+        |event| {
+            event
+                .into_parts()
+                .0
+                .into_json()
+                .expect("scalar protocol fixture")
+        },
     )
     .await;
     ctx.sent.extend(scheduler_output);
@@ -1487,7 +1493,12 @@ async fn cdp_fetch_then_bidi_network_intercept_request_stage_chain_completes() {
         &ctx.handle(),
         &mut continue_output,
         continue_scheduler_events,
-        crate::conn::BackgroundProtocolEvent::into_protocol_message,
+        |event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        },
     )
     .await;
     ctx.sent.extend(continue_output);
@@ -1757,7 +1768,12 @@ async fn cdp_fetch_then_bidi_network_intercept_response_stage_chain_completes() 
         &ctx.handle(),
         &mut continue_output,
         continue_scheduler_events,
-        crate::conn::BackgroundProtocolEvent::into_protocol_message,
+        |event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        },
     )
     .await;
     ctx.sent.extend(continue_output);
@@ -1880,7 +1896,13 @@ async fn bidi_response_stage_network_intercept_marks_fetch_continuation_request_
         &ctx.handle(),
         &mut scheduler_output,
         scheduler_events,
-        |event| event.into_parts().0,
+        |event| {
+            event
+                .into_parts()
+                .0
+                .into_json()
+                .expect("scalar protocol fixture")
+        },
     )
     .await;
     ctx.sent.extend(scheduler_output);

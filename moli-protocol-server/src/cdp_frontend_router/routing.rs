@@ -94,14 +94,6 @@ impl CdpFrontendRoutingState {
     }
 }
 
-fn remove_top_level_session_id(message: &mut CdpMessage) {
-    message.set_session_id(None);
-}
-
-fn set_top_level_session_id(message: &mut CdpMessage, session_id: Option<&str>) {
-    message.set_session_id(session_id);
-}
-
 fn cdp_error_response(id: Option<u64>, code: i32, message: &str) -> Value {
     json!({
         "id": id.map(Value::from).unwrap_or(Value::Null),

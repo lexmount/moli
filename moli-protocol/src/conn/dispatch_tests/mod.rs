@@ -62,11 +62,21 @@ fn command_wait_failure_preserves_context_events_and_does_not_ack_early() {
     assert!(boundary.is_none() && predecessor.is_none());
     let before = before
         .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect::<Vec<_>>();
     let after = after
         .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .map(|event| {
+            event
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")
+        })
         .collect::<Vec<_>>();
     assert_eq!(before.len(), 2);
     assert_eq!(before[0]["method"], "Test.beforeResponse");

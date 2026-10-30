@@ -555,6 +555,7 @@ fn legacy_target_session_references_cannot_cross_browser_frontends() {
         else {
             panic!("foreign {method} session reference was not rejected");
         };
+        let message = message.into_json().expect("scalar routing fixture");
         assert_eq!(frontend_id, 6);
         assert_eq!(message["id"], json!(11));
         assert_eq!(message["error"]["code"], json!(-32602));
@@ -623,6 +624,7 @@ fn legacy_target_id_reference_requires_one_direct_child_session() {
     else {
         panic!("ambiguous target-id detach was not rejected");
     };
+    let message = message.into_json().expect("scalar routing fixture");
     assert_eq!(message["error"]["code"], json!(-32000));
 
     let Some(CdpPreparedFrontendCommand::ImmediateResponse { message, .. }) = routing
@@ -640,6 +642,7 @@ fn legacy_target_id_reference_requires_one_direct_child_session() {
     else {
         panic!("non-direct child session was accepted by the base Target handler");
     };
+    let message = message.into_json().expect("scalar routing fixture");
     assert_eq!(message["error"]["code"], json!(-32602));
 
     let command = expect_prepared_command(
@@ -694,6 +697,7 @@ fn rejected_nested_detach_preserves_the_request_session_route() {
     else {
         panic!("non-direct nested session was accepted by the page Target handler");
     };
+    let message = message.into_json().expect("scalar routing fixture");
 
     assert_eq!(message["id"], json!(61));
     assert_eq!(message["error"]["code"], json!(-32602));
@@ -757,6 +761,7 @@ fn target_command_errors_preserve_only_valid_client_session_routes() {
         else {
             panic!("invalid {method} target session reference was accepted");
         };
+        let message = message.into_json().expect("scalar routing fixture");
 
         assert_eq!(message["id"], json!(id));
         assert_eq!(message["error"]["code"], json!(-32602));
@@ -779,6 +784,7 @@ fn target_command_errors_preserve_only_valid_client_session_routes() {
     else {
         panic!("invalid root Target session reference was accepted");
     };
+    let message = message.into_json().expect("scalar routing fixture");
     assert!(message.get("sessionId").is_none());
 
     let Some(CdpPreparedFrontendCommand::ImmediateResponse { message, .. }) = routing
@@ -797,6 +803,7 @@ fn target_command_errors_preserve_only_valid_client_session_routes() {
     else {
         panic!("unknown outer session was accepted");
     };
+    let message = message.into_json().expect("scalar routing fixture");
     assert_eq!(message["error"]["code"], json!(-32001));
     assert!(message.get("sessionId").is_none());
 }
@@ -1005,6 +1012,7 @@ fn structurally_invalid_command_preserves_frontend_id_in_invalid_request() {
     else {
         panic!("invalid command must produce an immediate response")
     };
+    let message = message.into_json().expect("scalar routing fixture");
 
     assert_eq!(frontend_id, 5);
     assert_eq!(
@@ -1147,6 +1155,7 @@ fn page_child_sessions_are_scoped_to_their_frontend_and_removed_on_detach() {
     else {
         panic!("foreign child session command was not rejected");
     };
+    let message = message.into_json().expect("scalar routing fixture");
     assert_eq!(message["error"]["code"], json!(-32001));
 
     routing
@@ -1342,7 +1351,7 @@ fn raw_utf16_replies_restore_large_ids_for_their_own_frontend_once() {
             );
             let response = CdpMessage::parse(&raw).unwrap();
             let (owner, message) = routing
-                .route_message(response.clone(), Some(session))
+                .route_message(response.clone(), Some(session), None)
                 .unwrap();
             assert_eq!(owner.frontend_id(), frontend);
             assert_eq!(message.id(), Some(client_id));
@@ -1352,7 +1361,11 @@ fn raw_utf16_replies_restore_large_ids_for_their_own_frontend_once() {
                     .unwrap()
                     .contains(r#""value":"\ud800""#)
             );
-            assert!(routing.route_message(response, Some(session)).is_none());
+            assert!(
+                routing
+                    .route_message(response, Some(session), None)
+                    .is_none()
+            );
         }
     }
 }
@@ -1364,7 +1377,9 @@ fn raw_utf16_target_titles_do_not_break_child_session_ownership() {
         .register_browser_frontend(5, "browser".into(), test_sink())
         .unwrap();
     let attached = CdpMessage::parse(r#"{"method":"Target.attachedToTarget","sessionId":"browser","params":{"sessionId":"child","targetInfo":{"targetId":"worker","title":"\ud800"}}}"#).unwrap();
-    let (owner, attached) = routing.route_message(attached, Some("browser")).unwrap();
+    let (owner, attached) = routing
+        .route_message(attached, Some("browser"), None)
+        .unwrap();
     assert_eq!(owner.frontend_id(), 5);
     assert!(
         serde_json::to_string(&attached)
@@ -1372,7 +1387,9 @@ fn raw_utf16_target_titles_do_not_break_child_session_ownership() {
             .contains(r#""title":"\ud800""#)
     );
     let notification = CdpMessage::parse(r#"{"method":"Runtime.consoleAPICalled","sessionId":"child","params":{"args":[{"value":"\udc00"}]}}"#).unwrap();
-    let (owner, notification) = routing.route_message(notification, Some("child")).unwrap();
+    let (owner, notification) = routing
+        .route_message(notification, Some("child"), None)
+        .unwrap();
     assert_eq!(owner.frontend_id(), 5);
     assert_eq!(notification.session_id(), Some("child"));
     assert!(

@@ -70,7 +70,7 @@ async fn assert_popup_document_location(source: &str) {
             }))
             .await;
             let opener_id = take_created_target_id(&mut ctx, 1);
-            let context_id = ctx.conn.browser_context.as_ref().unwrap().id.clone();
+            let context_id = ctx.with_fixture(|conn| conn.browser_context.as_ref().unwrap().id.clone());
             ctx.wait_until_scheduler_state("opener document committed", |conn| {
                 conn.browser_context_by_id(&context_id)
                     .and_then(|context| loaded_page_for_target(context, &opener_id))

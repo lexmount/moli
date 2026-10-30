@@ -1168,7 +1168,9 @@ mod devtools_runtime_entry_tests {
                     ))
                     && response
                         .clone()
-                        .into_protocol_message_for_typed_runtime_route()["error"]["message"]
+                        .into_protocol_message_for_typed_runtime_route()
+                        .into_json()
+                        .expect("scalar protocol fixture")["error"]["message"]
                         == "Target closed")),
             "pending Runtime await cancellation must remain a typed runtime-ready event"
         );
@@ -1182,7 +1184,9 @@ mod devtools_runtime_entry_tests {
                     ))
                     && response
                         .clone()
-                        .into_protocol_message_for_typed_runtime_route()["error"]["message"]
+                        .into_protocol_message_for_typed_runtime_route()
+                        .into_json()
+                        .expect("scalar protocol fixture")["error"]["message"]
                         == "Target closed"
                     && response.has_bound_renderer_call_id())),
             "an attached claimed await must settle through its correlated typed response before the Page route retires"
@@ -1258,7 +1262,12 @@ mod devtools_runtime_entry_tests {
         let messages: Vec<_> = plan
             .into_background_events(Some(42), Some("SID-1"))
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["id"], 42);
@@ -1285,7 +1294,12 @@ mod devtools_runtime_entry_tests {
         let messages: Vec<_> = plan
             .into_background_events(Some(43), Some("SID-2"))
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["id"], 43);

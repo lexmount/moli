@@ -34,12 +34,14 @@ impl SessionOutputRoute {
         self.payload_session_id = session_id.map(str::to_owned);
     }
 
-    pub(super) fn encode(&self, mut message: CdpMessage) -> CdpMessage {
+    pub(super) fn encode(&self, message: impl Into<CdpMessage>) -> CdpMessage {
+        let mut message = message.into();
         message.set_session_id(self.payload_session_id.as_deref());
         for envelope in self.envelopes.iter().rev() {
             message = json!({"method":"Target.receivedMessageFromTarget", "params":{
                 "sessionId": envelope.target_session_id, "message":message.to_string(),
-            }}).into();
+            }})
+            .into();
             message.set_session_id(envelope.carrier_session_id.as_deref());
         }
         message

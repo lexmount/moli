@@ -225,7 +225,6 @@ pub(crate) fn prepare_worker_inspector_projection(
             runtime,
             background_events,
             response_events,
-            pending_runtime_console,
             pending_runtime_exceptions,
         } => {
             if !runtime.is_current() {
@@ -233,12 +232,6 @@ pub(crate) fn prepare_worker_inspector_projection(
             }
             output.extend(background_events);
             output.extend(response_events);
-            if let Some((messages, _)) = pending_runtime_console {
-                output.extend(runtime_console_api_called_events(
-                    runtime.session_id(),
-                    &messages,
-                ));
-            }
             if let Some((messages, start, _)) = pending_runtime_exceptions {
                 output.extend(runtime_exception_thrown_events(
                     runtime.session_id(),
@@ -266,13 +259,6 @@ pub(crate) fn prepare_worker_inspector_projection(
             );
             debug_assert!(!current_response_seen);
             output.extend(responses);
-            if let Some((messages, end)) =
-                exact_shared_worker_pending_runtime_console(conn, &attachment)
-            {
-                output.extend(runtime_console_api_called_events(session, &messages));
-                // Acceptance, cursor advancement and retained output are one finite operation.
-                mark_exact_shared_worker_runtime_console_emitted(conn, &attachment, end);
-            }
             session.to_owned()
         }
         WorkerTargetLifecycleOutput::DedicatedWorkerRuntimeInspectorMessages {

@@ -185,9 +185,12 @@ impl CdpConnection {
                                 terminal.is_none(),
                                 "one automation protocol terminal per owner"
                             );
-                            terminal = Some(match message.get("error") {
-                                Some(error) => Err(devtools_error_from_cdp_error_value(error)),
-                                None => Ok(()),
+                            terminal = Some(match message.field::<serde_json::Value>("error") {
+                                Ok(Some(error)) => Err(devtools_error_from_cdp_error_value(&error)),
+                                Ok(None) => Ok(()),
+                                Err(error) => {
+                                    Err(DevToolsError::new(DevToolsErrorKind::Internal, error))
+                                }
                             });
                         } else {
                             retained.push(event);

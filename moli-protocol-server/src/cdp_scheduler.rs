@@ -465,6 +465,12 @@ impl ProtocolOutputSequence {
         self.events.len()
     }
 
+    fn contains_protocol_response(&self) -> bool {
+        self.events
+            .iter()
+            .any(|event| event.protocol_message_id().is_some())
+    }
+
     #[cfg(test)]
     pub(crate) fn into_messages(self) -> Vec<Value> {
         self.events
@@ -2030,12 +2036,26 @@ impl CdpScheduler {
         self.complete_protocol_residence_snapshot(snapshot)
     }
 
+    /// A receipt acknowledges an already-projected native prefix. It executes
+    /// no Page JavaScript, so an outer paused Runtime command cannot gate it.
+    pub(crate) fn complete_ready_renderer_output_continuations(
+        &mut self,
+    ) -> ProtocolOutputSequence {
+        let snapshot = self.queues.take_renderer_output_continuation_snapshot();
+        self.complete_protocol_residence_snapshot(snapshot)
+    }
+
     /// Completes frozen outputs admitted from one exact renderer stream before
     /// exposing the Runtime response fenced by `predecessor`.
     pub(crate) fn complete_renderer_output_predecessor_before_runtime_response(
         &mut self,
         predecessor: &moli_core::RendererOutputFence,
     ) -> ProtocolOutputSequence {
+        // Projection can publish finite protocol observations in the same
+        // state turn that satisfies the renderer fence. Admit those durable
+        // events before selecting the prefix, even if the Runtime reply wins
+        // the actor's next input selection.
+        self.apply_protocol_state_events();
         let cursor = predecessor.cursor();
         let snapshot = self
             .queues
@@ -2226,7 +2246,9 @@ impl CdpScheduler {
         let mut blocked_target_ids = Vec::new();
         let mut blocked_renderer_streams = Vec::new();
         for (index, residence) in self.queues.protocol_residences.iter().enumerate() {
-            let renderer_stream = residence.renderer_output_cursor().map(RendererOutputCursor::stream);
+            let renderer_stream = residence
+                .renderer_output_cursor()
+                .map(RendererOutputCursor::stream);
             if renderer_stream.is_some_and(|stream| blocked_renderer_streams.contains(&stream)) {
                 continue;
             }
@@ -2238,12 +2260,18 @@ impl CdpScheduler {
             }
             let target_ids = self.protocol_residence_navigation_gate_target_ids(residence);
             let waits_for_navigation = self.protocol_residence_waits_for_navigation(
-                residence, &target_ids, &blocked_target_ids,
+                residence,
+                &target_ids,
+                &blocked_target_ids,
             );
             let waits_for_predecessor = !residence.should_yield_to_client_turn()
-                && !self.state.with_state(|state| {
-                    self.queues.residence_is_ready_to_complete(residence, &state)
-                }).expect("live protocol actor state");
+                && !self
+                    .state
+                    .with_state(|state| {
+                        self.queues
+                            .residence_is_ready_to_complete(residence, &state)
+                    })
+                    .expect("live protocol actor state");
             if waits_for_navigation || waits_for_predecessor {
                 if let Some(stream) = renderer_stream {
                     blocked_renderer_streams.push(stream);
@@ -2354,6 +2382,7 @@ impl CdpScheduler {
         events.extend(after_renderer);
         events.extend(after_response);
         let output = ProtocolOutputSequence::from_background_events(events);
+        let contains_response = output.contains_protocol_response();
         let (mut immediate, resident) =
             if !load_predecessors.is_empty() || future_load_predecessor.is_some() {
                 output.split_network_observations()
@@ -2372,17 +2401,28 @@ impl CdpScheduler {
         {
             immediate.append(resident);
         }
+        self.apply_scheduler_events_with_load_predecessors(
+            scheduler,
+            &load_predecessors,
+            future_load_predecessor,
+        );
+        if contains_response {
+            // Native session replies are themselves stream publications. Their
+            // earlier notifications must cross the same response boundary as
+            // adapter replies, including a pending client-turn predecessor.
+            let snapshot = self
+                .queues
+                .take_renderer_output_predecessor_snapshot(source);
+            let mut prefix = self.complete_protocol_residence_snapshot(snapshot);
+            prefix.append(immediate);
+            immediate = prefix;
+        }
         if let Some(output) = self.queues.take_unconstrained_renderer_output(source) {
             // The producing Native turn already authorizes this output. In
             // particular, Debugger.paused must reach the client while ordinary
             // adapter work is suspended by that very pause.
             immediate.append(output);
         }
-        self.apply_scheduler_events_with_load_predecessors(
-            scheduler,
-            &load_predecessors,
-            future_load_predecessor,
-        );
         Ok(self
             .route_background_events_around_inflight_navigation(immediate.into_background_events()))
     }

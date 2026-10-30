@@ -61,11 +61,13 @@ pub(crate) struct MainWindowProxyNavigationCommit {
     context: v8::Global<v8::Context>,
     context_host: Rc<RefCell<JsContextHost>>,
     renderer_document_isolate: RendererDocumentIsolateHandle,
+    devtools_target: crate::devtools::target::RendererDevToolsTargetHandle,
     page_id: u64,
 }
 
 impl MainWindowProxyNavigationCommit {
     pub(crate) fn unload_and_detach(self) {
+        let _unload_callbacks = self.devtools_target.pause_ref().begin_unload_callbacks();
         self.renderer_document_isolate
             .with_renderer_document_isolate_mut(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
@@ -1211,7 +1213,6 @@ pub(super) struct ActiveDragSession {
 #[derive(Clone, Copy)]
 pub(super) struct PendingDragGesture {
     pub document: DomHandle,
-    pub handle: DomHandle,
     pub x: f64,
     pub y: f64,
     pub root_to_frame: moli_layout::LayoutTransform2D,
@@ -2215,14 +2216,17 @@ impl ScriptVmPageRealmBootstrap {
         context_host
             .borrow_mut()
             .set_main_about_document_state(about_document_state);
-        if let Some(root_frame_id) = root_frame_id.as_deref() {
+        let inherited_window_identity =
+            renderer_page_script_environment
+                .as_ref()
+                .is_some_and(|environment| {
+                    environment.inherit_window_identity(&mut context_host.borrow_mut())
+                });
+        if !inherited_window_identity && let Some(root_frame_id) = root_frame_id.as_deref() {
             let name = context_host
                 .borrow()
                 .browser_context_runtime()
                 .browsing_context_name(root_frame_id);
-            if let Some(group) = browsing_context_group {
-                name.set_group(group);
-            }
             context_host.borrow_mut().bind_browsing_context_name(name);
             let window = context_host
                 .borrow()
@@ -2230,10 +2234,11 @@ impl ScriptVmPageRealmBootstrap {
                 .auxiliary_window(root_frame_id);
             context_host.borrow_mut().bind_auxiliary_window(window);
         }
-        if root_frame_id.is_none()
-            && let Some(environment) = renderer_page_script_environment.as_ref()
-        {
-            environment.inherit_window_identity(&mut context_host.borrow_mut());
+        if let Some(group) = browsing_context_group {
+            context_host
+                .borrow()
+                .browsing_context_name()
+                .set_group(group);
         }
         let main_document_owner = context_host
             .borrow()
@@ -2915,6 +2920,14 @@ impl ScriptVm {
             .deactivate_page_vm_binding_for_teardown();
     }
 
+    pub(super) fn retire_inspector_context_for_replacement(&mut self) {
+        // The successor agent emits the reset on reattachment. Preserve the
+        // source's already-produced unload prefix before retiring its route.
+        self.append_live_command_output_prefix();
+        self.page_inspector.retire_notifications_for_replacement();
+        self.detach_default_inspector_context_for_context_teardown();
+    }
+
     pub(super) fn prepare_main_window_proxy_navigation_commit(
         &mut self,
         page_id: u64,
@@ -2951,6 +2964,7 @@ impl ScriptVm {
             context,
             context_host: self._context_host.clone(),
             renderer_document_isolate: self.renderer_document_isolate.clone(),
+            devtools_target: self.devtools_target(),
             page_id,
         })
     }

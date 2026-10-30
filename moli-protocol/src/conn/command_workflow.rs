@@ -804,14 +804,23 @@ mod tests {
         let (mut events, _, _) = outcome.into_protocol_event_parts();
         assert_eq!(events.len(), 3);
         assert_eq!(
-            events.remove(0).into_protocol_message()["method"],
+            events
+                .remove(0)
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")["method"],
             "Page.frameStartedLoading"
         );
         assert_eq!(
-            events.remove(0).into_protocol_message()["error"]["code"],
+            events
+                .remove(0)
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")["error"]["code"],
             -32000
         );
         let (chooser, typed) = events.remove(0).into_parts();
+        let chooser = chooser.into_json().expect("scalar chooser fixture");
         assert_eq!(chooser["method"], "Page.fileChooserOpened");
         assert!(matches!(
             typed,
@@ -888,7 +897,11 @@ mod tests {
             assert_eq!(before[1], expected_before);
             assert_eq!(after, vec![expected_after]);
             assert!(post.is_empty());
-            let response = before[0].clone().into_protocol_message();
+            let response = before[0]
+                .clone()
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture");
             assert_eq!(response["id"], 92);
             if terminal_ready {
                 assert_eq!(response["result"], json!({"original":"settled"}));
@@ -936,7 +949,11 @@ mod tests {
             plan.into_renderer_fenced_background_and_post_response_events(Some(94), None);
         assert_eq!(events.len(), 1);
         assert_eq!(
-            events[0].clone().into_protocol_message()["error"]["message"],
+            events[0]
+                .clone()
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")["error"]["message"],
             "cancelled"
         );
         assert!(boundary.is_none() && after.is_empty() && post.is_empty());
@@ -1009,7 +1026,11 @@ mod tests {
             let (events, _, _) = outcome.into_protocol_event_parts();
             assert_eq!(events.len(), 2);
             assert_eq!(
-                events[0].clone().into_protocol_message()["result"],
+                events[0]
+                    .clone()
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")["result"],
                 json!({"original":"finished"})
             );
             assert_eq!(events[1], expected_fact);
@@ -1054,7 +1075,11 @@ mod tests {
             plan.into_renderer_fenced_background_and_post_response_events(Some(96), None);
         assert_eq!(events.len(), 2);
         assert_eq!(
-            events[0].clone().into_protocol_message()["error"]["message"],
+            events[0]
+                .clone()
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")["error"]["message"],
             OwnedProtocolWaitFailure::Panicked.message()
         );
         let (_, typed) = events[1].clone().into_parts();

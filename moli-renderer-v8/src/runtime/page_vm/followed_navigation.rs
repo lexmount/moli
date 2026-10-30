@@ -1151,6 +1151,7 @@ impl PageVm {
         reservation: crate::runtime::owner_local_store::RendererDocumentIsolateReservation,
     ) -> Result<PageVmValidatedFollowedNavigationCommit> {
         request.validate_bootstrap_configuration()?;
+        self.vm_mut().publish_main_document_navigation_history()?;
         // Browser requests retain the destination identity while resolving the
         // latest source state at commit. A session-history position alone is
         // only a fallback for requests without that explicit history handle.

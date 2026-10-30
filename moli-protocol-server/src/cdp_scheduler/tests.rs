@@ -1051,7 +1051,7 @@ async fn renderer_stream_fifo_runtime_snapshot_stops_at_its_first_exact_load_bar
     let before = json!({"method":"Runtime.consoleAPICalled", "params":{"marker":"before"}});
     let after = json!({"method":"Runtime.consoleAPICalled", "params":{"marker":"after-load"}});
     let response = json!({"id":17, "result":{"result":{"value":"done"}}});
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
     for (sequence, message, predecessors) in [
         (1, before.clone(), Vec::new()),
         (2, after.clone(), vec![load]),
@@ -1069,7 +1069,6 @@ async fn renderer_stream_fifo_runtime_snapshot_stops_at_its_first_exact_load_bar
     assert_eq!(
         scheduler
             .complete_renderer_output_predecessor_before_runtime_response(&fence)
-            .await
             .into_messages(),
         vec![before],
         "a ready Runtime response cannot pass its earlier load-blocked output"
@@ -1077,7 +1076,6 @@ async fn renderer_stream_fifo_runtime_snapshot_stops_at_its_first_exact_load_bar
     assert!(
         scheduler
             .complete_renderer_output_predecessor_before_runtime_response(&fence)
-            .await
             .is_empty()
     );
     assert_eq!(scheduler.queues.protocol_residence_len(), 2);
@@ -1086,7 +1084,6 @@ async fn renderer_stream_fifo_runtime_snapshot_stops_at_its_first_exact_load_bar
     assert_eq!(
         scheduler
             .complete_renderer_output_predecessor_before_runtime_response(&fence)
-            .await
             .into_messages(),
         vec![after, response]
     );
@@ -1105,7 +1102,7 @@ async fn renderer_stream_fifo_waits_for_its_load_without_blocking_an_independent
         let console = json!({"method":"Runtime.consoleAPICalled", "params":{"marker":"held"}});
         let response = json!({"id":17, "result":{"result":{"value":"done"}}});
         let other = json!({"method":"Runtime.consoleAPICalled", "params":{"marker":"other"}});
-        let mut scheduler = CdpScheduler::new(CdpConnection::new());
+        let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
         for (cursor, message, predecessors) in [
             (
                 RendererOutputCursor::new_for_test(stream, 1),
@@ -1133,10 +1130,7 @@ async fn renderer_stream_fifo_waits_for_its_load_without_blocking_an_independent
 
         assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(2));
         assert_eq!(
-            scheduler
-                .complete_next_protocol_residence()
-                .await
-                .into_messages(),
+            scheduler.complete_next_protocol_residence().into_messages(),
             vec![other],
             "stream identity includes the renderer agent and epoch, not only PageId"
         );
@@ -1145,17 +1139,11 @@ async fn renderer_stream_fifo_waits_for_its_load_without_blocking_an_independent
 
         scheduler.queues.satisfy_load_predecessor(load);
         assert_eq!(
-            scheduler
-                .complete_next_protocol_residence()
-                .await
-                .into_messages(),
+            scheduler.complete_next_protocol_residence().into_messages(),
             vec![console]
         );
         assert_eq!(
-            scheduler
-                .complete_next_protocol_residence()
-                .await
-                .into_messages(),
+            scheduler.complete_next_protocol_residence().into_messages(),
             vec![response]
         );
         assert_eq!(scheduler.queues.protocol_residence_len(), 0);
@@ -1168,7 +1156,7 @@ async fn renderer_stream_fifo_runtime_snapshot_ignores_another_streams_exact_loa
     let ready =
         RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(8));
     let load = deferred_main_document_load_observation_id(1);
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
     let other = json!({"method":"Runtime.consoleAPICalled", "params":{"marker":"other"}});
     scheduler.queues.enqueue_renderer_output_publication(
         RendererOutputCursor::new_for_test(held, 1),
@@ -1189,7 +1177,6 @@ async fn renderer_stream_fifo_runtime_snapshot_ignores_another_streams_exact_loa
             .complete_renderer_output_predecessor_before_runtime_response(
                 &RendererOutputFence::new_for_test(cursor),
             )
-            .await
             .into_messages(),
         vec![other]
     );

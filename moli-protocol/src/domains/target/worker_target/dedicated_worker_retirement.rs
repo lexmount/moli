@@ -676,7 +676,12 @@ mod tests {
             let messages = events
                 .iter()
                 .cloned()
-                .map(BackgroundProtocolEvent::into_protocol_message)
+                .map(|event| {
+                    event
+                        .into_protocol_message()
+                        .into_json()
+                        .expect("scalar protocol fixture")
+                })
                 .collect::<Vec<_>>();
             assert_eq!(
                 messages

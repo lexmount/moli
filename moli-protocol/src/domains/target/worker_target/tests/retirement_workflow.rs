@@ -40,7 +40,11 @@ fn discover_worker(conn: &mut CdpConnection) {
         .into_background_events();
     assert_eq!(events.len(), 1);
     assert_eq!(
-        events[0].clone().into_protocol_message()["method"],
+        events[0]
+            .clone()
+            .into_protocol_message()
+            .into_json()
+            .expect("scalar protocol fixture")["method"],
         "Target.targetCreated"
     );
 }
@@ -157,7 +161,11 @@ async fn worker_close_joins_original_detachment_and_recovers_its_admitted_workfl
         };
         let (events, _, _) = duplicate.into_protocol_event_parts();
         assert_eq!(
-            events[0].clone().into_protocol_message()["error"]["message"],
+            events[0]
+                .clone()
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")["error"]["message"],
             "Target is closing"
         );
         let completed = drive(&mut ctx, *detachment).await;
@@ -471,7 +479,12 @@ async fn worker_close_settles_original_calls_at_admission_before_cleanup_is_poll
             .expect("call retirement is synchronous at admission")
             .unwrap();
         assert_eq!(
-            terminal.output.protocol_response(terminal.call_id).unwrap()["error"]["message"],
+            terminal
+                .output
+                .protocol_response(terminal.call_id)
+                .unwrap()
+                .as_json()
+                .expect("scalar Inspector fixture")["error"]["message"],
             "Target detached"
         );
         if cancel_before_poll {
@@ -608,7 +621,11 @@ async fn captured_worker_attach_remains_ordered_and_cannot_leave_a_late_binding_
         };
         let (events, _, _) = rejected.into_protocol_event_parts();
         assert_eq!(
-            events[0].clone().into_protocol_message()["error"],
+            events[0]
+                .clone()
+                .into_protocol_message()
+                .into_json()
+                .expect("scalar protocol fixture")["error"],
             json!({"code": -32001, "message": "Session is closing"})
         );
         ctx.with_fixture(|conn| {

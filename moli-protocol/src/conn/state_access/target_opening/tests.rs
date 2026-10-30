@@ -1,7 +1,4 @@
-use crate::conn::{
-    BackgroundProtocolEvent, BrowserContext, CdpCommandTaskStep, CommandDispatchContext,
-    ParsedCdpCommand,
-};
+use crate::conn::{BrowserContext, CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand};
 use crate::testing::TestContext;
 use futures_util::FutureExt as _;
 use serde_json::json;
@@ -146,7 +143,12 @@ async fn creation_owns_surface_wait_and_preserves_events_after_waiter_or_ready_l
         let (events, _, _) = outcome.into_protocol_event_parts();
         let messages = events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
         let response = messages
             .iter()
@@ -359,7 +361,12 @@ async fn attachment_owns_native_wait_and_recovers_waiter_ready_loss_and_closing(
         let (events, _, _) = outcome.into_protocol_event_parts();
         let messages = events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| {
+                event
+                    .into_protocol_message()
+                    .into_json()
+                    .expect("scalar protocol fixture")
+            })
             .collect::<Vec<_>>();
         let replies = messages
             .iter()

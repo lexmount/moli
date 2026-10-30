@@ -121,7 +121,7 @@ impl CdpFrontendRoutingState {
                 })
             }
             CdpPreparedFrontendCommand::ImmediateResponse { message, .. } => {
-                if message.get("sessionId").is_none() {
+                if message.session_id().is_none() {
                     // Unknown payload sessions have no valid reply session.
                     route.set_payload_session_id(None);
                 }
