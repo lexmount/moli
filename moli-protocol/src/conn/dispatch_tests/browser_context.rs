@@ -5,11 +5,7 @@ async fn devtools_browser_context_create_uses_ephemeral_storage_partition() {
     let initial_storage_owner = StoragePartitionState::open(None).expect("memory partition");
     let initial_shared_storage = initial_storage_owner.shared_storage_handles();
     let initial_local_storage = initial_shared_storage.web_storage_store();
-    assert!(initial_local_storage.lock().set_item(
-        "https://example.com",
-        "profile-key",
-        "profile-value"
-    ));
+    assert!(initial_local_storage.set_item("https://example.com", "profile-key", "profile-value"));
     let initial_storage_partition = CdpInitialStoragePartition::from_storage_partition(
         vec![stored_cookie_for_dispatch_test("sid", "seeded")],
         &initial_storage_owner,
@@ -56,7 +52,6 @@ async fn devtools_browser_context_create_uses_ephemeral_storage_partition() {
         assert_eq!(
             created_context
                 .web_storage_store_for_test()
-                .lock()
                 .get_item("https://example.com", "profile-key"),
             None
         );

@@ -1454,7 +1454,7 @@ fn browser_context_clears_origin_site_data_through_partition_owner() {
     );
     assert_eq!(context.snapshot_cookies().len(), 2);
     {
-        let mut store = context.web_storage_store_for_test().lock();
+        let store = context.web_storage_store_for_test();
         assert!(store.set_item(&storage_key, "local", "1"));
         assert!(store.set_item(&sibling_storage_key, "local", "2"));
     }
@@ -1475,7 +1475,7 @@ fn browser_context_clears_origin_site_data_through_partition_owner() {
     let cookies = context.snapshot_cookies();
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "sibling");
-    let mut store = context.web_storage_store_for_test().lock();
+    let store = context.web_storage_store_for_test();
     assert_eq!(store.get_item(&storage_key, "local"), None);
     assert_eq!(
         store.get_item(&sibling_storage_key, "local"),

@@ -428,7 +428,7 @@ fn browser_context_storage_usage_reads_storage_partition_owner() {
         moli_storage_key::MoliStorageKey::first_party_from_url(&Url::parse(&origin).unwrap(), None)
             .serialized_storage_key();
     {
-        let mut store = browser_context.web_storage_store_for_test().lock();
+        let store = browser_context.web_storage_store_for_test();
         assert!(store.set_item(&storage_key, "local", "owner"));
     }
 

@@ -128,11 +128,9 @@ fn enable_command_output_plan(
     };
     let subscription = handles
         .web_storage_store
-        .lock()
         .subscribe_mutations(WebStorageAreaKind::Local);
     handles
         .session_storage_store
-        .lock()
         .add_mutation_subscription(WebStorageAreaKind::Session, &subscription);
 
     let enabled = conn.with_target_devtools_session_state_for_session_mut(session_id, |state| {
@@ -321,19 +319,22 @@ fn complete_storage_operation(
     } else {
         handles.session_storage_store
     };
-    let mut store = store.lock();
 
     match operation {
         DomStorageOperation::Clear => mutation_output_plan(store.try_clear(storage_key)),
         DomStorageOperation::GetItems => {
-            let entries = store
-                .sorted_keys(storage_key)
-                .into_iter()
-                .filter_map(|key| {
-                    let value = store.get_item(storage_key, &key)?;
-                    Some(vec![key, value])
-                })
-                .collect::<Vec<_>>();
+            let entries = match store.try_items_utf16(storage_key) {
+                Ok(entries) => entries
+                    .into_iter()
+                    .map(|(key, value)| {
+                        vec![
+                            String::from_utf16_lossy(&key),
+                            String::from_utf16_lossy(&value),
+                        ]
+                    })
+                    .collect::<Vec<_>>(),
+                Err(error) => return CommandOutputPlan::error(-32000, error.to_string()),
+            };
             CommandOutputPlan::result(json!({ "entries": entries }))
         }
         DomStorageOperation::RemoveItem { key } => {

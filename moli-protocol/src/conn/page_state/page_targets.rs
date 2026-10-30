@@ -1371,11 +1371,11 @@ mod tests {
         context.set_active_target_id("TID-first");
         let first_storage = context.page_storage_handles();
         {
-            let mut local_storage = first_storage.web_storage_store.lock();
+            let local_storage = &first_storage.web_storage_store;
             assert!(local_storage.set_item("https://same.test", "local", "shared"));
         }
         {
-            let mut session_storage = first_storage.session_storage_store.lock();
+            let session_storage = &first_storage.session_storage_store;
             assert!(session_storage.set_item("https://same.test", "session", "first"));
         }
 
@@ -1401,14 +1401,12 @@ mod tests {
         assert_eq!(
             second_storage
                 .web_storage_store
-                .lock()
                 .get_item("https://same.test", "local"),
             Some("shared".to_owned())
         );
         assert_eq!(
             second_storage
                 .session_storage_store
-                .lock()
                 .get_item("https://same.test", "session"),
             None
         );
@@ -1419,7 +1417,7 @@ mod tests {
         let mut context = BrowserContext::new("BC-popup-storage".to_owned());
         context.set_active_target_id("TID-opener");
         let opener_storage = context.page_storage_handles();
-        assert!(opener_storage.session_storage_store.lock().set_item(
+        assert!(opener_storage.session_storage_store.set_item(
             "https://same.test",
             "session",
             "opener"
@@ -1446,11 +1444,10 @@ mod tests {
         assert_eq!(
             popup_storage
                 .session_storage_store
-                .lock()
                 .get_item("https://same.test", "session"),
             Some("opener".to_owned())
         );
-        assert!(popup_storage.session_storage_store.lock().set_item(
+        assert!(popup_storage.session_storage_store.set_item(
             "https://same.test",
             "session",
             "popup"
@@ -1458,7 +1455,6 @@ mod tests {
         assert_eq!(
             opener_storage
                 .session_storage_store
-                .lock()
                 .get_item("https://same.test", "session"),
             Some("opener".to_owned())
         );
@@ -1469,11 +1465,7 @@ mod tests {
         let mut context = BrowserContext::new("BC-deactivated-storage".to_owned());
         context.set_active_target_id("TID-first");
         let first_session_storage = context.page_storage_handles().session_storage_store.clone();
-        assert!(
-            first_session_storage
-                .lock()
-                .set_item("https://same.test", "session", "first")
-        );
+        assert!(first_session_storage.set_item("https://same.test", "session", "first"));
 
         context.stage_foreground_target(
             "TID-second".to_owned(),
@@ -1497,7 +1489,6 @@ mod tests {
         assert_eq!(
             first_target_storage
                 .session_storage_store
-                .lock()
                 .get_item("https://same.test", "session"),
             Some("first".to_owned())
         );

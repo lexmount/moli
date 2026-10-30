@@ -756,8 +756,12 @@ impl BrowserContext {
         serialized_origin: &str,
     ) -> Result<BrowserContextOriginStorageUsage, String> {
         let local_storage_usage = {
-            let store = self.storage_partition.web_storage_store().lock();
-            usize_to_u64_saturating(store.usage_bytes_for_origin_areas(serialized_origin))
+            let store = self.storage_partition.web_storage_store();
+            usize_to_u64_saturating(
+                store
+                    .try_usage_bytes_for_origin_areas(serialized_origin)
+                    .map_err(|error| error.to_string())?,
+            )
         };
         let indexed_db_usage = moli_core::storage::indexed_db_origins_with_prefix_usage_bytes(
             self.storage_partition.indexed_db_manager(),
@@ -1370,7 +1374,7 @@ impl BrowserContext {
 
         let serialized_origin = origin.origin().ascii_serialization();
         if options.local_storage {
-            let mut store = self.storage_partition.web_storage_store().lock();
+            let store = self.storage_partition.web_storage_store();
             store
                 .try_clear_origin_areas(&serialized_origin)
                 .map_err(|error| format!("FailedToClearLocalStorage: {error}"))?;
@@ -1420,7 +1424,7 @@ impl BrowserContext {
 
         let serialized_storage_key = storage_key.serialized_storage_key();
         if options.local_storage {
-            let mut store = self.storage_partition.web_storage_store().lock();
+            let store = self.storage_partition.web_storage_store();
             store
                 .try_clear_origin(&serialized_storage_key)
                 .map_err(|error| format!("FailedToClearLocalStorage: {error}"))?;

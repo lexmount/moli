@@ -1,0 +1,468 @@
+use super::{store::Edit, *};
+use moli_sqlite::writeback::{
+    FailureAdmission, WriteBatch, WritebackClient, WritebackError, WritebackOwner, WritebackPolicy,
+};
+use moli_sqlite::{OpenMode, RuntimeHandle};
+use rusqlite::{Connection, OptionalExtension, params};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+const APPLICATION_ID: i32 = 0x4d4c4c53; // MLLS
+pub struct SqliteWebStorageOwner {
+    owner: WritebackOwner<Batch>,
+}
+struct Area {
+    state: Mutex<Option<MemoryWebStorageArea>>,
+    views: AtomicUsize,
+}
+pub struct WebStorageAreaLease {
+    area: Arc<Area>,
+    client: WritebackClient<Batch>,
+}
+impl Drop for WebStorageAreaLease {
+    fn drop(&mut self) {
+        if self.area.views.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.client.request_flush();
+        }
+    }
+}
+#[derive(Default)]
+struct Cache {
+    areas: HashMap<String, Weak<Area>>,
+    insertions: usize,
+}
+pub(super) struct SqliteBackend {
+    pub(super) client: WritebackClient<Batch>,
+    cache: Mutex<Cache>,
+    pub(super) namespace: parking_lot::RwLock<()>,
+}
+#[derive(Default)]
+pub(super) struct Batch(BTreeMap<String, AreaDelta>);
+struct AreaDelta {
+    clear: bool,
+    changes: BTreeMap<WebStorageString, KeyChange>,
+    usage: usize,
+    count: usize,
+    _pin: Arc<Area>,
+}
+enum KeyChange {
+    Put {
+        value: WebStorageString,
+        existed: bool,
+    },
+    Delete,
+}
+impl WriteBatch for Batch {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    fn merge(&mut self, newer: Self) {
+        for (key, mut next) in newer.0 {
+            if let Some(mut previous) = self.0.remove(&key)
+                && !next.clear
+            {
+                for (key, change) in next.changes {
+                    match change {
+                        KeyChange::Put { value, existed } => {
+                            let existed = match previous.changes.remove(&key) {
+                                Some(KeyChange::Put { existed, .. }) => existed,
+                                Some(KeyChange::Delete) => true,
+                                None => existed && !previous.clear,
+                            };
+                            previous
+                                .changes
+                                .insert(key, KeyChange::Put { value, existed });
+                        }
+                        KeyChange::Delete => {
+                            if !matches!(
+                                previous.changes.remove(&key),
+                                Some(KeyChange::Put { existed: false, .. })
+                            ) && !previous.clear
+                            {
+                                previous.changes.insert(key, KeyChange::Delete);
+                            }
+                        }
+                    }
+                }
+                next.changes = previous.changes;
+                next.clear = previous.clear;
+            }
+            self.0.insert(key, next);
+        }
+    }
+    fn mark_commit_uncertain(&mut self) {
+        for delta in self.0.values_mut() {
+            for change in delta.changes.values_mut() {
+                if let KeyChange::Put { existed, .. } = change {
+                    *existed = true;
+                }
+            }
+        }
+    }
+    fn write(&self, connection: &mut Connection) -> std::result::Result<(), WritebackError> {
+        let tx = connection.transaction()?;
+        for (key, delta) in &self.0 {
+            if delta.count == 0 {
+                tx.execute("DELETE FROM areas WHERE storage_key=?1", [key])?;
+                continue;
+            }
+            let area: i64 = tx.query_row(
+                "INSERT INTO areas(storage_key,usage_bytes,entry_count) VALUES (?1,?2,?3) ON CONFLICT(storage_key) DO UPDATE SET usage_bytes=excluded.usage_bytes,entry_count=excluded.entry_count RETURNING area_id",
+                params![key, i64::try_from(delta.usage).map_err(WritebackError::new)?, i64::try_from(delta.count).map_err(WritebackError::new)?], |r| r.get(0))?;
+            if delta.clear {
+                tx.execute("DELETE FROM entries WHERE area_id=?1", [area])?;
+            }
+            for (key, value) in &delta.changes {
+                match value {
+                    KeyChange::Put { value, .. } => {
+                        tx.execute("INSERT INTO entries(area_id,key,value) VALUES (?1,?2,?3) ON CONFLICT(area_id,key) DO UPDATE SET value=excluded.value", params![area, encode(key.as_units()), encode(value.as_units())])?;
+                    }
+                    KeyChange::Delete => {
+                        tx.execute(
+                            "DELETE FROM entries WHERE area_id=?1 AND key=?2",
+                            params![area, encode(key.as_units())],
+                        )?;
+                    }
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+impl From<WritebackError> for WebStorageMutationError {
+    fn from(error: WritebackError) -> Self {
+        Self::Persistence(error.to_string())
+    }
+}
+pub fn new_sqlite_web_storage_store(
+    path: PathBuf,
+    mode: OpenMode,
+    runtime: RuntimeHandle,
+) -> Result<(SharedWebStorageStore, SqliteWebStorageOwner)> {
+    let owner = WritebackOwner::open(
+        path,
+        mode,
+        runtime,
+        WritebackPolicy {
+            delay: std::time::Duration::from_secs(5),
+            early_commit_operations: None,
+        },
+        initialize,
+    )?;
+    let backend = SqliteBackend {
+        client: owner.client(),
+        cache: Mutex::new(Cache::default()),
+        namespace: parking_lot::RwLock::new(()),
+    };
+    let store = Arc::new(WebStorageStore {
+        backend: WebStorageBackend::Sqlite(backend),
+        mutation_subscribers: Mutex::new(Vec::new()),
+    });
+    Ok((store, SqliteWebStorageOwner { owner }))
+}
+fn initialize(connection: &mut Connection) -> std::result::Result<(), WritebackError> {
+    connection.pragma_update(None, "foreign_keys", true)?;
+    let application: i32 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
+    let version: i32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if application == 0 && version == 0 {
+        let tables: i64 = connection.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+            [],
+            |r| r.get(0),
+        )?;
+        if tables != 0 {
+            return Err(WritebackError::new("unidentified localStorage database"));
+        }
+        let tx = connection.transaction()?;
+        tx.execute_batch("CREATE TABLE areas(area_id INTEGER PRIMARY KEY,storage_key TEXT NOT NULL UNIQUE,usage_bytes INTEGER NOT NULL CHECK(usage_bytes>=0),entry_count INTEGER NOT NULL CHECK(entry_count>=0));
+            CREATE TABLE entries(area_id INTEGER NOT NULL REFERENCES areas(area_id) ON DELETE CASCADE,key BLOB NOT NULL CHECK(length(key)%2=0),value BLOB NOT NULL CHECK(length(value)%2=0),PRIMARY KEY(area_id,key)) WITHOUT ROWID;
+            CREATE TABLE migration(source_fingerprint TEXT NOT NULL,complete INTEGER NOT NULL CHECK(complete=1));")?;
+        tx.pragma_update(None, "application_id", APPLICATION_ID)?;
+        tx.pragma_update(None, "user_version", 1)?;
+        tx.commit()?;
+    } else if application != APPLICATION_ID || version != 1 {
+        return Err(WritebackError::new(format!(
+            "unsupported localStorage database identity/version {application}/{version}"
+        )));
+    }
+    // Verify the actual schema even when a database claims the current version.
+    connection.prepare("SELECT area_id,storage_key,usage_bytes,entry_count FROM areas LIMIT 0")?;
+    connection.prepare("SELECT area_id,key,value FROM entries LIMIT 0")?;
+    Ok(())
+}
+fn encode(units: &[u16]) -> Vec<u8> {
+    units.iter().flat_map(|u| u.to_le_bytes()).collect()
+}
+fn decode(bytes: Vec<u8>) -> std::result::Result<WebStorageString, WritebackError> {
+    if !bytes.len().is_multiple_of(2) {
+        return Err(WritebackError::new("invalid UTF-16LE localStorage row"));
+    }
+    Ok(WebStorageString::from_utf16_units(
+        bytes
+            .chunks_exact(2)
+            .map(|p| u16::from_le_bytes([p[0], p[1]]))
+            .collect::<Vec<_>>(),
+    ))
+}
+impl SqliteBackend {
+    fn area(&self, origin: &str) -> Arc<Area> {
+        let mut cache = self.cache.lock();
+        if let Some(area) = cache.areas.get(origin).and_then(Weak::upgrade) {
+            return area;
+        }
+        cache.insertions += 1;
+        if cache.insertions >= 64 {
+            cache.areas.retain(|_, area| area.strong_count() != 0);
+            cache.insertions = 0;
+        }
+        let area = Arc::new(Area {
+            state: Mutex::new(None),
+            views: AtomicUsize::new(0),
+        });
+        cache.areas.insert(origin.to_owned(), Arc::downgrade(&area));
+        area
+    }
+    fn load(
+        &self,
+        origin: &str,
+        state: &mut Option<MemoryWebStorageArea>,
+    ) -> std::result::Result<(), WebStorageMutationError> {
+        self.client.ensure_open()?;
+        if state.is_some() {
+            return Ok(());
+        }
+        let origin = origin.to_owned();
+        *state = Some(self.client.query(move |connection| {
+            let metadata: Option<(i64, i64, i64)> = connection
+                .query_row(
+                    "SELECT area_id,usage_bytes,entry_count FROM areas WHERE storage_key=?1",
+                    [&origin],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()?;
+            let Some((id, usage, count)) = metadata else {
+                return Ok(MemoryWebStorageArea::default());
+            };
+            let mut statement =
+                connection.prepare("SELECT key,value FROM entries WHERE area_id=?1")?;
+            let rows = statement.query_map([id], |r| {
+                Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?;
+            let mut values = HashMap::new();
+            for row in rows {
+                let (key, value) = row?;
+                values.insert(decode(key)?, decode(value)?);
+            }
+            let size = values.values().map(WebStorageString::usage_bytes).sum();
+            if usize::try_from(usage).ok() != Some(size)
+                || usize::try_from(count).ok() != Some(values.len())
+            {
+                return Err(WritebackError::new(
+                    "localStorage area metadata disagrees with its entries",
+                ));
+            }
+            Ok(MemoryWebStorageArea { values, size })
+        })?);
+        Ok(())
+    }
+    pub(super) fn read<R>(
+        &self,
+        origin: &str,
+        read: impl FnOnce(Option<&MemoryWebStorageArea>) -> R,
+    ) -> std::result::Result<R, WebStorageMutationError> {
+        let _namespace = self.namespace.read();
+        let area = self.area(origin);
+        let mut state = area.state.lock();
+        self.load(origin, &mut state)?;
+        Ok(read(state.as_ref()))
+    }
+    pub(super) fn edit<R>(
+        &self,
+        origin: &str,
+        edit: impl FnOnce(
+            &mut MemoryWebStorageArea,
+        ) -> std::result::Result<Edit<R>, WebStorageMutationError>,
+        publish: impl FnOnce(Edit<R>) -> R,
+    ) -> std::result::Result<R, WebStorageMutationError> {
+        let _namespace = self.namespace.read();
+        self.edit_unfenced(origin, edit, publish)
+    }
+    pub(super) fn edit_unfenced<R>(
+        &self,
+        origin: &str,
+        edit: impl FnOnce(
+            &mut MemoryWebStorageArea,
+        ) -> std::result::Result<Edit<R>, WebStorageMutationError>,
+        publish: impl FnOnce(Edit<R>) -> R,
+    ) -> std::result::Result<R, WebStorageMutationError> {
+        let area = self.area(origin);
+        let mut state = area.state.lock();
+        self.load(origin, &mut state)?;
+        let data = state.as_mut().expect("loaded area");
+        let result = self.client.accept(FailureAdmission::Reject, || {
+            let result = edit(data)?;
+            let mut batch = Batch::default();
+            if let Some(mutation) = &result.mutation {
+                let mut delta = AreaDelta {
+                    clear: false,
+                    changes: BTreeMap::new(),
+                    usage: data.size,
+                    count: data.values.len(),
+                    _pin: area.clone(),
+                };
+                match mutation {
+                    WebStorageMutation::ItemAdded { key, value, .. } => {
+                        delta.changes.insert(
+                            key.clone(),
+                            KeyChange::Put {
+                                value: value.clone(),
+                                existed: false,
+                            },
+                        );
+                    }
+                    WebStorageMutation::ItemUpdated { key, new_value, .. } => {
+                        delta.changes.insert(
+                            key.clone(),
+                            KeyChange::Put {
+                                value: new_value.clone(),
+                                existed: true,
+                            },
+                        );
+                    }
+                    WebStorageMutation::ItemRemoved { key, .. } => {
+                        delta.changes.insert(key.clone(), KeyChange::Delete);
+                    }
+                    WebStorageMutation::ItemsCleared { .. } => delta.clear = true,
+                }
+                batch.0.insert(origin.to_owned(), delta);
+            }
+            Ok::<_, WebStorageMutationError>((result, batch))
+        })?;
+        Ok(publish(result))
+    }
+    pub(super) fn clear_origin_areas(
+        &self,
+        origin: &str,
+        publish: impl Fn(WebStorageMutation),
+    ) -> std::result::Result<bool, WebStorageMutationError> {
+        let _namespace = self.namespace.write();
+        let areas = self
+            .area_keys_for_origin(origin)?
+            .into_iter()
+            .map(|key| {
+                let area = self.area(&key);
+                (key, area)
+            })
+            .collect::<Vec<_>>();
+        // Finish all cold reads before changing any map. The namespace fence
+        // prevents a concurrent cold load or new area from restoring old data.
+        for (key, area) in &areas {
+            self.load(key, &mut area.state.lock())?;
+        }
+        let mutations = self.client.accept(FailureAdmission::Reject, || {
+            let mut batch = Batch::default();
+            let mut mutations = Vec::new();
+            for (key, area) in &areas {
+                let mut state = area.state.lock();
+                let data = state.as_mut().expect("loaded area");
+                if data.values.is_empty() {
+                    continue;
+                }
+                data.values.clear();
+                data.size = 0;
+                batch.0.insert(
+                    key.clone(),
+                    AreaDelta {
+                        clear: true,
+                        changes: BTreeMap::new(),
+                        usage: 0,
+                        count: 0,
+                        _pin: area.clone(),
+                    },
+                );
+                mutations.push(WebStorageMutation::ItemsCleared {
+                    area_key: key.clone(),
+                });
+            }
+            Ok::<_, WebStorageMutationError>((mutations, batch))
+        })?;
+        let changed = !mutations.is_empty();
+        for mutation in mutations {
+            publish(mutation);
+        }
+        Ok(changed)
+    }
+    pub(super) fn area_keys_for_origin(
+        &self,
+        origin: &str,
+    ) -> std::result::Result<Vec<String>, WebStorageMutationError> {
+        let prefix = web_storage_area_key_prefix_for_origin(origin);
+        let query_origin = origin.to_owned();
+        let query_prefix = prefix.clone();
+        let mut keys = self.client.query(move |connection| {
+            let mut statement=connection.prepare("SELECT storage_key FROM areas WHERE storage_key=?1 OR substr(storage_key,1,length(?2))=?2")?;
+            Ok(statement.query_map(params![query_origin,query_prefix],|r|r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?)
+        })?;
+        keys.extend(
+            self.cache
+                .lock()
+                .areas
+                .iter()
+                .filter(|(_, area)| area.strong_count() != 0)
+                .map(|(key, _)| key.clone()),
+        );
+        keys.retain(|key| key == origin || key.starts_with(&prefix));
+        keys.sort();
+        keys.dedup();
+        Ok(keys)
+    }
+}
+impl WebStorageStore {
+    pub fn lease_area(
+        &self,
+        origin: &str,
+    ) -> std::result::Result<Option<WebStorageAreaLease>, WebStorageMutationError> {
+        let WebStorageBackend::Sqlite(sqlite) = &self.backend else {
+            return Ok(None);
+        };
+        sqlite.client.ensure_open()?;
+        let area = sqlite.area(origin);
+        area.views.fetch_add(1, Ordering::AcqRel);
+        Ok(Some(WebStorageAreaLease {
+            area,
+            client: sqlite.client.clone(),
+        }))
+    }
+}
+impl SqliteWebStorageOwner {
+    pub fn flush(&self) -> Result<()> {
+        self.owner.client().flush()?;
+        Ok(())
+    }
+    pub fn close(&self) -> Result<()> {
+        self.owner.close()?;
+        Ok(())
+    }
+    pub fn checkpoint(&self) -> Result<()> {
+        self.flush()?;
+        self.owner.client().query(|connection| {
+            connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+    pub fn migration_fingerprint(&self) -> Result<Option<String>> {
+        Ok(self.owner.client().query(|connection| {
+            Ok(connection
+                .query_row(
+                    "SELECT source_fingerprint FROM migration WHERE complete=1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?)
+        })?)
+    }
+}
+
+#[cfg(test)]
+mod tests;

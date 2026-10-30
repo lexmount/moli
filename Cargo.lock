@@ -3444,6 +3444,7 @@ dependencies = [
  "stylo_dom",
  "stylo_static_prefs",
  "stylo_traits",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",
@@ -3521,6 +3522,7 @@ version = "0.1.0"
 dependencies = [
  "parking_lot",
  "rusqlite",
+ "tempfile",
  "tokio",
 ]
 
@@ -3702,10 +3704,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "moli-browser-profile",
+ "moli-sqlite",
  "moli-storage-key",
  "parking_lot",
+ "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "typed-num",
 ]
 

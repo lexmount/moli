@@ -749,23 +749,19 @@ mod tests {
         {
             let partition = StoragePartitionState::open(Some(&profile_dir.path))?;
             let local_store = partition.web_storage_store();
-            local_store
-                .lock()
-                .set_item(origin, "local", "profile-backed");
+            local_store.set_item(origin, "local", "profile-backed");
             let session_store = partition.session_storage_store();
-            session_store
-                .lock()
-                .set_item(origin, "session", "memory-only");
+            session_store.set_item(origin, "session", "memory-only");
         }
 
         let reopened = StoragePartitionState::open(Some(&profile_dir.path))?;
         let local_store = reopened.web_storage_store();
         let session_store = reopened.session_storage_store();
         assert_eq!(
-            local_store.lock().get_item(origin, "local").as_deref(),
+            local_store.get_item(origin, "local").as_deref(),
             Some("profile-backed")
         );
-        assert_eq!(session_store.lock().get_item(origin, "session"), None);
+        assert_eq!(session_store.get_item(origin, "session"), None);
         Ok(())
     }
 

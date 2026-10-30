@@ -2218,10 +2218,10 @@ async fn storage_clear_data_for_origin_clears_local_storage_area() {
     );
     {
         ctx.with_fixture(|conn| {
-            let mut store = {
+            let store = {
                 let bc = conn.browser_context.as_ref().unwrap();
 
-                bc.web_storage_store_for_test().lock()
+                bc.web_storage_store_for_test()
             };
             assert!(store.set_item(&first_party_key, "local", "1"));
             assert!(store.set_item(&partitioned_origin_top_a, "local", "1a"));
@@ -2243,10 +2243,10 @@ async fn storage_clear_data_for_origin_clears_local_storage_area() {
     ctx.expect_result(12_525, json!({}), None);
 
     ctx.with_fixture(|conn| {
-        let mut store = {
+        let store = {
             let bc = conn.browser_context.as_ref().unwrap();
 
-            bc.web_storage_store_for_test().lock()
+            bc.web_storage_store_for_test()
         };
         assert_eq!(store.len(&first_party_key), 0);
         assert_eq!(store.get_item(&first_party_key, "local"), None);
@@ -2285,10 +2285,10 @@ async fn storage_clear_data_for_storage_key_clears_site_data_for_matching_origin
     let sibling_storage_key = first_party_storage_key_for_origin(&sibling_origin);
     {
         ctx.with_fixture(|conn| {
-            let mut store = {
+            let store = {
                 let bc = conn.browser_context.as_ref().unwrap();
 
-                bc.web_storage_store_for_test().lock()
+                bc.web_storage_store_for_test()
             };
             assert!(store.set_item(&storage_key, "local", "1"));
             assert!(store.set_item(&sibling_storage_key, "local", "2"));
@@ -2348,7 +2348,7 @@ async fn storage_clear_data_for_storage_key_clears_site_data_for_matching_origin
     ctx.with_fixture(|conn| {
         let bc = conn.browser_context.as_ref().unwrap();
         {
-            let mut store = bc.web_storage_store_for_test().lock();
+            let store = bc.web_storage_store_for_test();
             assert_eq!(store.get_item(&storage_key, "local"), None);
             assert_eq!(
                 store.get_item(&sibling_storage_key, "local"),
@@ -2400,10 +2400,10 @@ async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_o
     );
     {
         ctx.with_fixture(|conn| {
-            let mut store = {
+            let store = {
                 let bc = conn.browser_context.as_ref().unwrap();
 
-                bc.web_storage_store_for_test().lock()
+                bc.web_storage_store_for_test()
             };
             assert!(store.set_item(&first_party_key, "local", "must-stay"));
             assert!(store.set_item(&partitioned_key, "local", "must-clear"));
@@ -2458,7 +2458,7 @@ async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_o
     ctx.with_fixture(|conn| {
         let bc = conn.browser_context.as_ref().unwrap();
         {
-            let mut store = bc.web_storage_store_for_test().lock();
+            let store = bc.web_storage_store_for_test();
             assert_eq!(
                 store.get_item(&first_party_key, "local"),
                 Some("must-stay".to_owned())
@@ -2535,14 +2535,14 @@ async fn storage_get_usage_and_quota_reports_local_storage_usage_for_origin() {
     );
     {
         ctx.with_fixture(|conn| {
-            let mut session_store = {
+            let session_store = {
                 let bc = conn.browser_context.as_ref().unwrap();
-                let mut store = bc.web_storage_store_for_test().lock();
+                let store = bc.web_storage_store_for_test();
                 assert!(store.set_item(&first_party_key, "local", "abc"));
                 assert!(store.set_item(&partitioned_origin, "partitioned", "de"));
                 assert!(store.set_item(&partitioned_sibling, "sibling", "ignored"));
 
-                bc.session_storage_store_for_test().lock()
+                bc.session_storage_store_for_test()
             };
             assert!(session_store.set_item(&first_party_key, "session", "session-only"));
             assert!(session_store.set_item(&partitioned_origin, "session", "also-ignored"));
@@ -2840,7 +2840,7 @@ async fn storage_get_usage_and_quota_targets_command_session_browser_context() {
     let mut active = BrowserContext::new_with_page_for_test("BID-usage-active", "TID-usage-active");
     active.attach_active_session("SID-usage-active");
     {
-        let mut store = active.web_storage_store_for_test().lock();
+        let store = active.web_storage_store_for_test();
         assert!(store.set_item(&storage_key, "local", "aa"));
     }
 
@@ -2848,7 +2848,7 @@ async fn storage_get_usage_and_quota_targets_command_session_browser_context() {
         BrowserContext::new_with_page_for_test("BID-usage-inactive", "TID-usage-inactive");
     inactive.attach_active_session("SID-usage-inactive");
     {
-        let mut store = inactive.web_storage_store_for_test().lock();
+        let store = inactive.web_storage_store_for_test();
         assert!(store.set_item(&storage_key, "local", "bbbb"));
     }
 
@@ -3101,7 +3101,7 @@ async fn storage_clear_data_for_origin_targets_command_session_browser_context()
     );
     active.attach_active_session("SID-session-clear-active");
     {
-        let mut store = active.web_storage_store_for_test().lock();
+        let store = active.web_storage_store_for_test();
         assert!(store.set_item(&storage_key, "local", "active"));
     }
 
@@ -3111,7 +3111,7 @@ async fn storage_clear_data_for_origin_targets_command_session_browser_context()
     );
     inactive.attach_active_session("SID-session-clear-inactive");
     {
-        let mut store = inactive.web_storage_store_for_test().lock();
+        let store = inactive.web_storage_store_for_test();
         assert!(store.set_item(&storage_key, "local", "inactive"));
     }
 
@@ -3131,26 +3131,20 @@ async fn storage_clear_data_for_origin_targets_command_session_browser_context()
     ctx.expect_result(12_527, json!({}), Some("SID-session-clear-inactive"));
 
     ctx.with_fixture(|conn| {
-        let mut active_store = {
+        let active_store = {
             conn.browser_context
                 .as_ref()
                 .unwrap()
                 .web_storage_store_for_test()
-                .lock()
         };
         assert_eq!(
             active_store.get_item(&storage_key, "local"),
             Some("active".to_owned())
         );
-        drop(active_store);
     });
 
     ctx.with_fixture(|conn| {
-        let mut inactive_store = {
-            conn.inactive_browser_contexts[0]
-                .web_storage_store_for_test()
-                .lock()
-        };
+        let inactive_store = { conn.inactive_browser_contexts[0].web_storage_store_for_test() };
         assert_eq!(inactive_store.get_item(&storage_key, "local"), None);
     });
 }
@@ -3172,10 +3166,10 @@ async fn storage_clear_data_for_origin_clears_cookies_and_local_storage_together
     let storage_key = first_party_storage_key_for_origin(&origin);
     {
         ctx.with_fixture(|conn| {
-            let mut store = {
+            let store = {
                 let bc = conn.browser_context.as_ref().unwrap();
 
-                bc.web_storage_store_for_test().lock()
+                bc.web_storage_store_for_test()
             };
             assert!(store.set_item(&storage_key, "local", "1"));
         });
@@ -3207,10 +3201,10 @@ async fn storage_clear_data_for_origin_clears_cookies_and_local_storage_together
 
     {
         ctx.with_fixture(|conn| {
-            let mut store = {
+            let store = {
                 let bc = conn.browser_context.as_ref().unwrap();
 
-                bc.web_storage_store_for_test().lock()
+                bc.web_storage_store_for_test()
             };
             assert_eq!(store.len(&storage_key), 0);
             assert_eq!(store.get_item(&storage_key, "local"), None);
