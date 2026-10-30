@@ -17,8 +17,9 @@ pub use profile::{BrowserProfile, BrowserProfilePartition};
 pub use profile_file::{DurableProfileFileError, write_profile_file, write_profile_file_durable};
 pub use profile_lock::{BrowserProfileLock, acquire_profile_lock};
 pub use profile_manifest::{
-    BrowserProfileManifest, BrowserProfilePartitionManifest, PROFILE_MANIFEST_VERSION,
-    ProfileBackendKind, ProfileBackendManifest, ensure_profile_manifest, load_profile_manifest,
+    BrowserProfileManifest, BrowserProfilePartitionManifest, LEGACY_JSON_PROFILE_MANIFEST_VERSION,
+    PROFILE_MANIFEST_VERSION, ProfileBackendKind, ProfileBackendManifest, ensure_profile_manifest,
+    load_profile_manifest,
 };
 pub use profile_partition_id::{
     DEFAULT_PROFILE_PARTITION_ID, ProfilePartitionId, ProfilePartitionIdError,

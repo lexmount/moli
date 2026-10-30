@@ -237,3 +237,60 @@ fn transient_keys_do_not_accumulate_delete_history_in_a_batch() {
     }
     assert!(batch.0["area"].changes.is_empty());
 }
+
+#[test]
+fn sqlite_full_keeps_dirty_data_and_explicit_flush_recovers_after_capacity_is_restored() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    let _view = store.lease_area("area").unwrap();
+    backend(&store)
+        .client
+        .query(|connection| {
+            let pages: i64 = connection.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+            connection.pragma_update(None, "max_page_count", pages)?;
+            Ok(())
+        })
+        .unwrap();
+    let value = "x".repeat(1024 * 1024);
+    store.try_set_item("area", "accepted", &value).unwrap();
+    assert!(owner.flush().is_err());
+    assert_eq!(store.get_item("area", "accepted"), Some(value.clone()));
+    backend(&store)
+        .client
+        .query(|connection| {
+            connection.pragma_update(None, "max_page_count", 1_000_000)?;
+            Ok(())
+        })
+        .unwrap();
+    owner.flush().unwrap();
+    owner.close().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    assert_eq!(store.get_item("area", "accepted"), Some(value));
+    owner.close().unwrap();
+}
+#[test]
+fn origin_clear_includes_cold_partitioned_areas_and_preserves_other_origins() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    let a = web_storage_partitioned_area_key("https://same.test", "https://top.test");
+    let b = web_storage_partitioned_area_key("https://same.test", "https://other.test");
+    let other = web_storage_partitioned_area_key("https://other.test", "https://other.test");
+    for key in [&a, &b, &other] {
+        store.try_set_item(key, "value", "persisted").unwrap();
+    }
+    owner.flush().unwrap();
+    assert_eq!(resident(&store), 0);
+    let _view = store.lease_area(&a).unwrap();
+    assert_eq!(store.get_item(&a, "value").as_deref(), Some("persisted"));
+    let events = store.subscribe_mutations(WebStorageAreaKind::Local);
+    store.try_clear_origin_areas("https://same.test").unwrap();
+    assert_eq!(events.drain().len(), 2);
+    owner.close().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    assert_eq!(store.try_len(&a).unwrap(), 0);
+    assert_eq!(store.try_len(&b).unwrap(), 0);
+    assert_eq!(store.try_len(&other).unwrap(), 1);
+    owner.close().unwrap();
+}

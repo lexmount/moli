@@ -398,7 +398,7 @@ async fn browser_version_five_profile_starts_sql_and_reopens_new_data_without_re
     let profile = TempProfileDir::new("v5-sql-default");
     let paths = BrowserProfilePaths::new(&profile.path);
     fs::create_dir_all(&paths.partition_root)?;
-    let mut previous = moli_browser_profile::BrowserProfileManifest::default_for_paths(&paths);
+    let mut previous = moli_browser_profile::BrowserProfileManifest::legacy_json_for_paths(&paths);
     previous.version = 5;
     previous.partitions[0].indexed_db = moli_browser_profile::ProfileBackendManifest {
         backend: moli_browser_profile::ProfileBackendKind::Disk,
@@ -1471,7 +1471,7 @@ async fn browser_profile_dir_initializes_profile_manifest() -> Result<()> {
     let manifest = load_profile_manifest(&profile_paths)?;
     assert_eq!(
         manifest.version,
-        moli_browser_profile::PROFILE_MANIFEST_VERSION
+        moli_browser_profile::LEGACY_JSON_PROFILE_MANIFEST_VERSION
     );
     assert_eq!(manifest.partitions.len(), 1);
     let partition = &manifest.partitions[0];

@@ -24,7 +24,7 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<(), WritebackErr
             source_scheme INTEGER NOT NULL CHECK(source_scheme BETWEEN 0 AND 2),source_port INTEGER NOT NULL,
             creation_index BLOB NOT NULL CHECK(length(creation_index)=8),last_access_index BLOB NOT NULL CHECK(length(last_access_index)=8),
             CHECK((expires_seconds IS NULL)=(expires_nanos IS NULL)),PRIMARY KEY(partition_key,domain,path,name)) WITHOUT ROWID;
-            CREATE TABLE migration(source_fingerprint TEXT NOT NULL,complete INTEGER NOT NULL CHECK(complete=1));")?;
+            CREATE TABLE migration(source_fingerprint TEXT NOT NULL,migration_id TEXT NOT NULL,complete INTEGER NOT NULL CHECK(complete=1));")?;
         tx.pragma_update(None, "application_id", APPLICATION_ID)?;
         tx.pragma_update(None, "user_version", 1)?;
         tx.commit()?;

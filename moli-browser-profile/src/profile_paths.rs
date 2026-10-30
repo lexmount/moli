@@ -8,8 +8,12 @@ pub struct BrowserProfilePaths {
     pub lock_path: PathBuf,
     pub manifest_path: PathBuf,
     pub partition_root: PathBuf,
+    /// Legacy JSON import source; retained as a backup after version 7.
     pub cookies_path: PathBuf,
+    /// Legacy JSON import source; active version-7 storage uses SQLite.
     pub local_storage_path: PathBuf,
+    pub cookies_sqlite_path: PathBuf,
+    pub local_storage_sqlite_path: PathBuf,
     pub storage_buckets_path: PathBuf,
     pub service_worker_resources_path: PathBuf,
     pub cache_storage_root: PathBuf,
@@ -22,8 +26,12 @@ pub struct BrowserProfilePaths {
 pub struct BrowserProfilePartitionPaths {
     pub id: ProfilePartitionId,
     pub partition_root: PathBuf,
+    /// Legacy JSON import source; retained as a backup after version 7.
     pub cookies_path: PathBuf,
+    /// Legacy JSON import source; active version-7 storage uses SQLite.
     pub local_storage_path: PathBuf,
+    pub cookies_sqlite_path: PathBuf,
+    pub local_storage_sqlite_path: PathBuf,
     pub storage_buckets_path: PathBuf,
     pub service_worker_resources_path: PathBuf,
     pub cache_storage_root: PathBuf,
@@ -43,6 +51,8 @@ impl BrowserProfilePaths {
             partition_root: default_partition.partition_root,
             cookies_path: default_partition.cookies_path,
             local_storage_path: default_partition.local_storage_path,
+            cookies_sqlite_path: default_partition.cookies_sqlite_path,
+            local_storage_sqlite_path: default_partition.local_storage_sqlite_path,
             storage_buckets_path: default_partition.storage_buckets_path,
             service_worker_resources_path: default_partition.service_worker_resources_path,
             cache_storage_root: default_partition.cache_storage_root,
@@ -68,6 +78,8 @@ impl BrowserProfilePartitionPaths {
         Self {
             cookies_path: partition_root.join("cookies.json"),
             local_storage_path: partition_root.join("localstorage.json"),
+            cookies_sqlite_path: partition_root.join("cookies.sqlite"),
+            local_storage_sqlite_path: partition_root.join("localstorage.sqlite"),
             storage_buckets_path: partition_root.join("storage-buckets.json"),
             service_worker_resources_path: partition_root.join("service-worker-resources.json"),
             cache_storage_root: partition_root.join("cache-storage"),

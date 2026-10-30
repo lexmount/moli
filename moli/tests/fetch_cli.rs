@@ -1784,7 +1784,7 @@ fn cli_profile_dir_persists_cookies_after_successful_fetch() -> Result<()> {
     let manifest = load_profile_manifest(&profile_paths)?;
     assert_eq!(
         manifest.version,
-        moli_browser_profile::PROFILE_MANIFEST_VERSION
+        moli_browser_profile::LEGACY_JSON_PROFILE_MANIFEST_VERSION
     );
     assert_eq!(manifest.partitions.len(), 1);
     Ok(())

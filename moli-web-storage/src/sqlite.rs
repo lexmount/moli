@@ -6,7 +6,7 @@ use moli_sqlite::{OpenMode, RuntimeHandle};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const APPLICATION_ID: i32 = 0x4d4c4c53; // MLLS
+pub(super) const APPLICATION_ID: i32 = 0x4d4c4c53; // MLLS
 pub struct SqliteWebStorageOwner {
     owner: WritebackOwner<Batch>,
 }
@@ -160,7 +160,7 @@ pub fn new_sqlite_web_storage_store(
     });
     Ok((store, SqliteWebStorageOwner { owner }))
 }
-fn initialize(connection: &mut Connection) -> std::result::Result<(), WritebackError> {
+pub(super) fn initialize(connection: &mut Connection) -> std::result::Result<(), WritebackError> {
     connection.pragma_update(None, "foreign_keys", true)?;
     let application: i32 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
     let version: i32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -176,7 +176,7 @@ fn initialize(connection: &mut Connection) -> std::result::Result<(), WritebackE
         let tx = connection.transaction()?;
         tx.execute_batch("CREATE TABLE areas(area_id INTEGER PRIMARY KEY,storage_key TEXT NOT NULL UNIQUE,usage_bytes INTEGER NOT NULL CHECK(usage_bytes>=0),entry_count INTEGER NOT NULL CHECK(entry_count>=0));
             CREATE TABLE entries(area_id INTEGER NOT NULL REFERENCES areas(area_id) ON DELETE CASCADE,key BLOB NOT NULL CHECK(length(key)%2=0),value BLOB NOT NULL CHECK(length(value)%2=0),PRIMARY KEY(area_id,key)) WITHOUT ROWID;
-            CREATE TABLE migration(source_fingerprint TEXT NOT NULL,complete INTEGER NOT NULL CHECK(complete=1));")?;
+            CREATE TABLE migration(source_fingerprint TEXT NOT NULL,migration_id TEXT NOT NULL,complete INTEGER NOT NULL CHECK(complete=1));")?;
         tx.pragma_update(None, "application_id", APPLICATION_ID)?;
         tx.pragma_update(None, "user_version", 1)?;
         tx.commit()?;
@@ -190,7 +190,7 @@ fn initialize(connection: &mut Connection) -> std::result::Result<(), WritebackE
     connection.prepare("SELECT area_id,key,value FROM entries LIMIT 0")?;
     Ok(())
 }
-fn encode(units: &[u16]) -> Vec<u8> {
+pub(super) fn encode(units: &[u16]) -> Vec<u8> {
     units.iter().flat_map(|u| u.to_le_bytes()).collect()
 }
 fn decode(bytes: Vec<u8>) -> std::result::Result<WebStorageString, WritebackError> {
@@ -446,7 +446,11 @@ impl SqliteWebStorageOwner {
     pub fn checkpoint(&self) -> Result<()> {
         self.flush()?;
         self.owner.client().query(|connection| {
-            connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+            let busy: i32 =
+                connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+            if busy != 0 {
+                return Err(WritebackError::new("localStorage checkpoint is busy"));
+            }
             Ok(())
         })?;
         Ok(())

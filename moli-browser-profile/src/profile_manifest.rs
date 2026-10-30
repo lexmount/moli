@@ -6,7 +6,8 @@ use serde_json::Value;
 
 use crate::{BrowserProfilePaths, DEFAULT_PROFILE_PARTITION_ID, write_profile_file_durable};
 
-pub const PROFILE_MANIFEST_VERSION: u32 = 6;
+pub const PROFILE_MANIFEST_VERSION: u32 = 7;
+pub const LEGACY_JSON_PROFILE_MANIFEST_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,9 +51,31 @@ pub enum ProfileBackendKind {
 
 impl BrowserProfileManifest {
     pub fn default_for_paths(paths: &BrowserProfilePaths) -> Self {
+        let mut manifest = Self::legacy_json_for_paths(paths);
+        manifest.version = PROFILE_MANIFEST_VERSION;
+        manifest.partitions[0].cookies = ProfileBackendManifest {
+            backend: ProfileBackendKind::Sqlite,
+            path: Some(relative_profile_path(
+                &paths.root,
+                &paths.cookies_sqlite_path,
+            )),
+        };
+        manifest.partitions[0].local_storage = ProfileBackendManifest {
+            backend: ProfileBackendKind::Sqlite,
+            path: Some(relative_profile_path(
+                &paths.root,
+                &paths.local_storage_sqlite_path,
+            )),
+        };
+        manifest
+    }
+
+    /// Startup metadata remains at the last JSON version until native import
+    /// and publication of both databases has completed under the profile lock.
+    pub fn legacy_json_for_paths(paths: &BrowserProfilePaths) -> Self {
         let partition_root = relative_profile_path(&paths.root, &paths.partition_root);
         Self {
-            version: PROFILE_MANIFEST_VERSION,
+            version: LEGACY_JSON_PROFILE_MANIFEST_VERSION,
             partitions: vec![BrowserProfilePartitionManifest {
                 id: DEFAULT_PROFILE_PARTITION_ID.to_owned(),
                 root: partition_root,
@@ -89,7 +112,7 @@ pub fn ensure_profile_manifest(paths: &BrowserProfilePaths) -> Result<BrowserPro
             .with_context(|| format!("failed to create profile dir `{}`", paths.root.display()))?;
     }
 
-    let manifest = BrowserProfileManifest::default_for_paths(paths);
+    let manifest = BrowserProfileManifest::legacy_json_for_paths(paths);
     save_profile_manifest(paths, &manifest)?;
     Ok(manifest)
 }
@@ -108,7 +131,7 @@ pub fn load_profile_manifest(paths: &BrowserProfilePaths) -> Result<BrowserProfi
         )
     })?;
     let version = manifest_version_from_value(paths, &value)?;
-    if version < PROFILE_MANIFEST_VERSION {
+    if version < LEGACY_JSON_PROFILE_MANIFEST_VERSION {
         let manifest = migrate_profile_manifest(paths, version, value)?;
         validate_profile_manifest(paths, &manifest)?;
         save_profile_manifest(paths, &manifest)?;
@@ -154,13 +177,13 @@ fn migrate_profile_manifest(
     value: Value,
 ) -> Result<BrowserProfileManifest> {
     match version {
-        0..=4 => Ok(BrowserProfileManifest::default_for_paths(paths)),
+        0..=4 => Ok(BrowserProfileManifest::legacy_json_for_paths(paths)),
         5 => {
             let mut manifest: BrowserProfileManifest = serde_json::from_value(value)
                 .context("failed to parse version 5 profile manifest")?;
             // Only IndexedDB changes backend; preserve every other backend.
-            let expected = BrowserProfileManifest::default_for_paths(paths);
-            manifest.version = PROFILE_MANIFEST_VERSION;
+            let expected = BrowserProfileManifest::legacy_json_for_paths(paths);
+            manifest.version = LEGACY_JSON_PROFILE_MANIFEST_VERSION;
             let partition = manifest
                 .partitions
                 .iter_mut()
@@ -178,7 +201,7 @@ fn migrate_profile_manifest(
     }
 }
 
-fn save_profile_manifest(
+pub(crate) fn save_profile_manifest(
     paths: &BrowserProfilePaths,
     manifest: &BrowserProfileManifest,
 ) -> Result<()> {
@@ -209,7 +232,13 @@ fn validate_profile_manifest(
         );
     }
 
-    let expected = BrowserProfileManifest::default_for_paths(paths);
+    let expected = match manifest.version {
+        LEGACY_JSON_PROFILE_MANIFEST_VERSION => {
+            BrowserProfileManifest::legacy_json_for_paths(paths)
+        }
+        PROFILE_MANIFEST_VERSION => BrowserProfileManifest::default_for_paths(paths),
+        version => bail!("unsupported validated profile version {version}"),
+    };
     let expected_default = &expected.partitions[0];
     if default_partition != expected_default {
         bail!(
@@ -252,7 +281,10 @@ mod tests {
     use anyhow::Result;
     use serde_json::json;
 
-    use super::{BrowserProfileManifest, PROFILE_MANIFEST_VERSION, ensure_profile_manifest};
+    use super::{
+        BrowserProfileManifest, LEGACY_JSON_PROFILE_MANIFEST_VERSION, PROFILE_MANIFEST_VERSION,
+        ensure_profile_manifest,
+    };
     use crate::BrowserProfilePaths;
 
     struct TempProfileDir {
@@ -286,7 +318,10 @@ mod tests {
 
         let manifest = ensure_profile_manifest(&paths)?;
 
-        assert_eq!(manifest, BrowserProfileManifest::default_for_paths(&paths));
+        assert_eq!(
+            manifest,
+            BrowserProfileManifest::legacy_json_for_paths(&paths)
+        );
         let persisted = fs::read_to_string(&paths.manifest_path)?;
         assert!(persisted.contains("\"version\""));
         assert!(persisted.contains("\"default\""));
@@ -350,7 +385,7 @@ mod tests {
         let profile = TempProfileDir::new("extra-partition");
         let paths = BrowserProfilePaths::new(&profile.path);
         fs::create_dir_all(&paths.root)?;
-        let mut manifest = BrowserProfileManifest::default_for_paths(&paths);
+        let mut manifest = BrowserProfileManifest::legacy_json_for_paths(&paths);
         let mut extra_partition = manifest.partitions[0].clone();
         extra_partition.id = "secondary".to_owned();
         extra_partition.root = "partitions/secondary".to_owned();
@@ -387,12 +422,15 @@ mod tests {
 
         let manifest = ensure_profile_manifest(&paths)?;
 
-        assert_eq!(manifest, BrowserProfileManifest::default_for_paths(&paths));
+        assert_eq!(
+            manifest,
+            BrowserProfileManifest::legacy_json_for_paths(&paths)
+        );
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&paths.manifest_path)?)?;
         assert_eq!(
             persisted["version"],
-            serde_json::json!(PROFILE_MANIFEST_VERSION)
+            serde_json::json!(LEGACY_JSON_PROFILE_MANIFEST_VERSION)
         );
         assert_eq!(
             persisted["partitions"][0]["sessionStorage"]["backend"],
@@ -454,12 +492,15 @@ mod tests {
 
         let manifest = ensure_profile_manifest(&paths)?;
 
-        assert_eq!(manifest, BrowserProfileManifest::default_for_paths(&paths));
+        assert_eq!(
+            manifest,
+            BrowserProfileManifest::legacy_json_for_paths(&paths)
+        );
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&paths.manifest_path)?)?;
         assert_eq!(
             persisted["version"],
-            serde_json::json!(PROFILE_MANIFEST_VERSION)
+            serde_json::json!(LEGACY_JSON_PROFILE_MANIFEST_VERSION)
         );
         assert_eq!(
             persisted["partitions"][0]["storageBuckets"]["path"],
@@ -517,12 +558,15 @@ mod tests {
 
         let manifest = ensure_profile_manifest(&paths)?;
 
-        assert_eq!(manifest, BrowserProfileManifest::default_for_paths(&paths));
+        assert_eq!(
+            manifest,
+            BrowserProfileManifest::legacy_json_for_paths(&paths)
+        );
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&paths.manifest_path)?)?;
         assert_eq!(
             persisted["version"],
-            serde_json::json!(PROFILE_MANIFEST_VERSION)
+            serde_json::json!(LEGACY_JSON_PROFILE_MANIFEST_VERSION)
         );
         assert_eq!(
             persisted["partitions"][0]["cacheStorage"]["path"],
@@ -580,12 +624,15 @@ mod tests {
 
         let manifest = ensure_profile_manifest(&paths)?;
 
-        assert_eq!(manifest, BrowserProfileManifest::default_for_paths(&paths));
+        assert_eq!(
+            manifest,
+            BrowserProfileManifest::legacy_json_for_paths(&paths)
+        );
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&paths.manifest_path)?)?;
         assert_eq!(
             persisted["version"],
-            serde_json::json!(PROFILE_MANIFEST_VERSION)
+            serde_json::json!(LEGACY_JSON_PROFILE_MANIFEST_VERSION)
         );
         assert_eq!(
             persisted["partitions"][0]["serviceWorkerResources"]["path"],
@@ -599,7 +646,8 @@ mod tests {
         let profile = TempProfileDir::new("migrate-v4");
         let paths = BrowserProfilePaths::new(&profile.path);
         fs::create_dir_all(&paths.root)?;
-        let mut previous = serde_json::to_value(BrowserProfileManifest::default_for_paths(&paths))?;
+        let mut previous =
+            serde_json::to_value(BrowserProfileManifest::legacy_json_for_paths(&paths))?;
         previous["version"] = serde_json::json!(4);
         previous["partitions"][0]
             .as_object_mut()
@@ -609,12 +657,15 @@ mod tests {
 
         let manifest = ensure_profile_manifest(&paths)?;
 
-        assert_eq!(manifest, BrowserProfileManifest::default_for_paths(&paths));
+        assert_eq!(
+            manifest,
+            BrowserProfileManifest::legacy_json_for_paths(&paths)
+        );
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&paths.manifest_path)?)?;
         assert_eq!(
             persisted["version"],
-            serde_json::json!(PROFILE_MANIFEST_VERSION)
+            serde_json::json!(LEGACY_JSON_PROFILE_MANIFEST_VERSION)
         );
         assert_eq!(
             persisted["partitions"][0]["opfs"]["backend"],
@@ -632,7 +683,8 @@ mod tests {
         let profile = TempProfileDir::new("v5-sqlite");
         let paths = BrowserProfilePaths::new(&profile.path);
         fs::create_dir_all(&paths.root)?;
-        let mut previous = serde_json::to_value(BrowserProfileManifest::default_for_paths(&paths))?;
+        let mut previous =
+            serde_json::to_value(BrowserProfileManifest::legacy_json_for_paths(&paths))?;
         previous["version"] = json!(5);
         previous["partitions"][0]["indexedDb"] = json!({
             "backend":"disk", "path":"partitions/default/indexeddb"
@@ -654,7 +706,7 @@ mod tests {
         assert_eq!(actual, previous);
         assert_eq!(
             ensure_profile_manifest(&paths)?,
-            BrowserProfileManifest::default_for_paths(&paths)
+            BrowserProfileManifest::legacy_json_for_paths(&paths)
         );
         Ok(())
     }
@@ -664,12 +716,36 @@ mod tests {
         let profile = TempProfileDir::new("v6-legacy-rejected");
         let paths = BrowserProfilePaths::new(&profile.path);
         fs::create_dir_all(&paths.root)?;
-        let mut manifest = BrowserProfileManifest::default_for_paths(&paths);
+        let mut manifest = BrowserProfileManifest::legacy_json_for_paths(&paths);
         manifest.partitions[0].indexed_db.backend = super::ProfileBackendKind::Disk;
         let bytes = serde_json::to_vec(&manifest)?;
         fs::write(&paths.manifest_path, &bytes)?;
         assert!(ensure_profile_manifest(&paths).is_err());
         assert_eq!(fs::read(&paths.manifest_path)?, bytes);
         Ok(())
+    }
+    #[test]
+    fn sqlite_manifest_requires_both_backends_and_keeps_session_storage_in_memory() {
+        let paths = crate::BrowserProfilePaths::new("profile-v7-layout");
+        let mut manifest = BrowserProfileManifest::default_for_paths(&paths);
+        assert_eq!(manifest.version, PROFILE_MANIFEST_VERSION);
+        assert_eq!(
+            manifest.partitions[0].cookies.backend,
+            super::ProfileBackendKind::Sqlite
+        );
+        assert_eq!(
+            manifest.partitions[0].local_storage.backend,
+            super::ProfileBackendKind::Sqlite
+        );
+        assert_eq!(
+            manifest.partitions[0].session_storage.backend,
+            super::ProfileBackendKind::Memory
+        );
+        super::validate_profile_manifest(&paths, &manifest).unwrap();
+        manifest.partitions[0].local_storage =
+            BrowserProfileManifest::legacy_json_for_paths(&paths).partitions[0]
+                .local_storage
+                .clone();
+        assert!(super::validate_profile_manifest(&paths, &manifest).is_err());
     }
 }

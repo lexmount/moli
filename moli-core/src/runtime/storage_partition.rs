@@ -1,3 +1,6 @@
+mod migration;
+pub use migration::migrate_profile_storage;
+
 use std::{
     fmt,
     path::{Path, PathBuf},

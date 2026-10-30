@@ -34,6 +34,29 @@ impl BrowserProfile {
         })
     }
 
+    pub fn needs_sqlite_storage_migration(&self) -> bool {
+        self.manifest.version == crate::LEGACY_JSON_PROFILE_MANIFEST_VERSION
+    }
+
+    /// Native startup only. The caller has verified, checkpointed, closed and
+    /// durably published both SQLite databases. This is the final commit point.
+    pub fn finish_sqlite_storage_migration(&mut self) -> Result<()> {
+        if !self.needs_sqlite_storage_migration() {
+            return Ok(());
+        }
+        if !self.paths.cookies_sqlite_path.is_file()
+            || !self.paths.local_storage_sqlite_path.is_file()
+        {
+            anyhow::bail!(
+                "both SQLite storage files must exist before publishing profile version 7"
+            );
+        }
+        let manifest = BrowserProfileManifest::default_for_paths(&self.paths);
+        crate::profile_manifest::save_profile_manifest(&self.paths, &manifest)?;
+        self.manifest = manifest;
+        Ok(())
+    }
+
     pub fn paths(&self) -> &BrowserProfilePaths {
         &self.paths
     }
@@ -80,6 +103,13 @@ impl<'a> BrowserProfilePartition<'a> {
         &self.paths.local_storage_path
     }
 
+    pub fn cookies_sqlite_path(&self) -> &'a Path {
+        &self.paths.cookies_sqlite_path
+    }
+    pub fn local_storage_sqlite_path(&self) -> &'a Path {
+        &self.paths.local_storage_sqlite_path
+    }
+
     pub fn storage_buckets_path(&self) -> &'a Path {
         &self.paths.storage_buckets_path
     }
@@ -116,7 +146,7 @@ mod tests {
     use anyhow::Result;
 
     use super::BrowserProfile;
-    use crate::{BrowserProfilePaths, PROFILE_MANIFEST_VERSION};
+    use crate::{BrowserProfilePaths, LEGACY_JSON_PROFILE_MANIFEST_VERSION};
 
     struct TempProfileDir {
         path: PathBuf,
@@ -152,7 +182,10 @@ mod tests {
         assert!(paths.lock_path.exists());
         assert!(paths.manifest_path.exists());
         assert_eq!(profile.paths(), &paths);
-        assert_eq!(profile.manifest().version, PROFILE_MANIFEST_VERSION);
+        assert_eq!(
+            profile.manifest().version,
+            LEGACY_JSON_PROFILE_MANIFEST_VERSION
+        );
 
         let partition = profile.default_partition();
         assert_eq!(partition.id(), "default");

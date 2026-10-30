@@ -27,6 +27,10 @@ moli-storage-key = { path = "../moli-storage-key" }
 moli-storage-service = { path = "../moli-storage-service" }
 moli-url = { path = "../moli-url" }
 moli-web-mime = { path = "../moli-web-mime" }
+moli-cookie-db = { path = "../moli-cookie-db" }
+moli-web-storage = { path = "../moli-web-storage" }
+sha2 = "0.10.9"
+getrandom = "0.3.4"
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-fetch = { path = "../moli-fetch" }
 parking_lot = "0.12"

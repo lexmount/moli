@@ -191,6 +191,35 @@ impl<B: WriteBatch> WritebackOwner<B> {
             }),
         })
     }
+    /// Native startup inspection. Unidentified existing files are opened
+    /// read-only, before any journal/locking pragma or schema initialization.
+    pub fn inspect<T: Send + 'static>(
+        path: PathBuf,
+        runtime: RuntimeHandle,
+        inspect: impl FnOnce(&Connection) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let worker = runtime.clone();
+        runtime
+            .wait(async move {
+                worker
+                    .blocking(move || {
+                        let connection = Connection::open_with_flags(
+                            path,
+                            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                        )?;
+                        let result = inspect(&connection)?;
+                        connection
+                            .close()
+                            .map_err(|(_, error)| WritebackError::new(error))?;
+                        Ok(result)
+                    })
+                    .await
+                    .map_err(WritebackError::new)?
+            })
+            .map_err(WritebackError::new)?
+    }
+
     pub fn client(&self) -> WritebackClient<B> {
         self.client.clone()
     }
