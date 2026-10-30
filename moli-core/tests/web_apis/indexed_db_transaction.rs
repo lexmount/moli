@@ -1,4 +1,4 @@
-use super::event_dispatch::run_probe;
+use super::event_dispatch::{run_probe, run_probe_with_timeout};
 use super::*;
 
 async fn assert_multi_entry_keys(scenario: &str) -> Result<()> {
