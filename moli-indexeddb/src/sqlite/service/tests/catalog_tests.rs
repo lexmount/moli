@@ -211,6 +211,8 @@ fn catalog_disk_restart_retains_generation_records_and_never_reads_legacy_storag
     let owner = [0xff, 0, 17];
     let name = "a/b\0unicode-\u{10000}";
     let mut service = Service::on_disk(root.clone(), config()).unwrap();
+    #[cfg(windows)]
+    let root = root.canonicalize().unwrap();
     let client = resolve(&service, &owner, name);
     assert_eq!(client.committed().unwrap().version, 0);
     assert!(service.databases(&owner).unwrap().is_empty());

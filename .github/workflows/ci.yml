@@ -181,14 +181,18 @@ jobs:
         run: >-
           cargo nextest run --locked --no-run
           -p moli-browser-profile
+          -p moli-indexeddb
           -p moli-opfs
+          -p moli-sqlite
           -p moli-storage-service
 
-      - name: Test Windows profile, OPFS, and storage paths
+      - name: Test Windows persistent storage
         run: >-
-          cargo nextest run --locked
+          cargo nextest run --locked --no-fail-fast
           -p moli-browser-profile
+          -p moli-indexeddb
           -p moli-opfs
+          -p moli-sqlite
           -p moli-storage-service
 
       # Nextest does not run doctests. Keep the coverage of the former cargo
@@ -198,7 +202,9 @@ jobs:
         run: >-
           cargo test --locked --doc
           -p moli-browser-profile
+          -p moli-indexeddb
           -p moli-opfs
+          -p moli-sqlite
           -p moli-storage-service
 
   python-harness-tests:
