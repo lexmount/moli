@@ -1168,7 +1168,7 @@ async fn worker_messageport_transfer_uses_intrinsic_prototype_after_global_delet
 }
 
 #[tokio::test]
-async fn worker_messageport_close_preserves_same_task_queued_messages() {
+async fn worker_messageport_close_cancels_same_task_queued_messages() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();
         let local_executor = page_vm.local_executor.clone();
@@ -1192,9 +1192,7 @@ async fn worker_messageport_close_preserves_same_task_queued_messages() {
                                     messages.push(messageEvent.data);
                                     if (messageEvent.data === 'first') {
                                       port.close();
-                                    }
-                                    if (messageEvent.data === 'second') {
-                                      postMessage(messages.join('|'));
+                                      setTimeout(() => postMessage(messages.join('|')), 150);
                                     }
                                   };
                                 };
@@ -1220,7 +1218,7 @@ async fn worker_messageport_close_preserves_same_task_queued_messages() {
                 drive_websocket_until_done(
                     &mut page_vm,
                     "String(globalThis.__messagePortCloseRaceDone === true)",
-                    "worker MessagePort close same-task queue test should complete",
+                    "worker MessagePort close cancellation test should complete",
                 )
                 .await?;
                 page_vm
@@ -1230,7 +1228,7 @@ async fn worker_messageport_close_preserves_same_task_queued_messages() {
             .await
             .expect("worker MessagePort close queue test should run on owner lane");
 
-        assert_eq!(result, "first|second");
+        assert_eq!(result, "first");
     })
     .await;
 }

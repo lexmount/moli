@@ -13,14 +13,29 @@ pub enum MessagePortCloseKind {
     ConnectionError,
 }
 
+/// Closing an endpoint cancels its queued messages. The embedding releases
+/// their native attachments after the registry lock has been released.
+#[derive(Debug)]
+pub struct MessagePortCloseResult<P, O> {
+    pub peer_wake: Option<MessagePortWake<O>>,
+    pub discarded_messages: VecDeque<P>,
+}
+
+/// A removed internal endpoint, including work and owner state to dispose of
+/// outside the registry lock.
+#[derive(Debug)]
+pub struct DiscardedMessagePort<P, O> {
+    pub port_id: MessagePortId,
+    pub owner: Option<O>,
+    pub discarded_messages: VecDeque<P>,
+}
+
 #[derive(Debug, Default)]
 struct MessagePortState<P, O> {
     peer_id: Option<MessagePortId>,
     owner: Option<O>,
     pending_messages: VecDeque<P>,
     pending_close: Option<MessagePortCloseKind>,
-    close_after_delivery: bool,
-    active_delivery_depth: usize,
 }
 
 /// Registry for MessagePort endpoint state.
@@ -57,8 +72,6 @@ where
                 owner: Some(owner),
                 pending_messages: VecDeque::new(),
                 pending_close: None,
-                close_after_delivery: false,
-                active_delivery_depth: 0,
             },
         );
         port_id
@@ -75,8 +88,6 @@ where
                 owner: Some(owner),
                 pending_messages: VecDeque::new(),
                 pending_close: Some(MessagePortCloseKind::ConnectionError),
-                close_after_delivery: false,
-                active_delivery_depth: 0,
             },
         );
         port_id
@@ -94,8 +105,6 @@ where
                 owner: Some(owner.clone()),
                 pending_messages: VecDeque::new(),
                 pending_close: None,
-                close_after_delivery: false,
-                active_delivery_depth: 0,
             },
         );
         ports.insert(
@@ -105,8 +114,6 @@ where
                 owner: Some(owner),
                 pending_messages: VecDeque::new(),
                 pending_close: None,
-                close_after_delivery: false,
-                active_delivery_depth: 0,
             },
         );
         (port1, port2)
@@ -165,13 +172,13 @@ where
 
     /// Enqueue to a previously captured destination, even if its source has
     /// since been disentangled. Port ids survive transfer to another owner.
-    pub fn enqueue_message_to_endpoint(&self, port_id: MessagePortId, payload: P) -> bool {
+    pub fn enqueue_message_to_endpoint(&self, port_id: MessagePortId, payload: P) -> Result<(), P> {
         let mut ports = self.ports.lock();
         let Some(state) = ports.get_mut(&port_id) else {
-            return false;
+            return Err(payload);
         };
         state.pending_messages.push_back(payload);
-        true
+        Ok(())
     }
 
     /// Enqueue a message to the peer endpoint and return the target peer id.
@@ -179,12 +186,16 @@ where
         &self,
         port_id: MessagePortId,
         payload: P,
-    ) -> Option<MessagePortId> {
+    ) -> Result<MessagePortId, P> {
         let mut ports = self.ports.lock();
-        let peer_id = ports.get(&port_id).and_then(|state| state.peer_id)?;
-        let peer_state = ports.get_mut(&peer_id)?;
+        let Some(peer_id) = ports.get(&port_id).and_then(|state| state.peer_id) else {
+            return Err(payload);
+        };
+        let Some(peer_state) = ports.get_mut(&peer_id) else {
+            return Err(payload);
+        };
         peer_state.pending_messages.push_back(payload);
-        Some(peer_id)
+        Ok(peer_id)
     }
 
     /// Pop one pending message for a port.
@@ -197,12 +208,6 @@ where
     }
 
     /// Whether the endpoint still has registry state.
-    ///
-    /// A close performed from inside a message callback retains the closed
-    /// endpoint until every message accepted before that callback has been
-    /// delivered. Embedders use this to keep the detached wrapper alive for
-    /// those already-queued delivery tasks without keeping ordinary closed
-    /// wrappers alive indefinitely.
     pub fn contains_message_port(&self, port_id: MessagePortId) -> bool {
         self.ports.lock().contains_key(&port_id)
     }
@@ -222,44 +227,31 @@ where
     /// were never handed to author code. Ordinary `MessagePort.close()` must
     /// use [`Self::close_message_port`] so the peer can observe its normal
     /// close lifecycle.
-    pub fn discard_message_port_channel(&self, port_id: MessagePortId) -> Vec<MessagePortId> {
+    pub fn discard_message_port_channel(
+        &self,
+        port_id: MessagePortId,
+    ) -> Vec<DiscardedMessagePort<P, O>> {
         let mut ports = self.ports.lock();
         let Some(state) = ports.remove(&port_id) else {
             return Vec::new();
         };
-        let mut discarded = vec![port_id];
-        if let Some(peer_id) = state.peer_id
-            && ports.remove(&peer_id).is_some()
-        {
-            discarded.push(peer_id);
+        let peer = state
+            .peer_id
+            .and_then(|peer_id| ports.remove(&peer_id).map(|state| (peer_id, state)));
+        drop(ports);
+        let mut discarded = vec![DiscardedMessagePort {
+            port_id,
+            owner: state.owner,
+            discarded_messages: state.pending_messages,
+        }];
+        if let Some((port_id, state)) = peer {
+            discarded.push(DiscardedMessagePort {
+                port_id,
+                owner: state.owner,
+                discarded_messages: state.pending_messages,
+            });
         }
         discarded
-    }
-
-    /// Mark the start of message callback delivery for close cleanup ordering.
-    pub fn begin_message_port_message_delivery(&self, port_id: MessagePortId) {
-        if let Some(state) = self.ports.lock().get_mut(&port_id) {
-            state.active_delivery_depth = state.active_delivery_depth.saturating_add(1);
-        }
-    }
-
-    /// Mark the end of message callback delivery and remove deferred closed
-    /// endpoints when they no longer have queued work.
-    pub fn finish_message_port_message_delivery(&self, port_id: MessagePortId) {
-        let mut ports = self.ports.lock();
-        let remove = {
-            let Some(state) = ports.get_mut(&port_id) else {
-                return;
-            };
-            state.active_delivery_depth = state.active_delivery_depth.saturating_sub(1);
-            state.close_after_delivery
-                && state.active_delivery_depth == 0
-                && state.pending_messages.is_empty()
-                && state.pending_close.is_none()
-        };
-        if remove {
-            ports.remove(&port_id);
-        }
     }
 
     /// Take a pending close event for a port.
@@ -272,30 +264,28 @@ where
     }
 
     /// Close a port endpoint and queue a close event for its peer.
-    pub fn close_message_port(&self, port_id: MessagePortId) -> Option<MessagePortWake<O>> {
+    pub fn close_message_port(&self, port_id: MessagePortId) -> MessagePortCloseResult<P, O> {
         let mut ports = self.ports.lock();
-        let (peer_id, remove_closed_side) = {
-            let state = ports.get_mut(&port_id)?;
-            state.owner = None;
-            let peer_id = state.peer_id.take();
-            let remove_closed_side =
-                state.active_delivery_depth == 0 || state.pending_messages.is_empty();
-            if !remove_closed_side {
-                state.close_after_delivery = true;
-            }
-            (peer_id, remove_closed_side)
+        let Some(state) = ports.remove(&port_id) else {
+            return MessagePortCloseResult {
+                peer_wake: None,
+                discarded_messages: VecDeque::new(),
+            };
         };
-        if remove_closed_side {
-            ports.remove(&port_id);
+        let peer_wake = state.peer_id.and_then(|peer_id| {
+            let peer_state = ports.get_mut(&peer_id)?;
+            peer_state.peer_id = None;
+            peer_state.pending_close = Some(MessagePortCloseKind::PeerClosed);
+            Some(MessagePortWake {
+                port_id: peer_id,
+                owner: peer_state.owner.clone()?,
+            })
+        });
+        drop(ports);
+        MessagePortCloseResult {
+            peer_wake,
+            discarded_messages: state.pending_messages,
         }
-        let peer_id = peer_id?;
-        let peer_state = ports.get_mut(&peer_id)?;
-        peer_state.peer_id = None;
-        peer_state.pending_close = Some(MessagePortCloseKind::PeerClosed);
-        Some(MessagePortWake {
-            port_id: peer_id,
-            owner: peer_state.owner.clone()?,
-        })
     }
 }
 
@@ -320,7 +310,7 @@ mod tests {
             Some(MessagePortCloseKind::ConnectionError)
         );
         assert_eq!(registry.take_pending_message_port_close(port), None);
-        assert!(registry.close_message_port(port).is_none());
+        assert!(registry.close_message_port(port).peer_wake.is_none());
         assert_eq!(registry.endpoint_count(), 0);
     }
 
@@ -331,11 +321,12 @@ mod tests {
 
         assert_eq!(
             registry.enqueue_message_to_message_port(peer_port, Vec::new()),
-            Some(closed_port)
+            Ok(closed_port)
         );
 
         let wake = registry
             .close_message_port(closed_port)
+            .peer_wake
             .expect("peer should be woken");
         assert_eq!(wake.port_id, peer_port);
         assert_eq!(wake.owner, 7);
@@ -366,10 +357,19 @@ mod tests {
         let (first, second) = registry.create_entangled_message_port_pair(7);
         assert_eq!(
             registry.enqueue_message_to_message_port(first, b"queued".to_vec()),
-            Some(second)
+            Ok(second)
         );
 
-        let mut discarded = registry.discard_message_port_channel(second);
+        let removed = registry.discard_message_port_channel(second);
+        assert_eq!(
+            removed[0].discarded_messages,
+            VecDeque::from([b"queued".to_vec()])
+        );
+        assert!(removed.iter().all(|port| port.owner == Some(7)));
+        let mut discarded = removed
+            .into_iter()
+            .map(|port| port.port_id)
+            .collect::<Vec<_>>();
         discarded.sort_unstable();
         let mut expected = vec![first, second];
         expected.sort_unstable();
@@ -387,7 +387,7 @@ mod tests {
 
         assert_eq!(
             registry.enqueue_message_to_message_port(source, b"hello".to_vec()),
-            Some(target)
+            Ok(target)
         );
         assert!(
             registry.wake_message_port_if_pending(target).is_none(),
@@ -412,7 +412,7 @@ mod tests {
         registry.detach_message_port_owner_for_transfer(target);
 
         assert!(
-            registry.close_message_port(source).is_none(),
+            registry.close_message_port(source).peer_wake.is_none(),
             "detached target has no owner to wake for close"
         );
         assert!(
@@ -433,27 +433,115 @@ mod tests {
     }
 
     #[test]
-    fn close_during_delivery_retains_endpoint_until_queued_messages_are_consumed() {
+    fn close_during_delivery_cancels_the_remaining_receive_queue() {
         let registry = MessagePortRegistry::<Vec<u8>, u8>::default();
-        let (closed_port, peer_port) = registry.create_entangled_message_port_pair(1);
-        registry.enqueue_message_to_message_port(peer_port, b"first".to_vec());
-        registry.enqueue_message_to_message_port(peer_port, b"second".to_vec());
-
+        let (receiver, sender) = registry.create_entangled_message_port_pair(1);
+        registry
+            .enqueue_message_to_message_port(sender, b"first".to_vec())
+            .unwrap();
+        registry
+            .enqueue_message_to_message_port(sender, b"second".to_vec())
+            .unwrap();
         assert_eq!(
-            registry.take_pending_message_port_message(closed_port),
+            registry.take_pending_message_port_message(receiver),
             Some(b"first".to_vec())
         );
-        registry.begin_message_port_message_delivery(closed_port);
-        registry.close_message_port(closed_port);
-        registry.finish_message_port_message_delivery(closed_port);
 
-        assert!(registry.contains_message_port(closed_port));
+        let closed = registry.close_message_port(receiver);
         assert_eq!(
-            registry.take_pending_message_port_message(closed_port),
+            closed.discarded_messages,
+            VecDeque::from([b"second".to_vec()])
+        );
+        assert!(!registry.contains_message_port(receiver));
+        assert_eq!(registry.take_pending_message_port_message(receiver), None);
+        assert!(
+            registry
+                .close_message_port(receiver)
+                .discarded_messages
+                .is_empty()
+        );
+        assert_eq!(registry.endpoint_count(), 1);
+        assert_eq!(
+            registry.take_pending_message_port_close(sender),
+            Some(MessagePortCloseKind::PeerClosed)
+        );
+    }
+
+    #[test]
+    fn closing_the_sender_preserves_messages_already_accepted_by_the_receiver() {
+        let registry = MessagePortRegistry::<Vec<u8>, u8>::default();
+        let (receiver, sender) = registry.create_entangled_message_port_pair(1);
+        registry
+            .enqueue_message_to_message_port(sender, b"first".to_vec())
+            .unwrap();
+        registry
+            .enqueue_message_to_message_port(sender, b"second".to_vec())
+            .unwrap();
+        let closed = registry.close_message_port(sender);
+        assert!(closed.discarded_messages.is_empty());
+        assert_eq!(
+            registry.take_pending_message_port_message(receiver),
+            Some(b"first".to_vec())
+        );
+        assert_eq!(
+            registry.take_pending_message_port_message(receiver),
             Some(b"second".to_vec())
         );
-        registry.begin_message_port_message_delivery(closed_port);
-        registry.finish_message_port_message_delivery(closed_port);
-        assert!(!registry.contains_message_port(closed_port));
+        assert_eq!(
+            registry.take_pending_message_port_close(receiver),
+            Some(MessagePortCloseKind::PeerClosed)
+        );
+    }
+
+    #[test]
+    fn failed_enqueue_returns_the_payload_for_native_attachment_disposal() {
+        let registry = MessagePortRegistry::<Vec<u8>, u8>::default();
+        let (receiver, sender) = registry.create_entangled_message_port_pair(1);
+        registry.close_message_port(receiver);
+        assert_eq!(
+            registry.enqueue_message_to_endpoint(receiver, b"captured destination".to_vec()),
+            Err(b"captured destination".to_vec())
+        );
+        assert_eq!(
+            registry.enqueue_message_to_message_port(sender, b"disconnected source".to_vec()),
+            Err(b"disconnected source".to_vec())
+        );
+    }
+
+    #[test]
+    fn canceled_payloads_are_dropped_after_the_registry_lock_is_released() {
+        use std::sync::{Arc, Weak, atomic::AtomicUsize};
+        struct Payload {
+            registry: Weak<MessagePortRegistry<Payload, u8>>,
+            dropped: Arc<AtomicUsize>,
+        }
+        impl Drop for Payload {
+            fn drop(&mut self) {
+                let registry = self.registry.upgrade().unwrap();
+                assert!(
+                    registry.ports.try_lock().is_some(),
+                    "payload disposal reenters the native registry"
+                );
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let registry = Arc::new(MessagePortRegistry::default());
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let (receiver, sender) = registry.create_entangled_message_port_pair(1);
+        assert!(
+            registry
+                .enqueue_message_to_message_port(
+                    sender,
+                    Payload {
+                        registry: Arc::downgrade(&registry),
+                        dropped: dropped.clone()
+                    }
+                )
+                .is_ok()
+        );
+        let closed = registry.close_message_port(receiver);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        drop(closed);
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
     }
 }

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 
 pub(crate) use moli_message_port::MessagePortCloseKind;
 use moli_message_port::{MessagePortRegistry as CoreMessagePortRegistry, MessagePortWake};
@@ -87,7 +87,13 @@ impl RendererMessagePortRegistry {
         port_id: MessagePortId,
         payload: V8StructuredClonePayload,
     ) -> Option<MessagePortId> {
-        self.inner.enqueue_message_to_message_port(port_id, payload)
+        match self.inner.enqueue_message_to_message_port(port_id, payload) {
+            Ok(peer_id) => Some(peer_id),
+            Err(payload) => {
+                self.discard_message(payload);
+                None
+            }
+        }
     }
 
     pub(crate) fn message_port_peer_id(&self, port_id: MessagePortId) -> Option<MessagePortId> {
@@ -99,7 +105,13 @@ impl RendererMessagePortRegistry {
         port_id: MessagePortId,
         payload: V8StructuredClonePayload,
     ) -> bool {
-        self.inner.enqueue_message_to_endpoint(port_id, payload)
+        match self.inner.enqueue_message_to_endpoint(port_id, payload) {
+            Ok(()) => true,
+            Err(payload) => {
+                self.discard_message(payload);
+                false
+            }
+        }
     }
 
     pub(crate) fn take_pending_message_port_message(
@@ -117,20 +129,15 @@ impl RendererMessagePortRegistry {
         &self,
         port_id: MessagePortId,
     ) -> Vec<MessagePortId> {
-        self.inner.discard_message_port_channel(port_id)
+        let mut messages = VecDeque::new();
+        let port_ids = self.discard_channel(port_id, &mut messages);
+        self.discard_messages(messages);
+        port_ids
     }
 
     #[cfg(test)]
     pub(crate) fn endpoint_count(&self) -> usize {
         self.inner.endpoint_count()
-    }
-
-    pub(crate) fn begin_message_port_message_delivery(&self, port_id: MessagePortId) {
-        self.inner.begin_message_port_message_delivery(port_id);
-    }
-
-    pub(crate) fn finish_message_port_message_delivery(&self, port_id: MessagePortId) {
-        self.inner.finish_message_port_message_delivery(port_id);
     }
 
     pub(crate) fn take_pending_message_port_close(
@@ -141,13 +148,56 @@ impl RendererMessagePortRegistry {
     }
 
     pub(crate) fn close_message_port(&self, port_id: MessagePortId) {
-        self.wake_port_if_owned(self.inner.close_message_port(port_id));
+        let closed = self.inner.close_message_port(port_id);
+        self.wake_port_if_owned(closed.peer_wake);
+        self.discard_messages(closed.discarded_messages);
+    }
+
+    pub(crate) fn discard_message(&self, payload: V8StructuredClonePayload) {
+        self.discard_messages(VecDeque::from([payload]));
+    }
+
+    fn discard_messages(&self, mut messages: VecDeque<V8StructuredClonePayload>) {
+        // A canceled payload may own ports with more queued transfers. Iterate
+        // outside the core lock: attachment graphs must not recurse through
+        // Rust destructors or enter another isolate during registry mutation.
+        while let Some(payload) = messages.pop_front() {
+            for port_id in payload.transferred_message_port_ids() {
+                let closed = self.inner.close_message_port(port_id);
+                self.wake_port_if_owned(closed.peer_wake);
+                messages.extend(closed.discarded_messages);
+            }
+            for port_id in payload.transferred_stream_port_ids() {
+                self.discard_channel(port_id, &mut messages);
+            }
+        }
+    }
+
+    fn discard_channel(
+        &self,
+        port_id: MessagePortId,
+        messages: &mut VecDeque<V8StructuredClonePayload>,
+    ) -> Vec<MessagePortId> {
+        let removed = self.inner.discard_message_port_channel(port_id);
+        let mut port_ids = Vec::with_capacity(removed.len());
+        for port in removed {
+            port_ids.push(port.port_id);
+            messages.extend(port.discarded_messages);
+            if let Some(owner) = port.owner {
+                // The endpoint is already gone. Its original owner's normal
+                // delivery task only releases the retained wrapper, even when
+                // its message queue was never started.
+                let _ = wake_owner(owner, port.port_id);
+            }
+        }
+        port_ids
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context_bootstrap::TransferredMessagePort;
 
     fn worker_owner() -> (MessagePortOwner, mpsc::UnboundedReceiver<WorkerMessage>) {
         let (sender, receiver) = mpsc::unbounded_channel();
@@ -162,6 +212,39 @@ mod tests {
             Ok(other) => panic!("expected MessagePort wake, got {other:?}"),
             Err(error) => panic!("expected MessagePort wake, got {error:?}"),
         }
+    }
+
+    #[test]
+    fn closing_a_receiver_iteratively_disposes_nested_queued_port_transfers() {
+        let (owner, mut wake_rx) = worker_owner();
+        let registry = new_message_port_registry();
+        let (root, peer) = registry.create_entangled_message_port_pair(owner.clone());
+        let mut peers = vec![peer];
+        let mut receiver = root;
+        for _ in 0..512 {
+            let (next, peer) = registry.create_entangled_message_port_pair(owner.clone());
+            registry.detach_message_port_owner_for_transfer(next);
+            let mut payload = V8StructuredClonePayload::default();
+            payload
+                .base
+                .transferred_message_ports
+                .push(TransferredMessagePort::Endpoint(next));
+            assert!(registry.enqueue_message_to_endpoint(receiver, payload));
+            receiver = next;
+            peers.push(peer);
+        }
+
+        registry.close_message_port(root);
+        assert_eq!(registry.endpoint_count(), peers.len());
+        for peer in peers {
+            assert_eq!(take_message_port_wake(&mut wake_rx), peer);
+            assert_eq!(
+                registry.take_pending_message_port_close(peer),
+                Some(MessagePortCloseKind::PeerClosed)
+            );
+            registry.close_message_port(peer);
+        }
+        assert_eq!(registry.endpoint_count(), 0);
     }
 
     #[test]

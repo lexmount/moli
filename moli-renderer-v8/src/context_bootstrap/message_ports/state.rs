@@ -377,14 +377,8 @@ pub(in crate::context_bootstrap) fn close_message_port_object<'s>(
     port: v8::Local<'s, v8::Object>,
 ) {
     if let Some(port_id) = message_port_id_from_object(scope, port) {
-        let retained_for_queued_delivery = current_message_port_registry(scope)
-            .is_some_and(|registry| registry.contains_message_port(port_id));
-        if !retained_for_queued_delivery {
-            forget_message_port_wrapper(scope, port_id);
-        }
-        // Preserve closed transfer identity independently of queued deliveries
-        // still bound to the old endpoint. Closing a neutered wrapper must not
-        // make it transferable again.
+        forget_message_port_wrapper(scope, port_id);
+        // Closing a neutered wrapper must not make it transferable again.
         set_message_port_slot_value(scope, port, MESSAGE_PORT_ID_SLOT, v8::null(scope).into());
     }
     set_message_port_bool_slot(scope, port, MESSAGE_PORT_CLOSED_SLOT, true);

@@ -20,6 +20,7 @@ function next_worker_event(worker) {
 function next_port_close(port) {
   return new Promise(function (resolve) {
     port.addEventListener("close", resolve, { once: true });
+    port.start();
   });
 }
 

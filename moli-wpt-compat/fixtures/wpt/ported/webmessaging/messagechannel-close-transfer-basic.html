@@ -23,9 +23,7 @@ promise_test(async function () {
       messages.push(event.data);
       if (event.data === "first") {
         channel.port1.close();
-      }
-      if (event.data === "second") {
-        resolve();
+        step_timeout(resolve, 150);
       }
     };
   });
@@ -33,9 +31,13 @@ promise_test(async function () {
   channel.port2.postMessage("first");
   channel.port2.postMessage("second");
 
-  await complete;
-  assert_array_equals(messages, ["first", "second"]);
-}, "MessagePort.close during dispatch does not cancel already queued messages");
+  try {
+    await complete;
+    assert_array_equals(messages, ["first"]);
+  } finally {
+    channel.port1.close(); channel.port2.close();
+  }
+}, "Closing the receiving MessagePort during dispatch cancels later queued messages");
 
 promise_test(async function () {
   const closedPair = new MessageChannel();

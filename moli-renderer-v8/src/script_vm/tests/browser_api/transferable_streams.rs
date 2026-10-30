@@ -1,5 +1,98 @@
 use super::*;
 
+#[tokio::test]
+async fn canceled_port_messages_release_nested_transfers_and_private_stream_wrappers() {
+    for mode in ["callback", "before-start", "serialize", "nested"] {
+        let loader =
+            ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://canceled-port-transfers.test/",
+            &loader,
+        );
+        let registry = vm._context_host.borrow().message_port_registry();
+        vm.eval(&format!("globalThis.cancellationMode = {mode:?}"))
+            .unwrap();
+        let result = vm
+            .eval(
+                r#"
+globalThis.canceledMessages = [];
+globalThis.orphanCloseEvents = 0;
+const channel = new MessageChannel();
+const orphan = new MessageChannel();
+const readable = new ReadableStream();
+const writable = new WritableStream();
+const transform = new TransformStream();
+orphan.port2.onclose = () => { orphanCloseEvents++; orphan.port2.close(); };
+channel.port2.onclose = () => channel.port2.close();
+orphan.port2.start(); channel.port2.start();
+channel.port1.onmessage = event => {
+  canceledMessages.push(event.data);
+  channel.port1.close();
+};
+channel.port2.postMessage(1);
+const payload = {port: orphan.port1, readable, writable, transform};
+const transfers = [orphan.port1, readable, writable, transform];
+if (cancellationMode === 'nested') {
+  const nested = new MessageChannel();
+  nested.port2.onclose = () => nested.port2.close();
+  nested.port2.start();
+  nested.port2.postMessage(payload, transfers);
+  channel.port2.postMessage(nested.port1, [nested.port1]);
+} else {
+  if (cancellationMode === 'serialize') {
+    Object.defineProperty(payload, 'closeReceiver', {enumerable: true, get() {
+      channel.port1.close(); return 0;
+    }});
+  }
+  channel.port2.postMessage(payload, transfers);
+  if (cancellationMode === 'before-start') channel.port1.close();
+}
+JSON.stringify([readable.locked, writable.locked, transform.readable.locked,
+  transform.writable.locked]);
+"#,
+            )
+            .expect("queue native transfer capabilities");
+        assert_eq!(result, "[true,true,true,true]", "{mode}");
+        for _ in 0..32 {
+            if registry.endpoint_count() == 0
+                && vm
+                    ._context_host
+                    .borrow()
+                    .message_port_execution_context_owners_for_test()
+                    .is_empty()
+            {
+                break;
+            }
+            vm.run_one_oldest_ready_page_task_executor_turn(&loader)
+                .await
+                .expect("dispose canceled transfer work");
+        }
+        let expected_messages = if matches!(mode, "callback" | "nested") {
+            "[1]"
+        } else {
+            "[]"
+        };
+        assert_eq!(
+            vm.eval("JSON.stringify(canceledMessages)").unwrap(),
+            expected_messages,
+            "{mode}"
+        );
+        assert_eq!(vm.eval("String(orphanCloseEvents)").unwrap(), "1", "{mode}");
+        assert_eq!(
+            registry.endpoint_count(),
+            0,
+            "{mode} leaked native endpoints"
+        );
+        assert!(
+            vm._context_host
+                .borrow()
+                .message_port_execution_context_owners_for_test()
+                .is_empty(),
+            "{mode} leaked MessagePort wrappers"
+        );
+    }
+}
+
 #[test]
 fn failed_message_serialization_does_not_transfer_readable_stream() {
     let mut vm = new_storage_test_vm("https://stream-transfer-failure.test/");
