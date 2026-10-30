@@ -594,6 +594,7 @@ impl PageVm {
         delta_y: f64,
         pointer: RendererPointerEventProperties,
         modifiers: u8,
+        intercept_drags: bool,
     ) -> Result<RendererInputDispatchOutcome> {
         let mut outcome = self
             .vm_mut()
@@ -608,6 +609,7 @@ impl PageVm {
                 delta_y,
                 pointer,
                 modifiers,
+                intercept_drags,
             )?;
         self.bind_input_dispatch_file_chooser_backend_node_id(&mut outcome);
         Ok(outcome)
@@ -622,6 +624,12 @@ impl PageVm {
         let mut outcome = self
             .vm_mut()
             .dispatch_touch_event_at_points(points, event_name, activate)?;
+        self.bind_input_dispatch_file_chooser_backend_node_id(&mut outcome);
+        Ok(outcome)
+    }
+
+    pub(crate) fn cancel_dragging(&mut self) -> Result<RendererInputDispatchOutcome> {
+        let mut outcome = self.vm_mut().cancel_dragging()?;
         self.bind_input_dispatch_file_chooser_backend_node_id(&mut outcome);
         Ok(outcome)
     }

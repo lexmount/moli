@@ -163,10 +163,10 @@ impl Drop for BrowserLifetimeOwner {
             drop(js_runtime);
         }
         self.browser_context_owner.shutdown_and_join();
-        if let Err(error) = self.partition.flush() {
+        if let Err(error) = self.partition.shutdown() {
             warn!(
                 error = %error,
-                "failed to flush browser storage partition"
+                "failed to close browser storage partition"
             );
         }
         debug!("browser renderer and resource owners joined");

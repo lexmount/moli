@@ -47,7 +47,7 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_event_object<'s>(
     dispatch_idb_event_object_with_result(scope, target, event).uncanceled
 }
 
-fn dispatch_idb_event_object_with_result<'s>(
+pub(super) fn dispatch_idb_event_object_with_result<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
     event: v8::Local<'s, v8::Object>,

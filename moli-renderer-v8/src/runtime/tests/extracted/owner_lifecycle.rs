@@ -20,6 +20,7 @@ async fn owner_loop_runs_file_reading_callback_without_retry_command() {
         r#"<!doctype html><body>
 <div id="drop" style="width: 100px; height: 100px">drop</div>
 <script>
+document.getElementById("drop").addEventListener("dragover", event => event.preventDefault());
 document.getElementById("drop").addEventListener("drop", event => {
   const reader =
     event.dataTransfer.items[0].webkitGetAsEntry().createReader();
@@ -35,37 +36,40 @@ document.getElementById("drop").addEventListener("drop", event => {
     )
     .await;
 
-    let (reply, _) = page
-        .run_async_command(RendererPageCommand::DispatchDragEventAtPoint {
-            x: 10.0,
-            y: 10.0,
-            event_name: "drop".to_owned(),
-            data: RendererDragData {
-                items: Vec::new(),
-                files: Vec::new(),
-                directories: vec![RendererDraggedDirectory {
-                    name: "fixture".to_owned(),
-                    files: vec![RendererDraggedFile {
-                        bytes: b"body".to_vec(),
-                        mime_type: "text/plain".to_owned(),
-                        name: "entry.txt".to_owned(),
-                        last_modified: 1.0,
-                    }],
-                    directories: Vec::new(),
-                }],
-                drag_operations_mask: 1,
-            },
-            modifiers: 0,
-        })
-        .await
-        .expect("directory drop command should run");
-    assert!(
-        matches!(
-            reply,
-            RendererPageReply::InputDispatchOutcome(ref outcome) if outcome.handled
-        ),
-        "directory drop command should dispatch to the target"
-    );
+    let data = RendererDragData {
+        items: Vec::new(),
+        files: Vec::new(),
+        directories: vec![RendererDraggedDirectory {
+            name: "fixture".to_owned(),
+            files: vec![RendererDraggedFile {
+                bytes: b"body".to_vec(),
+                mime_type: "text/plain".to_owned(),
+                name: "entry.txt".to_owned(),
+                last_modified: 1.0,
+            }],
+            directories: Vec::new(),
+        }],
+        drag_operations_mask: 1,
+    };
+    for event_name in ["dragenter", "dragover", "drop"] {
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::DispatchDragEventAtPoint {
+                x: 10.0,
+                y: 10.0,
+                event_name: event_name.to_owned(),
+                data: data.clone(),
+                modifiers: 0,
+            })
+            .await
+            .expect("directory drop command should run");
+        assert!(
+            matches!(
+                reply,
+                RendererPageReply::InputDispatchOutcome(ref outcome) if outcome.handled
+            ),
+            "directory drop command should dispatch to the target"
+        );
+    }
 
     tokio::time::timeout(Duration::from_secs(2), callback_request_seen)
         .await

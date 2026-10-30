@@ -21,6 +21,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_abort_task<'s>
             v8::null(scope).into(),
         );
     }
+    crate::context_bootstrap::indexed_db::clear_indexed_db_upgrade_transaction(scope, transaction);
     let _ = dispatch_idb_named_event(scope, transaction, "abort", |_, _| {});
     release_indexed_db_transaction_dispatch_refs(scope, transaction);
     if let Some((request, database)) = aborted_open {

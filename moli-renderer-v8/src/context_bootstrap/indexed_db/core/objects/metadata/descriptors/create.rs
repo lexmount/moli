@@ -42,9 +42,9 @@ pub(in crate::context_bootstrap::indexed_db) fn create_index_descriptor_object<'
 
 pub(in crate::context_bootstrap::indexed_db) fn create_object_store_descriptor_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    info: &ObjectStoreInfo,
-    indexes: &[IndexInfo],
+    metadata: &IndexedDbObjectStoreMetadata,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let info = metadata.info();
     let key_path = match &info.key_path {
         Some(key_path) => key_path_to_js_value(scope, key_path)?,
         None => v8::null(scope).into(),
@@ -53,12 +53,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_object_store_descriptor_o
     ObjectStoreDescriptorDeclaration::new(&info.name, key_path, info.auto_increment)
         .initialize(scope, descriptor)
         .ok()?;
-    let index_names = if indexes.is_empty() {
-        info.index_names.clone()
-    } else {
-        indexes.iter().map(|index| index.name.clone()).collect()
-    };
-    let index_names_list = new_idb_name_list(scope, &index_names);
+    let index_names_list = new_idb_name_list(scope, metadata.index_names());
     set_indexed_db_internal_object_property(
         scope,
         descriptor,
@@ -66,7 +61,10 @@ pub(in crate::context_bootstrap::indexed_db) fn create_object_store_descriptor_o
         index_names_list.into(),
     );
     let index_map = new_null_prototype_object(scope);
-    for index in indexes {
+    for name in metadata.index_names() {
+        let Some(index) = metadata.index(name) else {
+            continue;
+        };
         let descriptor_value = create_index_descriptor_object(scope, index)?;
         set_indexed_db_internal_object_property(
             scope,

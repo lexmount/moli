@@ -1,53 +1,8 @@
-use crate::{
-    IndexedDbExternalObject, IndexedDbValue, Key, KeyPath,
-    state::{DatabaseData, IndexData, ObjectStoreData, OriginState},
-};
-
+use crate::{IndexedDbExternalObject, IndexedDbValue, Key, KeyPath};
 const U64_STORAGE_BYTES: u64 = std::mem::size_of::<u64>() as u64;
 const I64_STORAGE_BYTES: u64 = std::mem::size_of::<i64>() as u64;
-const BOOL_STORAGE_BYTES: u64 = std::mem::size_of::<bool>() as u64;
 
-pub(crate) fn origin_usage_bytes(state: &OriginState) -> u64 {
-    sum_usage(
-        state
-            .databases
-            .iter()
-            .map(|(name, database)| database_usage_bytes(name, database)),
-    )
-}
-
-pub(crate) fn database_usage_bytes(name: &str, database: &DatabaseData) -> u64 {
-    database_usage_bytes_for_stores(name, database.stores.iter())
-}
-
-pub(crate) fn database_usage_bytes_for_stores<'a>(
-    name: &str,
-    stores: impl Iterator<Item = (&'a String, &'a ObjectStoreData)>,
-) -> u64 {
-    string_usage_bytes(name)
-        .saturating_add(U64_STORAGE_BYTES)
-        .saturating_add(sum_usage(
-            stores.map(|(name, store)| object_store_usage_bytes(name, store)),
-        ))
-}
-
-fn object_store_usage_bytes(name: &str, store: &ObjectStoreData) -> u64 {
-    string_usage_bytes(name)
-        .saturating_add(optional_key_path_usage_bytes(&store.key_path))
-        .saturating_add(BOOL_STORAGE_BYTES)
-        .saturating_add(U64_STORAGE_BYTES)
-        .saturating_add(sum_usage(
-            store
-                .indexes
-                .iter()
-                .map(|(name, index)| index_usage_bytes(name, index)),
-        ))
-        .saturating_add(sum_usage(store.records.iter().map(|(key, value)| {
-            key_usage_bytes(key).saturating_add(indexed_db_value_usage_bytes(value))
-        })))
-}
-
-fn indexed_db_value_usage_bytes(value: &IndexedDbValue) -> u64 {
+pub(crate) fn indexed_db_value_usage_bytes(value: &IndexedDbValue) -> u64 {
     value
         .wire_bytes
         .len()
@@ -85,18 +40,7 @@ fn indexed_db_value_usage_bytes(value: &IndexedDbValue) -> u64 {
         })))
 }
 
-fn index_usage_bytes(name: &str, index: &IndexData) -> u64 {
-    string_usage_bytes(name)
-        .saturating_add(key_path_usage_bytes(&index.key_path))
-        .saturating_add(BOOL_STORAGE_BYTES)
-        .saturating_add(BOOL_STORAGE_BYTES)
-}
-
-fn optional_key_path_usage_bytes(key_path: &Option<KeyPath>) -> u64 {
-    key_path.as_ref().map(key_path_usage_bytes).unwrap_or(0)
-}
-
-fn key_path_usage_bytes(key_path: &KeyPath) -> u64 {
+pub(crate) fn key_path_usage_bytes(key_path: &KeyPath) -> u64 {
     match key_path {
         KeyPath::String(value) => string_usage_bytes(value),
         KeyPath::Sequence(values) => {
@@ -105,7 +49,7 @@ fn key_path_usage_bytes(key_path: &KeyPath) -> u64 {
     }
 }
 
-fn key_usage_bytes(key: &Key) -> u64 {
+pub(crate) fn key_usage_bytes(key: &Key) -> u64 {
     match key {
         Key::String(value) => (value.len() as u64).saturating_mul(2),
         Key::Binary(value) => value.len() as u64,

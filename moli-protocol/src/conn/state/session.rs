@@ -182,8 +182,6 @@ impl PageTargetHost {
             || self.tls_verify_host_override.is_some()
             || self.environment_owner.has_override()
             || self.effective_emulation_state != super::EffectiveTargetEmulationState::default()
-            || self.input_intercept_drags_enabled
-            || self.input_drag_intercepted
             || self.css_enabled
             || self.fetch_owner.config_snapshot() != super::fetch::TargetFetchConfig::default()
     }
@@ -198,8 +196,6 @@ impl PageTargetHost {
         self.http_proxy_override = None;
         self.http_no_proxy_override = None;
         self.tls_verify_host_override = None;
-        self.input_intercept_drags_enabled = false;
-        self.input_drag_intercepted = false;
         self.css_enabled = false;
     }
 }
@@ -430,6 +426,7 @@ impl PageScreencastSessionState {
 #[derive(Debug, Clone)]
 pub(crate) struct TargetPageSessionState {
     pub(crate) input_events_ignored: bool,
+    pub(crate) input_intercept_drags_enabled: bool,
     pub(crate) page_domain_enabled: bool,
     pub(crate) page_domain_subscription_generation: u64,
     pub(crate) page_lifecycle_events: bool,
@@ -448,6 +445,7 @@ impl Default for TargetPageSessionState {
     fn default() -> Self {
         Self {
             input_events_ignored: false,
+            input_intercept_drags_enabled: false,
             page_domain_enabled: false,
             page_domain_subscription_generation: 0,
             page_lifecycle_events: false,
@@ -493,6 +491,7 @@ impl TargetPageSessionState {
 impl PartialEq for TargetPageSessionState {
     fn eq(&self, other: &Self) -> bool {
         self.input_events_ignored == other.input_events_ignored
+            && self.input_intercept_drags_enabled == other.input_intercept_drags_enabled
             && self.page_domain_enabled == other.page_domain_enabled
             && self.page_lifecycle_events == other.page_lifecycle_events
             && self.audits == other.audits

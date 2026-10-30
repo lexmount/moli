@@ -11,6 +11,7 @@ const host = document.getElementById("host");
 const child = document.getElementById("child");
 const events = [];
 let phase = "allowed";
+let finishActions = null;
 
 function selectedText() {
   const selection = getSelection();
@@ -37,49 +38,52 @@ window.__advanceContenteditableInheritancePhase = function () {
 resetSelection();
 
 const complete = new Promise(function (resolve) {
-  host.addEventListener("drop", function (event) {
-    events.push(
-      phase +
-        "-drop:" +
-        event.target.id +
-        ":" +
-        event.dataTransfer.getData("text") +
-        ":" +
-        child.textContent +
-        ":" +
-        selectedText(),
-    );
-    if (phase === "blocked") {
-      resolve();
-    }
-  });
+  finishActions = resolve;
+});
 
-  host.addEventListener("beforeinput", function (event) {
-    events.push(
-      phase +
-        "-beforeinput:" +
-        event.target.id +
-        ":" +
-        child.textContent +
-        ":" +
-        selectedText(),
-    );
-  });
+window.__finishContenteditableInheritance = function () {
+  finishActions();
+};
 
-  host.addEventListener("input", function (event) {
-    const selection = getSelection();
-    events.push(
-      phase +
-        "-input:" +
-        event.target.id +
-        ":" +
-        child.textContent +
-        ":" +
-        selection.anchorOffset +
-        ":" +
-        selection.focusOffset,
-    );
-  });
+host.addEventListener("drop", function (event) {
+  events.push(
+    phase +
+      "-drop:" +
+      event.target.id +
+      ":" +
+      event.dataTransfer.getData("text") +
+      ":" +
+      child.textContent +
+      ":" +
+      selectedText(),
+  );
+});
+
+host.addEventListener("beforeinput", function (event) {
+  events.push(
+    phase +
+      "-beforeinput:" +
+      event.target.id +
+      ":" +
+      child.textContent +
+      ":" +
+      selectedText(),
+  );
+});
+
+host.addEventListener("input", function (event) {
+  const selection = getSelection();
+  events.push(
+    phase +
+      "-input:" +
+      event.target.id +
+      ":" +
+      child.textContent +
+      ":" +
+      selection.anchorOffset +
+      ":" +
+      selection.focusOffset,
+  );
 });
 
 promise_test(async function () {
@@ -90,10 +94,10 @@ promise_test(async function () {
       "allowed-drop:child:allowed-text:hello world:world",
       "allowed-beforeinput:host:hello world:world",
       "allowed-input:host:hello allowed-text:18:18",
-      "blocked-drop:child:blocked-text:hello world:world",
     ],
-    "contenteditable drop should inherit editing host and stop at contenteditable=false",
+    "inherited contenteditable accepts the drop, while contenteditable=false rejects drop and editing events",
   );
   assert_equals(child.textContent, "hello world", "contenteditable=false child was not edited");
+  assert_equals(selectedText(), "world", "rejected drop preserves the selection inside the non-editable child");
 }, "Input.dispatchDragEvent applies contenteditable inheritance for text drop defaults");
 </script>

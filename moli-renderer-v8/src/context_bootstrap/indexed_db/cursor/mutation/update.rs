@@ -27,10 +27,15 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_update_callback<'s>(
         return;
     };
     if let Some(key_path) = &metadata.info().key_path {
-        let Some(clone) = deserialize_js_value(scope, &value) else {
+        let decode = crate::context_bootstrap::indexed_db::ValueDecodeSession::new();
+        let Some(clone) = decode.deserialize_or_throw(scope, &value) else {
             return;
         };
-        if !matches!(extract_object_store_key_from_value(scope, clone, key_path),
+        let key = extract_object_store_key_from_value(scope, clone, key_path);
+        if matches!(key, ObjectStoreKey::Failed) {
+            return;
+        }
+        if !matches!(key,
             ObjectStoreKey::Key(key) if key == target.primary_key)
         {
             throw_cursor_mutation_error(
@@ -48,14 +53,16 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_update_callback<'s>(
     let Some(request) = target.create_request(scope, cursor) else {
         return;
     };
-    execute_object_store_write_request(
+    schedule_transaction_operation(
         scope,
+        target.transaction,
         target.store,
         request,
-        target.handle,
         &target.store_name,
-        &prepared,
-        false,
+        IndexedDbTransactionOperation::ObjectStoreWrite {
+            prepared,
+            add_only: false,
+        },
     );
     // Updating storage does not replace the cursor's existing value snapshot.
     rv.set(request.into());

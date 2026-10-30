@@ -31,39 +31,13 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_count_callback<
     let Some(request) = create_operation_request(scope, store, transaction) else {
         return;
     };
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
-        .unwrap_or(false)
-    {
-        enqueue_transaction_operation(
-            scope,
-            transaction,
-            store,
-            request,
-            &store_name,
-            IndexedDbTransactionOperation::ObjectStoreCount { query },
-        );
-        rv.set(request.into());
-        return;
-    }
-    let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
-        return;
-    };
-    match scan_object_store_entries(scope, handle, &store_name, query.as_ref()) {
-        Ok(entries) => store_request_success(
-            scope,
-            request,
-            v8::Number::new(scope, entries.len() as f64).into(),
-        ),
-        Err(error) => {
-            let error = request_error_object(scope, &error);
-            store_request_error(scope, request, error);
-        }
-    }
+    schedule_transaction_operation(
+        scope,
+        transaction,
+        store,
+        request,
+        &store_name,
+        IndexedDbTransactionOperation::ObjectStoreCount { query },
+    );
     rv.set(request.into());
 }

@@ -11,6 +11,13 @@ fn native_range_client_rects<'s>(
     range: v8::Local<'s, v8::Object>,
 ) -> Option<Result<Vec<ClientRect>, moli_layout::LayoutError>> {
     let boundaries = native_range_boundary_handles(scope, range)?;
+    native_range_client_rects_for_boundaries(scope, boundaries)
+}
+
+pub(super) fn native_range_client_rects_for_boundaries(
+    scope: &mut v8::PinScope<'_, '_>,
+    boundaries: RangeBoundaryHandles,
+) -> Option<Result<Vec<ClientRect>, moli_layout::LayoutError>> {
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let host = unsafe { &*host_ptr };
     if !host.layout_policy().uses_real_layout() {

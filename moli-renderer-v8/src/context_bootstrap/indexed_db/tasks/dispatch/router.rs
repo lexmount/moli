@@ -1,5 +1,7 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::typed_state::IndexedDbTaskId;
+use crate::context_bootstrap::indexed_db::typed_state::sql::flush_indexed_db_sql_task;
+use crate::util::context_host_ptr_from_global_bridge;
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_task_callback(
     scope: &mut v8::PinScope<'_, '_>,
@@ -21,7 +23,7 @@ pub(crate) fn flush_indexed_db_task_by_id(
     scope: &mut v8::PinScope<'_, '_>,
     task_id: IndexedDbTaskId,
 ) -> bool {
-    let Some(task) = take_indexed_db_task_by_id(scope, task_id) else {
+    let Some(task) = take_indexed_db_task_by_id(scope, task_id, true) else {
         return false;
     };
     flush_indexed_db_task(scope, task)
@@ -31,7 +33,7 @@ pub(crate) fn discard_indexed_db_task_by_id(
     scope: &mut v8::PinScope<'_, '_>,
     task_id: IndexedDbTaskId,
 ) -> bool {
-    let Some(task) = take_indexed_db_task_by_id(scope, task_id) else {
+    let Some(task) = take_indexed_db_task_by_id(scope, task_id, false) else {
         return false;
     };
     unregister_indexed_db_task(scope, task);
@@ -47,17 +49,21 @@ fn flush_indexed_db_task<'s>(
     };
     let owner = indexed_db_typed_task_owner_scope(scope, task)
         .expect("IDB task should have typed owner state");
+    let retire =
+        crate::context_bootstrap::indexed_db::capture_indexed_db_task_retirement(scope, task);
     let owner_restore = owner.enter(scope);
     match kind {
+        IndexedDbTaskKind::SqlCompletion => flush_indexed_db_sql_task(scope, task),
+        IndexedDbTaskKind::FactoryRequest => {
+            crate::context_bootstrap::indexed_db::typed_state::factory::flush_factory_task(
+                scope, task,
+            )
+        }
         IndexedDbTaskKind::RequestSuccess => flush_request_success_task(scope, task),
         IndexedDbTaskKind::RequestError => flush_request_error_task(scope, task),
         IndexedDbTaskKind::Open => flush_open_task(scope, task),
         IndexedDbTaskKind::OpenSuccess => flush_open_success_task(scope, task),
-        IndexedDbTaskKind::OpenBlocked => flush_open_blocked_task(scope, task),
-        IndexedDbTaskKind::DeleteBlocked => flush_delete_blocked_task(scope, task),
         IndexedDbTaskKind::VersionChange => flush_version_change_task(scope, task),
-        IndexedDbTaskKind::BlockedRecheck => flush_blocked_recheck_task(scope, task),
-        IndexedDbTaskKind::DrainBlockedOpens => flush_drain_blocked_open_requests_task(scope),
         IndexedDbTaskKind::DatabasesSettle => flush_databases_settle_task(scope, task),
         IndexedDbTaskKind::TransactionStart => flush_transaction_start_task(scope, task),
         IndexedDbTaskKind::TransactionCommit => flush_transaction_commit_task(scope, task),
@@ -80,21 +86,26 @@ fn flush_indexed_db_task<'s>(
                         scope,
                         database.into(),
                     )
-                    && !crate::context_bootstrap::indexed_db::unregister_open_database_connection(
-                        scope, handle, database,
-                    )
+                    && let Some(host) = context_host_ptr_from_global_bridge(scope)
                 {
-                    enqueue_drain_blocked_open_requests_task(scope);
+                    unsafe { &*host }.unregister_indexed_db_open_connection(handle);
                 }
                 let _ = dispatch_idb_named_event(scope, database, "close", |_, _| {});
             }
         }
     }
-    if !indexed_db_runtime_array_contains_object(
-        scope,
-        IndexedDbRuntimeArray::BlockedOpenQueue,
-        task,
-    ) {
+    if scope.is_execution_terminating() {
+        // The task may have lost V8 execution while invoking script. Cancel its
+        // native state without another private-slot read or V8 allocation.
+        retire();
+        owner.defer_restore(scope, owner_restore);
+        return true;
+    }
+    let factory_pending = kind == IndexedDbTaskKind::FactoryRequest
+        && crate::context_bootstrap::indexed_db::typed_state::factory::retain_pending_factory_task(
+            scope, task,
+        );
+    if !factory_pending {
         unregister_indexed_db_task(scope, task);
     }
     owner.defer_restore(scope, owner_restore);

@@ -4,6 +4,7 @@ use super::*;
 pub(in crate::context_bootstrap::indexed_db) fn enqueue_ready_transaction_starts(
     scope: &mut v8::PinScope<'_, '_>,
 ) {
+    crate::context_bootstrap::indexed_db::typed_state::factory::enqueue_native_connection_notifications(scope);
     let Some(queue) = indexed_db_runtime_array(scope, IndexedDbRuntimeArray::Transactions) else {
         return;
     };
@@ -39,6 +40,9 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_ready_transaction_starts
     }
     for database in crate::context_bootstrap::indexed_db::indexed_db_forced_closed_databases(scope)
     {
+        crate::context_bootstrap::indexed_db::typed_state::factory::finish_forced_upgrade(
+            scope, database,
+        );
         crate::context_bootstrap::indexed_db::finish_indexed_db_database_close(scope, database);
     }
 }

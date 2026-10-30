@@ -31,7 +31,11 @@ pub(in crate::context_bootstrap::indexed_db) fn convert_key_range_key<'s>(
 ) -> Option<Key> {
     match parse_idb_key(scope, value) {
         Ok(Some(key)) => Some(key),
-        Err(error @ KeyConversionError::Exception(_)) => {
+        Err(
+            error @ (KeyConversionError::Exception(_)
+            | KeyConversionError::Terminated
+            | KeyConversionError::Backend(_)),
+        ) => {
             error.throw(scope);
             None
         }

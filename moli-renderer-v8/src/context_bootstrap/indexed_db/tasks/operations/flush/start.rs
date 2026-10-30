@@ -1,7 +1,13 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::{
+    indexed_db_transaction_mode,
+    typed_state::sql::{
+        ensure_sql_transaction_rollback, indexed_db_request_sql_client, submit_indexed_db_sql_task,
+    },
+};
+use moli_indexeddb::sqlite::service::{Command, CommandResult};
 
 mod fail;
-mod run_waiting;
 mod success;
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>(
@@ -22,6 +28,8 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
     );
     if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
         .unwrap_or(false)
+        || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
+            .unwrap_or(false)
         || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
             .unwrap_or(false)
     {
@@ -36,11 +44,56 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
     if !request.is_ready() {
         return;
     }
-    match with_indexed_db_manager(scope, |manager| manager.start_queued_transaction(&request)) {
-        Ok(transaction_handle) => {
-            success::start_regular_transaction(scope, transaction, transaction_handle);
+    if let Some(client) = indexed_db_request_sql_client(scope, transaction) {
+        // Arm rollback before BEGIN so owner retirement can clean up accepted work.
+        if let Err(error) = ensure_sql_transaction_rollback(scope, transaction) {
+            fail::fail_regular_transaction_start(scope, transaction, &error);
+            return;
         }
-        Err(error) => {
+        let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
+            return;
+        };
+        let Some(mode) = indexed_db_transaction_mode(scope, transaction) else {
+            return;
+        };
+        let command = Command::Begin {
+            transaction: handle,
+            mode,
+            stores: request.store_names().into_iter().collect(),
+            version: None,
+            admission: Some(request),
+        };
+        set_indexed_db_slot_value(
+            scope,
+            transaction,
+            INDEXED_DB_TRANSACTION_START_SCHEDULED_SLOT,
+            v8::Boolean::new(scope, true).into(),
+        );
+        let submitted = submit_indexed_db_sql_task(
+            scope,
+            transaction,
+            &client,
+            command,
+            move |scope, transaction, reply| {
+                if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
+                    .unwrap_or(false)
+                {
+                    return;
+                }
+                match reply.result {
+                    Ok(CommandResult::Unit) => {
+                        success::start_regular_transaction(scope, transaction, handle)
+                    }
+                    Err(error) => fail::fail_regular_transaction_start(scope, transaction, &error),
+                    _ => fail::fail_regular_transaction_start(
+                        scope,
+                        transaction,
+                        &IndexedDbError::InvalidState("Invalid SQL BEGIN response".into()),
+                    ),
+                }
+            },
+        );
+        if let Err(error) = submitted {
             fail::fail_regular_transaction_start(scope, transaction, &error);
         }
     }

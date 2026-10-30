@@ -329,6 +329,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::TransitionEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::MIDIMessageEvent::DESCRIPTOR,
+        kind: ConstructorKind::MIDIMessageEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MIDIConnectionEvent::DESCRIPTOR,
+        kind: ConstructorKind::MIDIConnectionEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::BlobEvent::DESCRIPTOR,
         kind: ConstructorKind::BlobEvent,
     },
@@ -1369,7 +1377,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMPointReadOnly::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::DomPointReadOnly,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMPoint::DESCRIPTOR,
@@ -1381,11 +1389,11 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMQuad::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::DomQuad,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMMatrixReadOnly::DESCRIPTOR,
-        kind: ConstructorKind::DomMatrix,
+        kind: ConstructorKind::DomMatrixReadOnly,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMMatrix::DESCRIPTOR,

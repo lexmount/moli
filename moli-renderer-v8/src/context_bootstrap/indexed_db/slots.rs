@@ -16,7 +16,6 @@ pub(super) const INDEXED_DB_DATABASE_HANDLE_SLOT: &str = "moli.IndexedDb.databas
 pub(super) const INDEXED_DB_DATABASE_METADATA_SLOT: &str = "moli.IndexedDb.databaseMetadata";
 pub(super) const INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT: &str =
     "moli.IndexedDb.databaseUpgradeTransaction";
-pub(super) const INDEXED_DB_DATABASE_KEY_SLOT: &str = "moli.IndexedDb.databaseKey";
 pub(super) const INDEXED_DB_DATABASE_STORAGE_KEY_SLOT: &str = "moli.IndexedDb.databaseStorageKey";
 pub(super) const INDEXED_DB_DATABASE_CLOSED_SLOT: &str = "moli.IndexedDb.databaseClosed";
 pub(super) const INDEXED_DB_TRANSACTION_HANDLE_SLOT: &str = "moli.IndexedDb.transactionHandle";
@@ -28,7 +27,6 @@ pub(super) const INDEXED_DB_TRANSACTION_ABORTED_SLOT: &str = "moli.IndexedDb.tra
 pub(super) const INDEXED_DB_TRANSACTION_STARTED_SLOT: &str = "moli.IndexedDb.transactionStarted";
 pub(super) const INDEXED_DB_TRANSACTION_START_SCHEDULED_SLOT: &str =
     "moli.IndexedDb.transactionStartScheduled";
-pub(super) const INDEXED_DB_TRANSACTION_DB_KEY_SLOT: &str = "moli.IndexedDb.transactionDbKey";
 pub(super) const INDEXED_DB_TRANSACTION_PENDING_SLOT: &str = "moli.IndexedDb.transactionPending";
 pub(super) const INDEXED_DB_TRANSACTION_COMMIT_SCHEDULED_SLOT: &str =
     "moli.IndexedDb.transactionCommitScheduled";

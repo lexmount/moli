@@ -15,16 +15,19 @@ mod quota;
 pub use buckets::{
     DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES, IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME,
     SharedStorageBucketIndexedDbManager, SharedStorageBucketRegistry, SharedStorageBucketStore,
-    StorageBucketCacheId, StorageBucketCacheMatch, StorageBucketCachePutOutcome,
-    StorageBucketCacheQuery, StorageBucketCachedRequest, StorageBucketCachedResponse,
-    StorageBucketDurability, StorageBucketIdentity, StorageBucketQuotaOwner, StorageBucketRegistry,
-    StorageBucketStore, StorageBucketUsageSnapshot, complete_storage_bucket_deletion,
+    SqlBucketDeletion, SqlBucketDeletionResult, SqlBucketMaintenance, SqlBucketOperation,
+    SqlBucketOperationResult, SqlBucketOperationValue, StorageBucketCacheId,
+    StorageBucketCacheMatch, StorageBucketCachePutOutcome, StorageBucketCacheQuery,
+    StorageBucketCachedRequest, StorageBucketCachedResponse, StorageBucketDurability,
+    StorageBucketIdentity, StorageBucketQuotaOwner, StorageBucketRegistry, StorageBucketStore,
+    StorageBucketUsageSnapshot, complete_storage_bucket_deletion,
     new_shared_json_storage_bucket_store, new_shared_json_storage_bucket_store_with_cache_root,
     new_shared_json_storage_bucket_store_with_cache_root_and_indexed_db_manager,
     new_shared_json_storage_bucket_store_with_storage_service, new_shared_storage_bucket_store,
     new_shared_storage_bucket_store_with_indexed_db_manager,
     new_shared_storage_bucket_store_with_storage_service,
     new_shared_storage_bucket_store_with_storage_service_and_indexed_db_manager,
+    prepare_sql_bucket_deletion, prepare_sql_bucket_maintenance,
     storage_bucket_indexed_db_storage_key, storage_bucket_origin_allows_storage,
     storage_bucket_quota_owner,
 };
@@ -66,6 +69,17 @@ pub struct StorageService {
 pub type SharedStorageService = Arc<StorageService>;
 
 impl StorageService {
+    /// After renderer/network producers join, finish accepted quota and bucket
+    /// maintenance jobs before shutting down the SQL service they may use.
+    pub fn drain_maintenance(&self) -> Result<(), StorageServiceDispatchError> {
+        self.quota_wait_queue.drain()
+    }
+
+    /// After SQL shutdown, finish accepted OPFS work before releasing a profile.
+    pub fn drain_io(&self) -> Result<(), StorageServiceDispatchError> {
+        self.io_queue.drain()
+    }
+
     /// Create an ephemeral partition storage service.
     pub fn in_memory() -> SharedStorageService {
         Arc::new(Self {

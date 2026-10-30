@@ -563,6 +563,37 @@ fn cancel_registered_opfs_task(
     }
 }
 
+/// Bucket lifecycle operations share the existing exact-owner storage channel.
+/// Cleanup continues if the accepting Window/Worker retires before delivery.
+pub(in crate::context_bootstrap) fn dispatch_storage_bucket_operation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    resolver: v8::Local<'s, v8::PromiseResolver>,
+    operation: moli_storage_service::SqlBucketMaintenance,
+) {
+    let Some(registered) = register_opfs_task(scope, resolver, operation.locator(), None) else {
+        reject_dom_exception(
+            scope,
+            resolver,
+            "UnknownError",
+            "The storage operation has no active asynchronous owner.",
+        );
+        return;
+    };
+    let (cancellation, sink) = registered.into_parts();
+    if operation
+        .dispatch(move |result| sink.send(OpfsTaskResult::StorageBucket(result)))
+        .is_err()
+    {
+        cancel_registered_opfs_task(scope, cancellation);
+        reject_dom_exception(
+            scope,
+            resolver,
+            "UnknownError",
+            "Failed to dispatch storage bucket operation.",
+        );
+    }
+}
+
 fn dispatch_opfs_task<'s, T, Operation, Wrap>(
     scope: &mut v8::PinScope<'s, '_>,
     resolver: v8::Local<'s, v8::PromiseResolver>,
@@ -3597,6 +3628,12 @@ pub(crate) fn settle_opfs_task_result<'s>(
     handle_access: Option<&OpfsHandleAccessContext>,
     result: OpfsTaskResult,
 ) {
+    if let OpfsTaskResult::StorageBucket(result) = result {
+        // Lifecycle operations use the manager's storage-key authority. A
+        // deleted/expired named locator intentionally no longer authorizes IO.
+        super::window_runtime::settle_storage_bucket_operation(scope, resolver, result);
+        return;
+    }
     let access_check = match handle_access {
         Some(access) => service_for_locator_with_handle_access(scope, locator, access),
         None => service_for_locator(scope, locator),
@@ -3606,6 +3643,9 @@ pub(crate) fn settle_opfs_task_result<'s>(
         return;
     }
     match result {
+        OpfsTaskResult::StorageBucket(_) => {
+            unreachable!("bucket lifecycle settled before handle authorization")
+        }
         OpfsTaskResult::CreateSyncAccessHandle { mode, result } => {
             let Some(lease) = take_opfs_owner_result(
                 scope,

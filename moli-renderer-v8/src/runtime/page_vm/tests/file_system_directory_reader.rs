@@ -29,6 +29,7 @@ const dropTarget = document.createElement("div");
 dropTarget.id = "directory-reader-drop-target";
 dropTarget.style.width = "100px";
 dropTarget.style.height = "100px";
+dropTarget.addEventListener("dragover", event => event.preventDefault());
 dropTarget.addEventListener("drop", event => {
   globalThis.__directoryEntry =
     event.dataTransfer.items[0].webkitGetAsEntry();
@@ -39,14 +40,14 @@ document.body.appendChild(dropTarget);
 "#,
     )?;
     page_vm.vm_mut().publish_layout_for_test()?;
-    let outcome = page_vm.dispatch_drag_event_at_point(
-        10.0,
-        10.0,
-        "drop",
-        directory_drag_data(file_count),
-        0,
-    )?;
-    assert!(outcome.handled, "the directory drop fixture must dispatch");
+    let data = directory_drag_data(file_count);
+    for event in ["dragenter", "dragover", "drop"] {
+        let outcome = page_vm.dispatch_drag_event_at_point(10.0, 10.0, event, data.clone(), 0)?;
+        assert!(
+            outcome.handled,
+            "the accepted directory drag fixture must dispatch {event}"
+        );
+    }
     assert_eq!(
         page_vm.vm_mut().eval(
             "__directoryEntry.isDirectory && \

@@ -1010,6 +1010,7 @@ fn data_transfer_directory_entries_use_private_slots_for_reflection_and_spoofing
         r#"
 (() => {
   const target = document.getElementById('drop');
+  target.addEventListener('dragover', event => event.preventDefault());
   const internalNames = object => Object.getOwnPropertyNames(object)
     .filter(name => name.startsWith('__lmDataTransfer') || name.startsWith('__lmFileSystem'))
     .sort();
@@ -1084,6 +1085,10 @@ fn data_transfer_directory_entries_use_private_slots_for_reflection_and_spoofing
         }],
         drag_operations_mask: 1,
     };
+    for event_name in ["dragenter", "dragover"] {
+        vm.dispatch_drag_event_at_point(10.0, 10.0, event_name, drag_data.clone(), 0)
+            .expect("directory drag target should accept the drag");
+    }
     vm.dispatch_drag_event_at_point(10.0, 10.0, "drop", drag_data, 0)
         .expect("directory drop should dispatch");
 
@@ -1463,7 +1468,7 @@ fn mouse_dragstart_bubbles_to_window_once() {
 
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should dispatch");
-    vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousemove", 0, Some(1), 0.0, 0.0)
+    vm.dispatch_mouse_event_at_point(30.0, 20.0, "mousemove", 0, Some(1), 0.0, 0.0)
         .expect("mousemove should start drag");
 
     let result = vm

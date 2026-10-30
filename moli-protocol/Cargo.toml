@@ -53,6 +53,7 @@ http = "1"
 sanitize-filename = "=0.6.0"
 
 [dev-dependencies]
+moli-indexeddb = { path = "../moli-indexeddb" }
 moli-paint = { path = "../moli-paint" }
 moli-layout = { path = "../moli-layout" }
 lopdf = { version = "0.45.0", default-features = false }

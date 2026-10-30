@@ -11,6 +11,7 @@ use moli_storage_service::{
 
 #[derive(Debug)]
 pub(crate) enum OpfsTaskResult {
+    StorageBucket(moli_storage_service::SqlBucketOperationResult),
     CreateSyncAccessHandle {
         mode: String,
         result: OpfsOwnerResult<StorageOpfsSyncAccessLease>,

@@ -11,6 +11,13 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
     let Some(request) = indexed_db_request_dispatch_task_request(scope, task) else {
         return;
     };
+    if let Some(lease) =
+        crate::context_bootstrap::indexed_db::take_indexed_db_connection_request(scope, request)
+    {
+        crate::context_bootstrap::microtask_checkpoint::defer_indexed_db_connection_request(
+            scope, lease,
+        );
+    }
     let transaction = indexed_db_request_transaction_object(scope, request);
     if let Some(transaction) = transaction
         && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_COMMITTING_SLOT)
@@ -50,7 +57,22 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
         "readyState",
         done,
     );
+    let cancel =
+        crate::context_bootstrap::indexed_db::typed_state::sql::indexed_db_request_sql_client(
+            scope, request,
+        )
+        .map(|_| {
+            crate::context_bootstrap::indexed_db::typed_state::sql::sql_transaction_event_cancellation(
+                scope, request,
+            )
+        });
     let outcome = dispatch_idb_named_event_with_result(scope, request, "error", |_, _| {});
+    if scope.is_execution_terminating() {
+        if let Some(cancel) = cancel {
+            cancel();
+        }
+        return;
+    }
     if let Some(transaction) = transaction
         && !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
             .unwrap_or(false)
@@ -68,9 +90,6 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
             object_hidden_value(scope, request, INDEXED_DB_REQUEST_ERROR_SLOT)
                 .expect("a failed request retains its native error")
         };
-        if let Some(handle) = transaction_handle_from_value(scope, transaction.into()) {
-            let _ = with_indexed_db_manager(scope, |manager| manager.abort_transaction(handle));
-        }
         finish_transaction_abort(scope, transaction, error);
     }
     finish::finish_request_dispatch(scope, request);

@@ -4,10 +4,16 @@ mod beforeinput_target_validation;
 mod child_document_web_fonts;
 mod credential_container;
 mod credential_json_options;
+mod cross_document_drag_events;
 mod cross_origin_navigation;
 mod current_pass_css_fonts;
 mod document_encodings;
+mod drag_drop_outcomes;
 mod message_port_transfer;
+mod native_drag_payloads;
+mod native_drag_pointer_coordinates;
+mod native_drag_pointer_suppression;
+mod native_drag_source_events;
 mod picture_in_picture_interfaces;
 mod touch_native_receivers;
 mod visual_viewport_receiver;
@@ -1141,7 +1147,7 @@ impl StoragePageTaskExecutorTestWaitExt for crate::runtime::PageVmTaskExecutorTe
                 {
                     continue;
                 }
-                if self.has_pending_opfs_tasks() {
+                if self.has_pending_opfs_tasks() || self.has_in_flight_indexed_db_tasks_for_test()? {
                     let arrived = tokio::time::timeout(
                         std::time::Duration::from_secs(5),
                         self.wait_for_task_executor_work_arrival(),
@@ -1150,7 +1156,7 @@ impl StoragePageTaskExecutorTestWaitExt for crate::runtime::PageVmTaskExecutorTe
                     .unwrap_or(false);
                     anyhow::ensure!(
                         arrived,
-                        "storage Page task executor timed out with pending OPFS work at step {step}"
+                        "storage Page task executor timed out with pending storage work at step {step}"
                     );
                     continue;
                 }
@@ -1349,19 +1355,6 @@ fn indexed_db_test_root(label: &str) -> std::path::PathBuf {
         "moli-renderer-v8-indexeddb-{label}-{}-{nonce}",
         std::process::id()
     ))
-}
-
-fn indexed_db_origin_file(root: &std::path::Path, origin: &str) -> std::path::PathBuf {
-    let mut encoded = String::with_capacity(origin.len() * 2);
-    for byte in origin.as_bytes() {
-        use std::fmt::Write;
-        let _ = write!(&mut encoded, "{byte:02x}");
-    }
-    if encoded.len() > 180 {
-        encoded = moli_crypto::sha256_hex(origin.as_bytes());
-        encoded.insert_str(0, "h-");
-    }
-    root.join(format!("{encoded}.json"))
 }
 
 // Ported from Chromium's WPT copy at
@@ -2256,6 +2249,8 @@ mod data_transfer_native_receivers;
 mod frame_owner_origin_access;
 mod hyperlink_null_url_protocol;
 mod idb_rejected_request;
+mod idb_sqlite_factory;
+mod idb_sqlite_lifecycle;
 mod idb_write_preparation;
 mod import_meta;
 mod indexed_db;
@@ -2404,3 +2399,5 @@ mod rtc_encoded_frames;
 mod xml_serializer_receivers;
 
 mod hyperlink_audit_owner;
+
+mod canvas_pixel_geometry;

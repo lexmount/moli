@@ -41,9 +41,14 @@ struct TransactionScope {
 }
 
 impl TransactionScope {
+    // One SQLite connection has one writer. Readonly transactions can share
+    // it while no older writer can modify their object-store scope.
     fn conflicts_with(&self, other: &Self) -> bool {
-        (self.mode != TransactionMode::ReadOnly || other.mode != TransactionMode::ReadOnly)
-            && !self.stores.is_disjoint(&other.stores)
+        self.mode == TransactionMode::VersionChange
+            || other.mode == TransactionMode::VersionChange
+            || (self.mode != TransactionMode::ReadOnly && other.mode != TransactionMode::ReadOnly)
+            || ((self.mode != TransactionMode::ReadOnly || other.mode != TransactionMode::ReadOnly)
+                && !self.stores.is_disjoint(&other.stores))
     }
 }
 
@@ -99,11 +104,6 @@ enum Release {
     BackendFinished,
 }
 
-enum CancellationNotification {
-    NotifyOwner,
-    OwnerRetired,
-}
-
 impl TransactionRequestQueues {
     pub fn enqueue(
         self: &Arc<Self>,
@@ -148,12 +148,20 @@ impl TransactionRequestQueues {
         })
     }
 
-    pub(crate) fn has_database_requests(&self, origin: &str, name: &str) -> bool {
-        self.state
+    pub(crate) fn cancel_database(&self, origin: &str, name: &str) {
+        let queue = self
+            .state
             .lock()
             .queues
-            .get(&(origin.to_owned(), name.to_owned()))
-            .is_some_and(|queue| !queue.is_empty())
+            .remove(&(origin.to_owned(), name.to_owned()));
+        if let Some(queue) = queue {
+            for entry in &queue {
+                *entry.request.status.lock() = TransactionRequestStatus::Canceled;
+            }
+            for entry in queue {
+                (entry.wake)();
+            }
+        }
     }
 
     pub(crate) fn has_connection_requests(&self, database: DatabaseHandle) -> bool {
@@ -168,21 +176,10 @@ impl TransactionRequestQueues {
     /// observable through surviving handles after entries leave the queue.
     /// Callbacks run outside the queue lock and must not reenter the manager.
     pub fn cancel_connection(&self, database: DatabaseHandle) {
-        self.cancel_connections(
-            &BTreeSet::from([database]),
-            CancellationNotification::NotifyOwner,
-        );
+        self.cancel_connections(&BTreeSet::from([database]));
     }
 
-    pub(crate) fn retire_connections(&self, databases: &BTreeSet<DatabaseHandle>) {
-        self.cancel_connections(databases, CancellationNotification::OwnerRetired);
-    }
-
-    fn cancel_connections(
-        &self,
-        databases: &BTreeSet<DatabaseHandle>,
-        notification: CancellationNotification,
-    ) {
+    fn cancel_connections(&self, databases: &BTreeSet<DatabaseHandle>) {
         let wakes = {
             let mut state = self.state.lock();
             let mut wakes = Vec::new();
@@ -193,9 +190,7 @@ impl TransactionRequestQueues {
                         return true;
                     }
                     *entry.request.status.lock() = TransactionRequestStatus::Canceled;
-                    if matches!(notification, CancellationNotification::NotifyOwner) {
-                        wakes.push(entry.wake.clone());
-                    }
+                    wakes.push(entry.wake.clone());
                     false
                 });
                 if before != queue.len() {
@@ -229,6 +224,9 @@ fn wake_newly_ready(queue: &mut VecDeque<QueuedRequest>, wakes: &mut Vec<Transac
 }
 
 impl TransactionRequestHandle {
+    pub(crate) fn matches_key(&self, origin: &str, name: &str) -> bool {
+        self.key.0 == origin && self.key.1 == name
+    }
     pub fn status(&self) -> TransactionRequestStatus {
         let status = *self.request.status.lock();
         if status != TransactionRequestStatus::Finished && self.queues.strong_count() == 0 {
@@ -368,7 +366,7 @@ mod tests {
             wake.clone(),
         );
         let last_reader = request(&queues, 3, &["b"], TransactionMode::ReadOnly, wake.clone());
-        let independent = request(&queues, 1, &["c"], TransactionMode::ReadWrite, wake);
+        let independent = request(&queues, 1, &["c"], TransactionMode::ReadOnly, wake);
         assert!(reader.0.is_ready());
         assert!(parallel_reader.0.is_ready());
         assert!(!writer.0.is_ready());
@@ -387,6 +385,43 @@ mod tests {
         assert!(last_reader.0.is_ready());
         assert_eq!(wakes.load(Ordering::SeqCst), 2);
         drop((last_reader, independent));
+        assert!(queues.state.lock().queues.is_empty());
+    }
+
+    #[test]
+    fn one_writer_allows_disjoint_readers_and_retains_admission_until_backend_finishes() {
+        let queues = Arc::new(TransactionRequestQueues::default());
+        let wake: TransactionRequestWake = Arc::new(|| {});
+        let first = request(&queues, 1, &["a"], TransactionMode::ReadWrite, wake.clone());
+        assert!(first.handle().claim_start());
+        let first_handle = first.handle().clone();
+        let overlapping_reader =
+            request(&queues, 2, &["a"], TransactionMode::ReadOnly, wake.clone());
+        let disjoint_reader = request(&queues, 2, &["b"], TransactionMode::ReadOnly, wake.clone());
+        let second_writer = request(&queues, 3, &["c"], TransactionMode::ReadWrite, wake.clone());
+        let later_reader = request(&queues, 4, &["c"], TransactionMode::ReadOnly, wake);
+        assert!(!overlapping_reader.handle().is_ready());
+        assert!(disjoint_reader.handle().is_ready());
+        assert!(!second_writer.handle().is_ready());
+        assert!(!later_reader.handle().is_ready());
+        drop(first);
+        assert_eq!(first_handle.status(), TransactionRequestStatus::Started);
+        assert!(!overlapping_reader.handle().is_ready());
+        assert!(!second_writer.handle().is_ready());
+        first_handle.finish();
+        assert!(overlapping_reader.handle().is_ready());
+        assert!(disjoint_reader.handle().is_ready());
+        assert!(second_writer.handle().is_ready());
+        assert!(!later_reader.handle().is_ready());
+        assert!(second_writer.handle().claim_start());
+        second_writer.handle().finish();
+        assert!(later_reader.handle().is_ready());
+        drop((
+            overlapping_reader,
+            disjoint_reader,
+            second_writer,
+            later_reader,
+        ));
         assert!(queues.state.lock().queues.is_empty());
     }
 

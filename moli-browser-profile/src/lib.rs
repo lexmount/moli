@@ -14,7 +14,7 @@ pub use identity::{
 };
 pub use moli_cookie_cache::{load_cookie_cache, save_cookie_cache};
 pub use profile::{BrowserProfile, BrowserProfilePartition};
-pub use profile_file::write_profile_file;
+pub use profile_file::{DurableProfileFileError, write_profile_file, write_profile_file_durable};
 pub use profile_lock::{BrowserProfileLock, acquire_profile_lock};
 pub use profile_manifest::{
     BrowserProfileManifest, BrowserProfilePartitionManifest, PROFILE_MANIFEST_VERSION,

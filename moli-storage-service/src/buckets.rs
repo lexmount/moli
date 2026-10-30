@@ -14,6 +14,15 @@ use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use moli_crypto::sha256_hex;
 use moli_indexeddb::IndexedDbManager;
+mod deletion;
+mod indexed_db;
+mod maintenance;
+mod metadata;
+pub use deletion::{SqlBucketDeletion, SqlBucketDeletionResult, prepare_sql_bucket_deletion};
+pub use maintenance::{
+    SqlBucketMaintenance, SqlBucketOperation, SqlBucketOperationResult, SqlBucketOperationValue,
+    prepare_sql_bucket_maintenance,
+};
 use moli_storage_key::storage_key_prefix_for_origin;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -214,8 +223,8 @@ pub enum StorageBucketCachePutOutcome {
 struct JsonStorageBucketBackend {
     path: PathBuf,
     cache_storage_root: Option<PathBuf>,
-    indexed_db_keys_use_bucket_ids: bool,
     cache_paths_use_bucket_ids: bool,
+    metadata_publication_uncertain: bool,
     memory: MemoryStorageBucketBackend,
 }
 
@@ -358,8 +367,6 @@ struct StorageBucketsJson {
     version: u32,
     #[serde(default = "default_next_bucket_id")]
     next_bucket_id: u64,
-    #[serde(default)]
-    indexed_db_keys_use_bucket_ids: bool,
     #[serde(default)]
     cache_paths_use_bucket_ids: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -549,14 +556,6 @@ pub fn storage_bucket_indexed_db_storage_key(
     )
 }
 
-fn legacy_storage_bucket_indexed_db_storage_key(storage_key: &str, bucket_name: &str) -> String {
-    format!(
-        "bucket:v1:{}:{}",
-        sha256_hex(storage_key.as_bytes()),
-        sha256_hex(bucket_name.as_bytes())
-    )
-}
-
 pub fn storage_bucket_origin_allows_storage(origin: &str) -> bool {
     !moli_storage_key::serialized_storage_key_has_opaque_origin(origin)
 }
@@ -611,15 +610,14 @@ fn clear_storage_bucket_backends(
     indexed_db_manager: Option<&SharedStorageBucketIndexedDbManager>,
     identity: &StorageBucketIdentity,
 ) -> Result<()> {
+    if let Some(manager) = indexed_db_manager {
+        let sql = manager.lock().sqlite_service();
+        sql.request_clear_owner(identity.indexed_db_storage_key().into_bytes())?
+            .execute()?;
+    }
     storage_service
         .clear_opfs_bucket(&identity.locator())
         .map_err(|error| anyhow!(error))?;
-    if let Some(indexed_db_manager) = indexed_db_manager {
-        indexed_db_manager
-            .lock()
-            .clear_origin(&identity.indexed_db_storage_key())
-            .map_err(|error| anyhow!(error))?;
-    }
     Ok(())
 }
 
@@ -638,6 +636,9 @@ impl StorageBucketRegistry {
         &self,
         identity: &StorageBucketIdentity,
     ) -> Option<&StorageBucketMetadata> {
+        if self.metadata_publication_uncertain() {
+            return None;
+        }
         self.memory()
             .origins
             .get(identity.storage_key())
@@ -649,6 +650,9 @@ impl StorageBucketRegistry {
         &mut self,
         identity: &StorageBucketIdentity,
     ) -> Option<&mut StorageBucketMetadata> {
+        if self.metadata_publication_uncertain() {
+            return None;
+        }
         self.memory_mut()
             .origins
             .get_mut(identity.storage_key())
@@ -661,6 +665,9 @@ impl StorageBucketRegistry {
     }
 
     pub fn bucket_locator_is_live(&self, locator: &StorageBucketLocator) -> bool {
+        if self.metadata_publication_uncertain() {
+            return false;
+        }
         match locator {
             StorageBucketLocator::Default { .. } => true,
             StorageBucketLocator::Named {
@@ -671,14 +678,21 @@ impl StorageBucketRegistry {
                 .origins
                 .get(storage_key)
                 .is_some_and(|buckets| {
-                    buckets
-                        .values()
-                        .any(|metadata| metadata.bucket_id == Some(*bucket_id))
+                    buckets.values().any(|metadata| {
+                        metadata.bucket_id == Some(*bucket_id)
+                            && !storage_bucket_metadata_expired(
+                                metadata,
+                                storage_bucket_current_unix_ms(),
+                            )
+                    })
                 }),
         }
     }
 
     pub fn opfs_quota_for_locator(&self, locator: &StorageBucketLocator) -> Option<u64> {
+        if self.metadata_publication_uncertain() {
+            return None;
+        }
         match locator {
             StorageBucketLocator::Default { .. } => Some(DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES),
             StorageBucketLocator::Named {
@@ -689,15 +703,22 @@ impl StorageBucketRegistry {
                 .origins
                 .get(storage_key)
                 .and_then(|buckets| {
-                    buckets
-                        .values()
-                        .find(|metadata| metadata.bucket_id == Some(*bucket_id))
+                    buckets.values().find(|metadata| {
+                        metadata.bucket_id == Some(*bucket_id)
+                            && !storage_bucket_metadata_expired(
+                                metadata,
+                                storage_bucket_current_unix_ms(),
+                            )
+                    })
                 })
                 .map(|metadata| metadata.quota.unwrap_or(DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES)),
         }
     }
 
     fn bucket_quota_and_cache_usage(&self, locator: &StorageBucketLocator) -> Option<(u64, u64)> {
+        if self.metadata_publication_uncertain() {
+            return None;
+        }
         match locator {
             StorageBucketLocator::Default { storage_key } => {
                 let cache_usage = self
@@ -717,9 +738,13 @@ impl StorageBucketRegistry {
                 .origins
                 .get(storage_key)
                 .and_then(|buckets| {
-                    buckets
-                        .values()
-                        .find(|metadata| metadata.bucket_id == Some(*bucket_id))
+                    buckets.values().find(|metadata| {
+                        metadata.bucket_id == Some(*bucket_id)
+                            && !storage_bucket_metadata_expired(
+                                metadata,
+                                storage_bucket_current_unix_ms(),
+                            )
+                    })
                 })
                 .map(|metadata| {
                     (
@@ -744,6 +769,22 @@ impl StorageBucketRegistry {
     }
 
     pub fn open_bucket_with_options(
+        &mut self,
+        origin: &str,
+        name: &str,
+        expires: Option<f64>,
+        durability: Option<StorageBucketDurability>,
+        quota: Option<u64>,
+        persisted: Option<bool>,
+    ) -> Result<StorageBucketIdentity> {
+        self.edit_metadata(|candidate| {
+            candidate.open_bucket_with_options_in_memory(
+                origin, name, expires, durability, quota, persisted,
+            )
+        })
+    }
+
+    fn open_bucket_with_options_in_memory(
         &mut self,
         origin: &str,
         name: &str,
@@ -799,11 +840,16 @@ impl StorageBucketRegistry {
             .origins
             .get(origin)
             .map(|names| {
-                names
-                    .keys()
-                    .filter(|name| name.as_str() != IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME)
-                    .cloned()
-                    .collect()
+                // The maintenance caller reserves this exact upper bound
+                // before cloning names into its owner result.
+                let mut result = Vec::with_capacity(names.len());
+                result.extend(
+                    names
+                        .keys()
+                        .filter(|name| name.as_str() != IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME)
+                        .cloned(),
+                );
+                result
             })
             .unwrap_or_default()
     }
@@ -911,6 +957,14 @@ impl StorageBucketRegistry {
         origin: &str,
         now_ms: f64,
     ) -> Result<Vec<StorageBucketIdentity>> {
+        self.edit_metadata(|candidate| candidate.delete_expired_buckets_in_memory(origin, now_ms))
+    }
+
+    fn delete_expired_buckets_in_memory(
+        &mut self,
+        origin: &str,
+        now_ms: f64,
+    ) -> Result<Vec<StorageBucketIdentity>> {
         let expired: Vec<String> = self
             .memory()
             .origins
@@ -964,6 +1018,20 @@ impl StorageBucketRegistry {
         origin: &str,
         name: &str,
     ) -> Result<Option<StorageBucketIdentity>> {
+        let identity =
+            self.edit_metadata(|candidate| candidate.delete_bucket_in_memory(origin, name))?;
+        #[cfg(test)]
+        if identity.is_some() {
+            fault_injection::crash_if_armed(fault_injection::CrashPoint::BucketTombstoneDurable);
+        }
+        Ok(identity)
+    }
+
+    fn delete_bucket_in_memory(
+        &mut self,
+        origin: &str,
+        name: &str,
+    ) -> Result<Option<StorageBucketIdentity>> {
         if let Some(pending) = self.pending_deletion(origin, name) {
             return Ok(Some(pending));
         }
@@ -986,12 +1054,14 @@ impl StorageBucketRegistry {
         let identity = StorageBucketIdentity::new(origin, name, bucket_id);
         memory.pending_deletions.push(identity.clone());
         self.flush()?;
-        #[cfg(test)]
-        fault_injection::crash_if_armed(fault_injection::CrashPoint::BucketTombstoneDurable);
         Ok(Some(identity))
     }
 
     pub fn clear_origin(&mut self, origin: &str) -> Result<Vec<StorageBucketIdentity>> {
+        self.edit_metadata(|candidate| candidate.clear_origin_in_memory(origin))
+    }
+
+    fn clear_origin_in_memory(&mut self, origin: &str) -> Result<Vec<StorageBucketIdentity>> {
         let mut cleanups: Vec<StorageBucketIdentity> = self
             .memory()
             .pending_deletions
@@ -1013,6 +1083,10 @@ impl StorageBucketRegistry {
     }
 
     pub fn clear_origin_areas(&mut self, origin: &str) -> Result<Vec<StorageBucketIdentity>> {
+        self.edit_metadata(|candidate| candidate.clear_origin_areas_in_memory(origin))
+    }
+
+    fn clear_origin_areas_in_memory(&mut self, origin: &str) -> Result<Vec<StorageBucketIdentity>> {
         let prefix = storage_key_prefix_for_origin(origin);
         let mut cleanups: Vec<StorageBucketIdentity> = self
             .memory()
@@ -1054,6 +1128,21 @@ impl StorageBucketRegistry {
     pub fn finish_bucket_deletion(&mut self, identity: &StorageBucketIdentity) -> Result<bool> {
         #[cfg(test)]
         fault_injection::crash_if_armed(fault_injection::CrashPoint::BucketCleanupComplete);
+        let removed =
+            self.edit_metadata(|candidate| candidate.finish_bucket_deletion_in_memory(identity))?;
+        #[cfg(test)]
+        if removed {
+            fault_injection::crash_if_armed(
+                fault_injection::CrashPoint::BucketTombstoneRemovedDurable,
+            );
+        }
+        Ok(removed)
+    }
+
+    fn finish_bucket_deletion_in_memory(
+        &mut self,
+        identity: &StorageBucketIdentity,
+    ) -> Result<bool> {
         let pending_deletions = &mut self.memory_mut().pending_deletions;
         let before = pending_deletions.len();
         pending_deletions.retain(|pending| pending != identity);
@@ -1064,8 +1153,6 @@ impl StorageBucketRegistry {
             self.memory_mut().pending_deletions.push(identity.clone());
             return Err(error);
         }
-        #[cfg(test)]
-        fault_injection::crash_if_armed(fault_injection::CrashPoint::BucketTombstoneRemovedDurable);
         Ok(true)
     }
 
@@ -1114,7 +1201,10 @@ impl StorageBucketRegistry {
     }
 
     pub fn bucket_identity_is_live(&self, identity: &StorageBucketIdentity) -> bool {
-        self.metadata_for_identity(identity).is_some()
+        self.metadata_for_identity(identity)
+            .is_some_and(|metadata| {
+                !storage_bucket_metadata_expired(metadata, storage_bucket_current_unix_ms())
+            })
     }
 
     pub fn bucket_expires_for_identity(
@@ -1642,6 +1732,17 @@ impl StorageBucketRegistry {
     }
 
     pub fn set_bucket_expires(&mut self, origin: &str, name: &str, expires: f64) -> Result<()> {
+        self.edit_metadata(|candidate| {
+            candidate.set_bucket_expires_in_memory(origin, name, expires)
+        })
+    }
+
+    fn set_bucket_expires_in_memory(
+        &mut self,
+        origin: &str,
+        name: &str,
+        expires: f64,
+    ) -> Result<()> {
         let Some(metadata) = self
             .memory_mut()
             .origins
@@ -1655,6 +1756,16 @@ impl StorageBucketRegistry {
     }
 
     pub fn set_bucket_expires_for_identity(
+        &mut self,
+        identity: &StorageBucketIdentity,
+        expires: Option<f64>,
+    ) -> Result<bool> {
+        self.edit_metadata(|candidate| {
+            candidate.set_bucket_expires_for_identity_in_memory(identity, expires)
+        })
+    }
+
+    fn set_bucket_expires_for_identity_in_memory(
         &mut self,
         identity: &StorageBucketIdentity,
         expires: Option<f64>,
@@ -2187,8 +2298,8 @@ impl JsonStorageBucketBackend {
             return Ok(Self {
                 path: path.to_path_buf(),
                 cache_storage_root,
-                indexed_db_keys_use_bucket_ids: true,
                 cache_paths_use_bucket_ids: true,
+                metadata_publication_uncertain: false,
                 memory: MemoryStorageBucketBackend::default(),
             });
         }
@@ -2196,13 +2307,7 @@ impl JsonStorageBucketBackend {
             .with_context(|| format!("failed to read storage bucket store `{}`", path.display()))?;
         let version = storage_buckets_json_version(&bytes, path)?;
         if version == 1 {
-            let mut backend = Self::open_v1(path, cache_storage_root, &bytes)?;
-            if let Some(manager) = indexed_db_manager {
-                backend.migrate_legacy_indexed_db_storage_keys(manager)?;
-                backend.indexed_db_keys_use_bucket_ids = true;
-                backend.save()?;
-            }
-            return Ok(backend);
+            return Self::open_v1(path, cache_storage_root, &bytes);
         }
         if !matches!(version, 2 | 3 | 4 | STORAGE_BUCKETS_JSON_VERSION) {
             bail!(
@@ -2224,8 +2329,8 @@ impl JsonStorageBucketBackend {
         let mut backend = Self {
             path: path.to_path_buf(),
             cache_storage_root,
-            indexed_db_keys_use_bucket_ids: version >= 5 && json.indexed_db_keys_use_bucket_ids,
             cache_paths_use_bucket_ids: version >= 5 && json.cache_paths_use_bucket_ids,
+            metadata_publication_uncertain: false,
             memory,
         };
         let cache_path_migration_pending = !backend.cache_paths_use_bucket_ids;
@@ -2238,21 +2343,22 @@ impl JsonStorageBucketBackend {
         if implicit_default_migrated {
             identity_migrated |= backend.memory.assign_missing_bucket_ids()?;
         }
-        let mut indexed_db_identity_migrated = false;
-        if !backend.indexed_db_keys_use_bucket_ids
-            && let Some(manager) = indexed_db_manager
-        {
-            backend.migrate_legacy_indexed_db_storage_keys(manager)?;
-            backend.indexed_db_keys_use_bucket_ids = true;
-            indexed_db_identity_migrated = true;
-        }
         let expired_buckets = backend.prune_expired_buckets(storage_bucket_current_unix_ms())?;
+        if expired_buckets > 0 || identity_migrated {
+            // Cleanup may remove files in another backend. Its exact identity
+            // and tombstone must be durable before any such removal begins.
+            backend.save_metadata()?;
+        }
+        if !backend.memory.pending_deletions.is_empty() {
+            // Retire cache files before removing any tombstone. A restart
+            // between SQL/OPFS cleanup and the final metadata save can retry.
+            backend.save_cache_storage()?;
+        }
         let recovered_deletions =
             backend.recover_pending_deletions(indexed_db_manager, deletion_storage_service)?;
         if version != STORAGE_BUCKETS_JSON_VERSION
             || identity_migrated
             || implicit_default_migrated
-            || indexed_db_identity_migrated
             || cache_path_migration_pending
             || expired_buckets > 0
             || recovered_deletions > 0
@@ -2280,8 +2386,8 @@ impl JsonStorageBucketBackend {
         let mut backend = Self {
             path: path.to_path_buf(),
             cache_storage_root,
-            indexed_db_keys_use_bucket_ids: false,
             cache_paths_use_bucket_ids: false,
+            metadata_publication_uncertain: false,
             memory,
         };
         backend.load_cache_storage()?;
@@ -2301,18 +2407,8 @@ impl JsonStorageBucketBackend {
         Ok(())
     }
 
-    fn save_metadata(&self) -> Result<()> {
-        let json = StorageBucketsJson {
-            version: STORAGE_BUCKETS_JSON_VERSION,
-            next_bucket_id: self.memory.next_bucket_id,
-            indexed_db_keys_use_bucket_ids: self.indexed_db_keys_use_bucket_ids,
-            cache_paths_use_bucket_ids: self.cache_paths_use_bucket_ids,
-            pending_deletions: self.memory.pending_deletions.clone(),
-            origins: self.memory.origins.clone(),
-        };
-        let bytes =
-            serde_json::to_vec_pretty(&json).context("failed to serialize storage bucket store")?;
-        moli_browser_profile::write_profile_file(&self.path, &bytes, "storage bucket store")
+    fn save_metadata(&mut self) -> Result<()> {
+        self.publish_metadata(&self.memory.clone_metadata())
     }
 
     fn migrate_legacy_implicit_default_cache_storage(&mut self) -> bool {
@@ -2431,36 +2527,6 @@ impl JsonStorageBucketBackend {
         #[cfg(test)]
         fault_injection::crash_if_armed(fault_injection::CrashPoint::CacheNextDurable);
         replace_storage_bucket_cache_root(root, &next, &previous)?;
-        Ok(())
-    }
-
-    fn migrate_legacy_indexed_db_storage_keys(
-        &self,
-        indexed_db_manager: &SharedStorageBucketIndexedDbManager,
-    ) -> Result<()> {
-        let identities: Vec<StorageBucketIdentity> = self
-            .memory
-            .origins
-            .iter()
-            .flat_map(|(storage_key, buckets)| {
-                buckets.iter().filter_map(|(name, metadata)| {
-                    metadata
-                        .bucket_id
-                        .map(|bucket_id| StorageBucketIdentity::new(storage_key, name, bucket_id))
-                })
-            })
-            .chain(self.memory.pending_deletions.iter().cloned())
-            .collect();
-        let mut manager = indexed_db_manager.lock();
-        for identity in identities {
-            let legacy = legacy_storage_bucket_indexed_db_storage_key(
-                identity.storage_key(),
-                identity.name(),
-            );
-            manager
-                .migrate_origin(&legacy, &identity.indexed_db_storage_key())
-                .map_err(|error| anyhow!(error))?;
-        }
         Ok(())
     }
 
@@ -2642,7 +2708,7 @@ mod tests {
     };
 
     use anyhow::Result;
-    use moli_indexeddb::{IndexedDbManager, Key, ObjectStoreOptions, OpenOptions, TransactionMode};
+    use moli_indexeddb::{IndexedDbManager, Key, ObjectStoreOptions};
     use parking_lot::Mutex;
 
     use crate::{StorageBucketId, StorageBucketLocator, StorageService};
@@ -2655,8 +2721,8 @@ mod tests {
         StorageBucketUsageSnapshot, complete_storage_bucket_deletion,
         encode_storage_bucket_cache_component,
         fault_injection::{CrashPoint, arm},
-        legacy_storage_bucket_cache_bucket_dir, legacy_storage_bucket_indexed_db_storage_key,
-        new_shared_json_storage_bucket_store, new_shared_json_storage_bucket_store_with_cache_root,
+        legacy_storage_bucket_cache_bucket_dir, new_shared_json_storage_bucket_store,
+        new_shared_json_storage_bucket_store_with_cache_root,
         new_shared_json_storage_bucket_store_with_storage_service, save_storage_bucket_cache_file,
         storage_bucket_cache_bucket_dir, storage_bucket_cache_replacement_paths,
         storage_bucket_indexed_db_storage_key, storage_bucket_origin_allows_storage,
@@ -2666,20 +2732,26 @@ mod tests {
     fn new_indexed_db_manager(
         root: Option<PathBuf>,
     ) -> std::result::Result<SharedStorageBucketIndexedDbManager, String> {
-        let manager = match root {
-            Some(path) => IndexedDbManager::new(path).map_err(|error| error.to_string())?,
-            None => IndexedDbManager::new_in_memory(),
+        use moli_indexeddb::sqlite::service::{Service, ServiceConfig};
+        let mut config = ServiceConfig::default();
+        config.executor.workers = 1;
+        let service = match root {
+            Some(path) => Service::on_disk(path, config).map_err(|error| error.to_string())?,
+            None => Service::new(config).map_err(|error| error.to_string())?,
         };
-        Ok(Arc::new(Mutex::new(manager)))
+        Ok(Arc::new(Mutex::new(IndexedDbManager::with_sqlite_service(
+            service,
+        ))))
     }
 
     fn clear_indexed_db_origin(
         manager: &SharedStorageBucketIndexedDbManager,
         origin: &str,
     ) -> std::result::Result<(), String> {
-        manager
-            .lock()
-            .clear_origin(origin)
+        let service = manager.lock().sqlite_service();
+        service
+            .request_clear_owner(origin.as_bytes().to_vec())
+            .and_then(|clear| clear.execute())
             .map_err(|error| error.to_string())
     }
 
@@ -2715,7 +2787,7 @@ mod tests {
         }
 
         fn indexed_db_root(&self) -> PathBuf {
-            self.path.with_extension("indexed-db")
+            self.path.with_extension("idb-lite")
         }
 
         fn opfs_root(&self) -> PathBuf {
@@ -2753,25 +2825,72 @@ mod tests {
         manager: &SharedStorageBucketIndexedDbManager,
         origin: &str,
     ) -> Result<()> {
-        let mut manager = manager.lock();
-        let opened = manager.open(OpenOptions {
-            origin: origin.to_owned(),
-            name: "bucket-db".to_owned(),
-            version: None,
-        })?;
-        let upgrade = opened
-            .upgrade_transaction
-            .expect("first open should create an upgrade transaction");
-        manager.create_object_store(upgrade, "items", ObjectStoreOptions::default())?;
-        manager.commit_transaction(upgrade)?;
-        let tx = manager.begin_transaction(
-            opened.database,
-            &[String::from("items")],
-            TransactionMode::ReadWrite,
+        use moli_indexeddb::sqlite::service::{Command, Completion, DatabaseClient};
+        use std::{sync::mpsc, time::Duration};
+        fn receive(receiver: mpsc::Receiver<Completion>) -> Result<Completion> {
+            let reply = receiver.recv_timeout(Duration::from_secs(10))?;
+            if let Err(error) = &reply.result {
+                return Err(anyhow::anyhow!(error.clone()));
+            }
+            Ok(reply)
+        }
+        fn execute(client: &DatabaseClient, command: Command) -> Result<()> {
+            let (sender, receiver) = mpsc::channel();
+            client.submit(command, move |reply| {
+                let _ = sender.send(reply);
+            })?;
+            receive(receiver)?;
+            Ok(())
+        }
+        let service = manager.lock().sqlite_service();
+        let (sender, receiver) = mpsc::channel();
+        let client = service.resolve(
+            origin.as_bytes().to_vec(),
+            "bucket-db".into(),
+            move |reply| {
+                let _ = sender.send(reply);
+            },
         )?;
-        manager.put(tx, "items", Some(Key::from("alpha")), b"record".to_vec())?;
-        manager.commit_transaction(tx)?;
-        manager.close_database(opened.database)?;
+        receive(receiver)?;
+        let connection = client.open_connection(Arc::new(|| {}))?;
+        let transaction = client.allocate_transaction_handle()?;
+        let (sender, receiver) = mpsc::channel();
+        connection.begin_upgrade(transaction, 1, move |reply| {
+            let _ = sender.send(reply);
+        })?;
+        receive(receiver)?;
+        execute(
+            &client,
+            Command::CreateStore {
+                transaction,
+                name: "items".into(),
+                options: ObjectStoreOptions::default(),
+            },
+        )?;
+        execute(
+            &client,
+            Command::Write {
+                transaction,
+                store: "items".into(),
+                key: Some(Key::from("alpha")),
+                value: b"record".to_vec().into(),
+                indexes: vec![],
+                add_only: false,
+                quota: None,
+            },
+        )?;
+        execute(
+            &client,
+            Command::Commit {
+                transaction,
+                quota: None,
+            },
+        )?;
+        let (sender, receiver) = mpsc::channel();
+        connection.close(move |result| {
+            let _ = sender.send(result);
+        })?;
+        receiver.recv_timeout(Duration::from_secs(10))??;
         Ok(())
     }
 
@@ -2788,6 +2907,7 @@ mod tests {
             let cache_root = self.cache_root();
             let _ = fs::remove_dir_all(&cache_root);
             let _ = fs::remove_dir_all(self.indexed_db_root());
+            let _ = fs::remove_dir_all(self.path.with_extension("legacy-idb"));
             let _ = fs::remove_dir_all(self.opfs_root());
             if let Ok((next, previous)) = storage_bucket_cache_replacement_paths(&cache_root) {
                 let _ = fs::remove_dir_all(next);
@@ -3105,12 +3225,15 @@ mod tests {
     #[test]
     fn memory_storage_bucket_store_prunes_expired_buckets() -> Result<()> {
         let mut store = StorageBucketRegistry::default();
+        let now = super::storage_bucket_current_unix_ms();
 
-        let expired = store.open_bucket_with_expires("https://a.test", "expired", Some(1_000.0))?;
-        let live = store.open_bucket_with_expires("https://a.test", "live", Some(3_000.0))?;
-        store.open_bucket_with_expires("https://b.test", "expired", Some(1_000.0))?;
+        let expired =
+            store.open_bucket_with_expires("https://a.test", "expired", Some(now - 1_000.0))?;
+        let live =
+            store.open_bucket_with_expires("https://a.test", "live", Some(now + 60_000.0))?;
+        store.open_bucket_with_expires("https://b.test", "expired", Some(now - 1_000.0))?;
 
-        let cleanups = store.delete_expired_buckets("https://a.test", 2_000.0)?;
+        let cleanups = store.delete_expired_buckets("https://a.test", now)?;
         assert_eq!(
             cleanups
                 .iter()
@@ -3132,18 +3255,21 @@ mod tests {
     #[test]
     fn memory_storage_bucket_store_deletes_one_expired_bucket() -> Result<()> {
         let mut store = StorageBucketRegistry::default();
+        let now = super::storage_bucket_current_unix_ms();
 
-        let expired = store.open_bucket_with_expires("https://a.test", "expired", Some(1_000.0))?;
-        let live = store.open_bucket_with_expires("https://a.test", "live", Some(3_000.0))?;
+        let expired =
+            store.open_bucket_with_expires("https://a.test", "expired", Some(now - 1_000.0))?;
+        let live =
+            store.open_bucket_with_expires("https://a.test", "live", Some(now + 60_000.0))?;
 
         assert!(
             store
-                .delete_bucket_if_expired("https://a.test", "live", 2_000.0)?
+                .delete_bucket_if_expired("https://a.test", "live", now)?
                 .is_none()
         );
         assert!(
             store
-                .delete_bucket_if_expired("https://a.test", "expired", 2_000.0)?
+                .delete_bucket_if_expired("https://a.test", "expired", now)?
                 .is_some()
         );
         assert_eq!(store.keys("https://a.test"), vec!["live"]);
@@ -4467,56 +4593,56 @@ mod tests {
     }
 
     #[test]
-    fn json_v4_migrates_bucket_indexed_db_from_name_to_persistent_id() -> Result<()> {
-        let temp = TempStorePath::new("v4-indexed-db-identity");
-        let cache_root = temp.cache_root();
-        let indexed_db_manager =
+    fn json_v4_keeps_bucket_identity_without_reading_legacy_indexed_db() -> Result<()> {
+        let temp = TempStorePath::new("v4-no-idb-import");
+        let legacy = temp.path.with_extension("legacy-idb");
+        fs::create_dir_all(&legacy)?;
+        fs::write(legacy.join("broken.json"), b"invalid old IndexedDB JSON")?;
+        let manager =
             new_indexed_db_manager(Some(temp.indexed_db_root())).map_err(anyhow::Error::msg)?;
-        let storage_service = StorageService::on_disk(temp.opfs_root())?;
-        let storage_key = "https://a.test";
-        let legacy_key = legacy_storage_bucket_indexed_db_storage_key(storage_key, "bucket");
-        seed_indexed_db_record(&indexed_db_manager, &legacy_key)?;
-        let legacy_usage = indexed_db_usage(&indexed_db_manager, &legacy_key)?;
-        fs::write(
-            &temp.path,
-            br#"{"version":4,"nextBucketId":18,"origins":{"https://a.test":{"bucket":{"bucketId":17}}}}"#,
-        )?;
-
+        fs::write(&temp.path, br#"{"version":4,"nextBucketId":18,"origins":{"https://a.test":{"bucket":{"bucketId":17}}}}"#)?;
         let store = new_shared_json_storage_bucket_store_with_storage_service(
             &temp.path,
-            &cache_root,
-            &indexed_db_manager,
-            storage_service,
+            temp.cache_root(),
+            &manager,
+            StorageService::on_disk(temp.opfs_root())?,
         )?;
-        let store = store.lock();
         let identity = store
-            .bucket_identity(storage_key, "bucket")
-            .expect("migrated bucket should have identity");
+            .lock()
+            .bucket_identity("https://a.test", "bucket")
+            .unwrap();
         assert_eq!(identity.bucket_id().get(), 17);
-        assert_eq!(indexed_db_usage(&indexed_db_manager, &legacy_key)?, 0);
         assert_eq!(
-            indexed_db_usage(&indexed_db_manager, &identity.indexed_db_storage_key())?,
-            legacy_usage
+            indexed_db_usage(&manager, &identity.indexed_db_storage_key())?,
+            0
         );
-        drop(store);
-
+        assert_eq!(
+            fs::read(legacy.join("broken.json"))?,
+            b"invalid old IndexedDB JSON"
+        );
         let json: serde_json::Value = serde_json::from_slice(&fs::read(&temp.path)?)?;
         assert_eq!(json["version"], serde_json::json!(5));
+        assert_eq!(json["nextBucketId"], serde_json::json!(18));
+        assert!(json.get("indexedDbKeysUseBucketIds").is_none());
         Ok(())
     }
 
     #[test]
-    fn json_v5_pending_deletion_migrates_legacy_idb_before_recovery() -> Result<()> {
-        let temp = TempStorePath::new("v5-pending-legacy-indexed-db");
-        let cache_root = temp.cache_root();
-        let indexed_db_manager =
+    fn json_v5_pending_deletion_recovers_sql_without_touching_legacy_idb() -> Result<()> {
+        let temp = TempStorePath::new("v5-pending-no-idb-import");
+        let manager =
             new_indexed_db_manager(Some(temp.indexed_db_root())).map_err(anyhow::Error::msg)?;
         let storage_service = StorageService::on_disk(temp.opfs_root())?;
-        let storage_key = "https://a.test";
-        let identity =
-            StorageBucketIdentity::new(storage_key, "bucket", StorageBucketId::new(17).unwrap());
-        let legacy_key = legacy_storage_bucket_indexed_db_storage_key(storage_key, "bucket");
-        seed_indexed_db_record(&indexed_db_manager, &legacy_key)?;
+        let identity = StorageBucketIdentity::new(
+            "https://a.test",
+            "bucket",
+            StorageBucketId::new(17).unwrap(),
+        );
+        seed_indexed_db_record(&manager, &identity.indexed_db_storage_key())?;
+        assert!(indexed_db_usage(&manager, &identity.indexed_db_storage_key())? > 0);
+        let legacy = temp.path.with_extension("legacy-idb");
+        fs::create_dir_all(&legacy)?;
+        fs::write(legacy.join("broken.json"), b"untouched old IDB")?;
         let locator = identity.locator();
         let bucket_key = StorageService::opfs_bucket_key(&locator)?;
         let root = storage_service.ensure_opfs_root(&locator)?;
@@ -4524,27 +4650,24 @@ mod tests {
             storage_service.with_opfs(|opfs| opfs.get_file(&bucket_key, &root, "old.txt", true))?;
         storage_service
             .with_opfs(|opfs| opfs.write_file(&bucket_key, &file, b"old bucket", None))?;
-        fs::write(
-            &temp.path,
-            br#"{"version":5,"nextBucketId":18,"indexedDbKeysUseBucketIds":false,"cachePathsUseBucketIds":true,"pendingDeletions":[{"storageKey":"https://a.test","name":"bucket","bucketId":17}],"origins":{}}"#,
-        )?;
-
+        fs::write(&temp.path,br#"{"version":5,"nextBucketId":18,"indexedDbKeysUseBucketIds":false,"cachePathsUseBucketIds":true,"pendingDeletions":[{"storageKey":"https://a.test","name":"bucket","bucketId":17}],"origins":{}}"#)?;
         let store = new_shared_json_storage_bucket_store_with_storage_service(
             &temp.path,
-            &cache_root,
-            &indexed_db_manager,
+            temp.cache_root(),
+            &manager,
             storage_service.clone(),
         )?;
         assert!(store.lock().pending_deletions().is_empty());
-        assert_eq!(indexed_db_usage(&indexed_db_manager, &legacy_key)?, 0);
         assert_eq!(
-            indexed_db_usage(&indexed_db_manager, &identity.indexed_db_storage_key())?,
+            indexed_db_usage(&manager, &identity.indexed_db_storage_key())?,
             0
         );
         assert_eq!(storage_service.opfs_usage(&locator)?, 0);
+        assert_eq!(fs::read(legacy.join("broken.json"))?, b"untouched old IDB");
         let json: serde_json::Value = serde_json::from_slice(&fs::read(&temp.path)?)?;
-        assert_eq!(json["indexedDbKeysUseBucketIds"], serde_json::json!(true));
+        assert!(json.get("indexedDbKeysUseBucketIds").is_none());
         assert!(json.get("pendingDeletions").is_none());
+        assert_eq!(json["nextBucketId"], serde_json::json!(18));
         Ok(())
     }
 

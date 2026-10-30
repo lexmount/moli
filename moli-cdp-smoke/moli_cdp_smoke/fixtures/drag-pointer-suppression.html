@@ -1,0 +1,50 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Native drag pointer stream suppression</title>
+<link rel="help" href="https://w3c.github.io/pointerevents/#suppressing-a-pointer-event-stream">
+<!-- Manual port of Chromium/WPT html/editing/dnd/events/pointer-suppression.html.
+     The shared CDP smoke drives real pointer input: start a drag while still
+     inside the source, then leave it. No DOM event is synthesized by this page.
+     The port also checks pointer capture and the ancestor leave chain. -->
+<style>
+  html, body { margin: 0; min-height: 320px; }
+  #outer { position: absolute; left: 20px; top: 20px; width: 120px; height: 100px; }
+  #source, #leaf { display: block; width: 100px; height: 80px; }
+  #source { background: lightblue; }
+  #target { position: absolute; left: 220px; top: 20px; width: 100px; height: 80px; }
+</style>
+<div id="outer"><div id="source" draggable="true"><span id="leaf">Drag source</span></div></div>
+<div id="target">Destination</div>
+<script>
+window.installPointerSuppression = function (options) {
+  const source = document.getElementById("source");
+  const state = window.__pointerSuppression = {
+    events: [], started: false, dragLeaveSawSuppression: false,
+  };
+  const name = node => node ? node.id || node.nodeName : null;
+  for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel",
+                     "pointerout", "pointerleave", "gotpointercapture", "lostpointercapture",
+                     "mousedown", "mousemove", "mouseup", "dragstart", "dragleave", "dragend"]) {
+    document.addEventListener(type, event => {
+      if (type === "dragstart") state.started = true;
+      state.events.push({
+        type, target: name(event.target), related: name(event.relatedTarget),
+        pointerId: event.pointerId ?? null, buttons: event.buttons,
+        bubbles: event.bubbles, cancelable: event.cancelable, trusted: event.isTrusted,
+        dragging: state.started,
+      });
+    }, true);
+  }
+  source.addEventListener("pointerdown", event => {
+    if (options.capture) source.setPointerCapture(event.pointerId);
+  });
+  source.addEventListener("dragstart", event => {
+    event.dataTransfer.setData("text/plain", "pointer suppression");
+  });
+  source.addEventListener("dragleave", () => {
+    const types = state.events.filter(event => event.dragging).map(event => event.type);
+    state.dragLeaveSawSuppression = ["pointercancel", "pointerout", "pointerleave"]
+      .every(type => types.includes(type));
+  });
+};
+</script>

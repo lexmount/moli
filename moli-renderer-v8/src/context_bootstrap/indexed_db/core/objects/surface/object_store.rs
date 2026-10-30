@@ -37,3 +37,18 @@ pub(in crate::context_bootstrap::indexed_db) fn create_object_store_object<'s>(
     sync_store_surface_from_metadata(scope, store, metadata)?;
     Some(store)
 }
+
+// Creation can fail asynchronously after the method has returned. Such a
+// handle is deleted from birth and owns only its ordinary JavaScript fields.
+pub(in crate::context_bootstrap::indexed_db) fn create_failed_object_store_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    db: v8::Local<'s, v8::Object>,
+    tx: v8::Local<'s, v8::Object>,
+    info: &ObjectStoreInfo,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let store = IdbObjectStoreObjectDeclaration::new(tx, db)
+        .bind(scope)
+        .ok()?;
+    sync_store_surface_fields(scope, store, info, &[])?;
+    Some(store)
+}

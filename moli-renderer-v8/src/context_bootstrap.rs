@@ -23,6 +23,7 @@ pub(crate) use css_fontface_runtime::{
 };
 mod css_runtime;
 pub(crate) mod css_stylesheet_runtime;
+mod dom_quad;
 mod dom_rect;
 mod dom_rect_list;
 mod encoded_video_chunk;
@@ -34,6 +35,7 @@ mod events;
 pub(crate) mod exposed_interfaces;
 mod file_api;
 mod form_data_runtime;
+mod geometry_clone;
 mod geometry_runtime;
 mod history_mutation;
 mod history_runtime;
@@ -62,7 +64,14 @@ pub(crate) use exposed_interfaces::{
 };
 pub(crate) use indexed_db::dispatch_indexed_db_event_callback;
 #[cfg(test)]
-pub(crate) use indexed_db::indexed_db_native_cursor_count_for_test;
+pub(crate) use indexed_db::{
+    IndexedDbMetadataSharingProbe, IndexedDbTaskKind, create_sql_database_for_test,
+    create_sql_upgrade_for_test, deserialize_indexed_db_value_for_test,
+    indexed_db_has_in_flight_sql_tasks_for_test, indexed_db_has_queued_task_kind_for_test,
+    indexed_db_metadata_sharing_probe_for_test, indexed_db_native_cursor_count_for_test,
+    serialize_indexed_db_value_for_test, sql_transaction_handle_for_test,
+    sql_transaction_started_for_test,
+};
 mod location_history_storage;
 mod location_navigation;
 mod location_runtime;
@@ -129,6 +138,10 @@ mod performance_observer_runtime;
 mod performance_runtime;
 mod range;
 mod range_algorithms;
+pub(crate) use range_algorithms::{
+    NativeSelectionDragSnapshot, document_selection_drag_snapshot_at_point,
+    selection_text_element_is_hidden,
+};
 mod range_live;
 mod range_surface;
 mod resize_observer_runtime;
@@ -285,9 +298,7 @@ pub(crate) use self::css_stylesheet_runtime::{
     sync_css_style_sheet_media_list_from_owner,
     sync_css_style_sheet_shadow_root_adopted_owner_tracking,
 };
-pub(crate) use self::dom_rect::{
-    build_dom_rect_clone_object, build_dom_rect_object, dom_rect_clone_data,
-};
+pub(crate) use self::dom_rect::build_dom_rect_object;
 pub(crate) use self::dom_rect_list::build_dom_rect_list_object;
 pub(crate) use self::encoded_video_chunk::{
     EncodedVideoChunkClonePayload, EncodedVideoChunkType,
@@ -312,37 +323,40 @@ pub(crate) use self::file_api::{
 pub(crate) use self::file_api::{
     DragDataStoreMode, NativeDragDataStore, create_drag_data_transfer_view,
     create_external_drag_data_store, create_native_drag_data_store, finish_drag_data_transfer_view,
-    native_data_transfer_drop_effect, native_data_transfer_drop_effect_is_initialized,
-    native_data_transfer_effect_allowed, native_data_transfer_file_count,
-    native_data_transfer_files, native_data_transfer_get_data, native_data_transfer_has_type,
-    populate_native_drag_data_store, protect_native_drag_source_view,
-    readonly_data_transfer_for_input, replace_drag_data_store_contents,
-    update_drag_data_store_operations_mask,
+    native_data_transfer_drop_effect, native_data_transfer_effect_allowed,
+    native_data_transfer_file_count, native_data_transfer_files, native_data_transfer_get_data,
+    native_data_transfer_has_type, native_set_drag_drop_effect, populate_native_drag_data_store,
+    protect_native_drag_source_view, read_string_drag_data, readonly_data_transfer_for_input,
+    replace_drag_data_store_contents, update_drag_data_store_operations_mask,
 };
 pub(crate) use self::file_api::{
     build_file_list_object, build_file_object, file_list_files_from_object,
     flush_one_pending_file_reader, is_file_list_object, selected_file_from_object,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
+pub(crate) use self::geometry_clone::{
+    GeometryClonePayload, build_geometry_object_from_clone_payload,
+    build_geometry_quad_from_cloned_points, geometry_clone_payload_from_object,
+    geometry_quad_clone_points,
+};
 use self::geometry_runtime::{build_dom_point_object, optional_dom_point_init_arg};
 pub(crate) use self::image_data::{
     ImageDataClonePayload, build_image_data_object_from_clone_payload,
     image_data_clone_payload_from_object,
 };
 pub(crate) use self::indexed_db::{
-    IndexedDbTaskId, discard_indexed_db_task_by_id, flush_blocked_indexed_db_requests,
-    flush_indexed_db_task_by_id, flush_indexed_db_transaction_starts, flush_next_indexed_db_task,
-    indexed_db_has_pending_tasks, install_worker_indexed_db_runtime_state,
-    retain_indexed_db_state_in_retired_realm, retire_indexed_db_context,
-    set_indexed_db_manager_for_context, set_worker_indexed_db_task_wake_for_context,
+    IndexedDbTaskId, discard_indexed_db_task_by_id, flush_indexed_db_task_by_id,
+    flush_indexed_db_transaction_starts, flush_next_indexed_db_task, indexed_db_has_pending_tasks,
+    install_worker_indexed_db_runtime_state, retain_indexed_db_state_in_retired_realm,
+    retire_indexed_db_context, set_indexed_db_manager_for_context,
+    set_worker_indexed_db_task_wake_for_context,
 };
 pub use self::indexed_db::{
-    Key as IndexedDbKey, ObjectStoreOptions as IndexedDbObjectStoreOptions,
-    OpenOptions as IndexedDbOpenOptions, SharedIndexedDbManager,
+    Key as IndexedDbKey, ObjectStoreOptions as IndexedDbObjectStoreOptions, SharedIndexedDbManager,
     TransactionMode as IndexedDbTransactionMode, WeakIndexedDbManager, clear_indexed_db_origin,
     clear_indexed_db_origins_with_prefix, downgrade_indexed_db_manager,
     indexed_db_origin_usage_bytes, indexed_db_origins_with_prefix_usage_bytes,
-    new_indexed_db_manager,
+    new_indexed_db_manager, new_sqlite_indexed_db_manager,
 };
 pub(crate) use self::indexed_db::{
     bind_indexed_db_factory_to_window_execution_context,

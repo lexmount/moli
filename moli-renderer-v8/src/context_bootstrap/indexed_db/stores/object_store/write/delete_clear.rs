@@ -61,8 +61,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
             return;
         }
         Err(error) => {
-            let error = error.into_value(scope);
-            scope.throw_exception(error);
+            error.throw(scope);
             return;
         }
     };
@@ -70,30 +69,14 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
         return;
     };
     queue_transaction_request(scope, transaction, request);
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
-        .unwrap_or(false)
-    {
-        enqueue_transaction_operation(
-            scope,
-            transaction,
-            store,
-            request,
-            &store_name,
-            IndexedDbTransactionOperation::ObjectStoreDelete { query },
-        );
-        rv.set(request.into());
-        return;
-    }
-    let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
-        return;
-    };
-    execute_object_store_delete_request(scope, request, handle, &store_name, &query);
+    schedule_transaction_operation(
+        scope,
+        transaction,
+        store,
+        request,
+        &store_name,
+        IndexedDbTransactionOperation::ObjectStoreDelete { query },
+    );
     rv.set(request.into());
 }
 
@@ -110,29 +93,13 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_clear_callback<
         rv.set(request.into());
         return;
     };
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
-        .unwrap_or(false)
-    {
-        enqueue_transaction_operation(
-            scope,
-            transaction,
-            store,
-            request,
-            &store_name,
-            IndexedDbTransactionOperation::ObjectStoreClear,
-        );
-        rv.set(request.into());
-        return;
-    }
-    let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
-        return;
-    };
-    execute_object_store_clear_request(scope, request, handle, &store_name);
+    schedule_transaction_operation(
+        scope,
+        transaction,
+        store,
+        request,
+        &store_name,
+        IndexedDbTransactionOperation::ObjectStoreClear,
+    );
     rv.set(request.into());
 }

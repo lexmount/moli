@@ -366,7 +366,7 @@ fn navigator_storage_webidl_receiver_checks_match_promise_shape() {
 }
 #[test]
 fn navigator_storage_buckets_minimal_surface_matches_idlharness() {
-    let mut vm = new_storage_test_vm("https://storage-buckets-idl.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://storage-buckets-idl.test/");
 
     vm.exec(
         r#"
@@ -445,7 +445,7 @@ fn navigator_storage_buckets_minimal_surface_matches_idlharness() {
     .expect("storage buckets surface probe should schedule");
 
     let result = vm
-        .eval("String(globalThis.__storageBucketsSurfaceProbe)")
+        .eval_after_selected_page_tasks("String(globalThis.__storageBucketsSurfaceProbe)")
         .expect("storage buckets surface probe should settle");
 
     assert_eq!(
@@ -455,7 +455,8 @@ fn navigator_storage_buckets_minimal_surface_matches_idlharness() {
 }
 #[test]
 fn storage_bucket_manager_rejects_invalid_chromium_bucket_names() {
-    let mut vm = new_storage_test_vm("https://storage-bucket-invalid-names.test/");
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://storage-bucket-invalid-names.test/");
 
     vm.exec(
         r#"
@@ -497,7 +498,7 @@ fn storage_bucket_manager_rejects_invalid_chromium_bucket_names() {
     .expect("storage bucket invalid-name probe should schedule");
 
     let result = vm
-        .eval("String(globalThis.__storageBucketInvalidNameProbe)")
+        .eval_after_selected_page_tasks("String(globalThis.__storageBucketInvalidNameProbe)")
         .expect("storage bucket invalid-name probe should settle");
 
     assert_eq!(
@@ -597,7 +598,7 @@ fn storage_bucket_indexeddb_is_bucket_scoped() {
 }
 #[test]
 fn storage_bucket_caches_are_bucket_scoped_usage_metadata() {
-    let mut vm = new_storage_test_vm("https://storage-bucket-cache.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://storage-bucket-cache.test/");
 
     vm.exec(
         r#"
@@ -776,7 +777,7 @@ fn storage_bucket_caches_are_bucket_scoped_usage_metadata() {
     .expect("storage bucket CacheStorage probe should schedule");
 
     let result = vm
-        .eval("String(globalThis.__storageBucketCacheProbe)")
+        .eval_after_selected_page_tasks("String(globalThis.__storageBucketCacheProbe)")
         .expect("storage bucket CacheStorage probe should settle");
 
     assert_eq!(
@@ -903,7 +904,7 @@ fn storage_bucket_expiration_is_bucket_metadata() {
 }
 #[test]
 fn storage_bucket_durability_is_bucket_metadata() {
-    let mut vm = new_storage_test_vm("https://storage-bucket-durability.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://storage-bucket-durability.test/");
 
     vm.exec(
         r#"
@@ -962,7 +963,7 @@ fn storage_bucket_durability_is_bucket_metadata() {
     .expect("storage bucket durability probe should schedule");
 
     let result = vm
-        .eval("String(globalThis.__storageBucketDurabilityProbe)")
+        .eval_after_selected_page_tasks("String(globalThis.__storageBucketDurabilityProbe)")
         .expect("storage bucket durability probe should settle");
 
     assert_eq!(
@@ -972,7 +973,7 @@ fn storage_bucket_durability_is_bucket_metadata() {
 }
 #[test]
 fn storage_bucket_quota_is_bucket_metadata() {
-    let mut vm = new_storage_test_vm("https://storage-bucket-quota.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://storage-bucket-quota.test/");
 
     vm.exec(
         r#"
@@ -1028,7 +1029,7 @@ fn storage_bucket_quota_is_bucket_metadata() {
     .expect("storage bucket quota probe should schedule");
 
     let result = vm
-        .eval("String(globalThis.__storageBucketQuotaProbe)")
+        .eval_after_selected_page_tasks("String(globalThis.__storageBucketQuotaProbe)")
         .expect("storage bucket quota probe should settle");
 
     assert_eq!(
@@ -1038,7 +1039,7 @@ fn storage_bucket_quota_is_bucket_metadata() {
 }
 #[test]
 fn storage_bucket_cache_put_enforces_bucket_quota() {
-    let mut vm = new_storage_test_vm("https://storage-bucket-cache-quota.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://storage-bucket-cache-quota.test/");
 
     vm.exec(
         r#"
@@ -1096,7 +1097,7 @@ fn storage_bucket_cache_put_enforces_bucket_quota() {
     .expect("storage bucket CacheStorage quota probe should schedule");
 
     let result = vm
-        .eval("String(globalThis.__storageBucketCacheQuotaProbe)")
+        .eval_after_selected_page_tasks("String(globalThis.__storageBucketCacheQuotaProbe)")
         .expect("storage bucket CacheStorage quota probe should settle");
 
     assert_eq!(
@@ -1343,7 +1344,7 @@ fn storage_bucket_quota_is_aggregated_across_indexeddb_cache_and_opfs() {
 }
 #[test]
 fn storage_bucket_persisted_is_bucket_metadata() {
-    let mut vm = new_storage_test_vm("https://storage-bucket-persisted.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://storage-bucket-persisted.test/");
 
     vm.exec(
         r#"
@@ -1404,7 +1405,7 @@ fn storage_bucket_persisted_is_bucket_metadata() {
     .expect("storage bucket persisted probe should schedule");
 
     let result = vm
-        .eval("String(globalThis.__storageBucketPersistedProbe)")
+        .eval_after_selected_page_tasks("String(globalThis.__storageBucketPersistedProbe)")
         .expect("storage bucket persisted probe should settle");
 
     assert_eq!(
@@ -2247,7 +2248,7 @@ async fn third_party_iframe_storage_bucket_manager_uses_partitioned_storage_key(
 }
 #[test]
 fn storage_bucket_manager_methods_reject_after_iframe_detaches() {
-    let mut vm = new_storage_test_vm("https://storage-buckets-detached.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://storage-buckets-detached.test/");
 
     vm.exec(
         r#"
@@ -2297,7 +2298,7 @@ fn storage_bucket_manager_methods_reject_after_iframe_detaches() {
     .expect("storage buckets detached probe should schedule");
 
     let result = vm
-        .eval("String(globalThis.__storageBucketsDetachedProbe)")
+        .eval_after_selected_page_tasks("String(globalThis.__storageBucketsDetachedProbe)")
         .expect("storage buckets detached probe should settle");
 
     assert_eq!(

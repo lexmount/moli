@@ -17,17 +17,6 @@ impl WeakIndexedDbManager {
     pub(crate) fn upgrade(&self) -> Option<SharedIndexedDbManager> {
         self.inner.upgrade()
     }
-
-    pub(crate) fn close_database_handles(
-        &self,
-        handles: impl IntoIterator<Item = moli_indexeddb::DatabaseHandle>,
-    ) -> usize {
-        let Some(manager) = self.upgrade() else {
-            return 0;
-        };
-        let mut manager = manager.lock();
-        manager.retire_database_connections(handles)
-    }
 }
 
 impl fmt::Debug for WeakIndexedDbManager {
@@ -41,11 +30,22 @@ impl fmt::Debug for WeakIndexedDbManager {
 pub fn new_indexed_db_manager(
     root: Option<PathBuf>,
 ) -> std::result::Result<SharedIndexedDbManager, String> {
-    let manager = match root {
-        Some(path) => IndexedDbManager::new(path).map_err(|error| error.to_string())?,
-        None => IndexedDbManager::new_in_memory(),
+    new_sqlite_indexed_db_manager(root, Default::default())
+}
+
+/// Initialize and recover storage before starting its Page/Worker event loops.
+pub fn new_sqlite_indexed_db_manager(
+    root: Option<PathBuf>,
+    config: moli_indexeddb::sqlite::service::ServiceConfig,
+) -> std::result::Result<SharedIndexedDbManager, String> {
+    use moli_indexeddb::sqlite::service::Service;
+    let service = match root {
+        Some(root) => Service::on_disk(root, config).map_err(|error| error.to_string())?,
+        None => Service::new(config).map_err(|error| error.to_string())?,
     };
-    Ok(Arc::new(Mutex::new(manager)))
+    Ok(Arc::new(Mutex::new(IndexedDbManager::with_sqlite_service(
+        service,
+    ))))
 }
 
 pub fn downgrade_indexed_db_manager(manager: &SharedIndexedDbManager) -> WeakIndexedDbManager {
@@ -54,23 +54,25 @@ pub fn downgrade_indexed_db_manager(manager: &SharedIndexedDbManager) -> WeakInd
     }
 }
 
+/// Host-side cleanup, called outside V8. Native SQL work runs on storage workers.
 pub fn clear_indexed_db_origin(
     manager: &SharedIndexedDbManager,
     origin: &str,
 ) -> std::result::Result<(), String> {
-    manager
-        .lock()
-        .clear_origin(origin)
+    let sql = manager.lock().sqlite_service();
+    sql.prepare_clear_owner(origin.as_bytes().to_vec())
+        .and_then(|clear| clear.execute())
         .map_err(|error| error.to_string())
 }
 
+/// Host-side cleanup; the scope fence also excludes newly created owners.
 pub fn clear_indexed_db_origins_with_prefix(
     manager: &SharedIndexedDbManager,
     origin_prefix: &str,
 ) -> std::result::Result<(), String> {
-    manager
-        .lock()
-        .clear_origins_with_prefix(origin_prefix)
+    let sql = manager.lock().sqlite_service();
+    sql.prepare_clear_owners_with_prefix(origin_prefix.as_bytes().to_vec())
+        .and_then(|clear| clear.execute())
         .map_err(|error| error.to_string())
 }
 
@@ -97,9 +99,7 @@ pub fn indexed_db_origins_with_prefix_usage_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context_bootstrap::indexed_db::{
-        Key, ObjectStoreOptions, OpenOptions, TransactionMode,
-    };
+    use crate::context_bootstrap::indexed_db::{Key, ObjectStoreOptions, TransactionMode};
 
     #[test]
     fn weak_indexed_db_manager_expires_with_last_strong_owner() {
@@ -120,36 +120,59 @@ mod tests {
             new_indexed_db_manager(None).expect("in-memory IndexedDB manager should initialize");
         let origin = "https://usage-helper.example";
         {
-            let mut manager = manager.lock();
-            let opened = manager
-                .open(OpenOptions {
-                    origin: origin.to_owned(),
-                    name: "app".to_owned(),
-                    version: None,
+            use moli_indexeddb::sqlite::service::Command;
+            let service = manager.lock().sqlite_service();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let client = service
+                .resolve(origin.as_bytes().to_vec(), "app".into(), move |reply| {
+                    sender.send(reply).unwrap();
                 })
-                .expect("open should succeed");
-            let upgrade = opened
-                .upgrade_transaction
-                .expect("upgrade transaction should exist");
-            manager
-                .create_object_store(upgrade, "items", ObjectStoreOptions::default())
-                .expect("store should be created");
-            manager
-                .commit_transaction(upgrade)
-                .expect("upgrade commit should succeed");
-            let tx = manager
-                .begin_transaction(
-                    opened.database,
-                    &[String::from("items")],
-                    TransactionMode::ReadWrite,
-                )
-                .expect("readwrite transaction should start");
-            manager
-                .put(tx, "items", Some(Key::from("alpha")), b"first".to_vec())
-                .expect("put should succeed");
-            manager
-                .commit_transaction(tx)
-                .expect("record transaction should commit");
+                .unwrap();
+            receiver
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap()
+                .result
+                .unwrap();
+            let execute = |command| {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                client
+                    .submit(command, move |reply| {
+                        sender.send(reply).unwrap();
+                    })
+                    .unwrap();
+                receiver
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap()
+                    .result
+                    .unwrap()
+            };
+            let transaction = client.allocate_transaction_handle().unwrap();
+            execute(Command::Begin {
+                transaction,
+                mode: TransactionMode::VersionChange,
+                stores: Default::default(),
+                version: Some(1),
+                admission: None,
+            });
+            execute(Command::CreateStore {
+                transaction,
+                name: "items".into(),
+                options: ObjectStoreOptions::default(),
+            });
+            execute(Command::Write {
+                transaction,
+                store: "items".into(),
+                key: Some(Key::from("alpha")),
+                value: b"first".to_vec().into(),
+                indexes: vec![],
+                add_only: false,
+                quota: None,
+            });
+            assert_eq!(indexed_db_origin_usage_bytes(&manager, origin).unwrap(), 0);
+            execute(Command::Commit {
+                transaction,
+                quota: None,
+            });
         }
 
         assert!(

@@ -8,7 +8,8 @@ use crate::dom::{
 };
 use crate::util::{
     call_object_method, node_wrapper_from_handle, object_number_property,
-    object_property_as_object, utf16_len, v8_string, v8str,
+    object_property_as_object, utf16_len, utf16_replace_units_range_lossy, utf16_units, v8_string,
+    v8str,
 };
 use crate::{
     RendererInputDispatchOutcome, RendererPendingDownloadActivation,
@@ -148,14 +149,6 @@ fn perform_text_drop_default_action<'s>(
     )
 }
 
-fn slice_chars(value: &str, start: usize, end: usize) -> String {
-    value
-        .chars()
-        .skip(start)
-        .take(end.saturating_sub(start))
-        .collect()
-}
-
 fn call_node_contains(
     scope: &mut v8::PinScope<'_, '_>,
     target: v8::Local<'_, v8::Object>,
@@ -222,6 +215,7 @@ fn selected_text_node_range<'s>(
     {
         return None;
     }
+    // Selection offsets address UTF-16 code units, including within text nodes.
     let start = anchor_offset.min(focus_offset) as usize;
     let end = anchor_offset.max(focus_offset) as usize;
     Some((node, start, end))
@@ -239,11 +233,11 @@ fn replace_text_node_range(
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_default();
-    let next = format!(
-        "{}{}{}",
-        slice_chars(&value, 0, start),
-        replacement_text,
-        slice_chars(&value, end, value.chars().count())
+    let next = utf16_replace_units_range_lossy(
+        &utf16_units(&value),
+        start,
+        end.saturating_sub(start),
+        &utf16_units(replacement_text),
     );
     let Some(next_value) = v8_string(scope, &next) else {
         return false;
@@ -390,7 +384,18 @@ fn replace_selected_dom_range_with_html<'s>(
     selection: v8::Local<'s, v8::Object>,
     replacement_html: &str,
 ) -> bool {
-    let Some(range) = selected_dom_range(scope, target, selection) else {
+    let Some(range) = selected_dom_range(scope, target, selection).or_else(|| {
+        // A native selection drag can leave the Selection at its source.
+        // Preserve a range inside the editing host; otherwise insert the HTML
+        // at the host's end, just as the text fallback appends there.
+        let document = object_property_as_object(scope, target, "ownerDocument")?;
+        let range = call_object_method(scope, document, "createRange", &[])
+            .and_then(|range| v8::Local::<v8::Object>::try_from(range).ok())?;
+        call_object_method(scope, range, "selectNodeContents", &[target.into()])?;
+        let at_start = v8::Boolean::new(scope, false);
+        call_object_method(scope, range, "collapse", &[at_start.into()])?;
+        Some(range)
+    }) else {
         return false;
     };
     let Some(html) = v8_string(scope, replacement_html) else {
@@ -461,6 +466,19 @@ fn append_text_to_editing_host(
         .unwrap_or(false)
 }
 
+fn contenteditable_editing_host_in_document(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    document: DomHandle,
+) -> Option<DomHandle> {
+    if runtime.dom_host().owner_document_handle(handle) != Some(document)
+        || !runtime.dom_host().is_connected(handle)
+    {
+        return None;
+    }
+    contenteditable_editing_host(runtime, handle)
+}
+
 pub(crate) fn replace_contenteditable_selection(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
@@ -468,9 +486,6 @@ pub(crate) fn replace_contenteditable_selection(
     replacement_text: &str,
     input_type: TextEditInputType,
 ) -> bool {
-    let Some(target) = node_wrapper_from_handle(scope, handle) else {
-        return false;
-    };
     let Some(document) = unsafe { &*runtime_ptr }
         .dom_host()
         .owner_document_handle(handle)
@@ -488,21 +503,21 @@ pub(crate) fn replace_contenteditable_selection(
     }
     // beforeinput can disconnect or adopt the editor, or disable editing.
     // Revalidate native state before changing its DOM or selection.
-    {
-        let runtime = unsafe { &*runtime_ptr };
-        if runtime.dom_host().owner_document_handle(handle) != Some(document)
-            || !runtime.dom_host().is_connected(handle)
-            || contenteditable_editing_host(runtime, handle).is_none()
-        {
-            return false;
-        }
-    }
+    let Some(handle) =
+        contenteditable_editing_host_in_document(unsafe { &*runtime_ptr }, handle, document)
+    else {
+        return false;
+    };
+    let Some(target) = node_wrapper_from_handle(scope, handle) else {
+        return false;
+    };
     let inserted = if let Some(selection) = window_selection(scope) {
         if let Some((node, start, end)) = selected_text_node_range(scope, target, selection) {
             if !replace_text_node_range(scope, node, start, end, replacement_text) {
                 return false;
             }
-            let caret = start.saturating_add(replacement_text.chars().count()) as u32;
+            let caret = u32::try_from(start.saturating_add(utf16_len(replacement_text)))
+                .unwrap_or(u32::MAX);
             collapse_selection_to(scope, selection, node, caret);
             true
         } else {
@@ -573,7 +588,10 @@ fn perform_contenteditable_drop_default_action<'s>(
     if text.is_empty() && html.is_none() {
         return false;
     }
-    let Some(target) = node_wrapper_from_handle(scope, handle) else {
+    let Some(document) = unsafe { &*runtime_ptr }
+        .dom_host()
+        .owner_document_handle(handle)
+    else {
         return false;
     };
     let Some(input_data_transfer) = readonly_data_transfer_for_input(scope, data_transfer) else {
@@ -596,6 +614,17 @@ fn perform_contenteditable_drop_default_action<'s>(
     if event_default_prevented(scope, before_input) {
         return false;
     }
+    let Some(handle) =
+        contenteditable_editing_host_in_document(unsafe { &*runtime_ptr }, handle, document)
+    else {
+        return false;
+    };
+    let Some(target) = node_wrapper_from_handle(scope, handle) else {
+        return false;
+    };
+    // beforeinput can also change the editing host and its inherited mode.
+    let plaintext_only = element_attribute(unsafe { &*runtime_ptr }, handle, "contenteditable")
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("plaintext-only"));
     let inserted = if let Some(selection) = window_selection(scope) {
         if !plaintext_only
             && let Some(html) = html
@@ -607,7 +636,7 @@ fn perform_contenteditable_drop_default_action<'s>(
             if !replace_text_node_range(scope, node, start, end, &text) {
                 return false;
             }
-            let caret = start.saturating_add(text.chars().count()) as u32;
+            let caret = u32::try_from(start.saturating_add(utf16_len(&text))).unwrap_or(u32::MAX);
             collapse_selection_to(scope, selection, node, caret);
             true
         } else {
@@ -755,6 +784,7 @@ fn click_handle_internal(
             triggered_top_level_navigation: false,
             pending_download: None,
             pending_file_chooser: None,
+            intercepted_drag: None,
         };
     }
     if focus_behavior == ClickFocusBehavior::Apply
@@ -974,6 +1004,7 @@ fn click_handle_internal(
         triggered_top_level_navigation: false,
         pending_download: None,
         pending_file_chooser: None,
+        intercepted_drag: None,
     }
 }
 
@@ -990,6 +1021,7 @@ fn input_dispatch_outcome_after_click(
             && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
         pending_download,
         pending_file_chooser,
+        intercepted_drag: None,
     }
 }
 

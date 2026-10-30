@@ -52,6 +52,31 @@ pub(in crate::context_bootstrap) fn range_selection_string_contents<'s>(
                 range_boundary_offset(scope, range, RangeBoundarySide::End) as u32,
             )
         };
+    range_selection_string_contents_for_boundaries(
+        scope,
+        RangeBoundaryHandles {
+            start: RangeBoundaryHandle {
+                container: start,
+                offset: start_offset,
+            },
+            end: RangeBoundaryHandle {
+                container: end,
+                offset: end_offset,
+            },
+        },
+    )
+}
+
+pub(super) fn range_selection_string_contents_for_boundaries(
+    scope: &mut v8::PinScope<'_, '_>,
+    boundaries: RangeBoundaryHandles,
+) -> Option<String> {
+    let (start, start_offset, end, end_offset) = (
+        boundaries.start.container,
+        boundaries.start.offset,
+        boundaries.end.container,
+        boundaries.end.offset,
+    );
     if start == end && start_offset == end_offset {
         return Some(String::new());
     }
@@ -347,7 +372,7 @@ fn selection_node_may_intersect_range(
     Some(starts_before_range_end && ends_after_range_start)
 }
 
-fn selection_text_element_is_hidden(
+pub(crate) fn selection_text_element_is_hidden(
     runtime: &crate::native_bridge::JsContextHost,
     handle: DomHandle,
 ) -> bool {

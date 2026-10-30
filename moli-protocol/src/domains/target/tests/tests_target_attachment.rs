@@ -1696,8 +1696,10 @@ async fn detach_from_target() {
                 },
             );
         bc.active_page_target_mut().css_enabled = true;
-        bc.active_page_target_mut().input_intercept_drags_enabled = true;
-        bc.active_page_target_mut().input_drag_intercepted = true;
+        bc.active_page_target_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
+            .page_session_state
+            .input_intercept_drags_enabled = true;
         bc.active_page_target_mut().fetch_owner.configure(
             Some(sid.clone()),
             true,
@@ -1746,8 +1748,12 @@ async fn detach_from_target() {
                 .bypass_service_worker()
         );
         assert!(!bc.active_page_target().css_enabled);
-        assert!(!bc.active_page_target().input_intercept_drags_enabled);
-        assert!(!bc.active_page_target().input_drag_intercepted);
+        assert!(
+            !bc.active_page_target().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .input_intercept_drags_enabled
+        );
         assert!(!bc.active_page_target().fetch_owner.is_enabled());
         assert!(!bc.active_page_target().fetch_owner.handle_auth_requests());
         assert!(

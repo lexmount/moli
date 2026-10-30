@@ -140,8 +140,8 @@ fn blob_size_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let size = blob_bytes_from_object(scope, args.this())
-        .map(|bytes| bytes.len() as f64)
+    let size = blob_size_from_object(scope, args.this())
+        .map(|size| size as f64)
         .unwrap_or(0.0);
     rv.set(v8::Number::new(scope, size).into());
 }
@@ -261,14 +261,28 @@ pub(super) fn init_blob_object<'s>(
     bytes: Vec<u8>,
     mime_type: String,
 ) -> BlobId {
+    try_init_blob_object_from_shared(scope, object, bytes.into(), mime_type)
+        .expect("Blob instance declaration should initialize")
+}
+
+pub(super) fn try_init_blob_object_from_shared<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    bytes: std::sync::Arc<[u8]>,
+    mime_type: String,
+) -> Option<BlobId> {
     let owner_id = current_resource_owner_id(scope);
     let partition_id = current_blob_storage_partition_identity(scope);
-    let blob_id = blob_store().create_blob(owner_id, partition_id, bytes, mime_type);
-    BlobInstanceDeclaration::new(v8::BigInt::new_from_u64(scope, blob_id))
+    let blob_id = blob_store().create_blob_from_shared(owner_id, partition_id, bytes, mime_type);
+    if BlobInstanceDeclaration::new(v8::BigInt::new_from_u64(scope, blob_id))
         .initialize(scope, object)
-        .expect("Blob instance declaration should initialize");
+        .is_err()
+    {
+        release_blob_wrapper_ref(blob_id);
+        return None;
+    }
     track_blob_ref_lifetime(scope, object, move || release_blob_wrapper_ref(blob_id));
-    blob_id
+    Some(blob_id)
 }
 
 pub(super) fn build_blob_object<'s>(
@@ -276,11 +290,27 @@ pub(super) fn build_blob_object<'s>(
     bytes: Vec<u8>,
     mime_type: String,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    build_blob_object_from_shared(scope, bytes.into(), mime_type)
+}
+
+pub(super) fn build_blob_object_from_shared<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: std::sync::Arc<[u8]>,
+    mime_type: String,
+) -> Option<v8::Local<'s, v8::Object>> {
+    build_blob_object_unpublished(scope, bytes, mime_type).map(|(object, _)| object)
+}
+
+pub(super) fn build_blob_object_unpublished<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: std::sync::Arc<[u8]>,
+    mime_type: String,
+) -> Option<(v8::Local<'s, v8::Object>, BlobId)> {
     let prototype =
         crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Blob").ok()?;
     let owner_id = current_resource_owner_id(scope);
     let partition_id = current_blob_storage_partition_identity(scope);
-    let blob_id = blob_store().create_blob(owner_id, partition_id, bytes, mime_type);
+    let blob_id = blob_store().create_blob_from_shared(owner_id, partition_id, bytes, mime_type);
     let object = BlobInstanceDeclaration::new(v8::BigInt::new_from_u64(scope, blob_id))
         .bind(scope)
         .ok()
@@ -290,7 +320,12 @@ pub(super) fn build_blob_object<'s>(
         })?;
     let _ = object.set_prototype(scope, prototype.into());
     track_blob_ref_lifetime(scope, object, move || release_blob_wrapper_ref(blob_id));
-    Some(object)
+    Some((object, blob_id))
+}
+
+#[cfg(test)]
+pub(crate) fn live_blob_count_for_test() -> usize {
+    blob_store().live_blob_count()
 }
 
 fn blob_id_from_object<'s>(
@@ -358,6 +393,13 @@ pub(super) fn is_blob_object<'s>(
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
     web_api_interfaces::Blob::is_instance(scope, object)
+}
+
+pub(super) fn blob_size_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<usize> {
+    blob_id_from_object(scope, object).and_then(|id| blob_store().blob_size(id))
 }
 
 pub(super) fn blob_mime_type_from_object<'s>(
@@ -428,7 +470,7 @@ pub(crate) fn cleanup_owner_resources(owner_id: ResourceOwnerId) {
     blob_store().retire_owner_resources(owner_id);
 }
 
-fn release_blob_wrapper_ref(blob_id: BlobId) {
+pub(super) fn release_blob_wrapper_ref(blob_id: BlobId) {
     blob_store().release_blob_wrapper_ref(blob_id);
 }
 

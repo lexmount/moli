@@ -459,3 +459,24 @@ async fn indexed_db_rect_storage_preserves_native_snapshots_and_graph_identity()
     server.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_all_geometry_storage_preserves_native_fields_and_graphs() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-geometry-storage.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\ngeometryStorageProbe('geometry-storage-{target}').then(finish, error => finish({{state:'error', error:String(error), checks:geometryStorageChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            93,
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}

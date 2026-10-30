@@ -1,6 +1,11 @@
 use super::common::version_change_transaction;
 use super::*;
+use crate::context_bootstrap::indexed_db::{
+    schedule_schema_failure, schedule_schema_operation,
+    typed_state::sql::indexed_db_request_sql_client,
+};
 use crate::webidl;
+use moli_indexeddb::sqlite::service::Command;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBDatabase.deleteObjectStore")]
@@ -26,9 +31,31 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_delete_object_store
         rv.set_undefined();
         return;
     };
-    match with_indexed_db_manager(scope, |manager| manager.delete_object_store(handle, &name)) {
+    let Some(client) = indexed_db_request_sql_client(scope, transaction) else {
+        return;
+    };
+    let result = if object_store_info_from_database_metadata(scope, database, &name).is_none() {
+        Err(moli_indexeddb::IndexedDbError::NotFound(
+            "The object store was not found".into(),
+        ))
+    } else {
+        schedule_schema_operation(
+            scope,
+            transaction,
+            client,
+            Command::DeleteStore {
+                transaction: handle,
+                name: name.clone(),
+            },
+            None,
+        )
+    };
+    match result {
         Ok(()) => {
-            let _ = remove_database_store_metadata(scope, database, &name);
+            if let Err(error) = remove_database_store_metadata(scope, database, &name) {
+                schedule_schema_failure(scope, transaction, error);
+                return;
+            }
             sync_transaction_object_store_names_from_database(scope, transaction, database);
             rv.set_undefined();
         }

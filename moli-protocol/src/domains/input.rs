@@ -55,8 +55,6 @@ pub(crate) const DISPATCH_TOUCH_EVENT_UNSUPPORTED_MESSAGE: &str = "Input.dispatc
 pub(crate) const EMULATE_TOUCH_FROM_MOUSE_EVENT_UNSUPPORTED_MESSAGE: &str = "Input.emulateTouchFromMouseEvent is not supported: coordinate-based touch emulation requires layout hit testing.";
 pub(crate) const SYNTHESIZE_TAP_GESTURE_UNSUPPORTED_MESSAGE: &str = "Input.synthesizeTapGesture is not supported: coordinate-based tap gestures require layout hit testing.";
 pub(crate) const DISPATCH_DRAG_EVENT_UNSUPPORTED_MESSAGE: &str = "Input.dispatchDragEvent is not supported: coordinate-based drag input requires layout hit testing.";
-pub(crate) const SET_INTERCEPT_DRAGS_UNSUPPORTED_MESSAGE: &str =
-    "Input.setInterceptDrags is not supported: drag interception events are not implemented.";
 
 #[derive(Deserialize)]
 struct SetIgnoreInputEventsParams {
@@ -129,6 +127,8 @@ struct PendingInputCommandStartError {
 enum InputAdmissionError {
     #[error("InvalidParams")]
     InvalidParams,
+    #[error("NoBrowserContext")]
+    NoBrowserContext,
     #[error("{0}")]
     Unsupported(&'static str),
     #[error("UnsupportedDevToolsCommand")]
@@ -145,6 +145,7 @@ enum PendingInputCommandKind {
     DispatchKeyEvent,
     DispatchTouchEvent,
     DispatchDragEvent,
+    CancelDragging,
     SynthesizeTapGesture,
     InsertText,
 }
@@ -321,7 +322,7 @@ pub(crate) fn try_start_input_command_dispatch(
     };
     match action {
         InputAction::CancelDragging => {
-            InputCommandDispatchStep::Complete(drag::cancel_dragging_command_output_plan(conn, cmd))
+            start_input_command_dispatch_after_noop_checks(conn, cmd, action)
         }
         InputAction::SetInterceptDrags => InputCommandDispatchStep::Complete(
             drag::set_intercept_drags_command_output_plan(conn, cmd),
@@ -675,9 +676,27 @@ fn start_pending_input_command(
                 |page| page.start_insert_text_into_active_control(&text),
             )
         }
-        InputAction::CancelDragging
-        | InputAction::SetIgnoreInputEvents
-        | InputAction::SetInterceptDrags => Ok(None),
+        InputAction::CancelDragging => {
+            let slot = conn
+                .runtime_session_owner_slot_for_owner(&owner)
+                .ok_or_else(|| {
+                    PendingInputCommandStartError::renderer_error(
+                        InputAdmissionError::NoBrowserContext,
+                    )
+                })?;
+            if slot.loaded_page().is_none() {
+                // An attached target with no renderer cannot own an active drag.
+                return Ok(None);
+            }
+            start_page_input_command(
+                conn,
+                cmd.id,
+                &owner,
+                PendingInputCommandKind::CancelDragging,
+                |page| page.start_cancel_dragging(),
+            )
+        }
+        InputAction::SetIgnoreInputEvents | InputAction::SetInterceptDrags => Ok(None),
     }
 }
 
@@ -1126,6 +1145,7 @@ fn start_devtools_dispatch_mouse_event_command(
         tilt_y: command.tilt_y,
         twist: command.twist,
     };
+    let intercept_drags = drag::intercept_drags_enabled(conn, owner);
     start_page_input_command(
         conn,
         command_id,
@@ -1143,6 +1163,7 @@ fn start_devtools_dispatch_mouse_event_command(
                 command.delta_y,
                 pointer,
                 command.modifiers,
+                intercept_drags,
             )
         },
     )
@@ -1426,6 +1447,7 @@ async fn complete_input_operation(
                 PendingInputCommandKind::DispatchTouchEvent
                 | PendingInputCommandKind::SynthesizeTapGesture => "touch event page command",
                 PendingInputCommandKind::DispatchDragEvent => "drag event page command",
+                PendingInputCommandKind::CancelDragging => "cancel dragging page command",
                 PendingInputCommandKind::DispatchKeyEvent => "key event page command",
                 _ => unreachable!(),
             };
@@ -1668,6 +1690,12 @@ async fn handle_input_dispatch_outcome(
             )
             .await;
         }
+    }
+    if let Some(drag) = outcome.intercepted_drag
+        && driver.with_state(|state| state.input_page_is_current(&action_owner, owner, host))?
+    {
+        out.events_mut()
+            .push(drag::drag_intercepted_event(session_id, &drag));
     }
     // A navigation triggered by input is frozen by the renderer command turn
     // into a concrete owner-action record. Protocol ingress schedules that

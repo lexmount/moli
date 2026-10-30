@@ -72,7 +72,7 @@ impl BrowserProfilePartitionPaths {
             service_worker_resources_path: partition_root.join("service-worker-resources.json"),
             cache_storage_root: partition_root.join("cache-storage"),
             opfs_root: partition_root.join("opfs"),
-            indexeddb_root: partition_root.join("indexeddb"),
+            indexeddb_root: partition_root.join("idb-lite"),
             http_cache_root: partition_root.join("http-cache"),
             partition_root,
             id,
@@ -128,7 +128,7 @@ mod tests {
         );
         assert_eq!(
             paths.indexeddb_root,
-            PathBuf::from("/tmp/moli-profile/partitions/default/indexeddb")
+            PathBuf::from("/tmp/moli-profile/partitions/default/idb-lite")
         );
         assert_eq!(
             paths.http_cache_root,
@@ -173,7 +173,7 @@ mod tests {
         );
         assert_eq!(
             partition.indexeddb_root,
-            PathBuf::from("/tmp/moli-profile/partitions/tenant-a/indexeddb")
+            PathBuf::from("/tmp/moli-profile/partitions/tenant-a/idb-lite")
         );
         assert_eq!(
             partition.http_cache_root,

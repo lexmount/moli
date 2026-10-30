@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -18,6 +19,65 @@ from moli_cdp_smoke.supervisor import WorkerJob, WorkerOutcome, _coverage_error,
 
 
 class BrowserCoverageTests(unittest.IsolatedAsyncioTestCase):
+    def test_group_binary_overrides_are_repeatable_and_preserve_literal_paths(self) -> None:
+        args = parse_args([
+            "--browser", "chromium", "--chromium-bin-for-group", "dom-input=/tmp/browser with spaces/chrome",
+            "--chromium-bin-for-group", "network=/tmp/browser=other/chrome",
+        ])
+        self.assertEqual(args.chromium_bin_for_group, {
+            "dom-input": "/tmp/browser with spaces/chrome", "network": "/tmp/browser=other/chrome",
+        })
+
+    def test_group_binary_overrides_reject_invalid_and_ambiguous_configuration(self) -> None:
+        for entries, message in (
+            (["dom-input"], "requires GROUP=PATH"),
+            (["dom-input="], "nonempty path"),
+            (["dom-input=   "], "nonempty path"),
+            (["=/tmp/chrome"], "requires GROUP=PATH"),
+            (["unknown-group=/tmp/chrome"], "unknown group"),
+            (["dom-input=/tmp/old", "dom-input=/tmp/new"], "duplicate group"),
+        ):
+            options = [value for entry in entries for value in ("--chromium-bin-for-group", entry)]
+            stderr = io.StringIO()
+            with self.subTest(entries=entries), redirect_stderr(stderr), self.assertRaises(SystemExit) as error:
+                parse_args(["--browser", "chromium", *options])
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn(message, stderr.getvalue())
+        for options in ([], ["--browser", "moli"],
+                        ["--browser", "chromium", "--endpoint", "http://localhost:9222"]):
+            stderr = io.StringIO()
+            with self.subTest(options=options), redirect_stderr(stderr), self.assertRaises(SystemExit):
+                parse_args([*options, "--chromium-bin-for-group", "dom-input=/tmp/chrome"])
+            self.assertIn("requires managed --browser chromium", stderr.getvalue())
+
+    async def test_group_binary_override_preserves_every_strict_full_suite_group(self) -> None:
+        with (tempfile.TemporaryDirectory() as directory,
+              patch.dict(os.environ, {name: "" for name in (
+                  "MOLI_SMOKE_GROUPS", "MOLI_MULTI_PAGE_CASES", "MOLI_MULTI_PAGE_SHARD",
+              )})):
+            args = parse_args([
+                "--browser", "chromium", "--strict-full-suite", "--jobs", "4",
+                "--chromium-bin", "/tmp/legacy/chrome",
+                "--chromium-bin-for-group", "dom-input=/tmp/current browser/chrome",
+                "--output-dir", directory,
+            ])
+            seen = []
+
+            async def worker(job, output, timeout):
+                seen.append((job.group.name, job.chromium_bin))
+                argv = _worker_argv(job, output / "result")
+                self.assertEqual(argv[argv.index("--chromium-bin") + 1], job.chromium_bin)
+                return WorkerOutcome(job, "passed", 0, 0, output / "log", output / "result", 1)
+
+            with patch("moli_cdp_smoke.supervisor._run_worker_job", worker), redirect_stderr(io.StringIO()):
+                code, summary = await run_supervisor(args)
+            expected = [(group.name, "/tmp/current browser/chrome" if group.name == "dom-input"
+                         else "/tmp/legacy/chrome") for group in resolve_group_selection().groups]
+            self.assertEqual(code, 0)
+            self.assertTrue(summary["strictFullSuite"])
+            self.assertEqual(seen, expected)
+            self.assertEqual([(row["group"], row["chromiumBin"]) for row in summary["groups"]], expected)
+
     async def test_strict_full_suite_rejects_every_partial_execution_path(self) -> None:
         for options in (
             ["--group", "network"], ["--endpoint", "http://127.0.0.1:9222"],

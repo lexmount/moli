@@ -8,15 +8,19 @@
 const input = document.getElementById("upload");
 const events = [];
 let phase = "default";
-let preventedDropResolve = null;
 let defaultDropFile = null;
 let preventedDropFile = null;
 let defaultDropTransfer = null;
 let preventedDropTransfer = null;
+let finishActions = null;
 
-const preventedDrop = new Promise(function (resolve) {
-  preventedDropResolve = resolve;
+const actionsFinished = new Promise(function (resolve) {
+  finishActions = resolve;
 });
+
+window.__finishDragFileDrop = function () {
+  finishActions();
+};
 
 window.__advanceDragFileDropPhase = function () {
   phase = "prevented";
@@ -44,7 +48,6 @@ input.addEventListener("drop", function (event) {
         ":" +
         input.files[0].name,
     );
-    setTimeout(preventedDropResolve, 0);
     return;
   }
 
@@ -83,7 +86,7 @@ input.addEventListener("change", function () {
 });
 
 promise_test(async function () {
-  await preventedDrop;
+  await actionsFinished;
   assert_array_equals(
     events,
     [

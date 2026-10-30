@@ -6,7 +6,7 @@ mod dispatch;
 pub(crate) use self::constructors::construct_focus_event;
 pub(crate) use self::constructors::{
     InputEventCoordinates, TextEditInputType, TouchEventPoint, construct_command_event,
-    construct_drag_event, construct_drop_input_event, construct_input_event,
+    construct_drag_event_with_related_target, construct_drop_input_event, construct_input_event,
     construct_interest_event, construct_keyboard_event,
     construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
     construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
@@ -26,9 +26,11 @@ fn event_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
-    let global = scope.get_current_context().global(scope);
-    let ctor = global.get(scope, v8_string(scope, name)?.into())?;
-    v8::Local::<v8::Function>::try_from(ctor).ok()
+    // Browser-generated events must not consult author-replaceable Window properties.
+    crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(
+        scope, name,
+    )
+    .ok()
 }
 
 pub(in crate::native_bridge::element) fn construct_event<'s>(

@@ -55,6 +55,7 @@ class WorkerOutcome:
     error: str | None = None
     browser: dict[str, Any] | None = None
     previous_attempts: tuple[WorkerOutcome, ...] = ()
+    chromium_bin: str | None = None
 
     @property
     def passed(self) -> bool:
@@ -90,6 +91,8 @@ class WorkerOutcome:
             payload["endpoint"] = self.endpoint
         if self.browser:
             payload["browser"] = self.browser
+        if self.job.browser == "chromium":
+            payload["chromiumBin"] = self.chromium_bin or self.job.chromium_bin
         return payload
 
 
@@ -180,7 +183,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--browser", choices=("moli", "chromium"), help="Managed browser engine (default: moli).")
     parser.add_argument("--chromium-bin", help="Override the locked Playwright Chromium executable.")
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--chromium-bin-for-group", action="append", default=[], metavar="GROUP=PATH",
+        help="Override Chromium for one group without changing group selection. May be repeated.",
+    )
+    args = parser.parse_args(argv)
+    overrides: dict[str, str] = {}
+    if args.chromium_bin_for_group and (args.browser != "chromium" or args.endpoint):
+        parser.error("--chromium-bin-for-group requires managed --browser chromium")
+    known_groups = {group["name"] for group in group_listing()}
+    for raw in args.chromium_bin_for_group:
+        group, separator, binary = raw.partition("=")
+        if not separator or not group or not binary.strip():
+            parser.error("--chromium-bin-for-group requires GROUP=PATH with a nonempty path")
+        if group not in known_groups:
+            parser.error(f"--chromium-bin-for-group: unknown group {group!r}")
+        if group in overrides:
+            parser.error(f"--chromium-bin-for-group: duplicate group {group!r}")
+        overrides[group] = binary
+    args.chromium_bin_for_group = overrides
+    return args
 
 
 def _default_output_dir() -> Path:
@@ -322,6 +344,12 @@ async def _run_worker_job(
         scenario_count = len(payload["results"])
     if payload is not None and isinstance(payload.get("endpoint"), str):
         endpoint = payload["endpoint"]
+    chromium_bin = None
+    for launch in (payload.get("browserLaunches") or []) if payload else []:
+        command = launch.get("command")
+        if launch.get("engine") == "chromium" and isinstance(command, list) and command:
+            chromium_bin = command[0]
+            break
 
     if timed_out:
         status = "timed_out"
@@ -356,6 +384,7 @@ async def _run_worker_job(
         endpoint=endpoint,
         error=error,
         browser=payload.get("browser") if payload else None,
+        chromium_bin=chromium_bin,
     )
     print(
         f"[moli-cdp-supervisor] {status.upper()} {job.label} "
@@ -411,7 +440,7 @@ async def run_supervisor(args: argparse.Namespace) -> tuple[int, dict[str, Any]]
             repeat=args.repeat,
             endpoint=args.endpoint.rstrip("/") if args.endpoint else None,
             browser=args.browser or ("moli" if args.endpoint is None else None),
-            chromium_bin=args.chromium_bin,
+            chromium_bin=args.chromium_bin_for_group.get(group.name, args.chromium_bin),
         )
         for group in selection.groups
         for attempt in range(1, args.repeat + 1)

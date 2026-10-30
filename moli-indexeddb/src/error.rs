@@ -9,6 +9,7 @@ pub enum IndexedDbError {
     NotFound(String),
     QuotaExceeded { quota: u64, requested: u64 },
     ReadOnly(String),
+    Resource(String),
     TransactionInactive(String),
     Version(String),
     Io(String),
@@ -26,6 +27,7 @@ impl fmt::Display for IndexedDbError {
             | Self::InvalidState(message)
             | Self::NotFound(message)
             | Self::ReadOnly(message)
+            | Self::Resource(message)
             | Self::TransactionInactive(message)
             | Self::Version(message)
             | Self::Io(message)

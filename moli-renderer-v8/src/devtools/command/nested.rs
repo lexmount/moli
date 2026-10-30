@@ -113,6 +113,7 @@ impl RendererPageCommand {
             | Self::DispatchMouseEventAtPoint { .. }
             | Self::DispatchTouchEvent { .. }
             | Self::DispatchDragEventAtPoint { .. }
+            | Self::CancelDragging
             | Self::ClearActiveDragDataTransfer
             | Self::InsertTextIntoActiveControl(..)
             | Self::DispatchKeyEvent { .. }

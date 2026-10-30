@@ -4,9 +4,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{BrowserProfilePaths, DEFAULT_PROFILE_PARTITION_ID, write_profile_file};
+use crate::{BrowserProfilePaths, DEFAULT_PROFILE_PARTITION_ID, write_profile_file_durable};
 
-pub const PROFILE_MANIFEST_VERSION: u32 = 5;
+pub const PROFILE_MANIFEST_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +42,7 @@ pub struct ProfileBackendManifest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProfileBackendKind {
+    Sqlite,
     Disk,
     Json,
     Memory,
@@ -68,7 +69,10 @@ impl BrowserProfileManifest {
                 ),
                 cache_storage: disk_backend(&paths.root, &paths.cache_storage_root),
                 opfs: disk_backend(&paths.root, &paths.opfs_root),
-                indexed_db: disk_backend(&paths.root, &paths.indexeddb_root),
+                indexed_db: ProfileBackendManifest {
+                    backend: ProfileBackendKind::Sqlite,
+                    path: Some(relative_profile_path(&paths.root, &paths.indexeddb_root)),
+                },
                 http_cache: disk_backend(&paths.root, &paths.http_cache_root),
             }],
         }
@@ -147,10 +151,24 @@ fn manifest_version_from_value(paths: &BrowserProfilePaths, value: &Value) -> Re
 fn migrate_profile_manifest(
     paths: &BrowserProfilePaths,
     version: u32,
-    _value: Value,
+    value: Value,
 ) -> Result<BrowserProfileManifest> {
     match version {
         0..=4 => Ok(BrowserProfileManifest::default_for_paths(paths)),
+        5 => {
+            let mut manifest: BrowserProfileManifest = serde_json::from_value(value)
+                .context("failed to parse version 5 profile manifest")?;
+            // Only IndexedDB changes backend; preserve every other backend.
+            let expected = BrowserProfileManifest::default_for_paths(paths);
+            manifest.version = PROFILE_MANIFEST_VERSION;
+            let partition = manifest
+                .partitions
+                .iter_mut()
+                .find(|partition| partition.id == DEFAULT_PROFILE_PARTITION_ID)
+                .context("version 5 profile has no default partition")?;
+            partition.indexed_db = expected.partitions[0].indexed_db.clone();
+            Ok(manifest)
+        }
         _ => bail!(
             "unsupported profile manifest version {} in `{}`; this Moli supports version {}",
             version,
@@ -166,7 +184,7 @@ fn save_profile_manifest(
 ) -> Result<()> {
     let bytes =
         serde_json::to_vec_pretty(manifest).context("failed to serialize profile manifest")?;
-    write_profile_file(&paths.manifest_path, &bytes, "profile manifest")
+    write_profile_file_durable(&paths.manifest_path, &bytes, "profile manifest").map_err(Into::into)
 }
 
 fn validate_profile_manifest(
@@ -606,6 +624,52 @@ mod tests {
             persisted["partitions"][0]["opfs"]["path"],
             serde_json::json!("partitions/default/opfs")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn version_five_switches_only_indexeddb_and_preserves_other_backends() -> Result<()> {
+        let profile = TempProfileDir::new("v5-sqlite");
+        let paths = BrowserProfilePaths::new(&profile.path);
+        fs::create_dir_all(&paths.root)?;
+        let mut previous = serde_json::to_value(BrowserProfileManifest::default_for_paths(&paths))?;
+        previous["version"] = json!(5);
+        previous["partitions"][0]["indexedDb"] = json!({
+            "backend":"disk", "path":"partitions/default/indexeddb"
+        });
+        fs::write(&paths.manifest_path, serde_json::to_vec(&previous)?)?;
+        let current = ensure_profile_manifest(&paths)?;
+        assert_eq!(current.version, 6);
+        assert_eq!(
+            current.partitions[0].indexed_db.backend,
+            super::ProfileBackendKind::Sqlite
+        );
+        assert_eq!(
+            current.partitions[0].indexed_db.path.as_deref(),
+            Some("partitions/default/idb-lite")
+        );
+        let mut actual = serde_json::to_value(current)?;
+        actual["version"] = previous["version"].clone();
+        actual["partitions"][0]["indexedDb"] = previous["partitions"][0]["indexedDb"].clone();
+        assert_eq!(actual, previous);
+        assert_eq!(
+            ensure_profile_manifest(&paths)?,
+            BrowserProfileManifest::default_for_paths(&paths)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn version_six_does_not_accept_a_legacy_indexeddb_backend() -> Result<()> {
+        let profile = TempProfileDir::new("v6-legacy-rejected");
+        let paths = BrowserProfilePaths::new(&profile.path);
+        fs::create_dir_all(&paths.root)?;
+        let mut manifest = BrowserProfileManifest::default_for_paths(&paths);
+        manifest.partitions[0].indexed_db.backend = super::ProfileBackendKind::Disk;
+        let bytes = serde_json::to_vec(&manifest)?;
+        fs::write(&paths.manifest_path, &bytes)?;
+        assert!(ensure_profile_manifest(&paths).is_err());
+        assert_eq!(fs::read(&paths.manifest_path)?, bytes);
         Ok(())
     }
 }

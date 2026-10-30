@@ -48,7 +48,18 @@ pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     vm.active_touch_event_handle = None;
     vm.active_touch_point = None;
     vm.active_touch_points.clear();
-    let _ = vm.clear_active_drag_data_transfer();
+    // Target views were disabled when their dispatch ended. Retiring the
+    // Document must also disable its protected source view without dragend.
+    if let Some(session) = vm.active_drag_session.take()
+        && let Some(source) = session.source_transfer
+    {
+        let _ = vm.with_default_context_scope(|scope, _| {
+            let transfer = v8::Local::new(scope, &source);
+            crate::context_bootstrap::finish_drag_data_transfer_view(scope, transfer);
+            Ok(())
+        });
+    }
+    vm.pending_drag_gesture = None;
     vm.active_scrollbar_drag = None;
     vm.suppress_compat_mouse_events = false;
     vm._context_host.borrow_mut().clear_pointer_capture_state();

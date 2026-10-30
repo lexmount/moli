@@ -376,15 +376,23 @@ fn iframe_native_drag_preserves_screen_coordinates_with_offset_and_scale() {
         let events: Vec<serde_json::Value> =
             serde_json::from_str(&vm.eval("JSON.stringify(__dragCoordinates)").unwrap()).unwrap();
         assert_eq!(events.len(), 3, "scale {scale}: {events:?}");
+        // Chromium's dragstart retains the press position. The first move
+        // enters the target; release revalidates it with a final dragover.
         for (event, (event_type, target, client_y)) in events.iter().zip([
-            ("dragstart", "source", 120.0),
-            ("dragover", "target", 120.0),
+            ("dragstart", "source", 20.0),
+            ("dragover", "target", 130.0),
             ("drop", "target", 130.0),
         ]) {
             assert_eq!(event["type"], event_type);
             assert_eq!(event["target"], target);
-            assert!((event["clientX"].as_f64().unwrap() - 20.0).abs() < 0.1);
-            assert!((event["clientY"].as_f64().unwrap() - client_y).abs() < 0.1);
+            assert!(
+                (event["clientX"].as_f64().unwrap() - 20.0).abs() < 0.1,
+                "scale {scale}: {event}"
+            );
+            assert!(
+                (event["clientY"].as_f64().unwrap() - client_y).abs() < 0.1,
+                "scale {scale}: {event}"
+            );
             assert_eq!(event["screenX"], 100.0 + 20.0 * scale);
             assert_eq!(event["screenY"], 120.0 + client_y * scale);
         }
@@ -761,6 +769,7 @@ fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
             delta_y,
             crate::runtime::RendererPointerEventProperties::default(),
             0,
+            false,
         )
         .expect("batched child wheel step should dispatch");
     }
@@ -1244,4 +1253,141 @@ fn root_classic_scrollbars_stay_viewport_fixed_and_drive_window_scroll() {
         "root vertical thumb drag should advance scrollY: {result}"
     );
     assert_eq!(result[2], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn iframe_native_and_replayed_drag_events_use_the_receiving_window_realm() {
+    for native in [false, true] {
+        let mut vm = new_rendered_test_vm(
+            "https://iframe-drag-realm.test/",
+            "<!doctype html><body style='margin:0'>",
+        );
+        vm.eval(
+            r#"
+window.__constructorReads=0;
+Object.defineProperty(window,'DragEvent',{configurable:true,get(){
+  __constructorReads++;throw Error('parent public constructor');
+}});
+const frame=document.createElement('iframe');frame.id='frame';
+frame.style='position:absolute;left:100px;top:120px;width:300px;height:300px;border:0';
+frame.srcdoc=`<!doctype html><style>
+body{margin:0}#source,#target{position:absolute;left:0;width:100px;height:80px}
+#source{top:0}#target{top:100px}
+</style><div id=source draggable=true>source</div><div id=target>target</div><script>
+window.__records=[];window.__views=[];window.__constructorReads=0;
+const IntrinsicDragEvent=DragEvent;
+Object.defineProperty(window,'DragEvent',{configurable:true,get(){
+  __constructorReads++;throw Error('child public constructor');
+}});
+for(const type of ['dragstart','drag','dragenter','dragover','dragleave','drop','dragend']){
+  document.addEventListener(type,event=>{
+    const dt=event.dataTransfer;
+    if(type==='dragstart'){
+      dt.setData('text/plain','child-payload');dt.effectAllowed='copy';
+      dt.items.add(new File(['file-payload'],'payload.txt',{type:'text/plain'}));
+    }
+    if(type==='dragover'||type==='drop')event.preventDefault();
+    const file=dt.files[0];
+    __records.push({type,event:event instanceof IntrinsicDragEvent,
+      transfer:dt instanceof DataTransfer,items:dt.items instanceof DataTransferItemList,
+      item:dt.items[0] instanceof DataTransferItem,files:dt.files instanceof FileList,
+      view:event.view===window,types:dt.types instanceof Array&&Object.isFrozen(dt.types),
+      stable:dt===event.dataTransfer,
+      text:dt.getData('text/plain'),file:file?[file instanceof File,file.name,file.size,dt.items[1].getAsFile() instanceof File]:null});
+    __views.push(dt);
+  });
+}
+</`+`script>`;
+document.body.append(frame);
+"#,
+        )
+        .expect("queue listeners created by the child Window's own script");
+        run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
+            &mut vm,
+            ChildFrameSemanticTurnKind::NavigationCommit,
+            "commit the drag iframe",
+        )
+        .await;
+        run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
+            &mut vm,
+            ChildFrameSemanticTurnKind::DocumentScriptReady,
+            "install the iframe's own drag listeners",
+        )
+        .await;
+        run_child_document_lifecycle_and_host_load_for_test(&mut vm, "drag iframe ready").await;
+        publish_layout_for_test(&mut vm);
+        if native {
+            for (event, y, buttons) in [
+                ("mousedown", 140.0, 1),
+                ("mousemove", 240.0, 1),
+                ("mousemove", 245.0, 1),
+                ("mouseup", 245.0, 0),
+            ] {
+                vm.dispatch_mouse_event_at_point(120.0, y, event, 0, Some(buttons), 0.0, 0.0)
+                    .expect("dispatch native input inside the child");
+            }
+        } else {
+            let data = crate::runtime::RendererDragData {
+                items: vec![crate::runtime::RendererDragDataItem {
+                    mime_type: "text/plain".to_owned(),
+                    data: "external-payload".to_owned(),
+                    title: None,
+                    base_url: None,
+                }],
+                files: vec![crate::runtime::RendererDraggedFile {
+                    name: "payload.txt".to_owned(),
+                    mime_type: "text/plain".to_owned(),
+                    bytes: b"file-payload".to_vec(),
+                    last_modified: 123.0,
+                }],
+                directories: Vec::new(),
+                drag_operations_mask: 1,
+            };
+            for event in ["dragenter", "dragover", "drop"] {
+                vm.dispatch_drag_event_at_point(120.0, 245.0, event, data.clone(), 0)
+                    .expect("replay an external drag into the child");
+            }
+        }
+        let observed: serde_json::Value = serde_json::from_str(
+            &vm.eval(
+                r#"JSON.stringify({events:frame.contentWindow.__records,
+reads:[__constructorReads,frame.contentWindow.__constructorReads],
+closed:frame.contentWindow.__views.every(dt=>dt.types.length===0&&dt.items.length===0&&dt.files.length===0&&dt.getData('text/plain')==='')})"#,
+            )
+            .expect("read iframe drag observations"),
+        )
+        .expect("iframe drag observations are JSON");
+        let events = observed["events"].as_array().expect("drag records");
+        assert!(!events.is_empty(), "native={native}: {observed}");
+        for event in events {
+            for field in [
+                "event", "transfer", "items", "item", "files", "view", "types", "stable",
+            ] {
+                assert_eq!(event[field], true, "native={native}, {field}: {event}");
+            }
+        }
+        let drop = events
+            .iter()
+            .find(|event| event["type"] == "drop")
+            .expect("the iframe received its drop");
+        assert_eq!(
+            drop["text"],
+            if native {
+                "child-payload"
+            } else {
+                "external-payload"
+            }
+        );
+        assert_eq!(
+            drop["file"],
+            serde_json::json!([true, "payload.txt", 12, true])
+        );
+        assert_eq!(observed["reads"], serde_json::json!([0, 0]));
+        assert_eq!(observed["closed"], true);
+        assert!(vm.active_drag_session.is_none());
+        if native {
+            assert_eq!(events.first().unwrap()["type"], "dragstart");
+            assert_eq!(events.last().unwrap()["type"], "dragend");
+        }
+    }
 }

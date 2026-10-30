@@ -128,6 +128,7 @@ fn perform_implicit_form_submission(
             && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
         pending_download: None,
         pending_file_chooser: None,
+        intercepted_drag: None,
     }
 }
 

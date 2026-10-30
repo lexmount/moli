@@ -9,9 +9,22 @@ const target = document.getElementById("target");
 const events = [];
 let firstDataTransfer = null;
 
+window.__assertCanceledDragState = function () {
+  assert_array_equals(
+    events,
+    ["dragenter::true", "dragover::false", "dragleave::false"],
+    "cancellation leaves the completed drag lifecycle intact",
+  );
+  assert_equals(firstDataTransfer.getData("text"), "", "canceled data is unreadable");
+  assert_equals(firstDataTransfer.types.length, 0, "canceled store exposes no types");
+  assert_equals(firstDataTransfer.items.length, 0, "canceled store exposes no items");
+};
+
 const dropped = new Promise(function (resolve) {
   target.addEventListener("dragenter", function (event) {
-    firstDataTransfer = event.dataTransfer;
+    if (firstDataTransfer === null) {
+      firstDataTransfer = event.dataTransfer;
+    }
     events.push(
       "dragenter:" +
         event.dataTransfer.getData("text") +
@@ -21,6 +34,7 @@ const dropped = new Promise(function (resolve) {
   });
 
   target.addEventListener("dragover", function (event) {
+    event.preventDefault();
     event.dataTransfer.setData("text", "mutated-before-cancel");
     events.push(
       "dragover:" +
@@ -32,6 +46,15 @@ const dropped = new Promise(function (resolve) {
 
   target.addEventListener("dragCancel", function (event) {
     events.push("dragCancel:" + event.dataTransfer.getData("text"));
+  });
+
+  target.addEventListener("dragleave", function (event) {
+    events.push(
+      "dragleave:" +
+        event.dataTransfer.getData("text") +
+        ":" +
+        (event.dataTransfer === firstDataTransfer),
+    );
   });
 
   target.addEventListener("drop", function (event) {
@@ -52,12 +75,12 @@ promise_test(async function () {
     [
       "dragenter::true",
       "dragover::false",
+      "dragleave::false",
+      "dragenter::false",
+      "dragover::false",
       "drop:fresh-after-cancel:false",
     ],
-    "dragCancel clears the session, protected mutations are ignored, and a fresh drop receives its own view",
+    "dragCancel ends the store and rejects late drops until a new dragenter starts a fresh session",
   );
-  assert_equals(firstDataTransfer.getData("text"), "", "completed enter view cannot expose its string data");
-  assert_equals(firstDataTransfer.types.length, 0, "completed enter view exposes no types");
-  assert_equals(firstDataTransfer.items.length, 0, "completed enter view exposes no items");
 }, "Input.dispatchDragEvent dragCancel clears the active drag session");
 </script>

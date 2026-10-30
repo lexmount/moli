@@ -360,6 +360,7 @@ async fn dispatch_wheel_for_action_window_test(
             delta_y,
             pointer: RendererPointerEventProperties::default(),
             modifiers: 0,
+            intercept_drags: false,
         })
         .await
         .expect("wheel action should enter the renderer action window");
@@ -635,19 +636,6 @@ fn runtime_indexed_db_test_root(label: &str) -> std::path::PathBuf {
         "moli-runtime-indexeddb-{label}-{}-{nonce}",
         std::process::id()
     ))
-}
-
-fn runtime_indexed_db_origin_file(root: &std::path::Path, origin: &str) -> std::path::PathBuf {
-    let mut encoded = String::with_capacity(origin.len() * 2);
-    for byte in origin.as_bytes() {
-        use std::fmt::Write;
-        let _ = write!(&mut encoded, "{byte:02x}");
-    }
-    if encoded.len() > 180 {
-        encoded = moli_crypto::sha256_hex(origin.as_bytes());
-        encoded.insert_str(0, "h-");
-    }
-    root.join(format!("{encoded}.json"))
 }
 
 async fn create_isolated_world_for_test(

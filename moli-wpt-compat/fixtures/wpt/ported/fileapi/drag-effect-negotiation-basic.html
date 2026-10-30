@@ -80,15 +80,16 @@ promise_test(async function () {
   assert_array_equals(
     events,
     [
-      "blocked-enter:none:copy",
+      "blocked-enter:copy:copy",
       "blocked-over:move:copy",
-      "blocked-drop:blocked-text:none:copy:hello world",
-      "allowed-enter:none:copyMove",
+      "blocked-over:move:copy",
+      "allowed-enter:move:copyMove",
       "allowed-over:move:copyMove",
-      "allowed-drop:allowed-text:none:copyMove:hello world",
+      "allowed-over:move:copyMove",
+      "allowed-drop:allowed-text:move:copyMove:hello world",
       "allowed-input:hello allowed-text:18:18",
     ],
-    "independent drop views start with none, while the negotiated operation gates default insertion",
+    "an author-accepted drop is dispatched only when its operation is allowed by the source",
   );
 }, "Input.dispatchDragEvent gates text drop defaults on effect negotiation");
 </script>

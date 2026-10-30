@@ -32,10 +32,48 @@ async function(realm, scenario, realmIndex, requestStateEntries) {
       inline.createIndex('by-label', 'label', {unique: true});
       inline.createIndex('by-id', 'id', {unique: true});
     }
+    if (scenario === 'host-keys') {
+      const store = open.result.createObjectStore('host');
+      for (const field of ['size', 'type', 'name', 'lastModified'])
+        store.createIndex(field, `payload.${field}`, {unique: field === 'name'});
+      open.result.createObjectStore('host-inline', {keyPath: 'payload.name'});
+    }
+    if (scenario === 'multientry') {
+      const multi = open.result.createObjectStore('multi');
+      multi.createIndex('by-tag', 'tags', {multiEntry: true});
+      multi.createIndex('unique-tags', 'tags', {multiEntry: true, unique: true});
+      open.result.createObjectStore('nonunique').createIndex('by-tag', 'tags', {multiEntry: true});
+    }
   };
   const db = await result(open);
   try {
-    if (scenario === 'queued') {
+    if (scenario === 'host-keys') {
+      const blob = new realm.Blob(['hello'], {type: 'text/plain'});
+      const file = new realm.File(['world'], 'native.txt', {type: 'text/plain', lastModified: 42});
+      const attributes = [[realm.Blob.prototype, 'size'], [realm.Blob.prototype, 'type'],
+        [realm.File.prototype, 'name'], [realm.File.prototype, 'lastModified']];
+      const descriptors = attributes.map(([object, name]) => Object.getOwnPropertyDescriptor(object, name));
+      let reads = 0;
+      try {
+        for (const [object, name] of attributes) Object.defineProperty(object, name, {
+          configurable: true, get() {reads++; throw new Error(`author getter ${name}`);}
+        });
+        const tx = db.transaction(['host', 'host-inline'], 'readwrite'), done = complete(tx);
+        const store = tx.objectStore('host');
+        const writes = [result(store.put({payload: blob}, 1)), result(store.put({payload: file}, 2)),
+          result(tx.objectStore('host-inline').put({payload: file}))];
+        assert(JSON.stringify(await Promise.all(writes)) === '[1,2,"native.txt"]', 'host primary keys changed');
+        await done;
+        const read = db.transaction('host'), readDone = complete(read), saved = read.objectStore('host');
+        const queries = [result(saved.index('size').getAllKeys(5)), result(saved.index('type').getAllKeys('text/plain')),
+          result(saved.index('name').getAllKeys('native.txt')), result(saved.index('lastModified').getAllKeys(42))];
+        assert(JSON.stringify(await Promise.all(queries)) === '[[1,2],[1,2],[2],[2]]', 'host index keys used author attributes');
+        await readDone;
+        assert(reads === 0, `host key extraction invoked ${reads} author getters`);
+      } finally {
+        attributes.forEach(([object, name], index) => Object.defineProperty(object, name, descriptors[index]));
+      }
+    } else if (scenario === 'queued') {
       const first = db.transaction('plain', 'readwrite');
       const firstDone = complete(first);
       first.objectStore('plain').put('first', 'first');
@@ -233,6 +271,53 @@ async function(realm, scenario, realmIndex, requestStateEntries) {
         assert((await inline).id === keys[3], 'generated inline key was not available to the unique index');
         await readDone;
       }
+    } else if (scenario === 'multientry') {
+      const tx = db.transaction(['multi', 'nonunique'], 'readwrite'), done = complete(tx);
+      const multi = tx.objectStore('multi'), nonunique = tx.objectStore('nonunique');
+      const tags = [
+        -0, 0, 'x', 'x', new realm.Date(0), new realm.Date(0),
+        new realm.Uint8Array([1, 2]), new realm.Uint8Array([1, 2]),
+        [1, 'a'], [1, 'a'], [[1, 'a']], [[1, 'a']],
+        null, {}, undefined, NaN, [undefined]
+      ];
+      const first = result(multi.put({tags}, 1));
+      const nonuniqueWrites = [
+        result(nonunique.put({tags: ['shared', 'shared']}, 1)),
+        result(nonunique.put({tags: ['shared', 'shared']}, 2))
+      ];
+      const duplicate = multi.put({tags: ['x', 'x']}, 2);
+      const conflict = new Promise((resolve, reject) => {
+        duplicate.onsuccess = () => reject(new Error('unique index accepted another record'));
+        duplicate.onerror = event => {
+          event.preventDefault();
+          resolve(duplicate.error.name);
+        };
+      });
+      const last = result(multi.put({tags: ['later', 'later']}, 3));
+      assert(await first === 1, 'duplicates in one record rejected its write');
+      await Promise.all(nonuniqueWrites);
+      assert(await conflict === 'ConstraintError', 'different records did not conflict');
+      assert(await last === 3, 'preventDefault did not let the transaction continue');
+      await done;
+      const read = db.transaction(['multi', 'nonunique']), readDone = complete(read);
+      const store = read.objectStore('multi');
+      const counts = [];
+      for (const name of ['by-tag', 'unique-tags']) {
+        const index = store.index(name);
+        counts.push(result(index.count()).then(count => assert(count === 7, `${name}: duplicate entries counted`)));
+        for (const key of [0, 'x', new realm.Date(0), new realm.Uint8Array([1, 2]), [1, 'a'], [[1, 'a']]]) {
+          counts.push(result(index.count(key)).then(count => assert(count === 1, `${name}: equal keys were not deduplicated`)));
+        }
+        counts.push(result(index.getAllKeys()).then(keys => {
+          assert(keys.filter(key => key === 1).length === 6 && keys.filter(key => key === 3).length === 1,
+            `${name}: wrong primary-key collection ${keys}`);
+        }));
+      }
+      counts.push(result(read.objectStore('nonunique').index('by-tag').getAllKeys('shared')).then(keys => {
+        assert(JSON.stringify(keys) === '[1,2]', 'nonunique entries were deduplicated across records');
+      }));
+      await Promise.all(counts);
+      await readDone;
     } else if (scenario === 'native-state') {
       const first = db.transaction('plain', 'readwrite'), firstDone = complete(first);
       const queued = db.transaction('plain', 'readwrite'), queuedDone = complete(queued);

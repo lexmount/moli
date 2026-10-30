@@ -222,13 +222,14 @@ for(const type of ['dragenter','dragover','drop'])document.getElementById('targe
             observed,
             serde_json::json!({
                 "records":[
-                    ["dragenter","copy","none","","",["text/plain","application/x-seed","Files"],[["string","text/plain"],["string","application/x-seed"],["file","application/octet-stream"]],[]],
-                    ["dragenter","copy","none","","",entered_types,entered_items,[]],
-                    ["dragover","move","none","","",entered_types,entered_items,[]],
-                    ["drop","move","none","drop-text","drop-metadata",["text/plain","application/x-drop","Files"],[["string","text/plain"],["string","application/x-drop"],["file","application/octet-stream"]],[["drop.bin","application/octet-stream",4,123]]]
+                    ["dragenter","copy","copy","","",["text/plain","application/x-seed","Files"],[["string","text/plain"],["string","application/x-seed"],["file","application/octet-stream"]],[]],
+                    ["dragover","copy","copy","","",entered_types,entered_items,[]],
+                    ["dragover","move","move","","",entered_types,entered_items,[]],
+                    ["dragover","move","move","","",entered_types,entered_items,[]],
+                    ["drop","move","move","drop-text","drop-metadata",["text/plain","application/x-drop","Files"],[["string","text/plain"],["string","application/x-drop"],["file","application/octet-stream"]],[["drop.bin","application/octet-stream",4,123]]]
                 ],
-                "prior":[[],[["",0,0,0]],[["",0,0,0],["",0,0,0]],[["",0,0,0],["",0,0,0],["",0,0,0]]],
-                "fileText":"drop","closed":[["",0,0,0],["",0,0,0],["",0,0,0],["",0,0,0]]
+                "prior":[[],[["",0,0,0]],[["",0,0,0],["",0,0,0]],[["",0,0,0],["",0,0,0],["",0,0,0]],[["",0,0,0],["",0,0,0],["",0,0,0],["",0,0,0]]],
+                "fileText":"drop","closed":[["",0,0,0],["",0,0,0],["",0,0,0],["",0,0,0],["",0,0,0]]
             }),
             "empty_enter={empty_enter}"
         );

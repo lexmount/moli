@@ -2355,7 +2355,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fileapi", "drag-and-drop", "datatransfer", "events", "input", "actions"]
-notes = "Manual compat port for renderer-driven drag lifecycle behavior: manifest dispatch-drag actions synthesize dragenter/dragover/drop, use independent protected/readonly DataTransfer views, ignore listener payload mutations, and run the text input drop default action when drop is not canceled."
+notes = "Manual compat port for renderer-driven drag lifecycle behavior: manifest dispatch-drag actions synthesize dragenter/dragover/drop, give each target dispatch a separate DataTransfer view, keep data protected during dragenter/dragover so listener payload mutations are ignored, and let the user-agent insert the current drop command payload with a negotiated copy operation when the drop is accepted."
 
 [[test.actions]]
 type = "dispatch-drag"
@@ -2393,7 +2393,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fileapi", "drag-and-drop", "datatransfer", "events", "input", "actions"]
-notes = "Manual compat port for renderer drag operation-mask mapping: source drag_operations_mask values are exposed through DataTransfer.effectAllowed while each event view starts with dropEffect=none; explicit dragover cancellation negotiates author-handled operations, target dropEffect overrides only run text drop defaults when allowed by the source mask, dispatch-drag modifiers populate DragEvent modifier-key state, and Ctrl/Meta/Shift/Alt modifier combinations select copy/move/link defaults with explicit link gestures taking precedence when the source mask allows them."
+notes = "Manual compat port for renderer drag operation-mask mapping: source drag_operations_mask values initialize each protected target view's dropEffect, drop carries the negotiated operation, and explicitly canceled dragover requests only deliver drop and run text defaults when their dropEffect is allowed by the source mask. CDP modifier flags populate DragEvent modifier-key state without overriding the preferred operation."
 
 [[test.actions]]
 type = "dispatch-drag"
@@ -2661,7 +2661,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fileapi", "drag-and-drop", "datatransfer", "events", "input", "actions"]
-notes = "Manual compat port for dropEffect/effectAllowed default-action negotiation: an explicitly canceled dragover negotiates the target operation, which must be allowed by the source operation mask before text-control drop default insertion runs."
+notes = "Manual compat port for dropEffect/effectAllowed default-action negotiation: the target explicitly cancels dragover to request its dropEffect, which must be allowed by the source operation mask before drop delivery or text-control insertion runs."
 
 [[test.actions]]
 type = "dispatch-drag"
@@ -2802,7 +2802,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fileapi", "drag-and-drop", "datatransfer", "events", "input", "selection", "contenteditable", "actions"]
-notes = "Manual compat port for inherited contenteditable text drop behavior: a drop targeting a descendant of a contenteditable host edits the nearest editing host, while a contenteditable=false descendant stops the inherited default editing action."
+notes = "Manual compat port for inherited contenteditable text drop behavior: a drop targeting a descendant of a contenteditable host edits the nearest editing host, while a contenteditable=false descendant rejects drop delivery and editing events without changing its text or selection."
 
 [[test.actions]]
 type = "dispatch-drag"
@@ -2855,6 +2855,10 @@ x = 30.0
 y = 10.0
 drag_operations_mask = 1
 items = [{ mime_type = "text/plain", data = "blocked-text" }]
+
+[[test.actions]]
+type = "evaluate"
+expression = "__finishContenteditableInheritance()"
 
 [[test]]
 id = "drag-contenteditable-range-basic"
@@ -2934,7 +2938,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fileapi", "drag-and-drop", "datatransfer", "events", "actions"]
-notes = "Manual compat port for renderer-driven drag cancellation: manifest dispatch-drag event=dragCancel clears the active DataTransfer session without dispatching a DOM dragCancel event, so a subsequent baseline drop uses its own payload; protected listener mutations cannot change the drag data."
+notes = "Manual compat port for renderer-driven drag cancellation: manifest dispatch-drag event=dragCancel clears the active DataTransfer session without dispatching a DOM dragCancel event, disables the canceled DataTransfer, and new dragenter/drop commands establish fresh payloads for a subsequent accepted drop. Renderer tests separately cover rejection of a late bare drop, since manifest drag actions require a handled command."
 
 [[test.actions]]
 type = "dispatch-drag"
@@ -2961,6 +2965,18 @@ drag_operations_mask = 1
 items = [{ mime_type = "text/plain", data = "ignored-cancel" }]
 
 [[test.actions]]
+type = "evaluate"
+expression = "__assertCanceledDragState()"
+
+[[test.actions]]
+type = "dispatch-drag"
+event = "dragenter"
+x = 15.0
+y = 15.0
+drag_operations_mask = 1
+items = [{ mime_type = "text/plain", data = "fresh-after-cancel" }]
+
+[[test.actions]]
 type = "dispatch-drag"
 event = "drop"
 x = 15.0
@@ -2984,6 +3000,14 @@ notes = "Manual compat port for renderer-driven file drop behavior: manifest dis
 
 [[test.actions]]
 type = "dispatch-drag"
+event = "dragenter"
+x = 15.0
+y = 15.0
+drag_operations_mask = 1
+files = [{ name = "drag-upload.txt", mime_type = "text/plain", text = "drag-upload", last_modified = 7 }]
+
+[[test.actions]]
+type = "dispatch-drag"
 event = "drop"
 x = 15.0
 y = 15.0
@@ -2996,11 +3020,23 @@ expression = "__advanceDragFileDropPhase()"
 
 [[test.actions]]
 type = "dispatch-drag"
+event = "dragenter"
+x = 15.0
+y = 15.0
+drag_operations_mask = 1
+files = [{ name = "blocked-upload.txt", mime_type = "text/plain", text = "blocked-upload", last_modified = 11 }]
+
+[[test.actions]]
+type = "dispatch-drag"
 event = "drop"
 x = 15.0
 y = 15.0
 drag_operations_mask = 1
 files = [{ name = "blocked-upload.txt", mime_type = "text/plain", text = "blocked-upload", last_modified = 11 }]
+
+[[test.actions]]
+type = "evaluate"
+expression = "__finishDragFileDrop()"
 
 [[test]]
 id = "drag-file-multiple-basic"
@@ -3014,7 +3050,18 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fileapi", "drag-and-drop", "datatransfer", "events", "input", "file", "actions"]
-notes = "Manual compat port for file input multiple selection semantics under renderer-driven drops: a non-multiple input rejects multiple-file default editing without changing its selection, while an input with multiple=true preserves all dropped files and exposes fakepath metadata for the first selected file."
+notes = "Manual compat port for file input multiple selection semantics under renderer-driven drops: a non-multiple input rejects a multiple-file drag without drop/input/change events, while an input with multiple=true accepts all dropped files and exposes fakepath metadata for the first selected file. Payload Files are captured synchronously during drop and remain readable after the DataTransfer becomes disabled."
+
+[[test.actions]]
+type = "dispatch-drag"
+event = "dragenter"
+x = 15.0
+y = 15.0
+drag_operations_mask = 1
+files = [
+  { name = "first.txt", mime_type = "text/plain", text = "first", last_modified = 1 },
+  { name = "second.txt", mime_type = "text/plain", text = "second", last_modified = 2 },
+]
 
 [[test.actions]]
 type = "dispatch-drag"
@@ -3033,6 +3080,17 @@ expression = "__enableMultipleFileDropPhase()"
 
 [[test.actions]]
 type = "dispatch-drag"
+event = "dragenter"
+x = 15.0
+y = 15.0
+drag_operations_mask = 1
+files = [
+  { name = "alpha.txt", mime_type = "text/plain", text = "alpha", last_modified = 3 },
+  { name = "beta.txt", mime_type = "text/plain", text = "beta", last_modified = 4 },
+]
+
+[[test.actions]]
+type = "dispatch-drag"
 event = "drop"
 x = 15.0
 y = 15.0
@@ -3041,6 +3099,10 @@ files = [
   { name = "alpha.txt", mime_type = "text/plain", text = "alpha", last_modified = 3 },
   { name = "beta.txt", mime_type = "text/plain", text = "beta", last_modified = 4 },
 ]
+
+[[test.actions]]
+type = "evaluate"
+expression = "__finishMultipleFileDrop()"
 
 [[test]]
 id = "formdata-idlharness"

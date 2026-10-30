@@ -969,11 +969,15 @@ fn materialize_response_object_preserves_redirected_slot() {
         .expect("redirected response should materialize");
 }
 
-#[test]
-fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
+#[tokio::test]
+async fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
     use crate::types::AsyncSubresourceFetchResponseFilter::{Opaque, OpaqueRedirect};
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     for (response_type, filter) in [("opaque", Opaque), ("opaqueredirect", OpaqueRedirect)] {
-        let mut vm = new_storage_test_vm("https://response-materialize-filtered.test/");
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://response-materialize-filtered.test/",
+            &loader,
+        );
         let document_url = Url::parse("https://response-materialize-filtered.test/")
             .expect("document URL should parse");
         let final_url = Url::parse(
@@ -1067,6 +1071,14 @@ fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
         )
         .expect("filtered response cache roundtrip should schedule");
 
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(globalThis.__filteredResponseCacheProbe !== 'pending')",
+            "true",
+            "filtered response cache roundtrip should settle",
+        )
+        .await;
         let cache_probe = vm
             .eval("String(globalThis.__filteredResponseCacheProbe)")
             .expect("filtered response cache roundtrip should settle");

@@ -87,6 +87,11 @@ async fn prepared_writes_preserve_snapshots_generated_keys_and_index_constraints
 }
 
 #[tokio::test]
+async fn multientry_deduplicates_equal_keys_within_each_record() {
+    assert_write_preparation("multientry").await;
+}
+
+#[tokio::test]
 async fn cursor_updates_validate_before_admission_and_preserve_snapshots() {
     assert_write_preparation("cursor-rejections").await;
 }
@@ -94,4 +99,9 @@ async fn cursor_updates_validate_before_admission_and_preserve_snapshots() {
 #[tokio::test]
 async fn cursor_updates_reject_readonly_before_cloning() {
     assert_write_preparation("cursor-readonly").await;
+}
+
+#[tokio::test]
+async fn primary_and_index_keys_use_native_blob_and_file_metadata() {
+    assert_write_preparation("host-keys").await;
 }

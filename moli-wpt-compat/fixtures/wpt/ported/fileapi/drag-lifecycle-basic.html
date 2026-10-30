@@ -75,10 +75,12 @@ promise_test(async function () {
   assert_array_equals(
     events,
     [
-      "dragenter:true::none:copyMove",
+      "dragenter:true::move:copyMove",
       "dragover-before:false:",
       "dragover-after::move",
-      "drop:false:drop-text:none:hello world",
+      "dragover-before:false:",
+      "dragover-after::move",
+      "drop:false:drop-text:copy:hello world",
       "input:hello drop-text:15:15",
     ],
     "each dispatch owns its view, dragover stays protected, and the editor copies the explicit drop payload",

@@ -165,9 +165,38 @@ jobs:
           $toolchain = (Get-Content rust-toolchain -Raw).Trim()
           rustup toolchain install $toolchain --profile minimal --no-self-update
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: nextest@0.9.132
+
+      - name: Cache Windows persistence dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: windows-persistent-storage
+          cache-on-failure: true
+
+      - name: Build Windows persistence tests
+        id: storage-build
+        run: >-
+          cargo nextest run --locked --no-run
+          -p moli-browser-profile
+          -p moli-opfs
+          -p moli-storage-service
+
       - name: Test Windows profile, OPFS, and storage paths
         run: >-
-          cargo test --locked
+          cargo nextest run --locked
+          -p moli-browser-profile
+          -p moli-opfs
+          -p moli-storage-service
+
+      # Nextest does not run doctests. Keep the coverage of the former cargo
+      # test invocation, including when a unit or integration test fails.
+      - name: Test Windows persistence documentation
+        if: ${{ !cancelled() && steps.storage-build.outcome == 'success' }}
+        run: >-
+          cargo test --locked --doc
           -p moli-browser-profile
           -p moli-opfs
           -p moli-storage-service
@@ -491,10 +520,20 @@ jobs:
         run: |
           uv sync --project moli-cdp-smoke --locked
           npm ci --prefix moli-cdp-smoke
+      - name: Install current input oracle
+        env:
+          CHROMIUM_ORACLE_VERSION: "156.0.8078.73"
+        run: |
+          moli-cdp-smoke/node_modules/.bin/browsers install "chrome@$CHROMIUM_ORACLE_VERSION" --path "$RUNNER_TEMP/chromium-oracle"
+          chromium_bin="$RUNNER_TEMP/chromium-oracle/chrome/linux-$CHROMIUM_ORACLE_VERSION/chrome-linux64/chrome"
+          test -x "$chromium_bin"
+          echo "CHROMIUM_DOM_INPUT_BIN=$chromium_bin" >> "$GITHUB_ENV"
+          "$chromium_bin" --version
       - name: Run full CDP smoke on Chromium
         run: |
           uv run --project moli-cdp-smoke --no-sync moli-cdp-smoke \
-            --browser chromium --strict-full-suite --repeat 2 --retries 3 --jobs 4 --output-dir target/smoke/cdp-chromium-ci
+            --browser chromium --strict-full-suite --repeat 2 --retries 3 --jobs 4 \
+            --chromium-bin-for-group "dom-input=$CHROMIUM_DOM_INPUT_BIN" --output-dir target/smoke/cdp-chromium-ci
       - name: Upload Chromium diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

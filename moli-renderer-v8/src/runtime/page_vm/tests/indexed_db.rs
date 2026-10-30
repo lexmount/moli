@@ -7,6 +7,9 @@ use crate::{
 };
 
 fn install_indexed_db_manager(page_vm: &mut PageVm, manager: &crate::SharedIndexedDbManager) {
+    let buckets = crate::new_shared_storage_bucket_store_with_indexed_db_manager(manager);
+    page_vm.storage_bucket_store = Some(buckets.clone());
+    page_vm.vm_mut().set_storage_bucket_store(buckets);
     let manager = crate::downgrade_indexed_db_manager(manager);
     page_vm.indexed_db_manager = Some(manager.clone());
     page_vm.vm_mut().set_indexed_db_manager(Some(manager));
@@ -95,11 +98,26 @@ struct IndexedDbSelectedTaskObservation {
 async fn run_selected_indexed_db_task_for_test(
     page_vm: &mut PageVm,
     loader: &crate::network::ResourceRequestClient,
+    owner_wake_rx: &mut tokio::sync::mpsc::UnboundedReceiver<
+        crate::page_task_queue::RendererOwnerWake,
+    >,
 ) -> anyhow::Result<Option<IndexedDbSelectedTaskObservation>> {
-    let Some(claimed) = page_vm
-        .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::IndexedDbTask)
-    else {
-        return Ok(None);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let claimed = loop {
+        if let Some(claimed) = page_vm
+            .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::IndexedDbTask)
+        {
+            break claimed;
+        }
+        if !page_vm.vm_mut().has_in_flight_indexed_db_tasks_for_test()? {
+            return Ok(None);
+        }
+        anyhow::ensure!(
+            tokio::time::timeout_at(deadline, owner_wake_rx.recv())
+                .await?
+                .is_some(),
+            "IndexedDB owner wake closed before native completion"
+        );
     };
     assert_eq!(
         claimed.selector(),
@@ -114,6 +132,35 @@ async fn run_selected_indexed_db_task_for_test(
     Ok(Some(IndexedDbSelectedTaskObservation { owner, kind }))
 }
 
+/// Complete native preparation through real selected tasks, leaving the
+/// requested callback task queued for the boundary assertion itself.
+async fn prepare_indexed_db_event_task_for_test(
+    page_vm: &mut PageVm,
+    loader: &crate::network::ResourceRequestClient,
+    owner_wake_rx: &mut tokio::sync::mpsc::UnboundedReceiver<
+        crate::page_task_queue::RendererOwnerWake,
+    >,
+    kind: crate::context_bootstrap::IndexedDbTaskKind,
+) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !page_vm
+        .vm_mut()
+        .has_queued_indexed_db_task_kind_for_test(kind)?
+    {
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "IndexedDB callback {kind:?} was never queued"
+        );
+        anyhow::ensure!(
+            run_selected_indexed_db_task_for_test(page_vm, loader, owner_wake_rx)
+                .await?
+                .is_some(),
+            "IndexedDB stopped before callback {kind:?}"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_selected_completion()
  {
@@ -122,7 +169,7 @@ async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_
         let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
         let document_url =
             Url::parse("https://example.com/indexed-db-task-body-boundary").unwrap();
-        let (mut page_vm, _resource_source, _owner_wake_rx) =
+        let (mut page_vm, _resource_source, mut owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         install_indexed_db_manager(&mut page_vm, &manager);
         page_vm.vm_mut().eval(
@@ -151,13 +198,7 @@ async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_
 })()
 "#,
         )?;
-        // Advance upgrade, put success, and commit as separate selected tasks.
-        // The next exact task is open.success, whose body must leave reactions
-        // and the newly created transaction's deactivation to completion.
-        for _ in 0..3 {
-            assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
-                .await?.is_some());
-        }
+        prepare_indexed_db_event_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx, crate::context_bootstrap::IndexedDbTaskKind::OpenSuccess).await?;
         page_vm
             .vm_mut()
             .enqueue_test_ready_runtime_script_followup();
@@ -227,7 +268,7 @@ async fn indexed_db_current_ticket_without_realm_payload_owns_only_a_checkpoint(
         let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
         let document_url =
             Url::parse("https://example.com/indexed-db-missing-current-payload").unwrap();
-        let (mut page_vm, _resource_source, _owner_wake_rx) =
+        let (mut page_vm, _resource_source, mut owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         install_indexed_db_manager(&mut page_vm, &manager);
         schedule_open(
@@ -236,6 +277,13 @@ async fn indexed_db_current_ticket_without_realm_payload_owns_only_a_checkpoint(
             "__indexedDbMissingCurrentPayload",
         );
 
+        prepare_indexed_db_event_task_for_test(
+            &mut page_vm,
+            &loader,
+            &mut owner_wake_rx,
+            crate::context_bootstrap::IndexedDbTaskKind::Open,
+        )
+        .await?;
         let task = take_indexed_db_page_task_for_test(&mut page_vm);
         assert_eq!(
             page_vm
@@ -287,7 +335,7 @@ async fn indexed_db_selected_callback_completion_reconciles_a_created_child() {
         let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
         let document_url =
             Url::parse("https://example.com/indexed-db-selected-child-follow-up").unwrap();
-        let (mut page_vm, _resource_source, _owner_wake_rx) =
+        let (mut page_vm, _resource_source, mut owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         install_indexed_db_manager(&mut page_vm, &manager);
         page_vm.vm_mut().eval(
@@ -307,13 +355,10 @@ async fn indexed_db_selected_callback_completion_reconciles_a_created_child() {
 "#,
         )?;
 
-        for _ in 0..2 {
-            assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
-                .await?.is_some());
-            assert!(!page_vm.vm().has_pending_child_navigation_commit_for_test());
-        }
+        prepare_indexed_db_event_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx, crate::context_bootstrap::IndexedDbTaskKind::OpenSuccess).await?;
+        assert!(!page_vm.vm().has_pending_child_navigation_commit_for_test());
         assert!(
-            run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+            run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx)
                 .await?
                 .is_some(),
             "one selected IndexedDB task should be ready"
@@ -335,14 +380,22 @@ async fn indexed_db_task_applies_real_producer_work_and_one_microtask_checkpoint
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
         let document_url = Url::parse("https://example.com/indexed-db-owner-turn").unwrap();
-        let (mut page_vm, _resource_source, _owner_wake_rx) =
+        let (mut page_vm, _resource_source, mut owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         install_indexed_db_manager(&mut page_vm, &manager);
         schedule_open(&mut page_vm, "current-owner", "__indexedDbOwnerTurn");
 
-        let selected = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
-            .await?
-            .expect("real producer task should consume one typed Page turn");
+        prepare_indexed_db_event_task_for_test(
+            &mut page_vm,
+            &loader,
+            &mut owner_wake_rx,
+            crate::context_bootstrap::IndexedDbTaskKind::Open,
+        )
+        .await?;
+        let selected =
+            run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx)
+                .await?
+                .expect("real producer task should consume one typed Page turn");
         assert!(matches!(
             selected.kind,
             RendererPageIndexedDbTaskKind::RuntimeQueue(_)
@@ -368,34 +421,45 @@ async fn indexed_db_source_consumes_exactly_one_runtime_task_per_turn() {
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
         let document_url = Url::parse("https://example.com/indexed-db-one-turn").unwrap();
-        let (mut page_vm, _resource_source, _owner_wake_rx) =
+        let (mut page_vm, _resource_source, mut owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         install_indexed_db_manager(&mut page_vm, &manager);
-        schedule_open(&mut page_vm, "first", "__firstIndexedDbTurn");
-        schedule_open(&mut page_vm, "second", "__secondIndexedDbTurn");
+        schedule_open(&mut page_vm, "one-request", "__indexedDbTurn");
+        prepare_indexed_db_event_task_for_test(
+            &mut page_vm,
+            &loader,
+            &mut owner_wake_rx,
+            crate::context_bootstrap::IndexedDbTaskKind::Open,
+        )
+        .await?;
 
-        let first = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
-            .await?
-            .expect("first IDB task should consume one turn");
+        let first =
+            run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx)
+                .await?
+                .expect("first IDB task should consume one turn");
 
         assert_eq!(
-            page_vm
-                .vm_mut()
-                .eval("JSON.stringify([__firstIndexedDbTurn, __secondIndexedDbTurn])")?,
-            r#"[["upgrade","microtask"],[]]"#
+            page_vm.vm_mut().eval("JSON.stringify(__indexedDbTurn)")?,
+            r#"["upgrade","microtask"]"#
         );
 
-        let second = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
-            .await?
-            .expect("second IDB task should consume the next turn");
+        prepare_indexed_db_event_task_for_test(
+            &mut page_vm,
+            &loader,
+            &mut owner_wake_rx,
+            crate::context_bootstrap::IndexedDbTaskKind::OpenSuccess,
+        )
+        .await?;
+        let second =
+            run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx)
+                .await?
+                .expect("second IDB task should consume the next turn");
         assert_eq!(second.owner, first.owner);
         assert_ne!(second.kind, first.kind);
 
         assert_eq!(
-            page_vm
-                .vm_mut()
-                .eval("JSON.stringify([__firstIndexedDbTurn, __secondIndexedDbTurn])")?,
-            r#"[["upgrade","microtask"],["upgrade","microtask"]]"#
+            page_vm.vm_mut().eval("JSON.stringify(__indexedDbTurn)")?,
+            r#"["upgrade","microtask","success"]"#
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -410,7 +474,7 @@ async fn indexed_db_task_survives_document_open_in_the_same_window_realm() {
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
         let document_url = Url::parse("https://example.com/indexed-db-document-open").unwrap();
-        let (mut page_vm, _resource_source, _owner_wake_rx) =
+        let (mut page_vm, _resource_source, mut owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         install_indexed_db_manager(&mut page_vm, &manager);
         schedule_open(&mut page_vm, "document-open", "__documentOpenIndexedDbTurn");
@@ -419,7 +483,14 @@ async fn indexed_db_task_survives_document_open_in_the_same_window_realm() {
              document.close(); 'replaced'",
         )?;
 
-        run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+        prepare_indexed_db_event_task_for_test(
+            &mut page_vm,
+            &loader,
+            &mut owner_wake_rx,
+            crate::context_bootstrap::IndexedDbTaskKind::Open,
+        )
+        .await?;
+        run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx)
             .await?
             .expect("same-Window IDB task should remain runnable after document.open()");
 
@@ -443,7 +514,7 @@ async fn indexed_db_rejects_a_replaced_child_realm_without_stealing_its_task() {
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
         let document_url = Url::parse("https://example.com/indexed-db-realm-replacement").unwrap();
-        let (mut page_vm, _resource_source, _owner_wake_rx) =
+        let (mut page_vm, _resource_source, mut owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         install_indexed_db_manager(&mut page_vm, &manager);
         page_vm.vm_mut().eval(
@@ -498,9 +569,10 @@ async fn indexed_db_rejects_a_replaced_child_realm_without_stealing_its_task() {
             "__replacementRealmIndexedDbTurn",
         );
 
-        let stale = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
-            .await?
-            .expect("retired child-realm task should consume one stale discard turn");
+        let stale =
+            run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx)
+                .await?
+                .expect("retired child-realm task should consume one stale discard turn");
 
         assert_eq!(
             page_vm.vm_mut().eval_in_child_default_context(
@@ -511,9 +583,10 @@ async fn indexed_db_rejects_a_replaced_child_realm_without_stealing_its_task() {
             "discarding the retired realm must not consume the replacement realm's local task"
         );
 
-        let current = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
-            .await?
-            .expect("replacement child-realm task should consume the next turn");
+        let current =
+            run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx)
+                .await?
+                .expect("replacement child-realm task should consume the next turn");
         assert_eq!(
             stale.owner.root_document(),
             current.owner.root_document(),
@@ -532,6 +605,16 @@ async fn indexed_db_rejects_a_replaced_child_realm_without_stealing_its_task() {
             current.kind, stale.kind,
             "fresh realm-local IDB state should naturally reproduce the old task id"
         );
+        prepare_indexed_db_event_task_for_test(
+            &mut page_vm,
+            &loader,
+            &mut owner_wake_rx,
+            crate::context_bootstrap::IndexedDbTaskKind::Open,
+        )
+        .await?;
+        run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx)
+            .await?
+            .expect("replacement upgrade event");
         assert_eq!(
             page_vm.vm_mut().eval_in_child_default_context(
                 current_execution_context_id,
@@ -562,7 +645,7 @@ fn indexed_db_rejects_a_real_page_vm_replacement_identity_collision() {
                 .expect("loader");
             let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
             let document_url = Url::parse(&format!("{base_url}/initial.html")).unwrap();
-            let (mut page_vm, _resource_source, _owner_wake_rx) =
+            let (mut page_vm, _resource_source, mut owner_wake_rx) =
                 page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
             install_indexed_db_manager(&mut page_vm, &manager);
             let local_executor = page_vm.local_executor.clone();
@@ -603,7 +686,7 @@ fn indexed_db_rejects_a_real_page_vm_replacement_identity_collision() {
                         "__replacementIndexedDbTurn",
                     );
 
-                    let stale = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+                    let stale = run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx)
                         .await?
                         .expect("retired PageVm task should consume one stale discard turn");
                     assert_eq!(stale.owner.root_document(), retired_root);
@@ -616,7 +699,7 @@ fn indexed_db_rejects_a_real_page_vm_replacement_identity_collision() {
                         "discarding the old root namespace must not steal the colliding local task"
                     );
 
-                    let current = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+                    let current = run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx)
                         .await?
                         .expect("replacement producer task should consume the next turn");
                     assert_ne!(stale.owner, current.owner);
@@ -630,6 +713,8 @@ fn indexed_db_rejects_a_real_page_vm_replacement_identity_collision() {
                         current.kind, stale.kind,
                         "new PageVm counters should naturally reproduce the old local task id"
                     );
+                    prepare_indexed_db_event_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx, crate::context_bootstrap::IndexedDbTaskKind::Open).await?;
+                    run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx).await?.expect("replacement upgrade event");
                     assert_eq!(
                         page_vm
                             .vm_mut()
@@ -654,7 +739,7 @@ async fn indexed_db_retired_versionchange_notification_does_not_strand_open_requ
             .expect("loader");
         let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
         let document_url = Url::parse("https://example.com/indexed-db-retired-notification")?;
-        let (mut page_vm, _resource_source, _owner_wake_rx) =
+        let (mut page_vm, _resource_source, mut owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         install_indexed_db_manager(&mut page_vm, &manager);
         page_vm.vm_mut().eval(r#"
@@ -676,15 +761,8 @@ async fn indexed_db_retired_versionchange_notification_does_not_strand_open_requ
             notificationDatabase.onversionchange = () => top.notificationEvents.push('unexpected-retired-callback');
           };
         "#)?;
-        for _ in 0..8 {
-            if page_vm.vm_mut().eval_in_child_default_context(
-                child_context, "typeof globalThis.notificationDatabase",
-            )? == "object" {
-                break;
-            }
-            assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
-                .await?.is_some(), "opening the initial connection must leave a runnable task");
-        }
+        prepare_indexed_db_event_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx, crate::context_bootstrap::IndexedDbTaskKind::OpenSuccess).await?;
+        run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx).await?.expect("initial open.success");
         assert_eq!(page_vm.vm_mut().eval_in_child_default_context(
             child_context, "String(notificationDatabase.version)",
         )?, "1");
@@ -700,15 +778,24 @@ async fn indexed_db_retired_versionchange_notification_does_not_strand_open_requ
         "#)?;
         // Queue the notification in the connection's realm, then retire that
         // realm before its task can run. The requesting realm must still recheck.
-        assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
-            .await?.is_some());
+        prepare_indexed_db_event_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx, crate::context_bootstrap::IndexedDbTaskKind::VersionChange).await?;
+        // Retire with the notification still queued, before invoking its callback.
         page_vm.vm_mut().retire_child_frame_realm_for_test(child_handle);
-        for _ in 0..16 {
-            if page_vm.vm_mut().eval("notificationEvents.includes('success')")? == "true" {
-                break;
+        assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx)
+            .await?.is_some());
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while page_vm.vm_mut().eval("notificationEvents.includes('success')")? != "true" {
+            anyhow::ensure!(tokio::time::Instant::now() < deadline, "notification retirement did not finish");
+            if run_selected_indexed_db_task_for_test(&mut page_vm, &loader, &mut owner_wake_rx)
+                .await?.is_none()
+            {
+                // The retired realm no longer has a local table to expose
+                // its outstanding native close. Its receipt wakes the requester.
+                anyhow::ensure!(
+                    tokio::time::timeout_at(deadline, owner_wake_rx.recv()).await?.is_some(),
+                    "notification retirement lost its native close wake"
+                );
             }
-            assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
-                .await?.is_some(), "a discarded notification must leave a runnable continuation");
         }
         assert_eq!(page_vm.vm_mut().eval("JSON.stringify(notificationEvents)")?,
             r#"["upgrade","success"]"#);

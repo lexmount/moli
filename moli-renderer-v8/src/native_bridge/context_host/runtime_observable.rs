@@ -527,11 +527,9 @@ impl JsContextHost {
                 binding.dispatch_scope(),
                 OwnerDispatchScope::LightweightPopup(_)
             ) {
-                let retirement = self.retire_indexed_db_owner(owner);
-                retirement.finish(self.indexed_db_manager.as_ref());
+                self.retire_indexed_db_owner(owner);
             } else {
-                let retirement = self.retire_indexed_db_context(binding.realm_token());
-                retirement.finish(self.indexed_db_manager.as_ref());
+                self.retire_indexed_db_context(binding.realm_token());
                 self.bridge
                     .retire_default_world_wrappers_for_realm(binding.realm_token());
             }
@@ -549,9 +547,7 @@ impl JsContextHost {
     ) -> usize {
         self.retire_font_face_loads_for_context_token(context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
-        let indexed_db_retirement = self.retire_indexed_db_context(context_token);
-        let retired_indexed_db_connections = indexed_db_retirement.retired_connections.len();
-        indexed_db_retirement.finish(self.indexed_db_manager.as_ref());
+        let retired_indexed_db_connections = self.retire_indexed_db_context(context_token);
         let owners = self
             .window_execution_contexts
             .iter()
@@ -599,8 +595,7 @@ impl JsContextHost {
     ) -> usize {
         self.retire_font_face_loads_for_context_token(context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
-        let indexed_db_retirement = self.retire_indexed_db_context(context_token);
-        indexed_db_retirement.finish(self.indexed_db_manager.as_ref());
+        self.retire_indexed_db_context(context_token);
         let retired_realm_count = self
             .window_execution_context_realms
             .remove_token(context_token);

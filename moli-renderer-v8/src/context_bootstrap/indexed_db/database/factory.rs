@@ -1,4 +1,5 @@
 use super::*;
+use moli_indexeddb::IndexedDbError;
 
 mod cmp;
 mod databases;
@@ -57,4 +58,35 @@ fn idb_factory_effective_storage_scope<'s>(
                 .flatten()
         })?;
     origin_allows_indexed_db(storage_scope.storage_key()).then_some(storage_scope)
+}
+
+use crate::context_bootstrap::indexed_db::typed_state::factory::FactoryOperation;
+
+fn factory_sql_service(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Result<moli_indexeddb::sqlite::service::ServiceClient, IndexedDbError> {
+    with_indexed_db_manager(scope, |manager| Ok(manager.sqlite_service()))
+}
+
+fn dispatch_factory_request<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+    storage_scope: IndexedDbStorageScope,
+    name: String,
+    operation: FactoryOperation,
+) {
+    let result = factory_sql_service(scope).and_then(|service| {
+        crate::context_bootstrap::indexed_db::typed_state::factory::enqueue_sql_factory_request(
+            scope,
+            request,
+            service,
+            storage_scope,
+            name,
+            operation,
+        )
+    });
+    if let Err(error) = result {
+        let error = request_error_object(scope, &error);
+        store_request_error(scope, request, error);
+    }
 }

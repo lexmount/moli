@@ -117,6 +117,7 @@ impl StoragePartitionState {
             http_cache_root,
         ) = if let Some(profile) = profile.as_ref() {
             let partition = profile.default_partition();
+            partition.ensure_directory()?;
             let cookies_path = partition.cookies_path();
             let cookies = load_profile_cookie_cache(cookies_path).with_context(|| {
                 anyhow!(
@@ -135,15 +136,17 @@ impl StoragePartitionState {
                     )
                 })?;
             let indexed_db_root = partition.indexed_db_root();
-            let indexed_db_manager =
-                moli_renderer_v8::new_indexed_db_manager(Some(indexed_db_root.to_path_buf()))
-                    .map_err(|error| anyhow!(error))
-                    .with_context(|| {
-                        anyhow!(
-                            "failed to initialize browser profile IndexedDB `{}`",
-                            indexed_db_root.display()
-                        )
-                    })?;
+            let indexed_db_manager = moli_renderer_v8::new_sqlite_indexed_db_manager(
+                Some(indexed_db_root.to_path_buf()),
+                Default::default(),
+            )
+            .map_err(|error| anyhow!(error))
+            .with_context(|| {
+                anyhow!(
+                    "failed to initialize browser profile IndexedDB `{}`",
+                    indexed_db_root.display()
+                )
+            })?;
             let storage_buckets_path = partition.storage_buckets_path();
             let cache_storage_root = partition.cache_storage_root();
             let opfs_root = partition.opfs_root();
@@ -190,9 +193,10 @@ impl StoragePartitionState {
                 Some(partition.http_cache_root().to_path_buf()),
             )
         } else {
-            let indexed_db_manager = moli_renderer_v8::new_indexed_db_manager(None)
-                .map_err(|error| anyhow!(error))
-                .context("failed to initialize in-memory IndexedDB")?;
+            let indexed_db_manager =
+                moli_renderer_v8::new_sqlite_indexed_db_manager(None, Default::default())
+                    .map_err(|error| anyhow!(error))
+                    .context("failed to initialize in-memory IndexedDB")?;
             let storage_service = StorageService::in_memory();
             let storage_bucket_store =
                 new_shared_storage_bucket_store_with_storage_service_and_indexed_db_manager(
@@ -318,6 +322,33 @@ impl StoragePartitionState {
         })?;
         Ok(())
     }
+
+    /// Called after renderer and network producers have joined. All accepted
+    /// bucket cleanup and SQL rollback/commit must finish before profile unlock.
+    pub(crate) fn shutdown(&self) -> Result<()> {
+        // Run every stage even when an earlier stage reports failure. In
+        // particular, a failed storage barrier must not skip SQL retirement.
+        let maintenance = self
+            .storage_service
+            .drain_maintenance()
+            .map_err(anyhow::Error::new);
+        let sql = self
+            .indexed_db_manager
+            .lock()
+            .shutdown_sqlite()
+            .map_err(anyhow::Error::new);
+        let io = self.storage_service.drain_io().map_err(anyhow::Error::new);
+        let flush = self.flush();
+        maintenance.and(sql).and(io).and(flush)
+    }
+}
+
+impl Drop for StoragePartitionState {
+    fn drop(&mut self) {
+        if let Err(error) = self.shutdown() {
+            tracing::warn!(error = %error, "failed to close browser storage partition");
+        }
+    }
 }
 
 pub(crate) fn snapshot_cookie_store(
@@ -391,6 +422,7 @@ fn same_cookie_key(left: &StoredCookie, right: &StoredCookie) -> bool {
 
 #[cfg(test)]
 mod tests {
+    mod shutdown_tests;
     use std::{
         fs,
         path::PathBuf,

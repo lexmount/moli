@@ -122,6 +122,7 @@ impl PageVm {
                 delta_y,
                 pointer,
                 modifiers,
+                intercept_drags: _,
             } if event_name == "wheel" => self
                 .queue_wheel_event(
                     x,
@@ -146,8 +147,9 @@ impl PageVm {
                 delta_y,
                 pointer,
                 modifiers,
-            } => self
-                .dispatch_mouse_event_at_point_with_pointer(
+                intercept_drags,
+            } => {
+                self.dispatch_mouse_event_at_point_with_pointer(
                     x,
                     y,
                     &event_name,
@@ -158,8 +160,10 @@ impl PageVm {
                     delta_y,
                     pointer,
                     modifiers,
+                    intercept_drags,
                 )
-                .map(RendererPageReply::InputDispatchOutcome),
+                .map(RendererPageReply::InputDispatchOutcome)
+            }
             RendererPageCommand::DispatchTouchEvent {
                 points,
                 event_name,
@@ -180,6 +184,9 @@ impl PageVm {
                 self.clear_active_drag_data_transfer()?;
                 Ok(RendererPageReply::Unit)
             }
+            RendererPageCommand::CancelDragging => self
+                .cancel_dragging()
+                .map(RendererPageReply::InputDispatchOutcome),
             RendererPageCommand::MutateDocumentNodeAttribute {
                 reference,
                 mutation,

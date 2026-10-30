@@ -116,6 +116,7 @@ fn page_domain_subscription_generation_tracks_distinct_enable_lifetimes() {
 fn input_event_ignore_state_survives_document_context_replacement() {
     let mut state = TargetPageSessionState {
         input_events_ignored: true,
+        input_intercept_drags_enabled: true,
         ..Default::default()
     };
 
@@ -124,6 +125,10 @@ fn input_event_ignore_state_survives_document_context_replacement() {
     assert!(
         state.input_events_ignored,
         "Chromium retains each Inspector session's input ignore handle across renderer navigation"
+    );
+    assert!(
+        state.input_intercept_drags_enabled,
+        "drag interception belongs to the DevTools session, not the replaced Document"
     );
 }
 

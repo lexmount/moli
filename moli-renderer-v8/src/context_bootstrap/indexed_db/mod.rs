@@ -1,6 +1,6 @@
 use super::{
-    array_contains_strict, array_push_value, context_host_ptr_from_global_bridge,
-    global_constructor_prototype, object_bool_property as public_object_bool_property,
+    array_contains_strict, context_host_ptr_from_global_bridge, global_constructor_prototype,
+    object_bool_property as public_object_bool_property,
     object_number_property as public_object_number_property,
     object_property_as_object as public_object_property_as_object,
     object_string_property as public_object_string_property, throw_type_error, v8_string, v8str,
@@ -23,8 +23,96 @@ mod stores;
 mod tasks;
 mod typed_state;
 #[cfg(test)]
-pub(crate) use typed_state::indexed_db_native_cursor_count_for_test;
+pub(crate) use typed_state::{
+    IndexedDbMetadataSharingProbe, IndexedDbTaskKind, indexed_db_has_in_flight_sql_tasks_for_test,
+    indexed_db_has_queued_task_kind_for_test, indexed_db_metadata_sharing_probe_for_test,
+    indexed_db_native_cursor_count_for_test,
+};
+#[cfg(test)]
+pub(crate) fn serialize_indexed_db_value_for_test(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Option<IndexedDbValue> {
+    serialize_js_value(scope, value)
+}
+#[cfg(test)]
+pub(crate) fn deserialize_indexed_db_value_for_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: &IndexedDbValue,
+) -> Result<Option<v8::Local<'s, v8::Value>>, IndexedDbError> {
+    deserialize_js_value(scope, value)
+}
+#[cfg(test)]
+pub(crate) fn create_sql_database_for_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    connection: moli_indexeddb::sqlite::service::DatabaseConnection,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let client = connection.client().clone();
+    let factory = indexed_db_runtime_factory(scope)?;
+    let owner = indexed_db_typed_execution_owner(scope, factory)?;
+    let storage_scope = indexed_db_factory_storage_scope(scope, factory)?;
+    let metadata = client.committed()?;
+    let database = create_database_object(
+        scope,
+        storage_scope,
+        owner,
+        connection.handle(),
+        &metadata.name,
+        metadata.version,
+        client,
+    )
+    .ok()?;
+    attach_indexed_db_sql_connection(scope, database, connection)
+        .expect("fixture logical connection matches its SQL database");
+    Some(database)
+}
+#[cfg(test)]
+pub(crate) fn create_sql_upgrade_for_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    database: v8::Local<'s, v8::Object>,
+    handle: TransactionHandle,
+    version: u64,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let client = indexed_db_database_sql_client(scope, database)?;
+    let metadata = client.committed()?;
+    let names = metadata.stores.keys().cloned().collect::<Vec<_>>();
+    let transaction = create_transaction_object(
+        scope,
+        database,
+        Some(handle),
+        TransactionMode::VersionChange,
+        &names,
+    )?;
+    typed_state::sql::configure_sql_transaction(scope, transaction, client, handle).ok()?;
+    typed_state::sql::ensure_sql_transaction_rollback(scope, transaction).ok()?;
+    set_indexed_db_slot_value(
+        scope,
+        database,
+        INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT,
+        transaction.into(),
+    );
+    save_indexed_db_upgrade_metadata(scope, database, metadata.version);
+    set_indexed_db_database_version(scope, database, version);
+    schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
+    Some(transaction)
+}
 mod types;
+
+#[cfg(test)]
+pub(crate) fn sql_transaction_handle_for_test(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> Option<TransactionHandle> {
+    indexed_db_native_transaction_handle(scope, transaction)
+}
+
+#[cfg(test)]
+pub(crate) fn sql_transaction_started_for_test(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> bool {
+    object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT).unwrap_or(false)
+}
 
 use self::backend::*;
 use self::core::*;
@@ -35,10 +123,7 @@ use self::event_target::*;
 use self::operation_state::*;
 use self::runtime::*;
 use self::slots::*;
-use self::storage_bucket::{
-    storage_bucket_quota_check_for_object_store, storage_bucket_quota_check_for_transaction,
-    validate_storage_bucket_scope,
-};
+use self::storage_bucket::validate_storage_bucket_scope;
 use self::stores::*;
 use self::tasks::*;
 use self::typed_state::*;
@@ -61,10 +146,6 @@ pub(crate) use self::typed_state::indexed_db_request_state_entries_for_test;
 pub(crate) use self::typed_state::retain_indexed_db_state_in_retired_realm;
 pub(in crate::context_bootstrap::indexed_db) use self::typed_state::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 
-pub(crate) fn flush_blocked_indexed_db_requests(scope: &mut v8::PinScope<'_, '_>) {
-    flush_drain_blocked_open_requests_task(scope);
-}
-
 pub(in crate::context_bootstrap) use self::core::indexed_db_usage_bytes_for_storage_key;
 pub(crate) use self::core::set_indexed_db_manager_for_context;
 #[cfg(test)]
@@ -80,12 +161,10 @@ pub use self::state::{
     SharedIndexedDbManager, WeakIndexedDbManager, clear_indexed_db_origin,
     clear_indexed_db_origins_with_prefix, downgrade_indexed_db_manager,
     indexed_db_origin_usage_bytes, indexed_db_origins_with_prefix_usage_bytes,
-    new_indexed_db_manager,
+    new_indexed_db_manager, new_sqlite_indexed_db_manager,
 };
 pub(in crate::context_bootstrap) use self::storage_bucket::scoped_storage_bucket_indexed_db_factory;
-pub use moli_indexeddb::{
-    IndexedDbQuotaCheck, Key, ObjectStoreOptions, OpenOptions, TransactionMode,
-};
+pub use moli_indexeddb::{Key, ObjectStoreOptions, TransactionMode};
 
 fn is_indexed_db_private_slot(slot: &str) -> bool {
     slot.starts_with("moli.IndexedDb.")

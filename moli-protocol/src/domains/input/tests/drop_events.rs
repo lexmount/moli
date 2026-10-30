@@ -2,7 +2,7 @@ use super::*;
 
 async fn drop_fixture(control: &str) -> TestContext {
     let mut ctx = TestContext::new();
-    let html = r#"<html><body style='margin:0'>CONTROL<script>
+    let html = r#"<html><head><meta charset='utf-8'></head><body style='margin:0'>CONTROL<script>
         const editor = document.getElementById('editor');
         editor.style.cssText = 'position:absolute;left:0;top:0;width:200px;height:100px';
         editor.focus();
@@ -57,9 +57,13 @@ async fn drop_fixture(control: &str) -> TestContext {
 }
 
 async fn drop_text(ctx: &mut TestContext, html: bool) {
-    let mut items = vec![json!({"mimeType": "text/plain", "data": "hello"})];
-    if html {
-        items.push(json!({"mimeType": "text/html", "data": "<b>hello</b>"}));
+    drop_payload(ctx, "hello", html.then_some("<b>hello</b>")).await;
+}
+
+async fn drop_payload(ctx: &mut TestContext, text: &str, html: Option<&str>) {
+    let mut items = vec![json!({"mimeType": "text/plain", "data": text})];
+    if let Some(html) = html {
+        items.push(json!({"mimeType": "text/html", "data": html}));
     }
     for event_type in ["dragEnter", "dragOver", "drop"] {
         ctx.process_async(json!({
@@ -182,5 +186,244 @@ async fn plain_text_drop_keeps_string_payload_without_inserting_html() {
             evaluate_string(&mut ctx, "editor.value ?? editor.innerHTML").await,
             "hello"
         );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn drop_beforeinput_revalidates_connected_document_and_editability() {
+    for mode in ["true", "plaintext-only"] {
+        for (mutation, script) in [
+            ("remove", "editor.remove();"),
+            ("disable", "editor.contentEditable='false';"),
+            (
+                "adopt",
+                "window.__otherDocument=document.implementation.createHTMLDocument('other');window.__otherDocument.body.appendChild(editor);",
+            ),
+        ] {
+            let mut ctx = drop_fixture(&format!(
+                "<div id='editor' contenteditable='{mode}'>base</div>"
+            ))
+            .await;
+            assert!(evaluate_bool(&mut ctx, &format!(
+                "(() => {{window.__originalDocument=editor.ownerDocument;editor.addEventListener('beforeinput', () => {{{script}}});return true;}})()"
+            )).await);
+            drop_text(&mut ctx, true).await;
+            let before = if mode == "plaintext-only" {
+                input_event("beforeinput", json!("hello"), json!(null))
+            } else {
+                input_event("beforeinput", json!(null), transfer(true))
+            };
+            assert_eq!(
+                events(&mut ctx).await,
+                json!([before]),
+                "{mode}: {mutation}"
+            );
+            assert_eq!(
+                evaluate_string(&mut ctx, "editor.textContent").await,
+                "base",
+                "{mode}: {mutation}"
+            );
+            let target_state = evaluate_string(
+                &mut ctx,
+                "JSON.stringify([editor.ownerDocument===window.__originalDocument,editor.isConnected,editor.contentEditable])",
+            ).await;
+            let expected = match mutation {
+                "remove" => json!([true, false, mode]),
+                "disable" => json!([true, true, "false"]),
+                "adopt" => json!([false, true, mode]),
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&target_state).unwrap(),
+                expected,
+                "{mode}: {mutation}"
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn contenteditable_drop_and_insert_text_use_utf16_selection_and_caret_offsets() {
+    for mode in ["true", "plaintext-only"] {
+        for route in ["drop", "insertText"] {
+            for (initial, anchor, focus, replacement, expected, caret) in [
+                ("😀abc", 2, 3, "X", "😀Xbc", 3),
+                ("a😀bc", 1, 3, "🦀", "a🦀bc", 3),
+                ("Ae\u{301}B", 1, 3, "👩‍💻", "A👩‍💻B", 6),
+                ("A😀B", 1, 3, "e\u{301}", "Ae\u{301}B", 3),
+                ("😀abc", 3, 2, "🚀", "😀🚀bc", 4),
+                ("😀ab", 2, 2, "𐐀", "😀𐐀ab", 4),
+            ] {
+                let mut ctx =
+                    drop_fixture(&format!("<div id='editor' contenteditable='{mode}'></div>"))
+                        .await;
+                assert!(evaluate_bool(&mut ctx, &format!(
+                    "(() => {{editor.textContent={};const text=editor.firstChild;getSelection().setBaseAndExtent(text,{anchor},text,{focus});return true;}})()",
+                    json!(initial),
+                )).await);
+                if route == "drop" {
+                    drop_payload(&mut ctx, replacement, None).await;
+                } else {
+                    ctx.process_async(json!({
+                        "id": 702, "method": "Input.insertText", "params": {"text":replacement}
+                    }))
+                    .await;
+                    ctx.expect_result(702, json!({}), None);
+                }
+                let result = evaluate_string(
+                    &mut ctx,
+                    "JSON.stringify([editor.textContent,getSelection().anchorNode===editor.firstChild,getSelection().focusNode===editor.firstChild,getSelection().anchorOffset,getSelection().focusOffset,getSelection().isCollapsed])",
+                ).await;
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                    json!([expected, true, true, caret, caret, true]),
+                    "{mode}: {route}: {initial:?} {anchor}..{focus} -> {replacement:?}"
+                );
+                let expected_events = if route == "drop" {
+                    let snapshot = json!({"text":replacement,"html":"","types":["text/plain"],"effect":"copy","drop":"none"});
+                    let before = if mode == "plaintext-only" {
+                        input_event("beforeinput", json!(replacement), json!(null))
+                    } else {
+                        input_event("beforeinput", json!(null), snapshot.clone())
+                    };
+                    json!([before, input_event("input", json!(null), snapshot)])
+                } else {
+                    let mut before = input_event("beforeinput", json!(replacement), json!(null));
+                    before["inputType"] = json!("insertText");
+                    let mut after = input_event("input", json!(replacement), json!(null));
+                    after["inputType"] = json!("insertText");
+                    json!([before, after])
+                };
+                assert_eq!(
+                    events(&mut ctx).await,
+                    expected_events,
+                    "{mode}: {route}: {initial:?}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unicode_drop_keeps_rich_fragment_and_plaintext_insertion_paths_distinct() {
+    for mode in ["true", "plaintext-only"] {
+        let mut ctx = drop_fixture(&format!(
+            "<div id='editor' contenteditable='{mode}'>😀abc</div>"
+        ))
+        .await;
+        assert!(evaluate_bool(&mut ctx,
+            "(() => {const text=editor.firstChild;getSelection().setBaseAndExtent(text,2,text,3);return true;})()"
+        ).await);
+        drop_payload(&mut ctx, "🦀e\u{301}", Some("<b>🦀e\u{301}</b>")).await;
+        let result = evaluate_string(
+            &mut ctx,
+            "JSON.stringify([editor.textContent,editor.querySelector('b')!==null,getSelection().anchorNode===editor,getSelection().anchorNode===editor.firstChild,getSelection().anchorOffset,getSelection().focusOffset,getSelection().isCollapsed])",
+        ).await;
+        let expected = if mode == "true" {
+            json!(["😀🦀e\u{301}bc", true, true, false, 2, 2, true])
+        } else {
+            json!(["😀🦀e\u{301}bc", false, false, true, 6, 6, true])
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+            expected,
+            "{mode}"
+        );
+        let snapshot = json!({"text":"🦀e\u{301}","html":"<b>🦀e\u{301}</b>","types":["text/plain","text/html"],"effect":"copy","drop":"none"});
+        let before = if mode == "plaintext-only" {
+            input_event("beforeinput", json!("🦀e\u{301}"), json!(null))
+        } else {
+            input_event("beforeinput", json!(null), snapshot.clone())
+        };
+        assert_eq!(
+            events(&mut ctx).await,
+            json!([before, input_event("input", json!(null), snapshot)]),
+            "{mode}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn drop_beforeinput_switch_to_plaintext_only_preserves_rich_event_payload() {
+    let mut ctx = drop_fixture("<div id='editor' contenteditable='true'></div>").await;
+    assert!(evaluate_bool(
+        &mut ctx,
+        "(() => {editor.addEventListener('beforeinput', () => {editor.contentEditable='plaintext-only';});return true;})()",
+    ).await);
+    drop_text(&mut ctx, true).await;
+    assert_eq!(
+        events(&mut ctx).await,
+        json!([
+            input_event("beforeinput", json!(null), transfer(true)),
+            input_event("input", json!(null), transfer(true)),
+        ]),
+    );
+    let result = evaluate_string(
+        &mut ctx,
+        "JSON.stringify([editor.contentEditable,editor.innerHTML,editor.querySelector('b')===null,getSelection().focusNode===editor.firstChild,getSelection().focusOffset,__transfers[0]===__transfers[1]])",
+    ).await;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        json!(["plaintext-only", "hello", true, true, 5, true]),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn beforeinput_revalidates_the_inherited_editing_host_and_input_target() {
+    for mode in ["true", "plaintext-only"] {
+        for route in ["drop", "insertText"] {
+            let mut ctx = drop_fixture(
+                "<div id='outer'><div id='editor' contenteditable='true'></div></div>",
+            )
+            .await;
+            assert!(evaluate_bool(&mut ctx, &format!(
+                "(() => {{window.__retargetedInputs=[];window.__retargetedTransfer=null;\
+                document.addEventListener('input', event => {{\
+                    __retargetedInputs.push({{target:event.target.id,native:event instanceof InputEvent,\
+                    inputType:event.inputType,data:event.data,\
+                    transfer:event.dataTransfer?event.dataTransfer.getData('text/plain'):null}});\
+                    __retargetedTransfer=event.dataTransfer;\
+                }});\
+                editor.addEventListener('beforeinput', () => {{\
+                    document.getElementById('outer').contentEditable={};\
+                    editor.removeAttribute('contenteditable');\
+                }});return true;}})()",
+                json!(mode),
+            )).await);
+            if route == "drop" {
+                drop_text(&mut ctx, true).await;
+            } else {
+                ctx.process_async(json!({
+                    "id": 702, "method": "Input.insertText", "params": {"text":"hello"}
+                }))
+                .await;
+                ctx.expect_result(702, json!({}), None);
+            }
+            let before = if route == "drop" {
+                input_event("beforeinput", json!(null), transfer(true))
+            } else {
+                let mut event = input_event("beforeinput", json!("hello"), json!(null));
+                event["inputType"] = json!("insertText");
+                event
+            };
+            // The editor receives beforeinput, but input must target its new host.
+            assert_eq!(events(&mut ctx).await, json!([before]), "{mode}: {route}");
+            let result = evaluate_string(
+                &mut ctx,
+                "JSON.stringify([editor.textContent,editor.querySelector('b')!==null,editor.hasAttribute('contenteditable'),editor.isContentEditable,__retargetedInputs,__retargetedTransfer===__transfers[0]])",
+            ).await;
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                json!([
+                    "hello", mode == "true" && route == "drop", false, true,
+                    [{"target":"outer","native":true,
+                      "inputType":if route == "drop" {"insertFromDrop"} else {"insertText"},
+                      "data":if route == "drop" {json!(null)} else {json!("hello")},
+                      "transfer":if route == "drop" {json!("hello")} else {json!(null)}}],
+                    true
+                ]),
+                "{mode}: {route}"
+            );
+        }
     }
 }

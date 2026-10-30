@@ -2600,7 +2600,7 @@ dependencies = [
 
 [[package]]
 name = "moli"
-version = "1.1.19"
+version = "1.1.20"
 dependencies = [
  "anyhow",
  "axum",
@@ -2765,6 +2765,7 @@ dependencies = [
  "moli-cookie-jar",
  "moli-dom",
  "moli-fetch",
+ "moli-indexeddb",
  "moli-page-types",
  "moli-parser",
  "moli-renderer-v8",
@@ -3035,9 +3036,10 @@ name = "moli-indexeddb"
 version = "0.1.0"
 dependencies = [
  "moli-crypto",
+ "moli-sqlite",
  "parking_lot",
+ "rusqlite",
  "serde",
- "serde_json",
  "strum",
  "unicode-id-start",
 ]
@@ -3229,6 +3231,7 @@ dependencies = [
  "moli-fetch",
  "moli-header-field",
  "moli-image",
+ "moli-indexeddb",
  "moli-layout",
  "moli-page-types",
  "moli-paint",
@@ -3503,6 +3506,14 @@ dependencies = [
  "moli-url",
  "psl-types",
  "url",
+]
+
+[[package]]
+name = "moli-sqlite"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+ "rusqlite",
 ]
 
 [[package]]

@@ -12,6 +12,7 @@ use super::super::{
     css_fontface_runtime::font_face_constructor_callback,
     css_runtime::{css_keyword_value_constructor_callback, css_unit_value_constructor_callback},
     css_stylesheet_runtime::css_style_sheet_constructor_callback,
+    dom_quad::dom_quad_constructor_callback,
     encoded_video_chunk::encoded_video_chunk_constructor_callback,
     events::{
         EventSubclassKind, ValueEventKind, build_event_subclass_template,
@@ -23,7 +24,10 @@ use super::super::{
         file_reader_constructor_callback, file_reader_sync_constructor_callback,
     },
     form_data_runtime::build_form_data_constructor_template,
-    geometry_runtime::{dom_matrix_constructor_callback, dom_point_constructor_callback},
+    geometry_runtime::{
+        dom_matrix_constructor_callback, dom_matrix_readonly_constructor_callback,
+        dom_point_constructor_callback, dom_point_readonly_constructor_callback,
+    },
     idle_detection::idle_detector_constructor_callback,
     image_data::image_data_constructor_callback,
     location_runtime::build_location_constructor_template,
@@ -113,6 +117,12 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::TransitionEvent => {
             build_value_event_template(scope, ValueEventKind::Transition)
+        }
+        ConstructorKind::MIDIMessageEvent => {
+            build_value_event_template(scope, ValueEventKind::MidiMessage)
+        }
+        ConstructorKind::MIDIConnectionEvent => {
+            build_value_event_template(scope, ValueEventKind::MidiConnection)
         }
         ConstructorKind::BlobEvent => build_value_event_template(scope, ValueEventKind::Blob),
         ConstructorKind::GamepadEvent => build_value_event_template(scope, ValueEventKind::Gamepad),
@@ -573,10 +583,34 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .length(0)
             .build(scope)
         }
+        ConstructorKind::DomPointReadOnly => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMPointReadOnly,
+                dom_point_readonly_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
         ConstructorKind::DomPoint => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::DOMPoint,
                 dom_point_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::DomQuad => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMQuad,
+                dom_quad_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::DomMatrixReadOnly => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMMatrixReadOnly,
+                dom_matrix_readonly_constructor_callback
             ))
             .length(0)
             .build(scope)

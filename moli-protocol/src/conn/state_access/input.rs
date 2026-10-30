@@ -12,6 +12,19 @@ use moli_core::page::{
 };
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn input_page_is_current(
+        &self,
+        owner: &CommandOwnerScope,
+        page_owner: &TargetPageResidenceIdentity,
+        host: Option<&crate::conn::ProtocolPageHostScope>,
+    ) -> bool {
+        host.is_none_or(|host| host.is_current(self.connection))
+            && self
+                .connection
+                .target_page_residence_identity_for_owner(owner)
+                .as_ref()
+                == Some(page_owner)
+    }
     pub(crate) fn settle_input_page_command(
         self,
         owner: &TargetPageResidenceIdentity,
@@ -31,13 +44,7 @@ impl ProtocolWorkflowState<'_> {
         host: Option<&crate::conn::ProtocolPageHostScope>,
         activation: RendererPendingDownloadActivation,
     ) -> Result<Option<crate::conn::downloads::PreparedDownloadActivationDelivery>> {
-        if host.is_some_and(|host| !host.is_current(self.connection))
-            || self
-                .connection
-                .target_page_residence_identity_for_owner(owner)
-                .as_ref()
-                != Some(page_owner)
-        {
+        if !self.input_page_is_current(owner, page_owner, host) {
             return Ok(None);
         }
         self.connection

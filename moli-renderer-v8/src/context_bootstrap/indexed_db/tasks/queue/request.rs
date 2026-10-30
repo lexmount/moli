@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::set_indexed_db_request_error_pending;
 
 pub(in crate::context_bootstrap::indexed_db) fn store_request_success<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -12,8 +13,23 @@ pub(in crate::context_bootstrap::indexed_db) fn store_request_success<'s>(
 pub(in crate::context_bootstrap::indexed_db) fn store_request_error<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
-    error: v8::Local<'s, v8::Value>,
+    mut error: v8::Local<'s, v8::Value>,
 ) {
+    if let Some(transaction) = indexed_db_request_transaction_object(scope, request)
+        && crate::context_bootstrap::indexed_db::indexed_db_transaction_is_committing(
+            scope,
+            transaction,
+        )
+        && !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
+            .unwrap_or(false)
+    {
+        // A failed operation while committing aborts immediately, before its
+        // event can be canceled. All still-pending requests receive AbortError;
+        // the transaction retains the original failure as its error.
+        crate::context_bootstrap::indexed_db::finish_transaction_abort(scope, transaction, error);
+        error = dom_exception_value(scope, "The transaction was aborted.", "AbortError");
+    }
+    set_indexed_db_request_error_pending(scope, request, true);
     define_non_enumerable_value_property(scope, request, INDEXED_DB_PENDING_ERROR_SLOT, error);
     enqueue_request_task(scope, "request-error", request);
 }

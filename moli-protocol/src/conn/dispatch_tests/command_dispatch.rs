@@ -2128,18 +2128,11 @@ fn command_dispatch_completes_input_owner_commands_without_legacy_fallback() {
     let step = conn.start_command_dispatch(&raw);
     assert_eq!(
         complete_messages(step),
-        vec![json!({
-            "id": 1001,
-            "error": {
-                "code": -32000,
-                "message": crate::domains::input::SET_INTERCEPT_DRAGS_UNSUPPORTED_MESSAGE
-            }
-        })]
+        vec![json!({ "id": 1001, "result": {} })]
     );
     assert!(
-        conn.browser_context
-            .as_ref()
-            .is_some_and(|context| !context.active_page_target().input_intercept_drags_enabled)
+        conn.target_page_session_state_for_session(None)
+            .is_some_and(|state| state.input_intercept_drags_enabled)
     );
 
     let raw = serde_json::to_string(&json!({

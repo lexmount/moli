@@ -16,6 +16,7 @@ pub struct ConnectionRequestQueues {
 
 #[derive(Default)]
 struct QueueState {
+    closed: bool,
     next_id: u64,
     queues: BTreeMap<(String, String), VecDeque<QueuedRequest>>,
 }
@@ -55,8 +56,23 @@ impl ConnectionRequestQueues {
         name: &str,
         wake: ConnectionRequestWake,
     ) -> ConnectionRequestLease {
-        let key = (storage_key.to_owned(), name.to_owned());
+        self.try_enqueue(storage_key, name, wake)
+            .expect("connection request queue is open")
+    }
+
+    pub fn try_enqueue(
+        self: &Arc<Self>,
+        storage_key: &str,
+        name: &str,
+        wake: ConnectionRequestWake,
+    ) -> Result<ConnectionRequestLease, crate::IndexedDbError> {
         let mut state = self.state.lock();
+        if state.closed {
+            return Err(crate::IndexedDbError::InvalidState(
+                "IndexedDB connection queue is closed".into(),
+            ));
+        }
+        let key = (storage_key.to_owned(), name.to_owned());
         state.next_id = state
             .next_id
             .checked_add(1)
@@ -67,15 +83,25 @@ impl ConnectionRequestQueues {
             .entry(key.clone())
             .or_default()
             .push_back(QueuedRequest { id, wake });
-        ConnectionRequestLease(ConnectionRequestHandle {
+        Ok(ConnectionRequestLease(ConnectionRequestHandle {
             queues: Arc::downgrade(self),
             key,
             id,
-        })
+        }))
     }
 }
 
 impl ConnectionRequestHandle {
+    pub fn is_active(&self) -> bool {
+        self.queues.upgrade().is_some_and(|queues| {
+            queues
+                .state
+                .lock()
+                .queues
+                .get(&self.key)
+                .is_some_and(|queue| queue.iter().any(|entry| entry.id == self.id))
+        })
+    }
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -116,6 +142,44 @@ impl ConnectionRequestHandle {
         // Wake outside the lock: the recipient may immediately query its queue.
         if let Some(wake) = wake {
             wake();
+        }
+    }
+}
+
+impl ConnectionRequestQueues {
+    /// Cancel accepted algorithms after the storage owner has drained SQL.
+    /// Wake every event loop so non-head requests can settle rather than hang.
+    pub(crate) fn shutdown(&self) {
+        let queues = {
+            let mut state = self.state.lock();
+            state.closed = true;
+            std::mem::take(&mut state.queues)
+        };
+        for entry in queues.into_values().flatten() {
+            (entry.wake)();
+        }
+    }
+
+    /// Retire all accepted algorithms for one exact owner, including names
+    /// which have not reached database registration. Wake outside the lock.
+    pub(crate) fn cancel_owner(&self, owner: &str) {
+        self.cancel_matching_owners(|key| key == owner);
+    }
+
+    pub(crate) fn cancel_owner_prefix(&self, prefix: &str) {
+        self.cancel_matching_owners(|key| key.starts_with(prefix));
+    }
+
+    fn cancel_matching_owners(&self, matches: impl Fn(&str) -> bool) {
+        let queues = self
+            .state
+            .lock()
+            .queues
+            .extract_if(.., |(key, _), _| matches(key))
+            .map(|(_, queue)| queue)
+            .collect::<Vec<_>>();
+        for entry in queues.into_iter().flatten() {
+            (entry.wake)();
         }
     }
 }

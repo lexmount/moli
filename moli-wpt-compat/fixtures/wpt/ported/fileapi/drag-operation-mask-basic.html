@@ -6,24 +6,20 @@
 <script src="/wpt/resources/moli-wpt-adapter.js"></script>
 <script>
 const target = document.getElementById("target");
-const events = [];
+const records = Object.create(null);
 let phase = "none";
 let overrideDropEffect = null;
 let expectedDrops = 0;
 
-function shouldRecordModifierKeys() {
-  return phase === "modifiers" ||
-    phase === "modifierSelection" ||
-    phase === "modifierPrecedence";
+function phaseRecord() {
+  if (!records[phase]) {
+    records[phase] = { enter: [], over: [], drop: [], input: [] };
+  }
+  return records[phase];
 }
 
 function modifierState(event) {
-  return [
-    event.altKey,
-    event.ctrlKey,
-    event.metaKey,
-    event.shiftKey,
-  ].join(",");
+  return [event.altKey, event.ctrlKey, event.metaKey, event.shiftKey].join(",");
 }
 
 function resetTargetValue() {
@@ -42,119 +38,98 @@ resetTargetValue();
 
 const complete = new Promise(function (resolve) {
   target.addEventListener("dragenter", function (event) {
-    if (shouldRecordModifierKeys()) {
-      events.push(phase + "-enter-keys:" + modifierState(event));
-    }
-    events.push(
-      phase +
-        "-enter:" +
-        event.dataTransfer.dropEffect +
-        ":" +
-        event.dataTransfer.effectAllowed,
-    );
+    phaseRecord().enter.push([
+      event.dataTransfer.dropEffect,
+      event.dataTransfer.effectAllowed,
+      modifierState(event),
+      event.dataTransfer.getData("text"),
+    ]);
   });
 
   target.addEventListener("dragover", function (event) {
-    // Exercise author-selected operations rather than the editor's default copy.
+    // This fixture negotiates author-handled operations. Uncanceled editor
+    // drops instead use the editor's default copy operation.
     event.preventDefault();
-    if (shouldRecordModifierKeys()) {
-      events.push(phase + "-over-keys:" + modifierState(event));
-    }
     if (overrideDropEffect !== null) {
       event.dataTransfer.dropEffect = overrideDropEffect;
     }
-    events.push(
-      phase +
-        "-over:" +
-        event.dataTransfer.dropEffect +
-        ":" +
-        event.dataTransfer.effectAllowed,
-    );
+    event.dataTransfer.setData("text", "must-not-replace-the-payload");
+    phaseRecord().over.push([
+      event.dataTransfer.dropEffect,
+      event.dataTransfer.effectAllowed,
+      modifierState(event),
+      event.dataTransfer.getData("text"),
+    ]);
   });
 
   target.addEventListener("drop", function (event) {
-    if (shouldRecordModifierKeys()) {
-      events.push(phase + "-drop-keys:" + modifierState(event));
-    }
-    events.push(
-      phase +
-        "-drop:" +
-        event.dataTransfer.getData("text") +
-        ":" +
-        event.dataTransfer.dropEffect +
-        ":" +
-        event.dataTransfer.effectAllowed +
-        ":" +
-        target.value,
-    );
+    phaseRecord().drop.push([
+      event.dataTransfer.getData("text"),
+      event.dataTransfer.dropEffect,
+      event.dataTransfer.effectAllowed,
+      target.value,
+      modifierState(event),
+    ]);
     expectedDrops += 1;
-    if (expectedDrops === 9) {
+    if (phase === "modifierPrecedence") {
+      // The default input action runs after the drop listener returns.
       setTimeout(resolve, 0);
     }
   });
 
   target.addEventListener("input", function () {
-    events.push(
-      phase +
-        "-input:" +
-        target.value +
-        ":" +
-        target.selectionStart +
-        ":" +
-        target.selectionEnd,
-    );
+    phaseRecord().input.push([
+      target.value,
+      target.selectionStart,
+      target.selectionEnd,
+    ]);
   });
 });
 
 promise_test(async function () {
   await complete;
-  assert_array_equals(
-    events,
-    [
-      "none-enter:none:none",
-      "none-over:none:none",
-      "none-drop:none-text:none:none:hello world",
-      "link-enter:none:link",
-      "link-over:none:link",
-      "link-drop:link-text:none:link:hello world",
-      "link-input:hello link-text:15:15",
-      "move-enter:none:move",
-      "move-over:none:move",
-      "move-drop:move-text:none:move:hello world",
-      "move-input:hello move-text:15:15",
-      "copyLink-enter:none:copyLink",
-      "copyLink-over:move:copyLink",
-      "copyLink-drop:copylink-text:none:copyLink:hello world",
-      "linkMove-enter:none:linkMove",
-      "linkMove-over:copy:linkMove",
-      "linkMove-drop:linkmove-text:none:linkMove:hello world",
-      "all-enter:none:all",
-      "all-over:link:all",
-      "all-drop:all-text:none:all:hello world",
-      "all-input:hello all-text:14:14",
-      "modifiers-enter-keys:true,true,true,true",
-      "modifiers-enter:none:copy",
-      "modifiers-over-keys:false,true,false,true",
-      "modifiers-over:none:copy",
-      "modifiers-drop-keys:true,false,true,false",
-      "modifiers-drop:modifiers-text:none:copy:hello world",
-      "modifiers-input:hello modifiers-text:20:20",
-      "modifierSelection-enter-keys:false,true,false,false",
-      "modifierSelection-enter:none:all",
-      "modifierSelection-over-keys:false,false,false,true",
-      "modifierSelection-over:none:all",
-      "modifierSelection-drop-keys:true,false,false,false",
-      "modifierSelection-drop:auto-text:none:all:hello world",
-      "modifierSelection-input:hello auto-text:15:15",
-      "modifierPrecedence-enter-keys:false,false,true,false",
-      "modifierPrecedence-enter:none:all",
-      "modifierPrecedence-over-keys:false,true,false,true",
-      "modifierPrecedence-over:none:all",
-      "modifierPrecedence-drop-keys:true,false,true,false",
-      "modifierPrecedence-drop:precedence-text:none:all:hello world",
-      "modifierPrecedence-input:hello precedence-text:21:21",
-    ],
-    "independent event views expose source masks and modifier keys, while negotiated operations gate editing",
-  );
-}, "Input.dispatchDragEvent exposes operation-mask effect negotiation and modifier-key matrix");
+  const noKeys = "false,false,false,false";
+  const expected = [
+    { phase: "none", allowed: "none", initial: "none", over: ["none", "none"] },
+    { phase: "link", allowed: "link", initial: "link", over: ["link", "link"], drop: "link", text: "link-text" },
+    { phase: "move", allowed: "move", initial: "move", over: ["move", "move"], drop: "move", text: "move-text" },
+    { phase: "copyLink", allowed: "copyLink", initial: "copy", over: ["move", "move"] },
+    { phase: "linkMove", allowed: "linkMove", initial: "move", over: ["copy", "copy"] },
+    { phase: "all", allowed: "all", initial: "copy", over: ["link", "link"], drop: "link", text: "all-text" },
+    {
+      phase: "modifiers", allowed: "copy", initial: "copy", over: ["copy", "copy"], drop: "copy", text: "modifiers-text",
+      keys: ["true,true,true,true", "false,true,false,true", "true,false,true,false"],
+    },
+    {
+      phase: "modifierSelection", allowed: "all", initial: "copy", over: ["copy", "copy"], drop: "copy", text: "auto-text",
+      keys: ["false,true,false,false", "false,false,false,true", "true,false,false,false"],
+    },
+    {
+      phase: "modifierPrecedence", allowed: "all", initial: "copy", over: ["copy", "copy"], drop: "copy", text: "precedence-text",
+      keys: ["false,false,true,false", "false,true,false,true", "true,false,true,false"],
+    },
+  ];
+  assert_array_equals(Object.keys(records), expected.map(function (item) { return item.phase; }), "every requested operation phase ran");
+  for (const item of expected) {
+    const record = records[item.phase];
+    const keys = item.keys || [noKeys, noKeys, noKeys];
+    assert_equals(record.enter.length, 1, item.phase + ": one dragenter");
+    assert_array_equals(record.enter[0], [item.initial, item.allowed, keys[0], ""], item.phase + ": effectAllowed initializes the protected view");
+    assert_equals(record.over.length, 2, item.phase + ": explicit over and drop each negotiate dragover");
+    for (let index = 0; index < 2; index++) {
+      assert_array_equals(record.over[index], [item.over[index], item.allowed, keys[index + 1], ""], item.phase + ": operation/modifiers/protected data at over " + index);
+    }
+    if (item.text) {
+      assert_equals(record.drop.length, 1, item.phase + ": allowed operation dispatches drop");
+      assert_array_equals(record.drop[0], [item.text, item.drop, item.allowed, "hello world", keys[2]], item.phase + ": drop carries its negotiated operation and readable command payload");
+      const caret = 6 + item.text.length;
+      assert_equals(record.input.length, 1, item.phase + ": one default edit");
+      assert_array_equals(record.input[0], ["hello " + item.text, caret, caret], item.phase + ": accepted drop replaces the selection");
+    } else {
+      assert_equals(record.drop.length, 0, item.phase + ": forbidden operation must not dispatch drop");
+      assert_equals(record.input.length, 0, item.phase + ": forbidden operation must not edit");
+    }
+  }
+  assert_equals(expectedDrops, 6, "only the six accepted phases dispatch drop");
+}, "Input.dispatchDragEvent validates operation masks, protected data and modifier-key forwarding");
 </script>
