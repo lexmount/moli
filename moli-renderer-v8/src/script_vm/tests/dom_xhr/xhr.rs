@@ -941,6 +941,112 @@ fn xml_http_request_upload_listener_flag_is_captured_before_loadstart() {
     );
 }
 
+#[test]
+fn xhr_upload_microtask_can_replace_an_already_ready_timeout() {
+    for replacement in [0, 10_000] {
+        let mut vm = new_storage_test_vm("https://xhr-upload-ready-timeout.test/");
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Xhr),
+        );
+        vm.eval(&format!(
+            r#"
+globalThis.xhr = new XMLHttpRequest();
+globalThis.events = [];
+for (const type of ['progress', 'load', 'loadend']) {{
+  xhr.upload.addEventListener(type, () => events.push(type));
+}}
+xhr.upload.addEventListener('loadend', () => Promise.resolve().then(() => {{
+  xhr.timeout = {replacement};
+  events.push('microtask');
+}}));
+xhr.ontimeout = () => events.push('timeout');
+xhr.open('POST', '/held');
+xhr.send('Test Message');
+"#
+        ))
+        .expect("intercept upload without depending on network scheduling");
+        let pending = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(pending.len(), 1);
+        let internal_id = pending[0].internal_id;
+
+        let context = vm.page_default_runtime.context.clone();
+        vm.renderer_document_isolate
+            .with_entered_renderer_document_isolate(|isolate| {
+                let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let context = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let xhr = context
+                    .global(scope)
+                    .get(scope, v8str(scope, "xhr").into())
+                    .unwrap();
+                let xhr = v8::Local::<v8::Object>::try_from(xhr).unwrap();
+                // Backdate only the request's native start timestamp. The public
+                // setter must schedule a genuinely ready timer, without sleeping.
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as f64;
+                crate::network_host::set_xhr_state_number(
+                    scope,
+                    xhr,
+                    crate::network_host::XHR_TIMEOUT_START_MS_SLOT,
+                    now - 100.0,
+                );
+                let timeout = v8::Number::new(scope, 30.0);
+                assert_eq!(
+                    xhr.set(scope, v8str(scope, "timeout").into(), timeout.into()),
+                    Some(true)
+                );
+                Ok(())
+            })
+            .expect("schedule expired timeout through the public setter");
+        assert!(
+            vm.has_ready_timeout(),
+            "the old timeout must already be due"
+        );
+
+        let context = vm.page_default_runtime.context.clone();
+        vm.renderer_document_isolate
+            .with_entered_renderer_document_isolate(|isolate| {
+                let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let context = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let xhr = context
+                    .global(scope)
+                    .get(scope, v8str(scope, "xhr").into())
+                    .unwrap();
+                let xhr = v8::Local::<v8::Object>::try_from(xhr).unwrap();
+                assert!(crate::network_host::apply_xhr_upload_event(
+                    scope,
+                    xhr,
+                    internal_id,
+                    moli_fetch::UploadEvent::Complete {
+                        loaded: 12,
+                        total: 12
+                    },
+                ));
+                scope.perform_microtask_checkpoint();
+                Ok(())
+            })
+            .expect("apply an admitted upload task and its microtask checkpoint");
+        assert!(
+            !vm.has_ready_timeout(),
+            "the reaction must retire the ready timer"
+        );
+        assert_eq!(vm.ms_to_next_timeout().is_some(), replacement != 0);
+        assert_eq!(
+            vm.eval("JSON.stringify([xhr.timeout, xhr.readyState, events])")
+                .unwrap(),
+            format!(r#"[{replacement},1,["progress","load","loadend","microtask"]]"#),
+        );
+        vm.eval("xhr.abort()")
+            .expect("retire the intercepted request");
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn xml_http_request_upload_loadstart_preserves_reopened_request() {
     let loader = static_http_loader(std::iter::empty::<String>());
