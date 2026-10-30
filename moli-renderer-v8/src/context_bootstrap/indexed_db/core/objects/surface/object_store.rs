@@ -23,6 +23,11 @@ pub(in crate::context_bootstrap::indexed_db) fn create_object_store_object<'s>(
     tx: v8::Local<'s, v8::Object>,
     info: &ObjectStoreInfo,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    if let Some(store) =
+        crate::context_bootstrap::indexed_db::cached_indexed_db_object_store(scope, tx, &info.name)
+    {
+        return Some(store);
+    }
     let metadata = indexed_db_database_store_metadata(scope, db, &info.name)?;
     let store = create_failed_object_store_object(scope, db, tx, info)?;
     let storage_scope = indexed_db_typed_storage_scope(scope, db);

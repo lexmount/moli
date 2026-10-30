@@ -7,7 +7,7 @@ mod mirror;
 pub(super) use mirror::IndexedDbObjectStoreMetadata;
 #[cfg(test)]
 use mirror::IndexedDbObjectStoreMetadataData;
-use mirror::{StoreMap, edit_shared, missing_mirror};
+use mirror::{IndexedDbIndexMetadata, StoreMap, edit_shared, missing_mirror};
 mod collection;
 mod cursor;
 use collection::*;
@@ -475,26 +475,26 @@ impl IndexedDbObjectStoreLifecycleState {
 struct IndexedDbIndexLifecycleState {
     object_store: v8::Weak<v8::Object>,
     info: Rc<IndexInfo>,
+    origin: Rc<IndexInfo>,
     marker: bool,
     deleted: bool,
     created_in_upgrade: bool,
 }
-
 impl IndexedDbIndexLifecycleState {
     fn new(
         scope: &mut v8::PinScope<'_, '_>,
         index: v8::Local<'_, v8::Object>,
         object_store: v8::Local<'_, v8::Object>,
-        info: Rc<IndexInfo>,
-        created_in_upgrade: bool,
+        metadata: IndexedDbIndexMetadata,
     ) -> Self {
         set_private_value(scope, index, INDEX_OBJECT_STORE, object_store.into());
         Self {
             object_store: v8::Weak::new(scope, object_store),
-            info,
+            info: metadata.info,
+            origin: metadata.origin,
             marker: true,
             deleted: false,
-            created_in_upgrade,
+            created_in_upgrade: metadata.created_in_upgrade.get(),
         }
     }
 }
@@ -1351,12 +1351,10 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
 ) -> Option<()> {
     let id = indexed_db_typed_state_id(scope, index)?;
     let metadata = indexed_db_object_store_metadata(scope, object_store)?;
-    let created_in_upgrade = metadata.index_created_in_upgrade(&info.name);
-    let info = metadata.shared_index(&info.name)?;
+    let metadata = metadata.index_metadata(&info.name)?;
     let database = indexed_db_object_store_database(scope, object_store);
     let table = indexed_db_runtime_state_table_for_object(scope, index);
-    let state =
-        IndexedDbIndexLifecycleState::new(scope, index, object_store, info, created_in_upgrade);
+    let state = IndexedDbIndexLifecycleState::new(scope, index, object_store, metadata);
     let state = Rc::new(RefCell::new(state));
     table.borrow_mut().indexes.insert(id, Rc::downgrade(&state));
     track_collectible_wrapper(scope, index, id, &table, state);
@@ -1814,7 +1812,9 @@ pub(super) fn promote_indexed_db_sql_schema<'s>(
     if let Some(metadata) = &mirror.metadata {
         for store in metadata.values() {
             store.created_in_upgrade.set(false);
-            store.created_indexes.borrow_mut().take();
+            for index in store.indexes.values() {
+                index.created_in_upgrade.set(false);
+            }
         }
     }
     mirror.sql_schema = Some(std::sync::Arc::downgrade(schema));
