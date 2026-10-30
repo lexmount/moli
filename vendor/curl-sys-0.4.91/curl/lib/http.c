@@ -4232,7 +4232,19 @@ static CURLcode http_on_response(struct Curl_easy *data,
   http_check_auth_closure(data, conn);
 
 #ifndef CURL_DISABLE_WEBSOCKETS
-  /* All >=200 HTTP status codes are errors when wanting ws */
+  /* RFC 8441 replaces the connection-wide 101 upgrade with a successful
+   * extended CONNECT on an HTTP/2 stream. */
+  if(data->req.upgr101 == UPGR101_WS && k->httpversion == 20 &&
+     k->httpcode == 200) {
+    result = http_write_header(data, last_hd, last_hd_len);
+    last_hd = NULL;
+    if(!result)
+      result = Curl_ws_accept(data, buf, blen);
+    if(!result)
+      *pconsumed = blen;
+    goto out;
+  }
+  /* All other >=200 HTTP status codes are errors when wanting ws. */
   if(data->req.upgr101 == UPGR101_WS) {
     failf(data, "Refused WebSocket upgrade: %d", k->httpcode);
     result = CURLE_HTTP_RETURNED_ERROR;
@@ -5011,6 +5023,7 @@ CURLcode Curl_http_req_to_h2(struct dynhds *h2_headers,
                              struct httpreq *req, struct Curl_easy *data)
 {
   const char *scheme = NULL, *authority = NULL;
+  bool websocket = data->req.upgr101 == UPGR101_WS;
   struct dynhds_entry *e;
   size_t i;
   CURLcode result;
@@ -5044,8 +5057,11 @@ CURLcode Curl_http_req_to_h2(struct dynhds *h2_headers,
 
   Curl_dynhds_reset(h2_headers);
   Curl_dynhds_set_opts(h2_headers, DYNHDS_OPT_LOWERCASE);
+  if(websocket)
+    scheme = (data->conn->scheme->protocol & CURLPROTO_WSS) ? "https" : "http";
   result = Curl_dynhds_add(h2_headers, STRCONST(HTTP_PSEUDO_METHOD),
-                           req->method, strlen(req->method));
+                           websocket ? "CONNECT" : req->method,
+                           websocket ? 7 : strlen(req->method));
   if(!result && scheme) {
     result = Curl_dynhds_add(h2_headers, STRCONST(HTTP_PSEUDO_SCHEME),
                              scheme, strlen(scheme));
@@ -5058,8 +5074,13 @@ CURLcode Curl_http_req_to_h2(struct dynhds *h2_headers,
     result = Curl_dynhds_add(h2_headers, STRCONST(HTTP_PSEUDO_PATH),
                              req->path, strlen(req->path));
   }
+  if(!result && websocket)
+    result = Curl_dynhds_add(h2_headers, STRCONST(":protocol"),
+                             STRCONST("websocket"));
   for(i = 0; !result && i < Curl_dynhds_count(&req->headers); ++i) {
     e = Curl_dynhds_getn(&req->headers, i);
+    if(websocket && curl_strequal(e->name, "Sec-WebSocket-Key"))
+      continue;
     /* "TE" is special in that it is only permissible when it
      * has only value "trailers". RFC 9113 ch. 8.2.2 */
     if(e->namelen == 2 && curl_strequal("TE", e->name)) {

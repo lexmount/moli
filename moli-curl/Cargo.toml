@@ -19,11 +19,14 @@ tokio = { version = "1.51.0", features = ["sync"] }
 url = "2.5.7"
 
 [dev-dependencies]
+h2 = "0.4"
+http = "1"
 rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 tempfile = "3"
-tokio = { version = "1.51.0", features = ["macros", "rt", "time"] }
+tokio = { version = "1.51.0", features = ["io-util", "macros", "net", "rt", "time"] }
 tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["handshake"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12"] }
 tracing-subscriber = { version = "0.3.19", features = ["fmt"] }
 
 [lints]

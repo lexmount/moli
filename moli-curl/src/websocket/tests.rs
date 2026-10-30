@@ -13,6 +13,7 @@ use super::*;
 use crate::NetworkAddressPolicy;
 use moli_dns_resolver::DnsTarget;
 
+mod http2;
 mod readiness;
 mod shared;
 mod storage;
