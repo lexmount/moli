@@ -304,22 +304,68 @@ impl ScriptVm {
         let document_owner_before_run = self
             .current_main_document_task_owner()
             .expect("parser-owned classic execution requires a current main Document owner");
-        let result = {
+        let (result, failure_evaluation) = {
             let _parser_script_nesting = execution_context
                 .is_parser_blocking()
                 .then(|| self.document_runtime.enter_parser_script_nesting());
-            self.execute_prepared_script_run_body(script, run_input.body)
-                .await
+            let result = self
+                .execute_prepared_script_run_body(script, run_input.body)
+                .await;
+            // Engine termination skips the normal evaluation cleanup. Keep
+            // recovery inside currentScript and parser nesting, while nested
+            // execution still leaves its checkpoint to the enclosing script.
+            let failure_evaluation = match &result {
+                Err(error)
+                    if script.kind == ScriptKind::Classic
+                        && error.body_activity() == PreparedScriptBodyActivity::Entered =>
+                {
+                    match self.with_default_context_scope(|scope, _| {
+                        // Main tracks host JavaScript entries through V8
+                        // MicrotasksScope, so nested evaluation must leave the
+                        // checkpoint to the still-active enclosing entry.
+                        let can_checkpoint = scope
+                            .get_current_context()
+                            .get_microtask_queue()
+                            .is_none_or(|queue| {
+                                queue.get_microtasks_scope_depth() == 0
+                                    && !queue.is_running_microtasks()
+                            })
+                            && v8::StackTrace::current_stack_trace(scope, 1)
+                                .is_some_and(|stack| stack.get_frame_count() == 0);
+                        if can_checkpoint {
+                            Self::perform_microtask_checkpoints(scope, Some(&script.url))?;
+                        }
+                        Ok(())
+                    }) {
+                        Ok(()) => ParserOwnedClassicScriptEvaluationSettlement::Settled,
+                        Err(error) => {
+                            self.record_runtime_warning(format_args!(
+                                "parser-owned classic script cleanup failed: {error}"
+                            ));
+                            ParserOwnedClassicScriptEvaluationSettlement::NotSettled
+                        }
+                    }
+                }
+                _ => ParserOwnedClassicScriptEvaluationSettlement::NotSettled,
+            };
+            (result, failure_evaluation)
         };
         self.document_runtime.clear_current_script_handle();
         let outcome = match result {
             Ok(outcome) => outcome,
             Err(error) => {
-                let script_element_event = self
-                    .plan_parser_owned_external_classic_completion_event(
-                        script,
-                        ScriptEventKind::Error,
-                    );
+                let body_activity = error.body_activity();
+                // An entered classic script was successfully fetched. An
+                // engine failure does not turn its terminal into a load error.
+                let event_kind = if script.kind == ScriptKind::Classic
+                    && body_activity == PreparedScriptBodyActivity::Entered
+                {
+                    ScriptEventKind::Load
+                } else {
+                    ScriptEventKind::Error
+                };
+                let script_element_event =
+                    self.plan_parser_owned_external_classic_completion_event(script, event_kind);
                 tracing::debug!(
                     url = %script.url,
                     event_planned = script_element_event.is_some(),
@@ -331,8 +377,8 @@ impl ScriptVm {
                         error.into_message(),
                     )),
                     script_element_event,
-                    ParserOwnedClassicScriptEvaluationSettlement::NotSettled,
-                    PreparedScriptBodyActivity::Entered,
+                    failure_evaluation,
+                    body_activity,
                 );
             }
         };
