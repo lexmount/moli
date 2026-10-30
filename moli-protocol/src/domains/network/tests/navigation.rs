@@ -706,10 +706,16 @@ async fn main_document_navigation_redirect_emits_second_request_with_redirect_re
         let mut jar = bc.cookie_store_for_test().lock();
         jar.store_response_headers(
             &Url::parse(&final_url).unwrap(),
-            &[(
-                "set-cookie".to_owned(),
-                b"strict=1; Path=/; SameSite=Strict".to_vec(),
-            )],
+            &[
+                (
+                    "set-cookie".to_owned(),
+                    b"strict=1; Path=/; SameSite=Strict".to_vec(),
+                ),
+                (
+                    "set-cookie".to_owned(),
+                    b"lax=1; Path=/; SameSite=Lax".to_vec(),
+                ),
+            ],
         );
     }
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
@@ -769,16 +775,28 @@ async fn main_document_navigation_redirect_emits_second_request_with_redirect_re
         "strict"
     );
     assert_eq!(
+        redirected_request["params"]["cookieAccessReport"]["excludedCookies"][0]["exclusionReasons"],
+        json!(["SameSiteStrict"])
+    );
+    assert_eq!(
+        redirected_request["params"]["cookieAccessReport"]["includedCookies"][0]["cookie"]["name"],
+        "lax"
+    );
+    assert_eq!(
+        redirected_request["params"]["request"]["headers"]["Cookie"],
+        "lax=1"
+    );
+    assert_eq!(
         redirected_request["params"]["cookieAccessReport"]["excludedCookies"][0]["warningReasons"],
         json!(["SameSiteContextDowngradedByRedirect"])
     );
     assert_eq!(
         redirected_request["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContextDowngradeType"],
-        json!("StrictToCross")
+        json!("StrictToLax")
     );
     assert_eq!(
         redirected_request["params"]["cookieAccessReport"]["excludedCookies"][0]["schemefulSameSiteContextDowngradeType"],
-        json!("StrictToCross")
+        json!("StrictToLax")
     );
     assert_eq!(
         redirected_request["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContextHttpMethod"],
@@ -798,11 +816,11 @@ async fn main_document_navigation_redirect_emits_second_request_with_redirect_re
     );
     assert_eq!(
         redirected_request["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContext"],
-        json!("CrossSite")
+        json!("SameSiteLax")
     );
     assert_eq!(
         redirected_request["params"]["cookieAccessReport"]["excludedCookies"][0]["schemefulSameSiteContext"],
-        json!("CrossSite")
+        json!("SameSiteLax")
     );
 
     wait_until_messages(
@@ -1154,10 +1172,16 @@ async fn main_document_multi_hop_redirect_preserves_cookie_downgrade_report() {
         let mut jar = bc.cookie_store_for_test().lock();
         jar.store_response_headers(
             &Url::parse(&final_url).unwrap(),
-            &[(
-                "set-cookie".to_owned(),
-                b"strict=1; Path=/; SameSite=Strict".to_vec(),
-            )],
+            &[
+                (
+                    "set-cookie".to_owned(),
+                    b"strict=1; Path=/; SameSite=Strict".to_vec(),
+                ),
+                (
+                    "set-cookie".to_owned(),
+                    b"lax=1; Path=/; SameSite=Lax".to_vec(),
+                ),
+            ],
         );
     }
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
@@ -1198,24 +1222,36 @@ async fn main_document_multi_hop_redirect_preserves_cookie_downgrade_report() {
         "strict"
     );
     assert_eq!(
+        final_request["params"]["cookieAccessReport"]["excludedCookies"][0]["exclusionReasons"],
+        json!(["SameSiteStrict"])
+    );
+    assert_eq!(
+        final_request["params"]["cookieAccessReport"]["includedCookies"][0]["cookie"]["name"],
+        "lax"
+    );
+    assert_eq!(
+        final_request["params"]["request"]["headers"]["Cookie"],
+        "lax=1"
+    );
+    assert_eq!(
         final_request["params"]["cookieAccessReport"]["excludedCookies"][0]["warningReasons"],
         json!(["SameSiteContextDowngradedByRedirect"])
     );
     assert_eq!(
         final_request["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContext"],
-        json!("CrossSite")
+        json!("SameSiteLax")
     );
     assert_eq!(
         final_request["params"]["cookieAccessReport"]["excludedCookies"][0]["schemefulSameSiteContext"],
-        json!("CrossSite")
+        json!("SameSiteLax")
     );
     assert_eq!(
         final_request["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContextDowngradeType"],
-        json!("StrictToCross")
+        json!("StrictToLax")
     );
     assert_eq!(
         final_request["params"]["cookieAccessReport"]["excludedCookies"][0]["schemefulSameSiteContextDowngradeType"],
-        json!("StrictToCross")
+        json!("StrictToLax")
     );
     assert_eq!(
         final_request["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContextRedirectType"],

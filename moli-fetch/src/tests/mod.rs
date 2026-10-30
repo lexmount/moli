@@ -11,6 +11,7 @@ mod header_eof;
 mod http_authentication;
 mod mixed_transport;
 mod redirect_auth;
+mod redirect_cookie_context;
 mod referrer_redirects;
 mod request_security;
 mod response_progress;
