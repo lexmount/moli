@@ -29,6 +29,13 @@ pub(super) fn websocket_send_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if args.length() < 1 {
+        throw_type_error(
+            scope,
+            "Failed to execute 'send' on 'WebSocket': 1 argument required, but only 0 present.",
+        );
+        return;
+    }
     let ready_state = websocket_ready_state(scope, args.this());
     if (ready_state - CONNECTING).abs() < f64::EPSILON {
         throw_websocket_dom_exception(
@@ -36,13 +43,6 @@ pub(super) fn websocket_send_callback<'s>(
             "InvalidStateError",
             11,
             "Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.",
-        );
-        return;
-    }
-    if args.length() < 1 {
-        throw_type_error(
-            scope,
-            "Failed to execute 'send' on 'WebSocket': 1 argument required, but only 0 present.",
         );
         return;
     }

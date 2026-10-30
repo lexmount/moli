@@ -1,3 +1,6 @@
+#[path = "websocket/split30_websocket_native_receivers.rs"]
+mod split30_websocket_native_receivers;
+
 use super::*;
 use moli_webapi_declare::WebApiObject;
 
@@ -1093,7 +1096,7 @@ fn websocket_wpt_target_constructor_identity_and_string_tags() {
 
     assert_eq!(
         result,
-        "1|WebSocket|true|[object WebSocket]|[object WebSocket]|[object WebSocketPrototype]"
+        "1|WebSocket|true|[object WebSocket]|[object WebSocket]|[object WebSocket]"
     );
 }
 
