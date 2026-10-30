@@ -6,8 +6,8 @@ mod captured_document_navigation;
 mod child_navigation_wait;
 mod navigation_debugger;
 mod prepared_document_actions;
-mod target_message;
 mod runtime_console_order;
+mod target_message;
 
 fn assert_cdp_event_precedes_response(
     messages: &[serde_json::Value],

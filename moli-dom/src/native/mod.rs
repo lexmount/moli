@@ -30,13 +30,13 @@ use host::StylesheetCandidateRegistries;
 pub use host::{
     ConnectedShadowRootSnapshot, DomAdoptionTarget, DomAssociatedTreeEdgeKind,
     DomAttributeMutation, DomAttributeMutationOutcome, DomChildListMutation, DomHost,
-    DomMutationEffects, DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind,
-    DomScriptMutationEffects, DomSlotAssignmentChange, DomSlotMutationEffects,
-    DomStyleInvalidationInputs, DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind,
-    DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes, DomTextNormalizationStep, DomTextareaValueChange, DomTreeMutationEffects,
-    ScriptPrepareTrigger, ScriptPrepareTriggerKind, StylesheetCandidateTreeScopeSnapshots,
-    DomSubtreeTransfer, DomSubtreeTransferError,
-    DomMutationObserverEffect,
+    DomMutationEffects, DomMutationObserverEffect, DomMutationRecord, DomMutationRecordBatch,
+    DomMutationRecordKind, DomScriptMutationEffects, DomSlotAssignmentChange,
+    DomSlotMutationEffects, DomStyleInvalidationInputs, DomStylesheetOwnerChange,
+    DomStylesheetOwnerChangeKind, DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes,
+    DomSubtreeTransfer, DomSubtreeTransferError, DomTextNormalizationStep, DomTextareaValueChange,
+    DomTreeMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind,
+    StylesheetCandidateTreeScopeSnapshots,
 };
 pub use host::{
     HostElementSnapshot, ShadowRootBindingSnapshot, ShadowRootInclusion, ShadowRootInit,
@@ -446,13 +446,19 @@ impl NativeDom {
     }
 
     pub fn is_inert_template_document(&self, document_handle: NativeNodeId) -> bool {
-        self.node(document_handle).and_then(Node::as_document).is_some_and(Document::is_inert_template_document)
+        self.node(document_handle)
+            .and_then(Node::as_document)
+            .is_some_and(Document::is_inert_template_document)
     }
 
     /// Template contents keep their original creator's realm policy.
-    pub fn inert_template_document_creator(&self, document_handle: NativeNodeId) -> Option<NativeNodeId> {
+    pub fn inert_template_document_creator(
+        &self,
+        document_handle: NativeNodeId,
+    ) -> Option<NativeNodeId> {
         self.nodes().find_map(|node| {
-            (node.as_document()?.associated_inert_template_document() == Some(document_handle)).then_some(node.id())
+            (node.as_document()?.associated_inert_template_document() == Some(document_handle))
+                .then_some(node.id())
         })
     }
 

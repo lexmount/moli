@@ -183,7 +183,10 @@ impl PreparedRendererNavigation {
                             navigation.navigation_history().cloned(),
                         )
                     })
-                    .map(|history| history.with_about_document_state(navigation.about_document_state().cloned()));
+                    .map(|history| {
+                        history
+                            .with_about_document_state(navigation.about_document_state().cloned())
+                    });
                 let start = super::navigation::start_session_owner_navigation_from_renderer(
                     conn,
                     &owner,
@@ -459,7 +462,11 @@ impl PreparedRendererNavigationResult {
                 output.extend_background_events_after_messages(prefix);
                 if let Some(id) = state.web_mcp_invocation.as_ref() {
                     output.extend_background_events_after_messages(
-                        crate::domains::web_mcp::navigation_failed(conn, &state.owner, id.invocation_id),
+                        crate::domains::web_mcp::navigation_failed(
+                            conn,
+                            &state.owner,
+                            id.invocation_id,
+                        ),
                     );
                 }
                 let mut events = Vec::new();
@@ -476,17 +483,24 @@ impl PreparedRendererNavigationResult {
                 output.extend_background_events_after_messages(events);
                 if state.navigate_id.is_some() {
                     let mut result = state.result_projection.clone().into_payload();
-                    if state.result_projection.protocol() == crate::automation::FrontendProtocol::Cdp
+                    if state.result_projection.protocol()
+                        == crate::automation::FrontendProtocol::Cdp
                         && let Some(payload) = result.as_object_mut()
                         && payload.contains_key("frameId")
                     {
-                        payload.insert("errorText".to_owned(), serde_json::json!(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT));
+                        payload.insert(
+                            "errorText".to_owned(),
+                            serde_json::json!(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT),
+                        );
                         payload.insert("isDownload".to_owned(), serde_json::json!(false));
                     }
                     output.push_result_after_messages(result);
                 }
                 output_mode.retain(context, &state, output.into_plan());
-                Self::NoDocument { token, state: Box::new(state) }
+                Self::NoDocument {
+                    token,
+                    state: Box::new(state),
+                }
             }
             network::MaterializedNavigationLoadOutcome::ResponseCommitReady(_) => {
                 unreachable!("prepared responses use their owned native commit")
@@ -507,7 +521,11 @@ impl PreparedRendererNavigationResult {
                     .extend(pending.wait_using(driver).await?);
                 return Ok(());
             }
-            Self::Download { download, token, state } => {
+            Self::Download {
+                download,
+                token,
+                state,
+            } => {
                 download.run(context).await;
                 (token, state)
             }

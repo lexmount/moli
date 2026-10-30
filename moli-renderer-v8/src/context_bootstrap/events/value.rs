@@ -718,7 +718,7 @@ fn value_event_constructor<'s>(
                     .unwrap_or_else(|| v8::null(scope).into());
                 set_event_private_value(scope, state, MIDI_PORT_SLOT, port);
                 (parsed.bubbles, parsed.cancelable, parsed.composed)
-        }
+            }
             ValueEventKind::MediaEncrypted => {
                 let parsed =
                     webidl::parse_dictionary_object::<MediaEncryptedEventInit>(scope, dictionary)?;

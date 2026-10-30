@@ -93,7 +93,11 @@ impl CdpFrontendRoutingState {
         }
         let target = if matches!(
             method.as_deref(),
-            Some("Target.attachedToTarget" | "Target.detachedFromTarget" | "Target.receivedMessageFromTarget")
+            Some(
+                "Target.attachedToTarget"
+                    | "Target.detachedFromTarget"
+                    | "Target.receivedMessageFromTarget"
+            )
         ) {
             message
                 .field::<TargetEventParams>("params")

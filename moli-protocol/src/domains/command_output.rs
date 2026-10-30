@@ -2115,7 +2115,7 @@ impl CommandResponseOutput {
         }
     }
 
-#[cfg(test)]
+    #[cfg(test)]
     fn into_protocol_message(
         self,
         command_id: Option<u64>,

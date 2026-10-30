@@ -32,7 +32,9 @@ pub(super) use ordering::{
     range_compare_point_internal, range_intersects_node_native, root_handle,
 };
 pub(crate) use text::selection_text_element_is_hidden;
-pub(super) use text::{range_clipboard_string_contents, range_selection_string_contents, range_string_contents};
+pub(super) use text::{
+    range_clipboard_string_contents, range_selection_string_contents, range_string_contents,
+};
 pub(super) use tree_ops::create_contextual_fragment_internal;
 
 pub(in crate::context_bootstrap::range_algorithms) use tree_ops::{

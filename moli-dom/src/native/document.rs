@@ -222,7 +222,8 @@ impl Document {
     }
 
     pub(super) fn svg_user_transform(&self) -> SvgUserTransform {
-        self.arena_state.svg_user_transform
+        self.arena_state
+            .svg_user_transform
             .as_deref()
             .copied()
             .unwrap_or_default()

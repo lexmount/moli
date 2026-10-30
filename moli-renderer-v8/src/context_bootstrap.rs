@@ -388,9 +388,10 @@ pub(crate) use self::file_api::{
     DirectoryReaderCallbackTaskEffect, FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
 };
 pub(crate) use self::file_api::{
-    build_clipboard_data_transfer, clipboard_data_transfer_contents, disable_clipboard_data_transfer,
-    DragDataStoreMode, NativeDragDataStore, create_drag_data_transfer_view,
-    create_external_drag_data_store, create_native_drag_data_store, finish_drag_data_transfer_view,
+    DragDataStoreMode, NativeDragDataStore, build_clipboard_data_transfer,
+    clipboard_data_transfer_contents, create_drag_data_transfer_view,
+    create_external_drag_data_store, create_native_drag_data_store,
+    disable_clipboard_data_transfer, finish_drag_data_transfer_view,
     native_data_transfer_drop_effect, native_data_transfer_effect_allowed,
     native_data_transfer_file_count, native_data_transfer_files, native_data_transfer_get_data,
     native_data_transfer_has_type, native_set_drag_drop_effect, populate_native_drag_data_store,
@@ -454,8 +455,8 @@ pub(crate) use self::media_queries::{
     SimpleObjectEventListenerInspectorSnapshot, clear_simple_event_target_listeners,
     dispatch_media_query_list_change_events, dispatch_simple_event_target_event,
     dispatch_simple_event_target_event_collecting_errors,
-    dispatch_simple_event_target_event_with_checkpoint,
     dispatch_simple_event_target_event_with_ancestors,
+    dispatch_simple_event_target_event_with_checkpoint,
     dispatch_simple_event_target_event_with_original_target,
     evaluate_match_media_query_list_with_viewport, initialize_simple_event_target,
     invoke_simple_event_target_listeners, is_simple_event_target,
