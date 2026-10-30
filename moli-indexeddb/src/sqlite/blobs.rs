@@ -149,8 +149,8 @@ impl BlobSource for StoredBlob {
             self.size,
             range,
             Box::new(move |result| {
-                // Retirement may preserve the bytes between the initial check and
-                // enqueue rejection. A handed-out Blob outlives its old service.
+                // A rejected read completes after owner retirement has preserved
+                // the bytes or its error. A handed-out Blob outlives its service.
                 complete(match result {
                     Err(error) => saved_range(&saved, &retry).unwrap_or(Err(error)),
                     result => result,

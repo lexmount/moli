@@ -416,6 +416,7 @@ impl ServiceClient {
                 database: None,
                 blobs: super::blobs::BlobSnapshots::new(Arc::new(blob::DatabaseBlobReader {
                     owner,
+                    runtime: self.runtime.clone(),
                 })),
                 initialized,
                 idle_since: None,

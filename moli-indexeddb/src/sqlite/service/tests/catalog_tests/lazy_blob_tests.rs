@@ -1,6 +1,8 @@
 use super::*;
 use moli_file_api::BlobData;
 
+mod shutdown_tests;
+
 fn blob_value(bytes: Vec<u8>) -> crate::IndexedDbValue {
     crate::IndexedDbValue::new(
         vec![1],
