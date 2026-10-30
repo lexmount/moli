@@ -1,0 +1,20 @@
+{
+  "command": "cargo build --release --locked -p moli",
+  "profile": {
+    "optLevel": 3,
+    "codegenUnits": 1,
+    "panic": "abort"
+  },
+  "workspaceArtifactsCleanedBeforePatchedBuild": true,
+  "base": {
+    "revision": "2a52e9333894722d0e1e8724a3a41f0688a07613",
+    "binarySha256": "f0ba649f95065026fead637ab3b07ad5038f2e0cea2711495fb7d4bfb167dc10"
+  },
+  "patch": {
+    "revision": "eaed2c0496695652a820287f8b2bbcdf477e1f3a",
+    "binarySha256": "6452889f52e30190f551c3e63a715314502da92898d8b6ca58f701d12341da58"
+  },
+  "cdpRevisionsVerified": true,
+  "baselinePatchedResultChecksumsMatch": true,
+  "samplePairsCompared": 81
+}

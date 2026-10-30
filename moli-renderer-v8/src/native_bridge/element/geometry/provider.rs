@@ -108,6 +108,10 @@ pub(crate) fn observable_sources_with_fragments(
     if sources.is_empty() {
         return Ok(HashSet::new());
     }
+    if runtime.layout_policy().uses_real_layout() {
+        runtime.ensure_initial_layout()?;
+        return runtime.layout_sources_with_content_fragments(document, sources);
+    }
     let queries = sources
         .iter()
         .copied()
