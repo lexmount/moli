@@ -63,12 +63,10 @@ fetch/api/policies/referrer-unsafe-url-service-worker.https.html
 focus/hasfocus-different-site.html
 focus/hasfocus-same-site.html
 focus/nested-focus-within-iframe-focus-event.html
-html/browsers/browsing-the-web/back-forward-cache/eligibility/broadcast-channel.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-push-navigation.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-reload-navigation.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-replace-navigation.html
 html/browsers/browsing-the-web/navigating-across-documents/009.html
-html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-204.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-nourl.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-submit-popup.html
 html/browsers/browsing-the-web/navigating-across-documents/unknown-protocol-reload-crash.html
@@ -95,6 +93,7 @@ html/browsers/windows/browsing-context-names/choose-_top-002.html
 html/browsers/windows/browsing-context-names/choose-_top-003.html
 html/browsers/windows/noreferrer-null-opener.html
 html/cross-origin-embedder-policy/cache-storage-reporting-service-worker.https.html
+html/cross-origin-opener-policy/coop-same-origin-allow-popups-document-write.html
 html/dom/elements/global-attributes/cdata-dir_auto.html
 html/editing/the-hidden-attribute/beforematch-attribute-removal-001.html
 html/editing/the-hidden-attribute/beforematch-attribute-removal-002.html
@@ -121,19 +120,15 @@ html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-scr
 html/semantics/embedded-content/the-img-element/image-loading-lazy-zero-intersection-area.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy.html
 html/semantics/embedded-content/the-img-element/sizes/implicit-sizes-ignores-width.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-dynamic-attributes.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-resize-observer-removes-auto.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto.html
 html/semantics/embedded-content/the-img-element/srcset/srcset-w-reselect-on-resize.html
-html/semantics/forms/form-submission-0/form-double-submit-requestsubmit.html
-html/semantics/forms/form-submission-target/rel-base-target.html
 html/semantics/forms/the-button-element/button-submit-remove-children.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener_base.html
 html/semantics/popovers/popover-document-open.html
 html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html
+html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror-module.html
 html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-2.html
 html/webappapis/scripting/event-loops/new-scroll-event-dispatched-at-next-updating-rendering-time.html
@@ -159,13 +154,8 @@ infrastructure/expected-fail/timeout.html
 navigation-api/navigate-event/defer/tentative/defer-back.html
 navigation-api/navigate-event/defer/tentative/defer-restore-callback-abort.html
 navigation-api/navigate-event/defer/tentative/defer-same-document.html
-navigation-api/navigate-event/defer/tentative/restore-after-bfcache.html
-navigation-api/navigate-event/intercept-cross-origin.html
 navigation-api/navigate-event/navigate-form-requestSubmit.html
-navigation-api/navigate-event/navigate-history-back-bfcache.html
-navigation-api/navigation-activation/activation-after-bfcache.html
 navigation-api/navigation-activation/activation-traverse-not-in-entries.html
-navigation-api/navigation-history-entry/entries-after-bfcache.html
 navigation-api/navigation-methods/return-value/traverseTo-detach-cross-document-before-navigate-event.html
 navigation-api/navigation-methods/return-value/traverseTo-detach-same-document-before-navigate-event.html
 navigation-api/ordering-and-transition/anchor-download-intercept-reject.html?currententrychange
@@ -178,7 +168,6 @@ navigation-api/ordering-and-transition/back-same-document-intercept.html?current
 navigation-api/ordering-and-transition/back-same-document-intercept.html?no-currententrychange
 navigation-api/ordering-and-transition/navigate-intercept-precommitHandler-redirect.html?currententrychange
 navigation-api/ordering-and-transition/navigate-intercept-precommitHandler-redirect.html?no-currententrychange
-navigation-api/per-entry-events/dispose-after-bfcache.html
 navigation-api/state/cross-document-getState-undefined.html
 navigation-api/state/cross-document-getState.html
 navigation-api/updateCurrentEntry-method/reentrancy-on-serialize.html
@@ -188,7 +177,6 @@ page-visibility/unload-bubbles.html
 page-visibility/unload.html
 preload/preload-link-cached-stylesheet-different-doc.html
 requestidlecallback/callback-suspended.html
-resource-timing/iframe-sequence-of-events.html
 resource-timing/input-sequence-of-events.html
 resource-timing/tentative/initiator-url/post-message-shared-worker.html
 resource-timing/tentative/initiator-url/post-message-worker.html
@@ -227,7 +215,6 @@ service-workers/service-worker/registration-service-worker-attributes.https.html
 service-workers/service-worker/resource-timing-fetch-variants.https.html
 service-workers/service-worker/secure-context.https.html
 service-workers/service-worker/skip-waiting-without-client.https.html
-service-workers/service-worker/static-router-subresource.https.html
 service-workers/service-worker/unregister-immediately-before-installed.https.html
 service-workers/service-worker/unregister-immediately-during-extendable-events.https.html
 streams/transferable/deserialize-error.window.js?moli-wpt-script=window
@@ -241,6 +228,4 @@ web-based-payment-handler/payment-request-event-constructor.https.serviceworker.
 webmessaging/broadcastchannel/cross-origin.html
 webstorage/event_local_window_open_oldvalue.html
 webusb/usb.serviceworker.https.html
-workers/SharedWorker-extendedLifetime-named-module.html
-workers/modules/dedicated-worker-import-csp.html
 xhr/open-url-multi-window-4.htm
