@@ -212,19 +212,18 @@ fn xml_serialization_preserves_ordinary_xmlns_spelling_and_generated_prefix_coll
         for (let i = 0; i < roots.length; ++i) {
             if (snapshot(roots[i]) !== before[i]) throw Error('serializer mutated source');
             const parsed = new DOMParser().parseFromString(serialized[i], 'application/xml');
-            if (!parsed.getElementsByTagName('parsererror').length)
-                throw Error('this serialization is not required to be well-formed');
+            const hasError = parsed.getElementsByTagName('parsererror').length !== 0;
+            if (hasError !== (i === 1)) throw Error('unexpected namespace collision result');
         }
         return JSON.stringify(serialized);
     })()"#,
         )
         .unwrap();
-    // XMLSerializer uses require-well-formed=false. Namespace recording excludes
-    // ordinary xmlns:p spelling, and the specified nsN index can collide with a
-    // declaration already present on this element (DOM Parsing issue #44).
+    // The literal prefix is reserved for the ordinary attribute. The generated
+    // attribute case still follows the nsN counter from DOM Parsing issue #44.
     assert_eq!(
         result,
-        r#"["<p:root xmlns:p=\"urn:a\" xmlns:p=\"urn:b\"/>","<root xmlns:ns1=\"urn:reserved\" xmlns:ns1=\"urn:b\" ns1:value=\"b\"/>"]"#
+        r#"["<ns1:root xmlns:ns1=\"urn:a\" xmlns:p=\"urn:b\"/>","<root xmlns:ns1=\"urn:reserved\" xmlns:ns1=\"urn:b\" ns1:value=\"b\"/>"]"#
     );
 }
 
@@ -299,4 +298,24 @@ fn xml_serializer_derived_node_arguments_reject_invalid_roots_without_author_acc
         if (traps !== 0) throw Error('argument conversion invoked author access');
         return true;
     })()"#).unwrap(), "true");
+}
+
+#[test]
+fn xml_serialization_avoids_conflicting_ordinary_prefix_declarations() {
+    let mut vm = new_storage_html_test_vm("https://xml-ordinary-prefix.test/");
+    let result = vm
+        .eval(
+            r#"(() => {
+                const node = document.createElementNS("urn:element", "p:item");
+                node.setAttribute("xmlns:p", "urn:ordinary");
+                node.append(document.createElementNS("urn:ordinary", "p:child"));
+                const xml = new XMLSerializer().serializeToString(node);
+                const parsed = new DOMParser().parseFromString(xml, "application/xml");
+                const root = parsed.documentElement;
+                return [node.getAttributeNS(null, "xmlns:p"), root.namespaceURI,
+                    root.firstElementChild?.namespaceURI, (xml.match(/xmlns:p=/g) || []).length].join("|");
+              })()"#,
+        )
+        .expect("XML prefix reservation probe should evaluate");
+    assert_eq!(result, "urn:ordinary|urn:element|urn:ordinary|1");
 }
