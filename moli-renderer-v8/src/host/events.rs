@@ -1327,9 +1327,19 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
     };
     let post_dispatch_target =
         post_dispatch_retargeted_target(host_ptr, original_target, propagation_path);
-    let post_dispatch_related_target = original_related_target.map(|original_related_target| {
-        post_dispatch_retargeted_target(host_ptr, original_related_target, propagation_path)
-    });
+    // Clearing a shadow-scoped target also clears relatedTarget, including
+    // non-Node EventTargets that do not have a DOM propagation handle. Read the
+    // private state so an author's relatedTarget getter is never invoked.
+    let post_dispatch_related_target = if post_dispatch_target.is_none()
+        && crate::context_bootstrap::event_attribute(scope, event, "relatedTarget")
+            .is_some_and(|value| value.is_object())
+    {
+        Some(None)
+    } else {
+        original_related_target.map(|original_related_target| {
+            post_dispatch_retargeted_target(host_ptr, original_related_target, propagation_path)
+        })
+    };
     let post_dispatch_source_target = original_source_target.and_then(|source_target| {
         post_dispatch_retargeted_target(host_ptr, source_target, propagation_path)
     });
