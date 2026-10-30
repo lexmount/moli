@@ -70,7 +70,8 @@ impl CurlWebSocketRequest {
 #[derive(Debug)]
 pub enum CurlWebSocketEvent {
     Handshake {
-        /// Actual outgoing GET request, excluding proxy CONNECT headers.
+        /// Opening request reported by libcurl, excluding proxy CONNECT headers.
+        /// HTTP/2 converts this logical request to extended CONNECT on the wire.
         request: Vec<u8>,
         /// Final HTTP response block, preserving duplicate headers.
         response: Vec<u8>,

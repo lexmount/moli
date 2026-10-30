@@ -8,7 +8,7 @@ use tokio_tungstenite::tungstenite::{self, Message};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
-fn tls_config() -> Arc<rustls::ServerConfig> {
+fn tls_config(alpns: &[&[u8]]) -> Arc<rustls::ServerConfig> {
     use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
     let mut config = rustls::ServerConfig::builder()
@@ -18,7 +18,7 @@ fn tls_config() -> Arc<rustls::ServerConfig> {
             PrivateKeyDer::from(PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der())),
         )
         .unwrap();
-    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    config.alpn_protocols = alpns.iter().map(|alpn| alpn.to_vec()).collect();
     Arc::new(config)
 }
 
@@ -61,12 +61,12 @@ async fn event(connection: &mut CurlWebSocketConnection) -> CurlWebSocketEvent {
 }
 
 async fn mixed_http2_and_websocket(tls: bool, shutdown: bool) -> Result<()> {
-    let tls_config = tls_config();
+    let h2_tls_config = tls_config(&[b"h2", b"http/1.1"]);
     let h2_listener = TcpListener::bind("127.0.0.1:0").await?;
     let h2_url = format!("https://{}", h2_listener.local_addr()?);
     let (held_tx, held_rx) = oneshot::channel();
     let (release_tx, mut release_rx) = oneshot::channel();
-    let acceptor = tokio_rustls::TlsAcceptor::from(tls_config.clone());
+    let acceptor = tokio_rustls::TlsAcceptor::from(h2_tls_config);
     let h2_task = tokio::spawn(async move {
         // Exactly one TCP connection must carry all three HTTP/2 streams.
         let (stream, _) = h2_listener.accept().await.unwrap();
@@ -112,9 +112,11 @@ async fn mixed_http2_and_websocket(tls: bool, shutdown: bool) -> Result<()> {
         stream.set_read_timeout(Some(DEADLINE)).unwrap();
         stream.set_write_timeout(Some(DEADLINE)).unwrap();
         if tls {
+            // This listener implements only HTTP/1 Upgrade. Advertising h2
+            // would negotiate a protocol its tungstenite peer cannot parse.
             ws_peer(
                 rustls::StreamOwned::new(
-                    rustls::ServerConnection::new(tls_config).unwrap(),
+                    rustls::ServerConnection::new(tls_config(&[b"http/1.1"])).unwrap(),
                     stream,
                 ),
                 sent_tx,
