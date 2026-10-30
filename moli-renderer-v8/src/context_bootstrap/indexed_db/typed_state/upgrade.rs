@@ -181,11 +181,12 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
             } else {
                 snapshot
                     .stores
-                    .get(store.name())
+                    .get(store.original_name.as_ref().unwrap_or_else(|| store.name()))
                     .cloned()
                     .expect("existing store has upgrade snapshot")
             };
             store.metadata = metadata;
+            store.original_name = None;
         }
     }
     for table in &tables {
@@ -211,7 +212,12 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
                     .get(&id)
                     .and_then(std::rc::Weak::upgrade)
             {
-                index.borrow_mut().deleted = created_in_upgrade;
+                let mut state = index.borrow_mut();
+                state.deleted = created_in_upgrade;
+                if !created_in_upgrade {
+                    state.info = Rc::clone(&state.original_info);
+                }
+                drop(state);
                 if created_in_upgrade {
                     let name = index.borrow().info.name.clone();
                     super::super::core::invalidate_index_handle_cache(scope, store, &name);

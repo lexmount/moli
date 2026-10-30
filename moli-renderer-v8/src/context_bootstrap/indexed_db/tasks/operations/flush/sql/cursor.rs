@@ -1,7 +1,8 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
     IndexedDbCursorIteration, IndexedDbCursorSource, SqlCursorQuery, attach_indexed_db_sql_cursor,
-    indexed_db_cursor_state, stage_indexed_db_sql_cursor_page, store_cursor_iteration_result,
+    cursor_source, indexed_db_cursor_state, indexed_db_index_name,
+    stage_indexed_db_sql_cursor_page, store_cursor_iteration_result,
     typed_state::sql::sql_transaction_cancellation,
 };
 use moli_indexeddb::sqlite::{Seek, service::Completion};
@@ -58,6 +59,30 @@ pub(super) fn prepare<'s>(
                     IndexedDbError::InvalidState("SQL cursor has no current record".into())
                 })?;
             let mut query = page.query.query.clone();
+            // This runs at API admission, before the command enters the FIFO.
+            // Follow current native labels while earlier admitted commands keep
+            // the names they captured before any intervening schema rename.
+            let source_changed = if let QuerySource::Index(name) = &mut query.source {
+                let source = cursor_source(scope, local).ok_or_else(|| {
+                    IndexedDbError::InvalidState("SQL cursor lost its source".into())
+                })?;
+                let current_name = indexed_db_index_name(scope, source).ok_or_else(|| {
+                    IndexedDbError::InvalidState("SQL cursor lost its index".into())
+                })?;
+                let changed = *name != current_name;
+                *name = current_name;
+                changed
+            } else {
+                false
+            };
+            let descriptor = if page.query.store != operation.store_name || source_changed {
+                Rc::new(SqlCursorQuery {
+                    store: operation.store_name,
+                    query: query.clone(),
+                })
+            } else {
+                Rc::clone(&page.query)
+            };
             let source_is_index = matches!(query.source, QuerySource::Index(_));
             let default_seek = || Seek {
                 key: current.key.clone(),
@@ -87,7 +112,7 @@ pub(super) fn prepare<'s>(
             };
             query.seek = Some(seek);
             query.skip = skip;
-            (Rc::clone(&page.query), query, Target::Iterate(cursor))
+            (descriptor, query, Target::Iterate(cursor))
         }
         _ => unreachable!("cursor dispatcher only accepts cursor operations"),
     };

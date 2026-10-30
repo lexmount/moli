@@ -32,6 +32,5 @@ pub(super) const INDEXED_DB_TRANSACTION_COMMIT_SCHEDULED_SLOT: &str =
     "moli.IndexedDb.transactionCommitScheduled";
 pub(super) const INDEXED_DB_TRANSACTION_ABORT_DISPATCHED_SLOT: &str =
     "moli.IndexedDb.transactionAbortDispatched";
-pub(super) const INDEXED_DB_OBJECT_STORE_NAME_SLOT: &str = "moli.IndexedDb.objectStoreName";
 pub(super) const INDEXED_DB_OBJECT_STORE_METADATA_SLOT: &str = "moli.IndexedDb.objectStoreMetadata";
 pub(super) const INDEXED_DB_INDEX_MARKER_SLOT: &str = "moli.IndexedDb.indexMarker";

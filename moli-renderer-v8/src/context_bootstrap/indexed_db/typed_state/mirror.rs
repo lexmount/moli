@@ -155,6 +155,37 @@ impl IndexedDbObjectStoreMetadata {
             ..self.clone()
         }
     }
+    pub(super) fn with_name(&self, name: &moli_indexeddb::IndexedDbName) -> Self {
+        Self {
+            data: edit_shared(&self.data, |data| data.info.name = name.clone()),
+            ..self.clone()
+        }
+    }
+
+    pub(super) fn with_renamed_index(
+        &self,
+        name: &moli_indexeddb::IndexedDbName,
+        new_name: &moli_indexeddb::IndexedDbName,
+    ) -> Self {
+        let data = edit_shared(&self.data, |data| {
+            let mut index = (*data.indexes.remove(name).expect("existing index")).clone();
+            index.name = new_name.clone();
+            data.indexes.insert(new_name.clone(), Rc::new(index));
+            data.info.index_names = data.indexes.keys().cloned().collect();
+        });
+        let markers = self.created_indexes.borrow().as_ref().map(|names| {
+            edit_shared(names, |names| {
+                if names.remove(name) {
+                    names.insert(new_name.clone());
+                }
+            })
+        });
+        Self {
+            data,
+            created_indexes: RefCell::new(markers),
+            ..self.clone()
+        }
+    }
     pub(super) fn mark_created_in_upgrade(&mut self, created: bool) {
         self.created_in_upgrade.set(created);
     }

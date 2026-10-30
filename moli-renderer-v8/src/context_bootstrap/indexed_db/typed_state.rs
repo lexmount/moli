@@ -19,6 +19,8 @@ pub(super) use collection::{INDEX_OBJECT_STORE, OBJECT_STORE_DATABASE, OBJECT_ST
 pub(in crate::context_bootstrap::indexed_db) use cursor::*;
 mod upgrade;
 pub(super) use upgrade::*;
+mod rename;
+pub(super) use rename::*;
 pub(super) mod factory;
 pub(super) mod sql;
 
@@ -448,16 +450,14 @@ pub(super) struct IndexedDbCursorLifecycleState {
 struct IndexedDbObjectStoreLifecycleState {
     transaction: v8::Weak<v8::Object>,
     database: v8::Weak<v8::Object>,
-    name_override: Option<moli_indexeddb::IndexedDbName>,
+    original_name: Option<moli_indexeddb::IndexedDbName>,
     metadata: IndexedDbObjectStoreMetadata,
     deleted: bool,
 }
 
 impl IndexedDbObjectStoreLifecycleState {
     fn name(&self) -> &moli_indexeddb::IndexedDbName {
-        self.name_override
-            .as_ref()
-            .unwrap_or(&self.metadata.info.name)
+        &self.metadata.info.name
     }
 
     fn new(
@@ -472,7 +472,7 @@ impl IndexedDbObjectStoreLifecycleState {
         Self {
             transaction: v8::Weak::new(scope, transaction),
             database: v8::Weak::new(scope, database),
-            name_override: None,
+            original_name: None,
             metadata,
             deleted: false,
         }
@@ -482,6 +482,7 @@ impl IndexedDbObjectStoreLifecycleState {
 struct IndexedDbIndexLifecycleState {
     object_store: v8::Weak<v8::Object>,
     info: Rc<IndexInfo>,
+    original_info: Rc<IndexInfo>,
     marker: bool,
     deleted: bool,
     created_in_upgrade: bool,
@@ -498,6 +499,7 @@ impl IndexedDbIndexLifecycleState {
         set_private_value(scope, index, INDEX_OBJECT_STORE, object_store.into());
         Self {
             object_store: v8::Weak::new(scope, object_store),
+            original_info: Rc::clone(&info),
             info,
             marker: true,
             deleted: false,
@@ -2050,6 +2052,12 @@ pub(super) fn indexed_db_index_info(
             .clone(),
     )
 }
+pub(super) fn indexed_db_index_name(
+    scope: &mut v8::PinScope<'_, '_>,
+    index: v8::Local<'_, v8::Object>,
+) -> Option<IndexedDbName> {
+    Some(index_native_state(scope, index)?.borrow().info.name.clone())
+}
 pub(super) fn current_indexed_db_execution_owner(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> IndexedDbExecutionOwner {
@@ -2185,17 +2193,15 @@ pub(super) fn set_indexed_db_typed_slot_value(
     if let Some(database) = table.databases.get_mut(&id) {
         return set_indexed_db_typed_database_slot_value(scope, database, key, value);
     }
-    if let Some(store) = table
+    if table
         .object_stores
         .get(&id)
         .and_then(std::rc::Weak::upgrade)
+        .is_some()
     {
-        return set_indexed_db_typed_object_store_slot_value(
-            scope,
-            &mut store.borrow_mut(),
-            key,
-            value,
-        );
+        // Native metadata is authoritative; consume migrated writes so they
+        // cannot create a second schema in V8 private storage.
+        return key == INDEXED_DB_OBJECT_STORE_METADATA_SLOT;
     }
     if let Some(index) = table.indexes.get(&id).and_then(std::rc::Weak::upgrade) {
         return set_indexed_db_typed_index_slot_value(&mut index.borrow_mut(), key, value);
@@ -2433,41 +2439,10 @@ fn indexed_db_typed_object_store_slot_value<'s>(
     key: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
     match key {
-        INDEXED_DB_OBJECT_STORE_NAME_SLOT => {
-            v8::String::new_from_two_byte(scope, store.name().as_utf16(), v8::NewStringType::Normal)
-                .map(Into::into)
-        }
         INDEXED_DB_OBJECT_STORE_METADATA_SLOT => {
             create_object_store_descriptor_from_typed(scope, &store.metadata).map(Into::into)
         }
         _ => None,
-    }
-}
-
-fn set_indexed_db_typed_object_store_slot_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    store: &mut IndexedDbObjectStoreLifecycleState,
-    key: &str,
-    value: v8::Local<'_, v8::Value>,
-) -> bool {
-    match key {
-        INDEXED_DB_OBJECT_STORE_NAME_SLOT => {
-            store.name_override = Some(
-                value
-                    .to_string(scope)
-                    .map(|value| {
-                        moli_indexeddb::IndexedDbName::from_utf16(
-                            crate::util::v8_string_to_u16_string(scope, value).into_vec(),
-                        )
-                    })
-                    .unwrap_or_default(),
-            );
-            true
-        }
-        // Metadata is typed-state authoritative. Consume migrated slot writes here so they do not
-        // fall through into V8 private storage and become a second metadata source.
-        INDEXED_DB_OBJECT_STORE_METADATA_SLOT => true,
-        _ => false,
     }
 }
 
