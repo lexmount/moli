@@ -11,6 +11,7 @@ pub(in crate::context_bootstrap) fn install_indexed_db_template_bindings<'s>(
     interface_name: &str,
 ) {
     let prototype = template.prototype_template(scope);
+    super::helpers::install_idb_event_handlers(scope, prototype, interface_name);
     super::super::event_target::install_version_change_event_template_bindings(
         scope,
         prototype,

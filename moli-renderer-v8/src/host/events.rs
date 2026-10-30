@@ -517,7 +517,16 @@ pub(crate) fn report_event_callback_exception<'s>(
     if event_type == "error" {
         return;
     }
+    report_callback_exception(scope, host_ptr, relevant_identity, child_handle, report);
+}
 
+pub(crate) fn report_callback_exception<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut JsContextHost,
+    relevant_identity: Option<crate::native_bridge::WindowExecutionContextIdentity>,
+    child_handle: Option<DomHandle>,
+    report: &V8ExceptionReport,
+) {
     let child_handle = child_handle.or_else(|| {
         relevant_identity.and_then(|identity| match identity.dispatch_scope() {
             crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),

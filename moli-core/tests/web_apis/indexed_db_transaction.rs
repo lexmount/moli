@@ -577,7 +577,7 @@ async fn indexed_db_upgrade_complete_reserves_open_delivery_and_retains_transact
         assert_eq!(result["state"], "pass", "{target}: {result}");
         assert_eq!(
             result["checks"].as_array().unwrap().len(),
-            24,
+            35,
             "{target}: {result}"
         );
     }
@@ -636,6 +636,27 @@ async fn indexed_db_request_getters_preserve_cross_realm_identity() -> Result<()
     let result = run_probe(&browser, &server, "window", &source).await?;
     assert_eq!(result["state"], "pass", "{result}");
     assert_eq!(result["checks"].as_array().unwrap().len(), 26, "{result}");
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_events_propagate_and_abort_only_active_transactions() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-event-propagation.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nidbEventProbe('event-propagation-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: idbEventChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            152,
+            "{target}: {result}"
+        );
+    }
     server.shutdown().await;
     Ok(())
 }

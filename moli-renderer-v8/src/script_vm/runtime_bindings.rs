@@ -181,6 +181,25 @@ fn flush_promise_rejection_state(
 pub(crate) fn perform_microtask_checkpoint_and_report_pending_promise_rejections(
     scope: &mut v8::PinScope<'_, '_>,
 ) {
+    perform_microtask_checkpoint(
+        scope,
+        crate::context_bootstrap::MicrotaskCheckpointKind::Task,
+    );
+}
+
+pub(crate) fn perform_callback_microtask_checkpoint_and_report_pending_promise_rejections(
+    scope: &mut v8::PinScope<'_, '_>,
+) {
+    perform_microtask_checkpoint(
+        scope,
+        crate::context_bootstrap::MicrotaskCheckpointKind::Callback,
+    );
+}
+
+fn perform_microtask_checkpoint(
+    scope: &mut v8::PinScope<'_, '_>,
+    kind: crate::context_bootstrap::MicrotaskCheckpointKind,
+) {
     let trace_enabled = moli_trace::cdp_runtime_trace_enabled();
     let dom_binding_trace_enabled = trace_enabled && moli_trace::dom_binding_timing_enabled();
     let trace_started = trace_enabled.then(Instant::now);
@@ -249,11 +268,18 @@ pub(crate) fn perform_microtask_checkpoint_and_report_pending_promise_rejections
     }
     let flush_started = trace_enabled.then(Instant::now);
     let pending_rejections = flush_agent_pending_promise_rejections(scope);
-    crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
-    if let Some(host) = context_host_ptr_from_global_bridge(scope)
-        && let Some(environment) = unsafe { &*host }.page_script_environment()
-    {
-        environment.finish_related_page_turn_completions();
+    match kind {
+        crate::context_bootstrap::MicrotaskCheckpointKind::Callback => {
+            crate::context_bootstrap::run_callback_microtask_checkpoint_tasks(scope);
+        }
+        crate::context_bootstrap::MicrotaskCheckpointKind::Task => {
+            crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+            if let Some(host) = context_host_ptr_from_global_bridge(scope)
+                && let Some(environment) = unsafe { &*host }.page_script_environment()
+            {
+                environment.finish_related_page_turn_completions();
+            }
+        }
     }
     if let Some(started) = flush_started {
         tracing::info!(

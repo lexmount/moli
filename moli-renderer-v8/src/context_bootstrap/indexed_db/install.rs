@@ -128,6 +128,7 @@ indexed_db_receiver_realm_callback!(
 );
 
 mod constructors;
+mod helpers;
 mod state;
 
 pub(in crate::context_bootstrap) use self::constructors::install_indexed_db_template_bindings;
