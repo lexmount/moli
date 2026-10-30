@@ -20,6 +20,15 @@ use crate::{
         write_crypto_key_payload, write_image_data_payload,
     },
 };
+use crate::{
+    context_bootstrap::{
+        build_web_transport_error_from_clone_payload, web_transport_error_clone_payload_from_object,
+    },
+    structured_clone::{
+        HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR, read_web_transport_error_payload,
+        write_web_transport_error_payload,
+    },
+};
 use moli_indexeddb::{IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind};
 use std::{cell::RefCell, rc::Rc};
 
@@ -72,6 +81,13 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
                 | "DOMMatrix" | "DOMMatrixReadOnly",
             ) => {
                 return write_geometry_clone_object(scope, object, serializer);
+            }
+            Some("WebTransportError") => {
+                if let Some(payload) = web_transport_error_clone_payload_from_object(scope, object)
+                {
+                    write_web_transport_error_payload(serializer, &payload);
+                    return Some(true);
+                }
             }
             Some("EncodedVideoChunk") => {
                 let exception = dom_exception_value(
@@ -313,6 +329,10 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer<'_> {
                 read_quota_exceeded_error_payload(scope, deserializer)
             }
             HOST_OBJECT_TAG_GEOMETRY => read_geometry_clone_object(scope, deserializer),
+            HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR => {
+                let payload = read_web_transport_error_payload(deserializer)?;
+                build_web_transport_error_from_clone_payload(scope, &payload)
+            }
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
             HOST_OBJECT_TAG_CRYPTO_KEY => {
                 read_crypto_key_payload(scope, deserializer).or_else(|| {

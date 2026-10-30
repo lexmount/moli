@@ -6923,3 +6923,120 @@ fn indexed_db_request_getters_preserve_native_proxy_identity_and_reject_author_w
     );
     vm.eval("nativeRequest.result.close()").unwrap();
 }
+
+#[test]
+fn indexed_db_roundtrips_web_transport_error_native_payloads_without_author_access() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-transport-error.test/");
+    vm.eval(r#"(() => {
+      globalThis.transportErrorStorageResult='pending';
+      const WT=WebTransportError,message='m\u0000\ud800\udfff';
+      const originals=[];
+      for(const source of ['stream','session'])for(const streamErrorCode of [null,0,42,4294967295]) {
+        const error=new WT(message,{source,streamErrorCode});
+        Object.setPrototypeOf(error,null);
+        for(const name of ['message','source','streamErrorCode','stack'])Object.defineProperty(error,name,{enumerable:true,get(){throw 42;}});
+        originals.push({error,alias:error,source,streamErrorCode});
+      }
+      const value={rows:originals};value.self=value;
+      const open=indexedDB.open('transport-errors-'+Math.random(),1);
+      const fail=event=>{transportErrorStorageResult='error:'+event.target.error?.name;};
+      open.onerror=fail;open.onupgradeneeded=()=>open.result.createObjectStore('values');
+      open.onsuccess=()=>{
+        const db=open.result,write=db.transaction('values','readwrite');
+        write.onerror=fail;write.objectStore('values').put(value,'value');
+        write.oncomplete=()=>{
+          const descriptor=Object.getOwnPropertyDescriptor(window,'WebTransportError');
+          Object.defineProperty(window,'WebTransportError',{configurable:true,get(){throw 43;}});
+          const read=db.transaction('values').objectStore('values').get('value');read.onerror=fail;
+          read.onsuccess=()=>{
+            try {
+              const clone=read.result;
+              const valid=clone.self===clone&&clone.rows.length===8&&clone.rows.every((row,index)=>
+                Object.getPrototypeOf(row.error)===WT.prototype&&row.error!==originals[index].error&&row.error===row.alias&&
+                row.error.name==='WebTransportError'&&row.error.message===message&&row.error.source===row.source&&
+                row.error.streamErrorCode===row.streamErrorCode&&row.error.code===0&&!Object.hasOwn(row.error,'message'));
+              transportErrorStorageResult=String(valid);
+            } finally {Object.defineProperty(window,'WebTransportError',descriptor);db.close();}
+          };
+        };
+      };
+    })()"#).expect("WebTransportError IndexedDB round trip should schedule");
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("String(transportErrorStorageResult)")
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
+fn indexed_db_web_transport_error_preserves_native_data_across_profile_restart() {
+    let root = indexed_db_test_root("transport-error-profile-restart");
+    for phase in ["write", "read"] {
+        let manager = crate::new_indexed_db_manager(Some(root.clone())).unwrap();
+        let mut vm =
+            new_storage_page_task_executor_test_vm("https://transport-error-profile.test/");
+        vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+        vm.set_storage_bucket_store(
+            crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+        );
+        vm.eval(&format!("globalThis.transportPhase = {phase:?};"))
+            .unwrap();
+        vm.eval(r#"
+globalThis.transportProfileResult = 'pending';
+(async () => {
+  const result = request => new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  const done = tx => new Promise((resolve, reject) => {
+    tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
+  });
+  const opening = indexedDB.open('native-transport-error', 1);
+  opening.onupgradeneeded = () => opening.result.createObjectStore('s');
+  const db = await result(opening);
+  const NativeError = WebTransportError;
+  try {
+    if (transportPhase === 'write') {
+      const error = new NativeError('m\ud800\u0000\udfff', {source:'session', streamErrorCode:4294967295});
+      const value = {error, alias:error}; value.self = value;
+      const tx = db.transaction('s','readwrite'), complete = done(tx);
+      tx.objectStore('s').put(value, 1); await complete;
+      transportProfileResult = 'stored';
+    } else {
+      Object.defineProperty(globalThis,'WebTransportError',{configurable:true,get(){throw new Error('author constructor getter');}});
+      const tx = db.transaction('s'), complete = done(tx);
+      const value = await result(tx.objectStore('s').get(1)); await complete;
+      const message = value.error.message;
+      transportProfileResult = JSON.stringify([
+        value.self === value, value.error === value.alias,
+        Object.getPrototypeOf(value.error) === NativeError.prototype,
+        value.error.name, Array.from({length:message.length},(_,i)=>message.charCodeAt(i)),
+        value.error.code, value.error.source, value.error.streamErrorCode,
+      ]);
+    }
+  } finally { db.close(); }
+})().catch(error => { transportProfileResult = error.name+':'+error.message; });
+"#).unwrap();
+        let result = vm
+            .eval_after_selected_page_tasks("String(transportProfileResult)")
+            .unwrap();
+        if phase == "write" {
+            assert_eq!(result, "stored");
+        } else {
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                serde_json::json!([
+                    true,
+                    true,
+                    true,
+                    "WebTransportError",
+                    [109, 55296, 0, 57343],
+                    0,
+                    "session",
+                    4294967295_u64
+                ])
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
