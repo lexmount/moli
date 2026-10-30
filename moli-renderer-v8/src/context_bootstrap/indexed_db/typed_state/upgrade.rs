@@ -220,13 +220,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
         }
     }
     set_indexed_db_database_version(scope, database, version);
-    let transaction_names = new_idb_name_list(scope, &names);
-    let _ = transaction.define_own_property(
-        scope,
-        v8str(scope, "objectStoreNames").into(),
-        transaction_names.into(),
-        v8::PropertyAttribute::NONE,
-    );
+    set_indexed_db_transaction_store_names(scope, transaction, &names);
 }
 
 // Update native metadata for every alias. Author shadows and cached keyPath
