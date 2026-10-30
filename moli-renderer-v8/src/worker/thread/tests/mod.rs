@@ -1564,3 +1564,5 @@ mod abort_controller_receivers;
 mod bitmap_renderer;
 
 mod offscreen_canvas_transfer;
+
+mod canvas_draw_image_bindings;
