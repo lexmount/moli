@@ -7,7 +7,6 @@ use moli_webapi_declare::WebApiObject;
 #[webapi(
     interface = web_api_interfaces::IDBTransaction,
     require_prototype,
-    data_properties,
     enumerable
 )]
 struct IdbTransactionObjectDeclaration<'scope> {
@@ -20,7 +19,6 @@ struct IdbTransactionObjectDeclaration<'scope> {
     mode: &'static str,
     #[webapi(slot = crate::context_bootstrap::indexed_db::TRANSACTION_ERROR_SLOT, init = "null")]
     error: (),
-    object_store_names: v8::Local<'scope, v8::Object>,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
@@ -31,8 +29,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
     store_names: &[moli_indexeddb::IndexedDbName],
 ) -> Option<v8::Local<'s, v8::Object>> {
     let mode_label: &'static str = mode.into();
-    let object_store_names = new_idb_name_list(scope, store_names);
-    let tx = IdbTransactionObjectDeclaration::new(db, mode_label, object_store_names)
+    let tx = IdbTransactionObjectDeclaration::new(db, mode_label)
         .bind(scope)
         .ok()?;
     let storage_scope = indexed_db_typed_storage_scope(scope, db);
@@ -45,7 +42,15 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
         owner,
         storage_scope,
     );
-    register_indexed_db_transaction_lifecycle(scope, tx, db, handle, mode, handle.is_some());
+    register_indexed_db_transaction_lifecycle(
+        scope,
+        tx,
+        db,
+        handle,
+        mode,
+        store_names,
+        handle.is_some(),
+    );
     crate::context_bootstrap::indexed_db::initialize_indexed_db_event_target(scope, tx, Some(db));
     Some(tx)
 }

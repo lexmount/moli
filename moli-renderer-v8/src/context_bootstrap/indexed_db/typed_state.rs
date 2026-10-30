@@ -1,7 +1,11 @@
 use super::*;
 use crate::util::RealmValueHandle;
 use moli_storage_service::StorageBucketIdentity;
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
 
 mod mirror;
 pub(super) use mirror::IndexedDbObjectStoreMetadata;
@@ -316,6 +320,7 @@ struct IndexedDbRequestLifecycleState {
 
 struct IndexedDbTransactionLifecycleState {
     mode: TransactionMode,
+    store_names: BTreeSet<IndexedDbName>,
     database: Option<RealmValueHandle>,
     upgrade_open_request: Option<RealmValueHandle>,
     handle: Option<TransactionHandle>,
@@ -343,10 +348,12 @@ impl IndexedDbTransactionLifecycleState {
         database: RealmValueHandle,
         handle: Option<TransactionHandle>,
         mode: TransactionMode,
+        store_names: &[IndexedDbName],
         started: bool,
     ) -> Self {
         Self {
             mode,
+            store_names: store_names.iter().cloned().collect(),
             database: Some(database),
             upgrade_open_request: None,
             handle,
@@ -779,6 +786,7 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     database: v8::Local<'s, v8::Object>,
     handle: Option<TransactionHandle>,
     mode: TransactionMode,
+    store_names: &[IndexedDbName],
     started: bool,
 ) {
     let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
@@ -788,11 +796,68 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
         RealmValueHandle::new(scope, database.into()),
         handle,
         mode,
+        store_names,
         started,
     );
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     table.borrow_mut().transactions.insert(id, state);
     track_indexed_db_handle_table(scope, database, &table);
+}
+
+pub(super) fn indexed_db_transaction_store_names(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> Option<Vec<IndexedDbName>> {
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table
+        .borrow()
+        .transactions
+        .get(&id)
+        .map(|state| state.store_names.iter().cloned().collect())
+}
+
+pub(super) fn set_indexed_db_transaction_store_names(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+    store_names: &[IndexedDbName],
+) {
+    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
+        return;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    if let Some(state) = table.borrow_mut().transactions.get_mut(&id) {
+        debug_assert_eq!(state.mode, TransactionMode::VersionChange);
+        state.store_names = store_names.iter().cloned().collect();
+    }
+}
+
+pub(super) fn validate_indexed_db_transaction_store(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+    name: &IndexedDbName,
+) -> Result<(), IndexedDbError> {
+    let id = indexed_db_typed_state_id(scope, transaction)
+        .ok_or_else(|| IndexedDbError::InvalidState("Transaction was released".into()))?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let table = table.borrow();
+    let state = table
+        .transactions
+        .get(&id)
+        .ok_or_else(|| IndexedDbError::InvalidState("Transaction was released".into()))?;
+    // Chromium also rejects committing transactions. Inactive transactions may
+    // retrieve handles, while data operations still require an active state.
+    if state.finished || state.aborted || state.committing {
+        return Err(IndexedDbError::InvalidState(
+            "The transaction is finished or committing".into(),
+        ));
+    }
+    if !state.store_names.contains(name) {
+        return Err(IndexedDbError::NotFound(
+            "The object store is not in the transaction's scope".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn indexed_db_transaction_mode<'s>(
