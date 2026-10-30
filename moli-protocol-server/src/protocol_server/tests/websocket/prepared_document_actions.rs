@@ -1421,9 +1421,21 @@ async fn websocket_cdp_prepared_document_open_does_not_append_history_on_adoptio
             json!({"discover": true}),
         )
         .await;
-        // The asynchronous callback runs during a defer wait, outside parser
-        // script execution where document.open() would otherwise be ignored.
-        let html = "<!doctype html><title>before-open</title><script>fetch('/arm').then(()=>{document.open();document.write('<title>after-open</title><p>replacement</p>');document.close();});</script><script defer src=/slow.js></script>";
+        // A speculative script request does not prove parser EOF. Arm the
+        // callback at interactive so document.open() runs during the intended
+        // defer wait, outside the parser's script execution scope.
+        let html = r#"<!doctype html><title>before-open</title>
+<script>
+document.addEventListener('readystatechange', () => {
+  if (document.readyState === 'interactive') {
+    fetch('/arm').then(() => {
+      document.open();
+      document.write('<title>after-open</title><p>replacement</p>');
+      document.close();
+    });
+  }
+}, {once: true});
+</script><script defer src=/slow.js></script>"#;
         let mut observed =
             begin_document_html(&mut socket, &session.session_id, &fixture, html).await;
         tokio::time::timeout(Duration::from_secs(10), fixture.requested.notified())
