@@ -13,18 +13,6 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
-        interface: web_api_interfaces::ServiceWorkerContainer::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::ServiceWorkerRegistration::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::ServiceWorker::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
         interface: web_api_interfaces::PaymentRequestUpdateEvent::DESCRIPTOR,
         kind: ConstructorKind::PaymentRequestUpdateEvent,
     },
@@ -95,14 +83,6 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::LockManager::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::MIDIConnectionEvent::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
-    },
-    ConstructorSpec {
-        interface: web_api_interfaces::MIDIMessageEvent::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaKeyMessageEvent::DESCRIPTOR,
