@@ -33,6 +33,7 @@
 #include "rand.h"
 #include "curlx/base64.h"
 #include "cf-recvbuf.h"
+#include "cfilters.h"
 #include "connect.h"
 #include "sendf.h"
 #include "curl_trc.h"
@@ -1438,7 +1439,7 @@ CURLcode Curl_ws_accept(struct Curl_easy *data,
      subprotocol not requested by the client), the client MUST Fail
      the WebSocket Connection. */
 
-  infof(data, "[WS] Received 101, switch to WebSocket");
+  infof(data, "[WS] Received %d, switch to WebSocket", k->httpcode);
 
   /* Install our client writer that decodes WS frames payload */
   result = Curl_cwriter_create(&ws_dec_writer, data, &ws_cw_decode,
@@ -1937,12 +1938,52 @@ out:
 static CURLcode ws_setup_conn(struct Curl_easy *data,
                               struct connectdata *conn)
 {
-  /* WebSocket is 1.1 only (for now) */
+  /* Secure WebSockets may negotiate RFC 8441 over HTTP/2. Cleartext
+   * WebSockets retain HTTP/1.1, without an h2c upgrade. */
   data->state.http_neg.accept_09 = FALSE;
   data->state.http_neg.only_10 = FALSE;
-  data->state.http_neg.wanted = CURL_HTTP_V1x;
-  data->state.http_neg.allowed = CURL_HTTP_V1x;
+  if(!(conn->scheme->protocol & CURLPROTO_WSS)) {
+    data->state.http_neg.wanted = CURL_HTTP_V1x;
+    data->state.http_neg.allowed = CURL_HTTP_V1x;
+  }
+  data->state.http_neg.h2_upgrade = FALSE;
   return Curl_http_setup_conn(data, conn);
+}
+
+/* The browser's native owner polls CONNECT_ONLY handles after their opening
+ * transfers are DONE. Let the connection filters translate logical read/write
+ * interests, including HTTP/2 WINDOW_UPDATE and cross-direction TLS waits. */
+int curl_easy_moli_websocket_pending(CURL *easy)
+{
+  struct Curl_easy *data = easy;
+  return data && data->conn && Curl_conn_data_pending(data, FIRSTSOCKET);
+}
+
+CURLcode curl_easy_moli_websocket_poll(CURL *easy, curl_socket_t socket,
+                                      int wanted, int *events)
+{
+  struct Curl_easy *data = easy;
+  struct easy_pollset ps;
+  CURLcode result;
+  unsigned int i;
+
+  if(!data || !data->conn || !events)
+    return CURLE_BAD_FUNCTION_ARGUMENT;
+  *events = 0;
+  Curl_pollset_init(&ps);
+  result = Curl_pollset_set(data, &ps, socket,
+                             (wanted & CURL_POLL_IN) != 0,
+                             (wanted & CURL_POLL_OUT) != 0);
+  if(!result)
+    result = Curl_conn_adjust_pollset(data, data->conn, &ps);
+  if(!result) {
+    for(i = 0; i < ps.n; ++i) {
+      if(ps.sockets[i] == socket)
+        *events |= ps.actions[i];
+    }
+  }
+  Curl_pollset_cleanup(&ps);
+  return result;
 }
 
 const struct curl_ws_frame *curl_ws_meta(CURL *curl)
@@ -2030,6 +2071,23 @@ const struct Curl_protocol Curl_protocol_ws = {
 };
 
 #else
+
+int curl_easy_moli_websocket_pending(CURL *easy)
+{
+  (void)easy;
+  return 0;
+}
+
+CURLcode curl_easy_moli_websocket_poll(CURL *easy, curl_socket_t socket,
+                                      int wanted, int *events)
+{
+  (void)easy;
+  (void)socket;
+  (void)wanted;
+  if(events)
+    *events = 0;
+  return CURLE_NOT_BUILT_IN;
+}
 
 CURLcode curl_ws_recv(CURL *curl, void *buffer, size_t buflen,
                       size_t *recv,

@@ -169,10 +169,18 @@ impl Session {
         let send = pending
             .as_mut()
             .expect("runnable write has a pending frame");
-        match self
+        let result = self
             .handle
-            .ws_send(&send.frame.data[send.offset..], 0, send.frame.flags)
+            .ws_send(&send.frame.data[send.offset..], 0, send.frame.flags);
+        // A flow-control write may ingest frames while waiting for a window
+        // update. Buffered input no longer needs another socket-read event.
+        if self.reading.waiting_for_socket()
+            // SAFETY: The attached handle is accessed only on this owner.
+            && unsafe { curl_sys::curl_easy_moli_websocket_pending(self.handle.raw()) } != 0
         {
+            self.reading.socket_ready();
+        }
+        match result {
             Ok(count) => {
                 send.offset += count;
                 let completed = send.offset == send.frame.data.len();
@@ -282,11 +290,21 @@ impl Session {
             return None;
         }
         let mut fd = WaitFd::new();
-        fd.set_fd(self.handle.active_socket().ok()??);
-        // curl-rust exposes AGAIN without a TLS wait direction. These are the
-        // operation's read/write interests; cross-direction TLS waits would
-        // require extending the native contract here.
-        fd.poll_on_read(reading).poll_on_write(writing);
+        let socket = self.handle.active_socket().ok()??;
+        fd.set_fd(socket);
+        let wanted = if reading { curl_sys::CURL_POLL_IN } else { 0 }
+            | if writing { curl_sys::CURL_POLL_OUT } else { 0 };
+        let mut events = 0;
+        // SAFETY: This owner exclusively accesses the attached handle. The
+        // native filters only compute interests and write the local out value.
+        let result = unsafe {
+            curl_sys::curl_easy_moli_websocket_poll(self.handle.raw(), socket, wanted, &mut events)
+        };
+        if result != curl_sys::CURLE_OK {
+            return None;
+        }
+        fd.poll_on_read(events & curl_sys::CURL_POLL_IN != 0)
+            .poll_on_write(events & curl_sys::CURL_POLL_OUT != 0);
         Some(fd)
     }
 
