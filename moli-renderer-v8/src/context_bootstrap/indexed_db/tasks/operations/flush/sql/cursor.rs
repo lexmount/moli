@@ -1,7 +1,8 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
     IndexedDbCursorIteration, IndexedDbCursorSource, SqlCursorQuery, attach_indexed_db_sql_cursor,
-    indexed_db_cursor_state, stage_indexed_db_sql_cursor_page, store_cursor_iteration_result,
+    cursor_source, indexed_db_cursor_state, indexed_db_index_info,
+    stage_indexed_db_sql_cursor_page, store_cursor_iteration_result,
     typed_state::sql::sql_transaction_cancellation,
 };
 use moli_indexeddb::sqlite::{Seek, service::Completion};
@@ -58,6 +59,19 @@ pub(super) fn prepare<'s>(
                     IndexedDbError::InvalidState("SQL cursor has no current record".into())
                 })?;
             let mut query = page.query.query.clone();
+            if matches!(query.source, QuerySource::Index(_)) {
+                let source = cursor_source(scope, local).ok_or_else(|| {
+                    IndexedDbError::InvalidState("SQL cursor lost its source".into())
+                })?;
+                let index = indexed_db_index_info(scope, source).ok_or_else(|| {
+                    IndexedDbError::InvalidState("SQL cursor lost its index".into())
+                })?;
+                query.source = QuerySource::Index(index.name);
+            }
+            let descriptor = Rc::new(SqlCursorQuery {
+                store: operation.store_name,
+                query: query.clone(),
+            });
             let source_is_index = matches!(query.source, QuerySource::Index(_));
             let default_seek = || Seek {
                 key: current.key.clone(),
@@ -87,7 +101,7 @@ pub(super) fn prepare<'s>(
             };
             query.seek = Some(seek);
             query.skip = skip;
-            (Rc::clone(&page.query), query, Target::Iterate(cursor))
+            (descriptor, query, Target::Iterate(cursor))
         }
         _ => unreachable!("cursor dispatcher only accepts cursor operations"),
     };
