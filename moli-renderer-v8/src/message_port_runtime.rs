@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+pub(crate) use moli_message_port::MessagePortCloseKind;
 use moli_message_port::{MessagePortRegistry as CoreMessagePortRegistry, MessagePortWake};
 use tokio::sync::mpsc;
 
@@ -37,6 +38,13 @@ fn wake_owner(owner: MessagePortOwner, port_id: MessagePortId) -> bool {
 }
 
 impl RendererMessagePortRegistry {
+    pub(crate) fn create_disconnected_message_port(
+        &self,
+        owner: MessagePortOwner,
+    ) -> MessagePortId {
+        self.inner.create_disconnected_message_port(owner)
+    }
+
     fn wake_port_if_owned(&self, wake: Option<MessagePortWake<MessagePortOwner>>) {
         let Some(wake) = wake else {
             return;
@@ -125,7 +133,10 @@ impl RendererMessagePortRegistry {
         self.inner.finish_message_port_message_delivery(port_id);
     }
 
-    pub(crate) fn take_pending_message_port_close(&self, port_id: MessagePortId) -> bool {
+    pub(crate) fn take_pending_message_port_close(
+        &self,
+        port_id: MessagePortId,
+    ) -> Option<MessagePortCloseKind> {
         self.inner.take_pending_message_port_close(port_id)
     }
 
@@ -172,8 +183,11 @@ mod tests {
                 .take_pending_message_port_message(closed_port)
                 .is_none()
         );
-        assert!(registry.take_pending_message_port_close(peer_port));
-        assert!(!registry.take_pending_message_port_close(peer_port));
+        assert_eq!(
+            registry.take_pending_message_port_close(peer_port),
+            Some(MessagePortCloseKind::PeerClosed)
+        );
+        assert_eq!(registry.take_pending_message_port_close(peer_port), None);
 
         assert_eq!(take_message_port_wake(&mut wake_rx), peer_port);
 

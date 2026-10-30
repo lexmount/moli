@@ -62,6 +62,13 @@ promise_test(async function () {
         "    postMessage({ kind: 'ready' });",
         "    return;",
         "  }",
+        "  if (event.data && event.data.kind === 'closed') {",
+        "    postMessage({kind: 'closed-ready', portsLength: event.ports.length,",
+        "      isMessagePort: event.ports[0] instanceof MessagePort,",
+        "      alias: event.data.port === event.ports[0]});",
+        "    event.ports[0].close();",
+        "    return;",
+        "  }",
         "  if (event.data === 'peer') {",
         "    postMessage({",
         "      kind: 'peer-ready',",
@@ -95,9 +102,17 @@ promise_test(async function () {
     assert_array_equals(result.messages, ["first", "second"]);
 
     closedPair.port1.close();
+    const closedReady = next_worker_message(worker, function (data) {
+      return data && data.kind === "closed-ready";
+    });
+    worker.postMessage({kind: "closed", port: closedPair.port1}, [closedPair.port1]);
     assert_throws_name("DataCloneError", function () {
-      worker.postMessage("closed", [closedPair.port1]);
-    }, "closed MessagePort endpoint should be detached before worker transfer");
+      worker.postMessage("neutered", [closedPair.port1]);
+    }, "successful worker transfer neuters the original closed port");
+    const closedResult = await with_timeout(closedReady, "closed connection transfer result");
+    assert_equals(closedResult.portsLength, 1);
+    assert_true(closedResult.isMessagePort);
+    assert_true(closedResult.alias);
 
     const peerReady = next_worker_message(worker, function (data) {
       return data && data.kind === "peer-ready";

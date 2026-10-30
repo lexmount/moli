@@ -178,9 +178,9 @@ impl JsContextHost {
         &mut self,
         message: &PendingWindowMessage,
     ) {
-        for port_id in message.data.transferred_message_ports() {
-            if !self.retire_message_port(*port_id) {
-                self.message_port_registry.close_message_port(*port_id);
+        for port_id in message.data.transferred_message_port_ids() {
+            if !self.retire_message_port(port_id) {
+                self.message_port_registry.close_message_port(port_id);
             }
         }
     }

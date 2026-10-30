@@ -15,7 +15,7 @@ use crate::{
         CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, EncodedVideoChunkClonePayload,
         EncodedVideoChunkType, FileSystemFileSnapshotClonePayload, FileSystemHandleClonePayload,
         GeometryClonePayload, ImageDataClonePayload, ReadableStreamClonePayload,
-        TransformStreamClonePayload, WritableStreamClonePayload,
+        TransferredMessagePort, TransformStreamClonePayload, WritableStreamClonePayload,
         attach_file_system_file_snapshot_clone_payload, build_dom_exception_object,
         build_encoded_video_chunk_from_clone_payload, build_file_system_handle_from_clone_payload,
         build_geometry_object_from_clone_payload, build_geometry_quad_from_cloned_points,
@@ -23,16 +23,17 @@ use crate::{
         build_readable_stream_clone_shell, build_transform_stream_clone_shell,
         build_writable_stream_clone_shell, crypto_key_clone_payload_from_object,
         crypto_key_object_from_clone_payload, detach_message_port_owner_for_transfer,
-        detach_transferred_message_port, dom_exception_clone_fields,
+        detach_transferred_message_port, discard_message_port_channel, dom_exception_clone_fields,
         encoded_video_chunk_clone_payload_from_object, ensure_message_port_wrapper_for_id,
         file_system_file_snapshot_clone_payload_from_object,
         file_system_handle_clone_payload_from_object, geometry_clone_payload_from_object,
         geometry_quad_clone_points, image_data_clone_payload_from_object,
         initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
-        initialize_writable_stream_clone_shell, message_port_id_from_object,
-        new_dom_exception_value, prepare_readable_stream_transfer,
-        prepare_transform_stream_transfer, prepare_writable_stream_transfer,
-        quota_exceeded_error_clone_fields, require_internal_stream_value,
+        initialize_writable_stream_clone_shell, message_port_transfer_from_object,
+        new_disconnected_message_port_object, new_dom_exception_value,
+        prepare_readable_stream_transfer, prepare_transform_stream_transfer,
+        prepare_writable_stream_transfer, quota_exceeded_error_clone_fields,
+        require_internal_stream_value,
     },
     types::MessagePortId,
 };
@@ -70,7 +71,7 @@ const GEOMETRY_KIND_DOM_QUAD_REFERENCES: u32 = 7;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct V8StructuredClonePayload {
-    pub(crate) base: StructuredCloneWireBytes<MessagePortId>,
+    pub(crate) base: StructuredCloneWireBytes<TransferredMessagePort>,
     wasm_modules: Vec<ClonedWasmModule>,
     readable_streams: Vec<ClonedReadableStream>,
     writable_streams: Vec<ClonedWritableStream>,
@@ -81,8 +82,72 @@ pub(crate) struct V8StructuredClonePayload {
 }
 
 impl V8StructuredClonePayload {
-    pub(crate) fn transferred_message_ports(&self) -> &[MessagePortId] {
-        &self.base.transferred_message_ports
+    pub(crate) fn transferred_message_port_ids(&self) -> impl Iterator<Item = MessagePortId> + '_ {
+        self.base
+            .transferred_message_ports
+            .iter()
+            .filter_map(|port| match port {
+                TransferredMessagePort::Endpoint(id) => Some(*id),
+                TransferredMessagePort::Closed => None,
+            })
+    }
+}
+
+/// Only closed-port attachments need a per-deserialization identity cache.
+/// Ordinary endpoints continue to use their existing native wrapper registry.
+#[derive(Clone, Default)]
+struct ClosedMessagePortObjects(Rc<RefCell<HashMap<u32, ClosedPortObject>>>);
+
+struct ClosedPortObject {
+    id: MessagePortId,
+    object: v8::Global<v8::Object>,
+}
+
+impl ClosedMessagePortObjects {
+    fn discard(&self, scope: &mut v8::PinScope<'_, '_>) {
+        for (_, port) in self.0.borrow_mut().drain() {
+            discard_message_port_channel(scope, port.id);
+        }
+    }
+
+    fn for_payload(payload: &V8StructuredClonePayload) -> Option<Self> {
+        payload
+            .base
+            .transferred_message_ports
+            .iter()
+            .any(|port| matches!(port, TransferredMessagePort::Closed))
+            .then(Self::default)
+    }
+
+    fn get<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        index: u32,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        if let Some(port) = self.0.borrow().get(&index) {
+            return Some(v8::Local::new(scope, &port.object));
+        }
+        let (id, object) = new_disconnected_message_port_object(scope)?;
+        self.0.borrow_mut().insert(
+            index,
+            ClosedPortObject {
+                id,
+                object: v8::Global::new(scope, object),
+            },
+        );
+        Some(object)
+    }
+}
+
+fn transferred_message_port_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    port: TransferredMessagePort,
+    index: u32,
+    closed: Option<&ClosedMessagePortObjects>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    match port {
+        TransferredMessagePort::Endpoint(id) => ensure_message_port_wrapper_for_id(scope, id),
+        TransferredMessagePort::Closed => closed?.get(scope, index),
     }
 }
 
@@ -606,7 +671,8 @@ impl v8::ValueSerializerImpl for WireSerializer {
 }
 
 struct WireDeserializer {
-    transferred_message_ports: Vec<MessagePortId>,
+    transferred_message_ports: Vec<TransferredMessagePort>,
+    closed_message_ports: Option<ClosedMessagePortObjects>,
     wasm_modules: HashMap<u32, ClonedWasmModule>,
     readable_streams: HashMap<u32, ReadableStreamClonePayload>,
     writable_streams: HashMap<u32, WritableStreamClonePayload>,
@@ -636,10 +702,17 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                 build_web_transport_error_from_clone_payload(scope, &payload)
             }
             HOST_OBJECT_TAG_TRANSFERRED_MESSAGE_PORT => {
-                let port_id = read_u32(deserializer)
-                    .and_then(|index| self.transferred_message_ports.get(index as usize).copied());
-                port_id
-                    .and_then(|id| ensure_message_port_wrapper_for_id(scope, id))
+                let index = read_u32(deserializer);
+                index
+                    .and_then(|index| {
+                        let port = *self.transferred_message_ports.get(index as usize)?;
+                        transferred_message_port_object(
+                            scope,
+                            port,
+                            index,
+                            self.closed_message_ports.as_ref(),
+                        )
+                    })
                     .or_else(|| {
                         throw_data_clone_exception(
                             scope,
@@ -1336,8 +1409,8 @@ fn copy_array_buffer_bytes(buffer: v8::Local<'_, v8::ArrayBuffer>) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), length) }.to_vec()
 }
 
-/// Transfer steps retain author order within each transfer phase. Window
-/// messaging defers MessagePorts until target checks have succeeded.
+/// Transfer steps retain author order within each transfer phase. MessagePorts
+/// move together after all other transfers and any Window target checks.
 #[derive(Clone, Copy)]
 pub(crate) enum WireTransfer<'s> {
     ArrayBuffer(v8::Local<'s, v8::ArrayBuffer>),
@@ -1350,12 +1423,6 @@ pub(crate) enum WireTransfer<'s> {
 #[derive(Default)]
 pub(crate) struct WireTransfers<'a, 's> {
     pub entries: &'a [WireTransfer<'s>],
-}
-
-#[derive(Clone, Copy)]
-enum MessagePortTransferTiming {
-    InListOrder,
-    AfterTargetChecks,
 }
 
 /// Serialized data whose MessagePorts have not yet been disentangled.
@@ -1378,20 +1445,22 @@ impl<'s> PreparedStructuredClone<'s> {
         // Validate the entire list before moving any endpoint. A later invalid
         // port must not detach an earlier valid one.
         for port in self.message_ports.iter().copied() {
-            let Some(port_id) = message_port_id_from_object(scope, port) else {
+            let Some(transfer) = message_port_transfer_from_object(scope, port) else {
                 self.discard(scope);
                 throw_data_clone_exception(scope, "A transferred MessagePort is detached.");
                 return None;
             };
-            self.payload.base.transferred_message_ports.push(port_id);
+            self.payload.base.transferred_message_ports.push(transfer);
         }
-        for (port, port_id) in self
+        for (port, transfer) in self
             .message_ports
             .iter()
             .copied()
             .zip(self.payload.base.transferred_message_ports.iter().copied())
         {
-            detach_message_port_owner_for_transfer(scope, port_id);
+            if let TransferredMessagePort::Endpoint(port_id) = transfer {
+                detach_message_port_owner_for_transfer(scope, port_id);
+            }
             detach_transferred_message_port(scope, port);
         }
         Some(self.payload)
@@ -1407,7 +1476,6 @@ impl<'s> PreparedStructuredClone<'s> {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         transfers: &WireTransfers<'_, 's>,
-        port_timing: MessagePortTransferTiming,
     ) -> Option<()> {
         let mut array_buffer_index = 0;
         for transfer in transfers.entries {
@@ -1433,17 +1501,7 @@ impl<'s> PreparedStructuredClone<'s> {
                         return None;
                     }
                 }
-                WireTransfer::MessagePort(_)
-                    if matches!(port_timing, MessagePortTransferTiming::AfterTargetChecks) => {}
-                WireTransfer::MessagePort(port) => {
-                    let Some(port_id) = message_port_id_from_object(scope, port) else {
-                        throw_data_clone_exception(scope, "A transferred MessagePort is detached.");
-                        return None;
-                    };
-                    detach_message_port_owner_for_transfer(scope, port_id);
-                    detach_transferred_message_port(scope, port);
-                    self.payload.base.transferred_message_ports.push(port_id);
-                }
+                WireTransfer::MessagePort(_) => {}
                 WireTransfer::ReadableStream(stream) => {
                     let prepared = prepare_readable_stream_transfer(scope, stream)?;
                     self.payload.readable_streams.push(ClonedReadableStream {
@@ -1522,14 +1580,7 @@ fn serialize_for_wire_with_policy<'s>(
     transfers: &WireTransfers<'_, 's>,
     policy: StructuredClonePolicy,
 ) -> Option<V8StructuredClonePayload> {
-    let prepared = prepare_for_wire_with_policy(
-        scope,
-        value,
-        transfers,
-        policy,
-        MessagePortTransferTiming::InListOrder,
-    )?;
-    Some(prepared.payload)
+    prepare_for_wire_with_policy(scope, value, transfers, policy)?.commit_message_ports(scope)
 }
 
 pub(crate) fn prepare_for_window_post_message<'s>(
@@ -1542,7 +1593,6 @@ pub(crate) fn prepare_for_window_post_message<'s>(
         value,
         transfers,
         StructuredClonePolicy::RuntimeMessage,
-        MessagePortTransferTiming::AfterTargetChecks,
     )
 }
 
@@ -1551,7 +1601,6 @@ fn prepare_for_wire_with_policy<'s>(
     value: v8::Local<'s, v8::Value>,
     transfers: &WireTransfers<'_, 's>,
     policy: StructuredClonePolicy,
-    port_timing: MessagePortTransferTiming,
 ) -> Option<PreparedStructuredClone<'s>> {
     let mut array_buffer_transfers = Vec::new();
     let mut message_port_transfers = Vec::new();
@@ -1629,15 +1678,9 @@ fn prepare_for_wire_with_policy<'s>(
             file_system_handles,
             metadata,
         },
-        message_ports: match port_timing {
-            MessagePortTransferTiming::InListOrder => Vec::new(),
-            MessagePortTransferTiming::AfterTargetChecks => message_port_transfers,
-        },
+        message_ports: message_port_transfers,
     };
-    if prepared
-        .apply_transfer_steps(scope, transfers, port_timing)
-        .is_none()
-    {
+    if prepared.apply_transfer_steps(scope, transfers).is_none() {
         prepared.discard(scope);
         return None;
     }
@@ -1648,7 +1691,14 @@ pub(crate) fn deserialize_from_wire<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     payload: &V8StructuredClonePayload,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    deserialize_from_wire_impl(scope, payload)
+    let closed = ClosedMessagePortObjects::for_payload(payload);
+    let value = deserialize_from_wire_impl(scope, payload, closed.clone());
+    if value.is_none()
+        && let Some(closed) = closed
+    {
+        closed.discard(scope);
+    }
+    value
 }
 
 pub(crate) fn deserialize_message_event_from_wire<'s>(
@@ -1659,11 +1709,30 @@ pub(crate) fn deserialize_message_event_from_wire<'s>(
         discard_all_transferred_stream_channels(scope, payload);
         return None;
     }
-    let value = deserialize_from_wire_impl(scope, payload)?;
-    let ports = v8::Array::new(scope, payload.transferred_message_ports().len() as i32);
-    for (index, port_id) in payload.transferred_message_ports().iter().enumerate() {
-        if let Some(port) = ensure_message_port_wrapper_for_id(scope, *port_id) {
-            let _ = ports.set_index(scope, index as u32, v8::Local::<v8::Value>::from(port));
+    let closed = ClosedMessagePortObjects::for_payload(payload);
+    let Some(value) = deserialize_from_wire_impl(scope, payload, closed.clone()) else {
+        if let Some(closed) = closed {
+            closed.discard(scope);
+        }
+        return None;
+    };
+    let ports = v8::Array::new(scope, payload.base.transferred_message_ports.len() as i32);
+    for (index, transfer) in payload.base.transferred_message_ports.iter().enumerate() {
+        let Some(port) =
+            transferred_message_port_object(scope, *transfer, index as u32, closed.as_ref())
+        else {
+            if let Some(closed) = closed {
+                closed.discard(scope);
+            }
+            discard_all_transferred_stream_channels(scope, payload);
+            return None;
+        };
+        if ports.set_index(scope, index as u32, v8::Local::<v8::Value>::from(port)) != Some(true) {
+            if let Some(closed) = closed {
+                closed.discard(scope);
+            }
+            discard_all_transferred_stream_channels(scope, payload);
+            return None;
         }
     }
     let _ = ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
@@ -1689,6 +1758,7 @@ fn validate_message_event_metadata(
 fn deserialize_from_wire_impl<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     payload: &V8StructuredClonePayload,
+    closed_message_ports: Option<ClosedMessagePortObjects>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let context = scope.get_current_context();
     let wasm_modules = payload
@@ -1726,6 +1796,7 @@ fn deserialize_from_wire_impl<'s>(
         scope,
         Box::new(WireDeserializer {
             transferred_message_ports: payload.base.transferred_message_ports.clone(),
+            closed_message_ports,
             wasm_modules,
             readable_streams,
             writable_streams,

@@ -1,6 +1,7 @@
 use super::*;
 use crate::context_bootstrap::dispatch_simple_event_target_event_collecting_errors;
 use crate::context_bootstrap::events::mark_event_trusted;
+use crate::message_port_runtime::MessagePortCloseKind;
 use crate::types::MessagePortId;
 use crate::worker::worker_message_port_wrapper;
 
@@ -194,27 +195,29 @@ fn dispatch_one_message_port_event_in_current_context<'s>(
         return MessagePortDeliveryRunResult::Idle;
     };
     if !message_port_is_started(scope, target) {
-        if !registry.take_pending_message_port_close(port_id) {
+        let Some(kind) = registry.take_pending_message_port_close(port_id) else {
             return MessagePortDeliveryRunResult::Idle;
-        }
+        };
         return MessagePortDeliveryRunResult::Consumed {
             callback_dispatched: dispatch_message_port_close_event(
                 scope,
                 port_id,
                 target,
+                kind,
                 callback_errors,
             ),
         };
     }
     let Some(payload) = registry.take_pending_message_port_message(port_id) else {
-        if !registry.take_pending_message_port_close(port_id) {
+        let Some(kind) = registry.take_pending_message_port_close(port_id) else {
             return MessagePortDeliveryRunResult::Idle;
-        }
+        };
         return MessagePortDeliveryRunResult::Consumed {
             callback_dispatched: dispatch_message_port_close_event(
                 scope,
                 port_id,
                 target,
+                kind,
                 callback_errors,
             ),
         };
@@ -356,10 +359,20 @@ fn dispatch_message_port_event<'s>(
 
 fn dispatch_message_port_close_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _port_id: MessagePortId,
+    port_id: MessagePortId,
     target: v8::Local<'s, v8::Object>,
+    kind: MessagePortCloseKind,
     callback_errors: Option<&mut Vec<V8ExceptionReport>>,
 ) -> bool {
+    if kind == MessagePortCloseKind::ConnectionError {
+        // Starting a reconstructed dangling connection discovers its error in
+        // a later port task. Chromium does not dispatch a close event for it.
+        if let Some(registry) = current_message_port_registry(scope) {
+            registry.close_message_port(port_id);
+        }
+        close_message_port_object(scope, target);
+        return false;
+    }
     let Some(event) = new_simple_event(scope, "close") else {
         return false;
     };
