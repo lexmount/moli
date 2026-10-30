@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::network_host::body::URL_SEARCH_PARAMS_CONTENT_TYPE;
 use crate::network_host::url_helpers::ResolveContextUrlError;
 
 const CONTENT_TYPE_HEADER: &str = "Content-Type";

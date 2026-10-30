@@ -35,7 +35,6 @@ impl RendererPageFileReadingTaskId {
 pub(crate) enum RendererPageFileReadingTaskKind {
     BlobRead,
     FileReader(RendererPageFileReaderPhase),
-    BlobRead,
     /// Complete one active enumeration request, possibly with the first empty
     /// batch that transitions the reader to `done`.
     DirectoryBatch,

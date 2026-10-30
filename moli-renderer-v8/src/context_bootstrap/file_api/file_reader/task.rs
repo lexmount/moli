@@ -55,14 +55,13 @@ impl FileReaderTask {
                 Some(RendererPageFileReaderPhase::Complete)
             }
             RendererPageFileReaderPhase::Complete => {
+                let error = file_reader_pending_error(scope, reader);
                 let result = file_reader_pending_result(scope, reader)
                     .unwrap_or_else(|| v8::null(scope).into());
                 set_file_reader_pending_result(scope, reader, v8::null(scope).into());
                 set_file_reader_ready_state(scope, reader, 2.0);
-                let error = v8::Local::<v8::Object>::try_from(result).ok()
-                    .filter(|object| web_api_interfaces::DOMException::is_instance(scope, *object));
                 let loaded = if let Some(error) = error {
-                    set_file_reader_error(scope, reader, error.into());
+                    set_file_reader_error(scope, reader, error);
                     set_file_reader_result(scope, reader, v8::null(scope).into());
                     dispatch_file_reader_event(scope, reader, "error", 0.0, total);
                     0.0
@@ -107,7 +106,8 @@ pub(in crate::context_bootstrap::file_api::file_reader) fn queue_file_reader_pha
 }
 
 fn file_reader_pending_error<'s>(
-    scope: &mut v8::PinScope<'s, '_>, reader: v8::Local<'s, v8::Object>,
+    scope: &mut v8::PinScope<'s, '_>,
+    reader: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let value = file_reader_pending_result(scope, reader)?;
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;

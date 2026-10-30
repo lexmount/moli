@@ -72,17 +72,13 @@ fn pull<'s>(
         .and_then(|value| value.number_value(scope))
         .unwrap_or(0.0) as usize;
     let end = offset.saturating_add(64 * 1024).min(data.len());
-    if offset >= data.len() {
-        crate::context_bootstrap::close_stream(scope, stream);
-        set_private_value(scope, source, BLOB, v8::null(scope).into());
-        return;
-    }
     set_private_value(
         scope,
         source,
         OFFSET,
         v8::Number::new(scope, end as f64).into(),
     );
+    // Empty Blobs also close from FileReading, after the current microtasks.
     read::stream_read(
         scope,
         source,
@@ -121,15 +117,30 @@ pub(super) fn finish_read<'s>(
         let _ = resolver.resolve(scope, v8::undefined(scope).into());
         return;
     }
+    let scope = std::pin::pin!(v8::TryCatch::new(scope));
+    let scope = &mut scope.init();
+    let null = v8::null(scope);
     match result {
         Ok(bytes) => {
-            let Some(chunk) = new_uint8_array_from_bytes(scope, bytes) else {
-                return;
-            };
-            let _ = crate::context_bootstrap::enqueue_byte_chunk(scope, stream, chunk.into());
+            if !bytes.is_empty() {
+                let Some(chunk) = new_uint8_array_from_bytes(scope, bytes) else {
+                    let error = scope.exception().unwrap_or_else(|| {
+                        let message =
+                            v8::String::new(scope, "Could not allocate Blob stream chunk")
+                                .unwrap_or_else(|| v8::String::empty(scope));
+                        v8::Exception::error(scope, message)
+                    });
+                    scope.reset();
+                    crate::context_bootstrap::error_stream(scope, stream, error);
+                    set_private_value(scope, source, BLOB, null.into());
+                    let _ = resolver.reject(scope, error);
+                    return;
+                };
+                let _ = crate::context_bootstrap::enqueue_byte_chunk(scope, stream, chunk.into());
+            }
             if last {
                 crate::context_bootstrap::close_stream(scope, stream);
-                set_private_value(scope, source, BLOB, v8::null(scope).into());
+                set_private_value(scope, source, BLOB, null.into());
             }
             let _ = resolver.resolve(scope, v8::undefined(scope).into());
         }
@@ -140,7 +151,7 @@ pub(super) fn finish_read<'s>(
                 "NotReadableError",
             );
             crate::context_bootstrap::error_stream(scope, stream, error);
-            set_private_value(scope, source, BLOB, v8::null(scope).into());
+            set_private_value(scope, source, BLOB, null.into());
             let _ = resolver.reject(scope, error);
         }
     }

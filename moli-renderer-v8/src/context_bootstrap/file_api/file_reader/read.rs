@@ -157,8 +157,8 @@ fn file_reader_start_read<'s>(
     blob: v8::Local<'s, v8::Object>,
     mode: FileReaderReadMode,
 ) -> bool {
-    let blob = moli_webapi_declare::web_api_object_target(scope, blob)
-        .expect("converted Blob argument");
+    let blob =
+        moli_webapi_declare::web_api_object_target(scope, blob).expect("converted Blob argument");
     let Some(data) = blob::blob_data_from_object(scope, blob) else {
         return false;
     };
@@ -177,7 +177,8 @@ fn file_reader_start_read<'s>(
         };
         file_reader_begin_read(scope, reader, (result, total));
     } else {
-        file_reader_begin_read(scope, reader, (v8::undefined(scope).into(), total));
+        let pending = v8::undefined(scope).into();
+        file_reader_begin_read(scope, reader, (pending, total));
         let read_id = file_reader_read_id(scope, reader);
         blob::read::file_reader_read(scope, reader, read_id, data, mode, mime_type);
     }
@@ -235,7 +236,12 @@ pub(crate) fn finish_file_reader_read<'s>(
     };
     set_file_reader_pending_result(scope, reader, result);
     if file_reader_load_start_dispatched(scope, reader) {
-        queue_file_reader_phase(scope, reader, read_id, crate::page_task_queue::RendererPageFileReaderPhase::Progress);
+        queue_file_reader_phase(
+            scope,
+            reader,
+            read_id,
+            crate::page_task_queue::RendererPageFileReaderPhase::Progress,
+        );
     }
 }
 
