@@ -607,13 +607,8 @@ fn dispatch_broadcast_channel_event<'s>(
 ) -> bool {
     match event {
         BroadcastChannelEvent::Message(payload) => {
-            let target_origin = crate::context_bootstrap::current_runtime_message_origin(scope);
-            let target_agent_cluster =
-                crate::context_bootstrap::current_runtime_message_agent_cluster(scope);
-            if !crate::context_bootstrap::wasm_module_message_allowed_for_target(
-                &payload,
-                target_origin.as_deref(),
-                target_agent_cluster,
+            if !crate::context_bootstrap::runtime_message_allowed_for_current_target(
+                scope, &payload,
             ) {
                 if let Some(event) = new_broadcast_channel_message_event(
                     scope,
