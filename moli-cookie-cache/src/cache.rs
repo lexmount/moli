@@ -29,6 +29,8 @@ struct CachedCookie {
     secure: bool,
     http_only: bool,
     expires_unix: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    creation_unix_nanos: Option<i128>,
     same_site: CachedSameSite,
     priority: Option<CachedCookiePriority>,
     #[serde(default)]
@@ -121,6 +123,10 @@ impl CachedCookie {
         if self.partitioned && self.partition_key.is_none() {
             return None;
         }
+        let creation_time = match self.creation_unix_nanos {
+            Some(timestamp) => Some(OffsetDateTime::from_unix_timestamp_nanos(timestamp).ok()?),
+            None => None,
+        };
 
         Some(StoredCookie {
             name: self.name,
@@ -139,6 +145,7 @@ impl CachedCookie {
             source_scheme: self.source_scheme.into(),
             source_port: self.source_port,
             creation_index: 0,
+            creation_time,
             last_access_index: 0,
         })
     }
@@ -166,6 +173,9 @@ impl CachedCookie {
             secure: cookie.secure,
             http_only: cookie.http_only,
             expires_unix: cookie.expires.map(|expires| expires.unix_timestamp()),
+            creation_unix_nanos: cookie
+                .creation_time
+                .map(|created| created.unix_timestamp_nanos()),
             same_site: cookie.same_site.into(),
             priority: cookie.priority.map(Into::into),
             partitioned: partition_key.is_some(),

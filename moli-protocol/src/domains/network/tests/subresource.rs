@@ -3350,7 +3350,12 @@ fetch('{target_url}', {{ credentials: 'include' }})
         let mut jar = bc.cookie_store_for_test().lock().unwrap();
         jar.store_response_headers(
             &Url::parse("http://127.0.0.1:8443/").unwrap(),
-            &[("set-cookie".to_owned(), b"sid=1; Path=/".to_vec())],
+            // The caller is localhost and the cookie host is 127.0.0.1, so
+            // opt into cross-site use while testing that cookie ports are ignored.
+            &[(
+                "set-cookie".to_owned(),
+                b"sid=1; Path=/; SameSite=None; Secure".to_vec(),
+            )],
         );
     }
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));

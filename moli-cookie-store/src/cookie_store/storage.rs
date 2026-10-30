@@ -117,8 +117,9 @@ impl CookieStore {
         let mut next_creation_index = 0;
         let mut next_access_index = 0;
         for cookie in iter {
-            let cookie = cookie?;
+            let mut cookie = cookie?;
             if include_expired || !cookie.is_expired() {
+                cookie.restore_creation_time();
                 next_creation_index =
                     next_creation_index.max(cookie.creation_index().saturating_add(1));
                 next_access_index =

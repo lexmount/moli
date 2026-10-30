@@ -97,7 +97,7 @@ async fn websocket_handshake_inherits_browser_cookie_store() {
                 &cookie_url,
                 &[(
                     "set-cookie".to_owned(),
-                    b"sid=server; Path=/; HttpOnly".to_vec(),
+                    b"sid=server; Path=/; HttpOnly; SameSite=None; Secure".to_vec(),
                 )],
             );
             assert!(reports.iter().any(|report| report.is_accepted()));

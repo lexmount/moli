@@ -1,5 +1,3 @@
-use cookie::SameSite;
-
 use crate::cookie::Cookie;
 use crate::utils::{is_http_scheme, is_secure, is_trustworthy_non_cryptographic};
 
@@ -83,17 +81,24 @@ pub(super) fn query_context_access_result(
     // SameSite gates request inclusion, not raw cookie visibility. Keep the
     // first version scoped to network reads so `document.cookie` and browser
     // introspection continue to expose the stored value while request paths can
-    // start modeling cross-site exclusions explicitly. Unspecified SameSite is
-    // intentionally left alone here until the core grows a fuller
-    // navigation/method-aware lax-by-default model. Deliberately keep
+    // model cross-site exclusions explicitly. The default mode also retains
+    // Chromium's age-limited allowance for unsafe top-level navigation. Keep
     // accumulating exclusion reasons instead of returning early: Chromium's
     // `CookieInclusionStatus` is a set, and higher layers should be able to
     // inspect "why else would this cookie have been blocked" without changing
     // the first-reason compatibility projection.
-    let schemeful_same_site =
-        same_site_exclusion_reason(cookie, context, context.same_site_context.for_inclusion());
-    let schemeless_same_site =
-        same_site_exclusion_reason(cookie, context, context.same_site_context.context);
+    let schemeful_same_site = same_site_exclusion_reason(
+        cookie,
+        context,
+        context.same_site_context.for_inclusion(),
+        effective_same_site,
+    );
+    let schemeless_same_site = same_site_exclusion_reason(
+        cookie,
+        context,
+        context.same_site_context.context,
+        effective_same_site,
+    );
 
     if schemeful_same_site != schemeless_same_site {
         // Chromium classifies schemeful-context breakage more precisely than a
@@ -151,26 +156,40 @@ pub(super) fn same_site_exclusion_reason(
     cookie: &Cookie<'_>,
     context: &QueryContext<'_>,
     same_site_context: SameSiteRequestContext,
+    effective_same_site: CookieEffectiveSameSite,
 ) -> Option<CookieExclusionReason> {
     if context.source != CookieAccessSource::Http {
         return None;
     }
 
-    match cookie.same_site() {
-        Some(SameSite::Strict) if same_site_context != SameSiteRequestContext::SameSiteStrict => {
+    match effective_same_site {
+        CookieEffectiveSameSite::Strict
+            if same_site_context != SameSiteRequestContext::SameSiteStrict =>
+        {
             return Some(CookieExclusionReason::SameSiteStrict);
         }
         // Explicit `SameSite=Lax` cookies stay excluded in the
         // `LaxMethodUnsafe` context. Chromium's additional
         // "Lax-allow-unsafe" carve-out only applies to cookies that did not
         // opt into `SameSite=Lax` explicitly.
-        Some(SameSite::Lax)
+        CookieEffectiveSameSite::Lax
             if !matches!(
                 same_site_context,
                 SameSiteRequestContext::SameSiteStrict | SameSiteRequestContext::SameSiteLax
             ) =>
         {
-            return Some(CookieExclusionReason::SameSiteLax);
+            return Some(if cookie.same_site().is_none() {
+                CookieExclusionReason::SameSiteUnspecifiedTreatedAsLax
+            } else {
+                CookieExclusionReason::SameSiteLax
+            });
+        }
+        CookieEffectiveSameSite::LaxAllowUnsafe
+            if same_site_context == SameSiteRequestContext::CrossSite
+                || (same_site_context == SameSiteRequestContext::SameSiteLaxMethodUnsafe
+                    && context.request_type != HttpRequestType::TopLevelNavigation) =>
+        {
+            return Some(CookieExclusionReason::SameSiteUnspecifiedTreatedAsLax);
         }
         _ => {}
     }
@@ -189,15 +208,17 @@ pub(super) fn schemeful_same_site_mismatch_warning(
         (Some(SameSiteContextDowngradeType::StrictToCross), CookieEffectiveSameSite::Strict) => {
             Some(CookieWarningReason::StrictCrossDowngradeStrictSameSite)
         }
-        (Some(SameSiteContextDowngradeType::StrictToCross), CookieEffectiveSameSite::Lax) => {
-            Some(CookieWarningReason::StrictCrossDowngradeLaxSameSite)
-        }
+        (
+            Some(SameSiteContextDowngradeType::StrictToCross),
+            CookieEffectiveSameSite::Lax | CookieEffectiveSameSite::LaxAllowUnsafe,
+        ) => Some(CookieWarningReason::StrictCrossDowngradeLaxSameSite),
         (Some(SameSiteContextDowngradeType::LaxToCross), CookieEffectiveSameSite::Strict) => {
             Some(CookieWarningReason::LaxCrossDowngradeStrictSameSite)
         }
-        (Some(SameSiteContextDowngradeType::LaxToCross), CookieEffectiveSameSite::Lax) => {
-            Some(CookieWarningReason::LaxCrossDowngradeLaxSameSite)
-        }
+        (
+            Some(SameSiteContextDowngradeType::LaxToCross),
+            CookieEffectiveSameSite::Lax | CookieEffectiveSameSite::LaxAllowUnsafe,
+        ) => Some(CookieWarningReason::LaxCrossDowngradeLaxSameSite),
         _ => None,
     }
 }

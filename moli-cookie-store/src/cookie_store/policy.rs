@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-use cookie::SameSite;
 use url::Url;
 
 use crate::cookie::{Cookie, CookieSourceScheme};
@@ -14,18 +13,17 @@ pub(super) fn source_scheme_mismatch(cookie: &Cookie<'_>, url: &Url) -> bool {
 }
 
 pub(super) fn effective_same_site(cookie: &Cookie<'_>) -> CookieEffectiveSameSite {
-    match cookie.same_site() {
-        Some(SameSite::Strict) => CookieEffectiveSameSite::Strict,
-        Some(SameSite::Lax) => CookieEffectiveSameSite::Lax,
-        _ => CookieEffectiveSameSite::NoRestriction,
-    }
+    CookieEffectiveSameSite::for_cookie(
+        cookie.same_site(),
+        cookie.creation_time(),
+        time::OffsetDateTime::now_utc(),
+    )
 }
 
 pub(super) fn access_semantics(cookie: &Cookie<'_>) -> CookieAccessSemantics {
     match cookie.same_site() {
-        // The fork currently enforces the modern model for cookies with an
-        // explicit SameSite attribute. Cookies without an attribute remain
-        // `Unknown` until lax-by-default/legacy compatibility is modeled.
+        // No legacy access delegate is configured. Unknown access semantics
+        // therefore use the same modern default as Chromium's UNKNOWN value.
         Some(_) => CookieAccessSemantics::NonLegacy,
         None => CookieAccessSemantics::Unknown,
     }

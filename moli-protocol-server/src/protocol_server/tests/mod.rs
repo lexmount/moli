@@ -241,6 +241,7 @@ fn stored_cookie(name: &str, value: &str) -> StoredCookie {
         source_scheme: StoredCookieSourceScheme::NonSecure,
         source_port: -1,
         creation_index: 0,
+        creation_time: None,
         last_access_index: 0,
     }
 }

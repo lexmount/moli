@@ -200,11 +200,22 @@ pub struct StoredCookie {
     pub source_port: i32,
     /// Stable creation order projected from the canonical core cookie.
     pub creation_index: u64,
+    /// Original creation time, retained across replacement and profile storage.
+    pub creation_time: Option<OffsetDateTime>,
     /// Stable last-access order projected from the canonical core cookie.
     pub last_access_index: u64,
 }
 
 impl StoredCookie {
+    /// Effective request mode, including the limited default-cookie POST allowance.
+    pub fn effective_same_site(&self) -> super::StoredCookieEffectiveSameSite {
+        super::StoredCookieEffectiveSameSite::for_cookie(
+            self.same_site,
+            self.creation_time,
+            OffsetDateTime::now_utc(),
+        )
+    }
+
     /// Returns the eviction priority, defaulting omitted `Priority` to `Medium`.
     pub fn effective_priority(&self) -> CookiePriority {
         self.priority.unwrap_or(CookiePriority::Medium)
@@ -332,6 +343,7 @@ mod tests {
             source_scheme: StoredCookieSourceScheme::Secure,
             source_port: -1,
             creation_index: 0,
+            creation_time: None,
             last_access_index: 0,
         }
     }

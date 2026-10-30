@@ -1,9 +1,8 @@
 use moli_cookie_jar::{
     BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides,
     BrowserCookieStorageAccessStatus, StoredCookie, StoredCookieBrowserContextValueSource,
-    StoredCookieEffectiveSameSite, StoredCookieExclusionReason, StoredCookieSameSite,
-    StoredCookieSetRejectionReason, StoredCookieSetReport, StoredCookieSetStatus, same_site_urls,
-    site_key_for_host,
+    StoredCookieExclusionReason, StoredCookieSetRejectionReason, StoredCookieSetReport,
+    StoredCookieSetStatus, same_site_urls, site_key_for_host,
 };
 use url::Url;
 
@@ -217,18 +216,6 @@ pub(crate) struct BrowserContextStructuredCookieWriteSnapshot {
     pub(crate) normalized_write_capability: BrowserContextCookieWriteCapabilitySnapshot,
 }
 
-fn effective_same_site_from_stored_same_site(
-    same_site: StoredCookieSameSite,
-) -> StoredCookieEffectiveSameSite {
-    match same_site {
-        StoredCookieSameSite::Strict => StoredCookieEffectiveSameSite::Strict,
-        StoredCookieSameSite::Lax => StoredCookieEffectiveSameSite::Lax,
-        StoredCookieSameSite::None | StoredCookieSameSite::Unspecified => {
-            StoredCookieEffectiveSameSite::NoRestriction
-        }
-    }
-}
-
 impl BrowserContextStructuredCookieWriteSnapshot {
     fn cookie_facade_rejection_report(
         &self,
@@ -240,7 +227,7 @@ impl BrowserContextStructuredCookieWriteSnapshot {
             status: StoredCookieSetStatus::Rejected(primary_rejection_reason),
             rejection_reasons,
             warning_reasons: Vec::new(),
-            effective_same_site: Some(effective_same_site_from_stored_same_site(cookie.same_site)),
+            effective_same_site: Some(cookie.effective_same_site()),
         }
     }
 

@@ -73,6 +73,7 @@ pub(crate) fn import_cookies(profile: &Path) -> Result<Vec<StoredCookie>> {
             },
             source_port: -1,
             creation_index: cookies.len() as u64,
+            creation_time: None,
             last_access_index: 0,
         });
     }

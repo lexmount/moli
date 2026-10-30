@@ -52,6 +52,9 @@ pub(super) fn stored_effective_same_site_from_core(
     match same_site {
         CoreCookieEffectiveSameSite::NoRestriction => StoredCookieEffectiveSameSite::NoRestriction,
         CoreCookieEffectiveSameSite::Lax => StoredCookieEffectiveSameSite::Lax,
+        CoreCookieEffectiveSameSite::LaxAllowUnsafe => {
+            StoredCookieEffectiveSameSite::LaxAllowUnsafe
+        }
         CoreCookieEffectiveSameSite::Strict => StoredCookieEffectiveSameSite::Strict,
     }
 }
@@ -203,6 +206,9 @@ pub(super) fn stored_exclusion_reason_from_core(
         CoreCookieExclusionReason::SchemeMismatch => StoredCookieExclusionReason::SchemeMismatch,
         CoreCookieExclusionReason::SameSiteStrict => StoredCookieExclusionReason::SameSiteStrict,
         CoreCookieExclusionReason::SameSiteLax => StoredCookieExclusionReason::SameSiteLax,
+        CoreCookieExclusionReason::SameSiteUnspecifiedTreatedAsLax => {
+            StoredCookieExclusionReason::SameSiteUnspecifiedTreatedAsLax
+        }
         CoreCookieExclusionReason::PartitionKeyMismatch => {
             StoredCookieExclusionReason::PartitionKeyMismatch
         }
@@ -447,6 +453,7 @@ pub fn stored_cookie_from_core(cookie: &StoreCookie<'_>) -> StoredCookie {
         source_scheme: stored_source_scheme_from_core(cookie.source_scheme()),
         source_port: cookie.source_port(),
         creation_index: cookie.creation_index(),
+        creation_time: cookie.creation_time(),
         last_access_index: cookie.last_access_index(),
     }
 }
