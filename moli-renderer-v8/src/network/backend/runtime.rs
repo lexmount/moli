@@ -654,10 +654,10 @@ impl BrowserResourceRuntimeOwnerRegistrar {
     pub(crate) fn clear_cors_preflight_cache(
         &self,
         origin: Option<&url::Url>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), BrowserResourceRuntimeOwnerError> {
         self.with_owner_set(|owners| {
             if owners.terminal {
-                return Err("browser resource runtime owner root is shut down");
+                return Err(BrowserResourceRuntimeOwnerError::RootShutDown);
             }
             // Workers and in-flight loads can retain retired network leases
             // after a proxy/config change. Clearing only the current binding

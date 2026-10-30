@@ -1700,7 +1700,7 @@ pub(super) fn svg_length_setter<'s>(
                 args.get(0),
                 webidl::Context::member("SVGLength", name),
             ) {
-                Ok(value) => f64::from(value.0),
+                Ok(value) => value.0,
                 Err(error) => {
                     webidl::throw_error(scope, &error);
                     return;
@@ -3765,12 +3765,7 @@ pub(super) fn svg_length_new_value_specified_units_callback<'s>(
         );
         return;
     }
-    set_svg_length_numeric_value(
-        scope,
-        length,
-        f64::from(parsed.value),
-        parsed.unit_type as u32,
-    );
+    set_svg_length_numeric_value(scope, length, parsed.value, parsed.unit_type as u32);
     reflect_svg_length_to_owner_attribute(scope, length);
     reflect_svg_value_list_item_to_owner_list(scope, length, SvgListKind::Length);
     rv.set_undefined();

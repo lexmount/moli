@@ -342,7 +342,7 @@ pub(crate) fn window_open_callback<'s>(
         target @ (SpecialBrowsingContextTarget::Parent | SpecialBrowsingContextTarget::Top),
     ) = special_target
     {
-        let source = window_open_entry_scope(scope, unsafe { &*host_ptr });
+        let source = entered_window_dispatch_scope(scope, unsafe { &*host_ptr });
         match navigate_existing_browsing_context_target(
             scope,
             host_ptr,
@@ -368,7 +368,7 @@ pub(crate) fn window_open_callback<'s>(
     };
     if let Some(target) = named_target {
         let host = unsafe { &*host_ptr };
-        let source = window_open_entry_scope(scope, host);
+        let source = entered_window_dispatch_scope(scope, host);
         if url
             .as_deref()
             .and_then(|url| Url::parse(url).ok())
@@ -446,7 +446,7 @@ pub(crate) fn window_open_callback<'s>(
         && let Some(popup_id) = host.named_lightweight_popup_id(&parsed.target_name)
         && let Some(destination) = url.as_deref().and_then(|url| Url::parse(url).ok())
         && host.blocks_ancestor_navigation(
-            window_open_entry_scope(scope, host),
+            entered_window_dispatch_scope(scope, host),
             OwnerDispatchScope::LightweightPopup(popup_id),
             &destination,
         )
@@ -837,7 +837,7 @@ fn open_dialog(
         return None;
     }
     let source_url =
-        window_open_document_url(host, window_open_entry_scope(scope, host)).to_string();
+        window_open_document_url(host, entered_window_dispatch_scope(scope, host)).to_string();
     let dialog_id = host.allocate_javascript_dialog_id();
     host.open_modal_javascript_dialog(
         target,

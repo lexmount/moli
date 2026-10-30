@@ -985,7 +985,7 @@ impl RendererBrowserContextRuntimeOwnerAccess {
     pub fn clear_cors_preflight_cache(
         &self,
         origin: Option<&url::Url>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::network::BrowserResourceRuntimeOwnerError> {
         self.resource_runtime_registrar
             .clear_cors_preflight_cache(origin)
     }

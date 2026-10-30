@@ -186,7 +186,12 @@ fn dispatch_resolved_event<'s>(
 ) -> SimpleEventDispatchResult {
     let target = target.dispatch_target;
     let can_invoke =
-        crate::context_bootstrap::event_target_dispatch::begin_dispatch_with_original_target(scope, target, original_target.unwrap_or(target), event);
+        crate::context_bootstrap::event_target_dispatch::begin_dispatch_with_original_target(
+            scope,
+            target,
+            original_target.unwrap_or(target),
+            event,
+        );
     let mut result = if can_invoke {
         invoke_simple_event_listeners(
             scope,
@@ -258,9 +263,13 @@ fn invoke_simple_event_listeners<'s>(
             &listener,
             callback_target.into(),
             if listener.handler_slot.is_some() {
-                handler_override.map(|(arguments, _)| arguments).unwrap_or_else(|| {
-                    error_arguments.as_ref().map_or(callback_arguments.as_slice(), |values| values.as_slice())
-                })
+                handler_override
+                    .map(|(arguments, _)| arguments)
+                    .unwrap_or_else(|| {
+                        error_arguments
+                            .as_ref()
+                            .map_or(callback_arguments.as_slice(), |values| values.as_slice())
+                    })
             } else {
                 &callback_arguments
             },
@@ -273,9 +282,18 @@ fn invoke_simple_event_listeners<'s>(
             && let Some(returned) = outcome.value
         {
             let handler_type = handler_override.map(|(_, kind)| kind).unwrap_or_else(|| {
-                if error_arguments.is_some() { EventHandlerType::OnErrorEventHandler } else { EventHandlerType::EventHandler }
+                if error_arguments.is_some() {
+                    EventHandlerType::OnErrorEventHandler
+                } else {
+                    EventHandlerType::EventHandler
+                }
             });
-            apply_event_handler_return_value(scope, event, v8::Local::new(scope, &returned), handler_type);
+            apply_event_handler_return_value(
+                scope,
+                event,
+                v8::Local::new(scope, &returned),
+                handler_type,
+            );
         }
         set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
         if event_stop_immediate_propagation(scope, event) {
@@ -301,14 +319,28 @@ pub(crate) fn invoke_simple_event_target_listeners<'s>(
     handler_type: EventHandlerType,
     callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
 ) -> SimpleEventDispatchResult {
-    let Some(identity) = resolve_event_target(scope, target) else { return SimpleEventDispatchResult::default(); };
-    let Some(registry) = SimpleEventListenerRegistry::from_owner(scope, identity.listener_owner) else { return SimpleEventDispatchResult::default(); };
+    let Some(identity) = resolve_event_target(scope, target) else {
+        return SimpleEventDispatchResult::default();
+    };
+    let Some(registry) = SimpleEventListenerRegistry::from_owner(scope, identity.listener_owner)
+    else {
+        return SimpleEventDispatchResult::default();
+    };
     let capture = match filter {
         crate::host::ListenerFilter::Capturing => Some(true),
         crate::host::ListenerFilter::Bubbling => Some(false),
         crate::host::ListenerFilter::All => None,
     };
-    invoke_simple_event_listeners(scope, identity.dispatch_target, registry, event_type, event, capture, callback_errors, Some((handler_arguments, handler_type)))
+    invoke_simple_event_listeners(
+        scope,
+        identity.dispatch_target,
+        registry,
+        event_type,
+        event,
+        capture,
+        callback_errors,
+        Some((handler_arguments, handler_type)),
+    )
 }
 
 fn finish_event_dispatch<'s>(
@@ -344,7 +376,7 @@ fn invoke_simple_event_listener_collecting_errors<'s>(
     else {
         return SimpleEventCallbackResult {
             invoked: false,
-            did_throw: false,
+            threw: false,
             value: None,
         };
     };
@@ -433,7 +465,8 @@ fn invoke_simple_event_callback_with_invocation<'s>(
                         &report,
                     );
                 } else {
-                    let _ = crate::worker::dispatch_current_worker_callback_exception(scope, *report);
+                    let _ =
+                        crate::worker::dispatch_current_worker_callback_exception(scope, *report);
                 }
                 SimpleEventCallbackResult {
                     invoked: true,
@@ -449,5 +482,3 @@ fn invoke_simple_event_callback_with_invocation<'s>(
         },
     )
 }
-
-

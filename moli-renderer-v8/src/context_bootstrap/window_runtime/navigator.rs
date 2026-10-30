@@ -2,7 +2,7 @@ use super::*;
 use crate::web_api_interfaces;
 use moli_browser_profile::BrowserIdentityProfile;
 use moli_storage_service::SqlBucketOperation;
-use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use crate::context_bootstrap::navigator_runtime::{
     STORAGE_BUCKET_MANAGER_CHILD_HANDLE_SLOT, STORAGE_BUCKET_MANAGER_POPUP_ID_SLOT,
