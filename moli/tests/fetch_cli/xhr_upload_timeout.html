@@ -16,9 +16,12 @@ async function probeUploads(scope, base, pendingOrigin) {
     {name: 'absent body success', bytes: null, timeout: 0, head: 150, expected: 'load'},
     {name: 'disable elapsed timeout', timeout: 30, head: 300, busy: 150, after: 0, complete: true, expected: 'load'},
     {name: 'author abort discards queued completion', timeout: 0, head: 500, busy: 150, abort: true, expected: 'abort'},
-    {name: 'upload microtask disables timeout after headers', timeout: 30, head: 20, body: 400, busy: 150, afterUpload: 0, complete: true, expected: 'load'},
-    {name: 'upload microtask disables timeout after periodic report', timeout: 30, head: 500, busy: 150, afterUpload: 0, complete: true, expected: 'load'},
-    {name: 'upload microtask extends timeout', timeout: 30, head: 20, body: 400, busy: 150, afterUpload: 1000, complete: true, expected: 'load'}
+    // Do not require a real HTTP response to win a 10 ms scheduling window.
+    // The native upload/timeout regression covers an already-expired timer;
+    // transport tests separately gate response-start and periodic reports.
+    {name: 'upload microtask disables timeout with early headers', timeout: 500, head: 20, body: 1500, busy: 800, afterUpload: 0, complete: true, expected: 'load'},
+    {name: 'upload microtask disables timeout while response is held', timeout: 500, head: 1500, busy: 800, afterUpload: 0, complete: true, expected: 'load'},
+    {name: 'upload microtask extends timeout', timeout: 500, head: 20, body: 1500, busy: 800, afterUpload: 5000, complete: true, expected: 'load'}
   ];
   const facts = [];
   for (const config of cases) {
