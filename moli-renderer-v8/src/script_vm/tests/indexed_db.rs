@@ -6777,3 +6777,158 @@ fn indexed_db_roundtrips_image_data_and_geometry_objects() {
         r#"{"image":[true,true,true,2,1,"display-p3","1,2,3,4,5,6,7,8",true],"pointReadOnly":true,"point":true,"rectReadOnly":true,"rect":true,"quad":true,"matrixReadOnly":true,"matrix":true,"expandosExcluded":true}"#
     );
 }
+
+#[test]
+fn indexed_db_roundtrips_file_list_with_file_graph_identity() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-file-list-value.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__indexedDbFileListResult = "pending";
+  const dbName = `file-list-${Math.random()}`;
+  const open = indexedDB.open(dbName, 1);
+  open.onerror = () => {
+    globalThis.__indexedDbFileListResult = `open-error:${open.error && open.error.name}`;
+  };
+  open.onupgradeneeded = () => {
+    open.result.createObjectStore("values", { keyPath: "id" });
+  };
+  open.onsuccess = () => {
+    const db = open.result;
+    const transfer = new DataTransfer();
+    const file = new File(["FILE_LIST_IDB"], "list.txt", {
+      type: "text/list",
+      lastModified: 77
+    });
+    file.expando = "not serialized";
+    transfer.items.add(file);
+    const list = transfer.files;
+    list.expando = "not serialized";
+
+    const writeTx = db.transaction("values", "readwrite");
+    writeTx.onerror = () => {
+      globalThis.__indexedDbFileListResult =
+        `write-error:${writeTx.error && writeTx.error.name}`;
+    };
+    writeTx.objectStore("values").put({
+      id: 1,
+      list,
+      listAlias: list,
+      file
+    });
+    writeTx.oncomplete = () => {
+      const get = db.transaction("values").objectStore("values").get(1);
+      get.onerror = () => {
+        globalThis.__indexedDbFileListResult = `get-error:${get.error && get.error.name}`;
+      };
+      get.onsuccess = () => {
+        const row = get.result;
+        row.file.text().then(text => {
+          globalThis.__indexedDbFileListResult = JSON.stringify({
+            listBrand: row.list instanceof FileList,
+            listPrototype: Object.getPrototypeOf(row.list) === FileList.prototype,
+            listDistinct: row.list !== list,
+            listAlias: row.list === row.listAlias,
+            listLength: row.list.length,
+            itemMatchesFile: row.list.item(0) === row.file,
+            indexedMatchesFile: row.list[0] === row.file,
+            fileBrand: row.file instanceof File && row.file instanceof Blob,
+            fileDistinct: row.file !== file,
+            fileMetadata: [row.file.name, row.file.type, row.file.lastModified, row.file.size],
+            text,
+            expandosExcluded:
+              row.list.expando === undefined && row.file.expando === undefined
+          });
+        }, error => {
+          globalThis.__indexedDbFileListResult = `file-error:${error && error.name}`;
+        });
+      };
+    };
+  };
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("indexeddb FileList workflow should schedule");
+
+    let result = vm
+        .eval_after_selected_page_tasks("String(globalThis.__indexedDbFileListResult)")
+        .expect("indexeddb FileList result should be readable");
+
+    assert_eq!(
+        result,
+        r#"{"listBrand":true,"listPrototype":true,"listDistinct":true,"listAlias":true,"listLength":1,"itemMatchesFile":true,"indexedMatchesFile":true,"fileBrand":true,"fileDistinct":true,"fileMetadata":["list.txt","text/list",77,13],"text":"FILE_LIST_IDB","expandosExcluded":true}"#,
+    );
+}
+
+#[test]
+fn indexed_db_file_list_graphs_survive_sqlite_profile_restart() {
+    let root = indexed_db_test_root("file-list-profile-restart");
+    for write in [true, false] {
+        let manager = crate::new_indexed_db_manager(Some(root.clone())).unwrap();
+        let mut vm = new_storage_page_task_executor_test_vm(
+            "https://indexeddb-file-list-profile-restart.test/",
+        );
+        vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+        vm.set_storage_bucket_store(
+            crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+        );
+        vm.eval(&format!("globalThis.writeFileLists = {write};"))
+            .unwrap();
+        vm.eval(
+            r#"
+globalThis.fileListProfile = 'pending';
+(async () => {
+  const result = request => new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  const complete = transaction => new Promise((resolve, reject) => {
+    transaction.oncomplete = resolve;
+    transaction.onabort = () => reject(transaction.error);
+  });
+  const open = indexedDB.open('file-lists', 1);
+  open.onupgradeneeded = () => open.result.createObjectStore('records', {keyPath:'id'});
+  const db = await result(open);
+  if (writeFileLists) {
+    const transaction = db.transaction('records', 'readwrite');
+    const done = complete(transaction);
+    for (const id of [1, 2]) {
+      const file = new File(['body-' + id], 'file-' + id + '.txt', {
+        type:'text/plain', lastModified:id
+      });
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      const list = transfer.files;
+      transaction.objectStore('records').put({id, list, alias:list, file});
+    }
+    await done;
+  }
+  const transaction = db.transaction('records');
+  const done = complete(transaction);
+  const rows = await result(transaction.objectStore('records').getAll());
+  await done;
+  db.close();
+  const texts = await Promise.all(rows.map(row => row.file.text()));
+  return {
+    rows: rows.map(row => [row.id, row.list instanceof FileList,
+      row.list === row.alias, row.list.item(0) === row.file,
+      row.list[0] === row.file, row.file.name, row.file.lastModified]),
+    separateRecords: rows[0].list !== rows[1].list && rows[0].file !== rows[1].file,
+    texts
+  };
+})().then(result => fileListProfile = JSON.stringify(result),
+          error => fileListProfile = String(error));
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            vm.eval_after_selected_page_tasks("fileListProfile")
+                .unwrap(),
+            r#"{"rows":[[1,true,true,true,true,"file-1.txt",1],[2,true,true,true,true,"file-2.txt",2]],"separateRecords":true,"texts":["body-1","body-2"]}"#,
+            "profile write: {write}"
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
