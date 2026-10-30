@@ -9,10 +9,15 @@ use std::{
 const FORMAT: &[u8] = b"{\"backend\":\"indexeddb\",\"layout\":1}\n";
 const PREPARING: &str = ".creating-";
 
+#[cfg(test)]
+type BoundaryHook = (Boundary, Box<dyn FnOnce() + Send>);
+
 pub(in crate::sqlite::service) struct DiskCatalog {
     root: PathBuf,
     #[cfg(test)]
     fault: Mutex<Option<Boundary>>,
+    #[cfg(test)]
+    hook: Mutex<Option<BoundaryHook>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -20,6 +25,7 @@ pub(in crate::sqlite::service) enum Boundary {
     Allocated,
     MarkerSynced,
     CreatingSynced,
+    Retiring,
     Renamed,
     SourceSynced,
 }
@@ -109,6 +115,8 @@ impl DiskCatalog {
             root,
             #[cfg(test)]
             fault: Mutex::new(None),
+            #[cfg(test)]
+            hook: Mutex::new(None),
         })
     }
 
@@ -157,9 +165,10 @@ impl DiskCatalog {
         // Persist intent before mkdir. An empty unmarked directory then always
         // means missing/corrupt storage, never a safely disposable creation.
         let marker = preparation_marker(generation);
+        let retry = preparing(generation)?;
         let mut file = OpenOptions::new()
             .write(true)
-            .create_new(true)
+            .create_new(!retry)
             .open(&marker)
             .map_err(|error| io_error("create preparation marker", &marker, error))?;
         file.write_all(hex(&identity.generation).as_bytes())
@@ -167,8 +176,16 @@ impl DiskCatalog {
             .map_err(|error| io_error("sync preparation marker", &marker, error))?;
         sync_directory(name)?;
         self.boundary(Boundary::MarkerSynced)?;
-        fs::create_dir(generation)
-            .map_err(|error| io_error("allocate generation", generation, error))?;
+        match fs::create_dir(generation) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if !retry {
+                    return Err(corruption("unmarked IndexedDB generation already exists"));
+                }
+                require_directory(generation)?;
+            }
+            Err(error) => return Err(io_error("allocate generation", generation, error)),
+        }
         sync_directory(name)?;
         self.boundary(Boundary::Allocated)
     }
@@ -192,12 +209,16 @@ impl DiskCatalog {
         let generation = path.parent().expect("generation path");
         sync_directory(generation)?;
         self.boundary(Boundary::CreatingSynced)?;
-        fs::remove_file(preparation_marker(generation))
-            .map_err(|error| io_error("remove preparation marker", generation, error))?;
+        match fs::remove_file(preparation_marker(generation)) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(io_error("remove preparation marker", generation, error)),
+        }
         sync_directory(generation.parent().expect("name path"))
     }
 
     pub(in crate::sqlite::service) fn retire(&self, path: &Path) -> Result<(), IndexedDbError> {
+        self.boundary(Boundary::Retiring)?;
         let generation = path
             .parent()
             .ok_or_else(|| corruption("missing generation directory"))?;
@@ -300,6 +321,20 @@ impl DiskCatalog {
     fn boundary(&self, point: Boundary) -> Result<(), IndexedDbError> {
         #[cfg(test)]
         {
+            let hook = {
+                let mut hook = self.hook.lock();
+                if hook
+                    .as_ref()
+                    .is_some_and(|(boundary, _)| *boundary == point)
+                {
+                    hook.take()
+                } else {
+                    None
+                }
+            };
+            if let Some((_, hook)) = hook {
+                hook();
+            }
             let mut fault = self.fault.lock();
             if *fault == Some(point) {
                 *fault = None;
@@ -315,6 +350,15 @@ impl DiskCatalog {
     #[cfg(test)]
     pub(in crate::sqlite::service) fn interrupt_at(&self, point: Boundary) {
         *self.fault.lock() = Some(point);
+    }
+
+    #[cfg(test)]
+    pub(in crate::sqlite::service) fn on_boundary(
+        &self,
+        point: Boundary,
+        hook: impl FnOnce() + Send + 'static,
+    ) {
+        *self.hook.lock() = Some((point, Box::new(hook)));
     }
 }
 

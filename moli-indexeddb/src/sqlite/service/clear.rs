@@ -2,7 +2,7 @@
 //! Only execute waits; preparing the bounded native payload performs no I/O.
 
 use super::*;
-use std::sync::mpsc;
+use tokio::task::JoinSet;
 
 pub(super) struct ClearingOwner {
     active: bool,
@@ -97,7 +97,7 @@ impl ServiceClient {
     }
 
     fn request_clear_scope(&self, scope: ClearScope) -> Result<OwnerClearRequest, IndexedDbError> {
-        if self.executor.is_worker_thread() {
+        if self.runtime.is_current() {
             return Err(IndexedDbError::InvalidState(
                 "IndexedDB clear cannot run on a SQL worker".into(),
             ));
@@ -132,7 +132,7 @@ impl ServiceClient {
     }
 
     fn prepare_clear_scope(&self, scope: ClearScope) -> Result<OwnerClear, IndexedDbError> {
-        if self.executor.is_worker_thread() {
+        if self.runtime.is_current() {
             return Err(IndexedDbError::InvalidState(
                 "IndexedDB clear cannot run on a SQL worker".into(),
             ));
@@ -191,44 +191,59 @@ impl ServiceClient {
 }
 
 impl OwnerClear {
-    /// Blocking storage-worker operation. Each lane performs its cleanup after
-    /// accepted commands, independently of retained data and database count.
+    /// Blocking storage-worker operation. Drain each database owner before
+    /// finishing its catalog cleanup, independently of unrelated databases.
     pub fn execute(mut self) -> Result<(), IndexedDbError> {
-        if self.service.executor.is_worker_thread() {
+        if self.service.runtime.is_current() {
             return Err(IndexedDbError::InvalidState(
                 "IndexedDB clear cannot run on a SQL worker".into(),
             ));
         }
-        let mut first_error = None;
-        for (index, lane) in self.service.lanes.iter().enumerate() {
-            let lane = lane.clone();
-            let targets = self.targets.clone();
-            let workers = self.service.lanes.len() as u64;
-            let (sender, receiver) = mpsc::channel();
-            self.service
-                .executor
-                .submit(index as u64, move || {
-                    let mut error = None;
-                    let mut lane = lane.lock();
-                    for client in &targets.clients {
-                        if client.id.0 % workers != index as u64 {
-                            continue;
-                        }
-                        if let Err(failure) = clear_database(&mut lane, client) {
-                            error.get_or_insert(failure);
-                        }
+        let targets = self.targets.clone();
+        let runtime = self.service.runtime.clone();
+        let first_error = self
+            .service
+            .runtime
+            .wait(async move {
+                let mut pending = JoinSet::new();
+                // Fan out before waiting: a slow database cannot prevent unrelated
+                // owners from receiving their cleanup command.
+                for client in &targets.clients {
+                    let client = client.clone();
+                    let worker = runtime.clone();
+                    pending.spawn(async move {
+                        // closed precedes catalog retirement inside a delete.
+                        // Only the final receipt proves that no owner lifecycle
+                        // work can still touch this generation directory.
+                        let mut receipt = client.owner.stop();
+                        receipt
+                            .wait_for(|result| result.is_some())
+                            .await
+                            .map_err(|_| {
+                                IndexedDbError::Io(
+                                    "IndexedDB clear owner stopped without a receipt".into(),
+                                )
+                            })?
+                            .as_ref()
+                            .expect("completed owner")
+                            .clone()?;
+                        worker
+                            .blocking(move || finish_clear(&client))
+                            .await
+                            .map_err(|error| IndexedDbError::Io(error.to_string()))?
+                    });
+                }
+                let mut first_error = None;
+                while let Some(result) = pending.join_next().await {
+                    if let Err(error) =
+                        result.unwrap_or_else(|error| Err(IndexedDbError::Io(error.to_string())))
+                    {
+                        first_error.get_or_insert(error);
                     }
-                    drop(lane);
-                    let _ = sender.send(error);
-                })
-                .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-            let error = receiver
-                .recv()
-                .map_err(|_| IndexedDbError::Io("IndexedDB clear worker stopped".into()))?;
-            if first_error.is_none() {
-                first_error = error;
-            }
-        }
+                }
+                first_error
+            })
+            .map_err(|error| IndexedDbError::Io(error.to_string()))?;
         match &self.targets.scope {
             ClearScope::Owner(_) => self
                 .service
@@ -272,14 +287,11 @@ impl Drop for OwnerClear {
     }
 }
 
-fn clear_database(lane: &mut Lane, client: &DatabaseClient) -> Result<(), IndexedDbError> {
+fn finish_clear(client: &DatabaseClient) -> Result<(), IndexedDbError> {
     if client.state.deleted.load(Ordering::Acquire) {
         return Ok(());
     }
     let result = (|| {
-        if let Some(entry) = lane.entries.remove(&client.id) {
-            entry.close(client.id)?;
-        }
         if !client.is_retired() {
             return Err(corruption("IndexedDB clear lost its database owner"));
         }

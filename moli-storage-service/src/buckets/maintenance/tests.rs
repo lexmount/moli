@@ -38,8 +38,8 @@ impl Fixture {
     }
 
     fn manager(root: &Path) -> SharedStorageBucketIndexedDbManager {
-        let mut config = ServiceConfig::default();
-        config.executor.workers = 1;
+        let config = ServiceConfig::default();
+
         Arc::new(Mutex::new(IndexedDbManager::with_sqlite_service(
             Service::on_disk(root.join("idb-lite"), config).unwrap(),
         )))

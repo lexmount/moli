@@ -36,6 +36,12 @@ fn crash_child(root: PathBuf, case: &str) {
         completion.result.is_err(),
         preparation_boundary(case).is_some()
     );
+    // Keep a real Web connection open for the committed-WAL crash case.
+    // An idle disk owner can now checkpoint and close before shutdown.
+    let _connection = completion
+        .result
+        .is_ok()
+        .then(|| client.open_connection_for_test(Arc::new(|| {})).unwrap());
     let mut active = None;
     if preparation_boundary(case).is_none() && case != "unpublished" {
         seed(&client);

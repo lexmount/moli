@@ -9,12 +9,12 @@ fn versionchange_checkpoint_waits_for_an_already_requested_native_close() {
     let service = Service::new(config()).unwrap();
     let client = open(&service, "checkpoint-close", Location::Memory);
     initialize(&client);
-    let connection = client.open_connection(noop()).unwrap();
+    let connection = client.open_connection_for_test(noop()).unwrap();
     let batch = client.begin_version_change(1, Some(2), noop());
     let notification = connection.take_notification().unwrap();
-    // Hold the actual SQL lane to make the close receipt arrive strictly after
+    // Hold the database command FIFO to make the close receipt arrive strictly after
     // the recipient's event checkpoint, without depending on thread speed.
-    let worker = client.lane.lock();
+    let worker = hold_database(&client);
     let (sender, receiver) = mpsc::channel();
     connection
         .close(move |result| {
@@ -40,7 +40,7 @@ fn versionchange_checkpoint_waits_until_the_closed_connection_is_unregistered() 
     let service = Service::new(config()).unwrap();
     let client = open(&service, "unregistration-checkpoint", Location::Memory);
     initialize(&client);
-    let connection = client.open_connection(noop()).unwrap();
+    let connection = client.open_connection_for_test(noop()).unwrap();
     let batch = client.begin_version_change(1, Some(2), noop());
     let notification = connection.take_notification().unwrap();
     let (entered, waiting) = mpsc::channel();
@@ -131,8 +131,8 @@ fn logical_close_retains_accepted_transactions_and_other_connections() {
     let service = Service::new(config()).unwrap();
     let client = open(&service, "logical-close", Location::Memory);
     initialize(&client);
-    let first = client.open_connection(noop()).unwrap();
-    let second = client.open_connection(noop()).unwrap();
+    let first = client.open_connection_for_test(noop()).unwrap();
+    let second = client.open_connection_for_test(noop()).unwrap();
     assert_ne!(first.handle(), second.handle());
     let accepted = first
         .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, noop())
@@ -207,9 +207,9 @@ fn dropping_an_owner_rolls_back_before_canceling_admission_and_notifying_blocker
     let service = Service::new(config()).unwrap();
     let client = open(&service, "owner-drop", Location::Memory);
     initialize(&client);
-    let first = client.open_connection(noop()).unwrap();
+    let first = client.open_connection_for_test(noop()).unwrap();
     let signal = first.close_signal();
-    let second = client.open_connection(noop()).unwrap();
+    let second = client.open_connection_for_test(noop()).unwrap();
     let request = first
         .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, noop())
         .unwrap();
@@ -282,9 +282,9 @@ fn retiring_an_idle_connection_preserves_another_connections_active_savepoint() 
     let service = Service::new(config()).unwrap();
     let client = open(&service, "other-owner", Location::Memory);
     initialize(&client);
-    let first = client.open_connection(noop()).unwrap();
+    let first = client.open_connection_for_test(noop()).unwrap();
     let signal = first.close_signal();
-    let second = client.open_connection(noop()).unwrap();
+    let second = client.open_connection_for_test(noop()).unwrap();
     let request = second
         .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, noop())
         .unwrap();
@@ -332,7 +332,7 @@ fn retiring_an_idle_connection_preserves_another_connections_active_savepoint() 
 fn upgrade_ownership_is_rolled_back_when_its_connection_is_lost() {
     let service = Service::new(config()).unwrap();
     let client = open(&service, "upgrade-owner", Location::Memory);
-    let connection = client.open_connection(noop()).unwrap();
+    let connection = client.open_connection_for_test(noop()).unwrap();
     let signal = connection.close_signal();
     let transaction = client.allocate_transaction_handle().unwrap();
     let (sender, receiver) = mpsc::channel();
@@ -358,7 +358,7 @@ fn upgrade_ownership_is_rolled_back_when_its_connection_is_lost() {
     assert!(!client.has_open_connections());
     assert_eq!(client.committed().unwrap().version, 0);
     assert!(client.committed().unwrap().stores.is_empty());
-    let replacement = client.open_connection(noop()).unwrap();
+    let replacement = client.open_connection_for_test(noop()).unwrap();
     let (sender, receiver) = mpsc::channel();
     replacement
         .begin_upgrade(
@@ -383,7 +383,7 @@ fn connection_drop_rolls_back_before_forcing_close() {
     let committed_usage = client.committed().unwrap().usage;
     let (sender, receiver) = mpsc::channel();
     let connection = client
-        .open_connection(Arc::new(move || {
+        .open_connection_for_test(Arc::new(move || {
             let _ = sender.send(());
         }))
         .unwrap();
@@ -413,7 +413,7 @@ fn shutdown_forces_every_connection_after_rolling_back_and_cancels_queued_work()
     let mut service = Service::new(config()).unwrap();
     let client = open(&service, "shutdown-connections", Location::Memory);
     initialize(&client);
-    let connection = client.open_connection(noop()).unwrap();
+    let connection = client.open_connection_for_test(noop()).unwrap();
     let request = connection
         .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, noop())
         .unwrap();
@@ -444,7 +444,7 @@ fn shutdown_forces_every_connection_after_rolling_back_and_cancels_queued_work()
 }
 
 #[test]
-fn panicked_worker_shutdown_rolls_back_and_retires_live_connections() {
+fn panicked_database_shutdown_rolls_back_and_retires_live_connections() {
     for disk in [false, true] {
         let directory = Directory::new();
         let location = if disk {
@@ -455,7 +455,7 @@ fn panicked_worker_shutdown_rolls_back_and_retires_live_connections() {
         let mut service = Service::new(config()).unwrap();
         let client = open(&service, "panicked-owner", location);
         initialize(&client);
-        let connection = client.open_connection(noop()).unwrap();
+        let connection = client.open_connection_for_test(noop()).unwrap();
         let request = connection
             .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, noop())
             .unwrap();
@@ -466,10 +466,8 @@ fn panicked_worker_shutdown_rolls_back_and_retires_live_connections() {
             .queue_transaction_start(&["a".into()], TransactionMode::ReadOnly, noop())
             .unwrap();
         client
-            .executor
-            .submit(client.id.0, || {
-                panic!("injected failure with a live SQL owner")
-            })
+            .owner
+            .submit::<()>(|_| panic!("injected failure with a live SQL owner"), |_| {})
             .unwrap();
         assert!(service.shutdown().is_err());
         assert!(connection.is_forced_closed());
@@ -515,18 +513,18 @@ fn connection_registration_failure_does_not_publish_a_blocker_or_consume_a_handl
     let client = open(&service, "registration-pressure", Location::Memory);
     service.next_connection.store(u64::MAX, Ordering::Relaxed);
     assert!(matches!(
-        client.open_connection(noop()),
+        client.open_connection_for_test(noop()),
         Err(IndexedDbError::Resource(_))
     ));
     assert!(!client.has_open_connections());
     assert_eq!(service.next_connection.load(Ordering::Relaxed), u64::MAX);
     service.next_connection.store(1u64 << 53, Ordering::Relaxed);
 
-    let connection = client.open_connection(noop()).unwrap();
+    let connection = client.open_connection_for_test(noop()).unwrap();
     assert_eq!(connection.handle().into_raw(), (1u64 << 53) + 1);
 
     let other_client = open(&service, "other-registration", Location::Memory);
-    let other = other_client.open_connection(noop()).unwrap();
+    let other = other_client.open_connection_for_test(noop()).unwrap();
     assert_ne!(
         connection.handle(),
         other.handle(),
@@ -541,7 +539,7 @@ fn connection_registration_failure_does_not_publish_a_blocker_or_consume_a_handl
 }
 
 #[test]
-fn service_clients_do_not_keep_workers_alive_and_shutdown_wakes_all_factory_requests() {
+fn service_clients_do_not_keep_the_runtime_alive_and_shutdown_wakes_all_factory_requests() {
     for panic_worker in [false, true] {
         let mut service = Service::new(config()).unwrap();
         let client = service.client();
@@ -562,9 +560,9 @@ fn service_clients_do_not_keep_workers_alive_and_shutdown_wakes_all_factory_requ
         assert!(!requests[1].handle().is_head());
         if panic_worker {
             service
-                .executor
-                .handle()
-                .submit(0, || panic!("injected worker failure before shutdown"))
+                .client
+                .runtime
+                .spawn(async { panic!("injected runtime failure before shutdown") })
                 .unwrap();
             assert!(service.shutdown().is_err());
         }
@@ -648,7 +646,7 @@ fn weak_connection_does_not_keep_a_collected_owner_open() {
     let service = Service::new(config()).unwrap();
     let client = open(&service, "weak-owner", Location::Memory);
     initialize(&client);
-    let connection = client.open_connection(noop()).unwrap();
+    let connection = client.open_connection_for_test(noop()).unwrap();
     let weak = connection.downgrade();
     assert!(weak.is_alive());
     drop(connection);

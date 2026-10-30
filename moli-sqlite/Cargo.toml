@@ -8,5 +8,10 @@ edition = "2024"
 parking_lot = "0.12.5"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros"] }
+
 [lints]
 workspace = true

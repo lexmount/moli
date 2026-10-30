@@ -2733,8 +2733,8 @@ mod tests {
         root: Option<PathBuf>,
     ) -> std::result::Result<SharedStorageBucketIndexedDbManager, String> {
         use moli_indexeddb::sqlite::service::{Service, ServiceConfig};
-        let mut config = ServiceConfig::default();
-        config.executor.workers = 1;
+        let config = ServiceConfig::default();
+
         let service = match root {
             Some(path) => Service::on_disk(path, config).map_err(|error| error.to_string())?,
             None => Service::new(config).map_err(|error| error.to_string())?,
@@ -2825,7 +2825,7 @@ mod tests {
         manager: &SharedStorageBucketIndexedDbManager,
         origin: &str,
     ) -> Result<()> {
-        use moli_indexeddb::sqlite::service::{Command, Completion, DatabaseClient};
+        use moli_indexeddb::sqlite::service::{Command, CommandResult, Completion, DatabaseClient};
         use std::{sync::mpsc, time::Duration};
         fn receive(receiver: mpsc::Receiver<Completion>) -> Result<Completion> {
             let reply = receiver.recv_timeout(Duration::from_secs(10))?;
@@ -2852,7 +2852,13 @@ mod tests {
             },
         )?;
         receive(receiver)?;
-        let connection = client.open_connection(Arc::new(|| {}))?;
+        let (sender, receiver) = mpsc::channel();
+        client.open_connection(Arc::new(|| {}), move |reply| {
+            let _ = sender.send(reply);
+        })?;
+        let CommandResult::Connection(connection) = receive(receiver)?.result? else {
+            return Err(anyhow::anyhow!("expected connection receipt"));
+        };
         let transaction = client.allocate_transaction_handle()?;
         let (sender, receiver) = mpsc::channel();
         connection.begin_upgrade(transaction, 1, move |reply| {

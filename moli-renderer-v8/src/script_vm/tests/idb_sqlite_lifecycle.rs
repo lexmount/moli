@@ -67,8 +67,7 @@ impl SqlBackend {
         Self::with_config(ServiceConfig::default(), vm)
     }
 
-    fn with_config(mut config: ServiceConfig, vm: &mut ScriptVm) -> Self {
-        config.executor.workers = 1;
+    fn with_config(config: ServiceConfig, vm: &mut ScriptVm) -> Self {
         let service = Service::new(config).unwrap();
         let (sender, receiver) = mpsc::channel();
         let client = service
@@ -183,10 +182,20 @@ impl SqlBackend {
     fn bind(&self, vm: &mut ScriptVm) {
         vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&self.manager)));
         vm.set_storage_bucket_store(self.buckets.clone());
-        let connection = self
-            .client
-            .open_connection(std::sync::Arc::new(|| {}))
+        let (sender, receiver) = mpsc::channel();
+        self.client
+            .open_connection(std::sync::Arc::new(|| {}), move |reply| {
+                let _ = sender.send(reply);
+            })
             .unwrap();
+        let CommandResult::Connection(connection) = receiver
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .result
+            .unwrap()
+        else {
+            panic!("expected connection receipt");
+        };
         self.connection.borrow_mut().replace(connection.downgrade());
         let context_ptr = &vm.page_default_runtime.context as *const _;
         vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {

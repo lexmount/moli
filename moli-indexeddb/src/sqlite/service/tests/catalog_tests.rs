@@ -3,6 +3,8 @@ use super::*;
 use std::fs;
 
 mod crash_tests;
+mod idle_tests;
+mod open_retry_tests;
 
 const OWNER: &[u8] = b"partition/default/top-site/storage-key/bucket-7";
 
@@ -305,7 +307,9 @@ fn catalog_interrupted_preparation_is_recovered_before_any_database_is_published
             })
             .unwrap();
         assert!(receive(&receiver).result.is_err());
-        assert!(service.database_version(OWNER, "new").is_err());
+        // A failed creation has not published a database. It can be retried
+        // in process, or discarded by recovery if the caller leaves it alone.
+        assert_eq!(service.database_version(OWNER, "new").unwrap(), None);
         service.shutdown().unwrap();
         let recovered = Service::on_disk(root, config()).unwrap();
         assert!(recovered.databases(OWNER).unwrap().is_empty());
@@ -498,6 +502,9 @@ fn catalog_refuses_a_second_owner_and_unsupported_sql_schema_without_erasing_dat
     let root = directory.0.join("idb-lite");
     let mut service = Service::on_disk(root.clone(), config()).unwrap();
     let client = resolve(&service, OWNER, "protected");
+    // This native fixture has no profile lock. Keep a Web connection open so
+    // it specifically tests the physical connection's exclusive SQLite lock.
+    let _connection = client.open_connection_for_test(Arc::new(|| {})).unwrap();
     seed(&client);
     assert!(Service::on_disk(root.clone(), config()).is_err());
     verify_record(&client);

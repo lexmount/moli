@@ -13,5 +13,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 strum = { version = "0.28.0", features = ["derive"] }
 unicode-id-start = "1.4.0"
 
+tokio = { version = "1.53.1", features = ["rt", "sync", "time", "macros"] }
+
 [lints]
 workspace = true

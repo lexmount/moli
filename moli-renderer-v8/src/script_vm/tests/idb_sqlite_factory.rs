@@ -12,8 +12,8 @@ mod version_tests;
 const ORIGIN: &str = "https://idb-sql-factory.test";
 
 fn manager(root: Option<std::path::PathBuf>) -> crate::SharedIndexedDbManager {
-    let mut config = ServiceConfig::default();
-    config.executor.workers = 1;
+    let config = ServiceConfig::default();
+
     crate::new_sqlite_indexed_db_manager(root, config).unwrap()
 }
 

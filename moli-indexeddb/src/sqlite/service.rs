@@ -2,7 +2,11 @@
 //! state; a client reads only published metadata and never locks a SQL owner.
 
 mod command;
+mod entry;
+mod maintenance;
+mod owner;
 pub use command::Command;
+use owner::{DatabaseOwner, Owner};
 mod catalog;
 pub use catalog::CatalogSnapshot;
 mod connections;
@@ -21,11 +25,10 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
-use moli_sqlite::{
-    ConnectionOptions, Executor, ExecutorConfig, ExecutorError, ExecutorHandle, OpenMode,
-};
+use moli_sqlite::{ConnectionOptions, OpenMode, Runtime, RuntimeError, RuntimeHandle};
 use parking_lot::{Mutex, RwLock};
 
 use super::*;
@@ -33,7 +36,6 @@ use crate::{RecordSnapshot, TransactionRequestHandle};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ServiceConfig {
-    pub executor: ExecutorConfig,
     pub connection: ConnectionOptions,
 }
 
@@ -52,7 +54,7 @@ pub struct DatabaseId(u64);
 
 #[derive(Debug)]
 pub enum DispatchError {
-    Executor(ExecutorError),
+    Runtime(RuntimeError),
     IdentityConflict,
     Capacity,
     Storage(IndexedDbError),
@@ -62,7 +64,7 @@ pub enum DispatchError {
 impl fmt::Display for DispatchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Executor(error) => error.fmt(f),
+            Self::Runtime(error) => error.fmt(f),
             Self::IdentityConflict => {
                 f.write_str("IndexedDB identity or path is already registered")
             }
@@ -74,15 +76,16 @@ impl fmt::Display for DispatchError {
 }
 
 impl std::error::Error for DispatchError {}
-impl From<ExecutorError> for DispatchError {
-    fn from(error: ExecutorError) -> Self {
-        Self::Executor(error)
+impl From<RuntimeError> for DispatchError {
+    fn from(error: RuntimeError) -> Self {
+        Self::Runtime(error)
     }
 }
 
 #[derive(Debug)]
 pub enum CommandResult {
     Metadata(Arc<DatabaseMetadata>),
+    Connection(DatabaseConnection),
     Prepared(PreparedWrite),
     Key(Key),
     Records(Vec<RecordSnapshot>),
@@ -120,9 +123,7 @@ pub struct DatabaseClient {
     identity: Arc<DatabaseIdentity>,
     location: Location,
     state: Arc<Published>,
-    executor: ExecutorHandle,
-    lane: Arc<Mutex<Lane>>,
-    config: ServiceConfig,
+    owner: Arc<Owner>,
     admissions: Arc<crate::TransactionRequestQueues>,
     catalog: Option<Arc<catalog::DiskCatalog>>,
     next_connection: Arc<AtomicU64>,
@@ -139,6 +140,9 @@ struct Entry {
     admissions: Arc<crate::TransactionRequestQueues>,
     catalog: Option<Arc<catalog::DiskCatalog>>,
     prepared: bool,
+    idle_since: Option<Instant>,
+    request_owner: String,
+    connection_requests: Arc<crate::ConnectionRequestQueues>,
 }
 
 struct StartedTransaction {
@@ -169,7 +173,46 @@ impl Entry {
         metadata
     }
 
-    fn close(mut self, id: DatabaseId) -> Result<(), IndexedDbError> {
+    fn is_idle(&self) -> bool {
+        matches!(self.location, Location::Disk { .. })
+            && self.database.is_some()
+            && self.transactions.is_empty()
+            && self.state.connections.lock().is_empty()
+            && !self.state.deleting.load(Ordering::Acquire)
+            && !self
+                .connection_requests
+                .has_requests(&self.request_owner, &self.identity.name)
+    }
+
+    fn update_idle(&mut self, now: Instant) {
+        if self.is_idle() {
+            self.idle_since.get_or_insert(now);
+        } else {
+            self.idle_since = None;
+        }
+    }
+
+    fn idle_expired(&mut self, now: Instant) -> bool {
+        self.update_idle(now);
+        self.idle_since
+            .is_some_and(|since| now.saturating_duration_since(since) >= maintenance::IDLE_GRACE)
+    }
+
+    fn close_if_idle(&mut self, now: Instant) -> Result<(), IndexedDbError> {
+        if !self.idle_expired(now) {
+            return Ok(());
+        }
+        let database = self.database.take().expect("idle physical connection");
+        self.idle_since = None;
+        let result = database.close();
+        if let Err(error) = &result {
+            self.failure = Some(error.clone());
+            *self.state.failure.lock() = Some(error.clone());
+        }
+        result
+    }
+
+    fn close(&mut self, id: DatabaseId, _config: ServiceConfig) -> Result<(), IndexedDbError> {
         let result = self.database.take().map_or(Ok(()), Database::close);
         if let Err(error) = &result {
             *self.state.failure.lock() = Some(error.clone());
@@ -193,10 +236,6 @@ impl Entry {
     }
 }
 
-struct Lane {
-    entries: BTreeMap<DatabaseId, Entry>,
-}
-
 #[derive(Default)]
 struct Registry {
     closed: bool,
@@ -206,7 +245,8 @@ struct Registry {
 }
 
 pub struct Service {
-    executor: Executor,
+    runtime: Option<Runtime>,
+    maintenance: Option<maintenance::Maintenance>,
     client: ServiceClient,
 }
 
@@ -214,9 +254,8 @@ pub struct Service {
 /// threads and cannot keep storage alive after its partition shuts down.
 #[derive(Clone)]
 pub struct ServiceClient {
-    executor: ExecutorHandle,
+    runtime: RuntimeHandle,
     registry: Arc<Mutex<Registry>>,
-    lanes: Arc<[Arc<Mutex<Lane>>]>,
     config: ServiceConfig,
     admissions: Arc<crate::TransactionRequestQueues>,
     catalog: Option<Arc<catalog::DiskCatalog>>,
@@ -226,26 +265,25 @@ pub struct ServiceClient {
 
 impl Service {
     pub fn new(config: ServiceConfig) -> Result<Self, DispatchError> {
-        let executor = Executor::new(config.executor)?;
-        let lanes = (0..config.executor.workers)
-            .map(|_| {
-                Arc::new(Mutex::new(Lane {
-                    entries: BTreeMap::new(),
-                }))
-            })
-            .collect::<Vec<_>>()
-            .into();
+        let runtime = Runtime::new()?;
         let client = ServiceClient {
-            executor: executor.handle(),
+            runtime: runtime.handle(),
             registry: Arc::new(Mutex::new(Registry::default())),
-            lanes,
             config,
             catalog: None,
             next_connection: Arc::new(AtomicU64::new(0)),
             connection_requests: Arc::new(crate::ConnectionRequestQueues::default()),
             admissions: Arc::new(crate::TransactionRequestQueues::default()),
         };
-        Ok(Self { executor, client })
+        let maintenance = maintenance::Maintenance::start(
+            client.runtime.clone(),
+            Arc::downgrade(&client.registry),
+        )?;
+        Ok(Self {
+            runtime: Some(runtime),
+            maintenance: Some(maintenance),
+            client,
+        })
     }
 
     pub fn client(&self) -> ServiceClient {
@@ -299,7 +337,15 @@ impl ServiceClient {
             client.submit_metadata(completion)?;
             return Ok(client);
         }
-        self.register_client(&mut registry, key, generation, location, None, completion)
+        self.register_client(
+            &mut registry,
+            key,
+            generation,
+            location,
+            None,
+            None,
+            completion,
+        )
     }
 
     fn register_client(
@@ -309,6 +355,7 @@ impl ServiceClient {
         generation: [u8; 16],
         location: Location,
         catalog: Option<Arc<catalog::DiskCatalog>>,
+        recovered: Option<Arc<DatabaseMetadata>>,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<DatabaseClient, DispatchError> {
         if let Location::Disk { path, .. } = &location && registry.entries.iter().any(|(other_key, client)| other_key != &key && matches!(&client.location, Location::Disk { path: other, .. } if other == path)) { return Err(DispatchError::IdentityConflict); }
@@ -322,101 +369,112 @@ impl ServiceClient {
             .checked_add(1)
             .ok_or(DispatchError::Capacity)?;
         let id = DatabaseId(registry.next_id);
-        let index = (id.0 % self.config.executor.workers as u64) as usize;
-        let previous = registry
-            .entries
-            .get(&key)
-            .and_then(|client| client.committed());
+        let request_owner =
+            connections::request_owner_key(&key.0).map_err(DispatchError::Storage)?;
+        let initialized = recovered.is_some();
+        let previous = recovered.or_else(|| {
+            registry
+                .entries
+                .get(&key)
+                .and_then(|client| client.committed())
+        });
+        let state = Arc::new(Published {
+            metadata: RwLock::new(previous),
+            ..Default::default()
+        });
+        let owner = Owner::start(self.runtime.clone(), id, self.config, state.clone(), |_| {
+            Entry {
+                identity: identity.clone(),
+                location: location.clone(),
+                state: state.clone(),
+                database: None,
+                initialized,
+                idle_since: None,
+                request_owner,
+                connection_requests: self.connection_requests.clone(),
+                failure: None,
+                transactions: BTreeMap::new(),
+                admissions: self.admissions.clone(),
+                catalog: catalog.clone(),
+                prepared: !matches!(
+                    location,
+                    Location::Disk {
+                        mode: OpenMode::Create,
+                        ..
+                    }
+                ),
+            }
+        })?;
         let client = DatabaseClient {
             id,
             identity,
             location,
-            state: Arc::new(Published {
-                metadata: RwLock::new(previous),
-                ..Default::default()
-            }),
-            executor: self.executor.clone(),
-            lane: self.lanes[index].clone(),
-            config: self.config,
-            admissions: self.admissions.clone(),
-            catalog: catalog.clone(),
-            next_connection: self.next_connection.clone(),
-        };
-        let entry = Entry {
-            identity: client.identity.clone(),
-            location: client.location.clone(),
-            state: client.state.clone(),
-            database: None,
-            initialized: false,
-            failure: None,
-            transactions: BTreeMap::new(),
+            state,
+            owner,
             admissions: self.admissions.clone(),
             catalog,
-            prepared: !matches!(
-                client.location,
-                Location::Disk {
-                    mode: OpenMode::Create,
-                    ..
-                }
-            ),
+            next_connection: self.next_connection.clone(),
         };
-        let lane = client.lane.clone();
-        let config = client.config;
-        let generation = client.identity.generation;
-        client.executor.submit(id.0, move || {
-            let result = {
-                let mut lane = lane.lock();
-                lane.entries.insert(id, entry);
-                lane.connect(id, config)
-                    .map(|_| CommandResult::Metadata(lane.entries[&id].publish()))
-            };
-            completion(Completion {
-                database: id,
-                generation,
-                active_transaction: None,
-                result,
-            });
-        })?;
+        client.submit_metadata(completion)?;
         registry.entries.insert(key, client.clone());
         Ok(client)
     }
 }
 
 impl Service {
-    /// Call off the V8 owner thread. Each worker finalizes its connections after
-    /// accepted commands, independently of retained result data.
+    /// Native host boundary, off V8 and off this runtime. Seal every database
+    /// FIFO, drain accepted work and final rollback/close, then join the runtime.
     pub fn shutdown(&mut self) -> Result<(), IndexedDbError> {
-        self.registry.lock().closed = true;
-        let lanes = self.lanes.clone();
-        let errors = Arc::new(Mutex::new(Vec::new()));
-        let failures = errors.clone();
-        let close_lane = Arc::new(move |index: usize| {
-            let entries = std::mem::take(&mut lanes[index].lock().entries);
-            for (id, entry) in entries {
-                if let Err(error) = entry.close(id) {
-                    failures.lock().push(error);
-                }
-            }
-        });
-        let finalize = close_lane.clone();
-        let stopped = self
-            .executor
-            .shutdown_with(move |index| finalize(index))
-            .map_err(|error| IndexedDbError::Io(error.to_string()));
-        if stopped.is_err() {
-            // In an unwind build a failed worker cannot run its finalizer.
-            // All workers have joined, so shutdown's off-V8 thread can safely
-            // close the remaining owners even when old clients retain lanes.
-            for index in 0..self.lanes.len() {
-                close_lane(index);
-            }
+        if self.client.runtime.is_current() {
+            return Err(IndexedDbError::InvalidState(
+                "cannot shut down SQLite from its own runtime".into(),
+            ));
         }
-        // All workers have joined even if one panicked. Pending factory
-        // requests still need a terminal wake on that error path.
+        let Some(mut runtime) = self.runtime.take() else {
+            return Ok(());
+        };
+        let maintained = if let Some(maintenance) = self.maintenance.take() {
+            maintenance.stop(&runtime.handle())
+        } else {
+            Ok(())
+        };
+        let owners = {
+            let mut registry = self.registry.lock();
+            registry.closed = true;
+            registry
+                .entries
+                .values()
+                .map(|client| client.owner.clone())
+                .collect::<Vec<_>>()
+        };
+        let receipts = owners.iter().map(|owner| owner.stop()).collect::<Vec<_>>();
+        let drained = runtime
+            .handle()
+            .wait(async move {
+                let mut failure = None;
+                for mut receipt in receipts {
+                    let result = receipt
+                        .wait_for(|result| result.is_some())
+                        .await
+                        .map_err(|_| {
+                            IndexedDbError::Io(
+                                "SQLite owner stopped before its close receipt".into(),
+                            )
+                        })
+                        .and_then(|result| result.as_ref().expect("completed owner").clone());
+                    if let Err(error) = result {
+                        failure.get_or_insert(error);
+                    }
+                }
+                failure.map_or(Ok(()), Err)
+            })
+            .map_err(|error| IndexedDbError::Io(error.to_string()))
+            .and_then(|result| result);
+        let stopped = runtime
+            .shutdown()
+            .map_err(|error| IndexedDbError::Io(error.to_string()));
         self.connection_requests.shutdown();
-        stopped?;
-        let error = errors.lock().pop();
-        error.map_or(Ok(()), Err)
+        maintained.and(drained).and(stopped)
     }
 }
 
@@ -501,7 +559,8 @@ impl DatabaseClient {
     pub fn is_closed(&self) -> bool {
         self.state.closed.load(Ordering::Acquire) || self.state.deleting.load(Ordering::Acquire)
     }
-    /// Unlike a pending deletion, retirement proves worker rollback and close.
+    /// SQLite ownership has ended. The owner receipt also waits for any
+    /// remaining catalog work and completion callbacks in its terminal command.
     pub fn is_retired(&self) -> bool {
         self.state.closed.load(Ordering::Acquire)
     }
@@ -560,18 +619,19 @@ impl DatabaseClient {
         }
         let id = self.id;
         let generation = self.identity.generation;
-        let lane = self.lane.clone();
-        let config = self.config;
-        let submitted = self.executor.submit(id.0, move || {
-            let (result, active_transaction) =
-                lane.lock().run(id, command, config, connection, preflight);
-            completion(Completion {
-                database: id,
-                generation,
-                active_transaction,
-                result,
-            });
-        });
+        let submitted = self.owner.submit(
+            move |owner| Ok(owner.run(command, connection, preflight)),
+            move |result| {
+                let (result, active_transaction) =
+                    result.unwrap_or_else(|error| (Err(error), None));
+                completion(Completion {
+                    database: id,
+                    generation,
+                    active_transaction,
+                    result,
+                });
+            },
+        );
         if submitted.is_err() && deleting {
             self.state.deleting.store(false, Ordering::Release);
         }
@@ -585,28 +645,28 @@ impl DatabaseClient {
     ) -> Result<(), DispatchError> {
         let id = self.id;
         let generation = self.identity.generation;
-        let lane = self.lane.clone();
-        let config = self.config;
-        self.executor.submit(id.0, move || {
-            let (result, active_transaction) = {
-                let mut lane = lane.lock();
-                let result = lane
-                    .connect(id, config)
-                    .map(|_| CommandResult::Metadata(lane.entries[&id].publish()));
-                let active = lane
-                    .entries
-                    .get(&id)
+        self.owner.submit(
+            |owner| {
+                let config = owner.config;
+                let result = owner.entry()?.metadata(config);
+                let active = owner
+                    .entry
+                    .as_ref()
                     .and_then(|entry| entry.database.as_ref())
                     .and_then(Database::active_transaction);
-                (result, active)
-            };
-            completion(Completion {
-                database: id,
-                generation,
-                active_transaction,
-                result,
-            });
-        })?;
+                Ok((result, active))
+            },
+            move |result| {
+                let (result, active_transaction) =
+                    result.unwrap_or_else(|error| (Err(error), None));
+                completion(Completion {
+                    database: id,
+                    generation,
+                    active_transaction,
+                    result,
+                });
+            },
+        )?;
         Ok(())
     }
 }
@@ -624,420 +684,6 @@ fn queue_key(id: DatabaseId) -> (String, String) {
     // An old close cannot cancel admissions created by a later registration,
     // even when the database name or persistent generation is reused on reopen.
     (id.0.to_string(), String::new())
-}
-
-impl Lane {
-    fn connect(&mut self, id: DatabaseId, config: ServiceConfig) -> Result<(), IndexedDbError> {
-        let entry = self.entries.get(&id).ok_or_else(|| {
-            IndexedDbError::InvalidState("stale IndexedDB database client".into())
-        })?;
-        if entry.state.closed.load(Ordering::Acquire) {
-            return Err(IndexedDbError::InvalidState(
-                "IndexedDB database is retired".into(),
-            ));
-        }
-        if let Some(error) = &entry.failure {
-            return Err(error.clone());
-        }
-        if entry.database.is_some() {
-            return Ok(());
-        }
-        let entry = self.entries.get_mut(&id).expect("registered database");
-        let result = (|| {
-            let (connection, create) = match &entry.location {
-                Location::Memory if !entry.initialized => {
-                    (moli_sqlite::open_private_memory(config.connection), true)
-                }
-                Location::Memory => {
-                    return Err(IndexedDbError::InvalidState(
-                        "private memory database cannot be recreated".into(),
-                    ));
-                }
-                Location::Disk { path, mode } => {
-                    if let Some(catalog) = &entry.catalog
-                        && !entry.prepared
-                    {
-                        catalog.prepare(path, &entry.identity)?;
-                        entry.prepared = true;
-                    }
-                    let mode = if entry.initialized {
-                        OpenMode::Existing
-                    } else {
-                        *mode
-                    };
-                    (
-                        moli_sqlite::open_disk(path, mode, config.connection),
-                        matches!(mode, OpenMode::Create),
-                    )
-                }
-            };
-            let mut connection =
-                connection.map_err(|error| IndexedDbError::Io(error.to_string()))?;
-            if create {
-                Database::initialize(&mut connection, &entry.identity)?;
-                // Loading schema can fail after the creating schema was
-                // committed. A retry must open that disk generation, not try
-                // to create a second schema over it. Unpublished private memory
-                // is disposable until its first successful open.
-                if matches!(entry.location, Location::Disk { .. }) {
-                    entry.initialized = true;
-                }
-                if let (Some(catalog), Location::Disk { path, .. }) =
-                    (&entry.catalog, &entry.location)
-                {
-                    catalog.finish_preparation(path, &connection)?;
-                }
-            }
-            Database::open_shared(connection, entry.identity.clone())
-        })();
-        match result {
-            Ok(database) => {
-                if let Some(previous) = entry.state.metadata.read().as_ref()
-                    && previous.as_ref() != database.committed().as_ref()
-                {
-                    let error = corruption("IndexedDB changed outside its database owner");
-                    entry.failure = Some(error.clone());
-                    *entry.state.failure.lock() = Some(error.clone());
-                    return Err(error);
-                }
-                entry.database = Some(database);
-                entry.initialized = true;
-                entry.publish();
-                Ok(())
-            }
-            Err(error) => {
-                if !matches!(error, IndexedDbError::Resource(_)) {
-                    entry.failure = Some(error.clone());
-                    *entry.state.failure.lock() = Some(error.clone());
-                }
-                Err(error)
-            }
-        }
-    }
-
-    fn run(
-        &mut self,
-        id: DatabaseId,
-        command: Command,
-        config: ServiceConfig,
-        connection: Option<crate::DatabaseHandle>,
-        preflight: Result<(), IndexedDbError>,
-    ) -> (
-        Result<CommandResult, IndexedDbError>,
-        Option<TransactionHandle>,
-    ) {
-        let transaction = command.transaction();
-        let ends_transaction = matches!(
-            command,
-            Command::Commit { .. }
-                | Command::Abort { .. }
-                | Command::Close
-                | Command::DeleteDatabase
-        );
-        let mut result = self.run_command(id, command, config, connection, preflight);
-        let Some(database) = self
-            .entries
-            .get_mut(&id)
-            .and_then(|entry| entry.database.as_mut())
-        else {
-            return (result, None);
-        };
-        match database.reconcile_transaction() {
-            Ok(_) => (),
-            Err(error) => {
-                // No owned transaction remains, but SQLite could not confirm
-                // rollback. Closing on this worker makes the outcome terminal;
-                // never hand the same unowned connection to a new transaction.
-                let entry = self.entries.remove(&id).expect("connected entry");
-                *entry.state.failure.lock() = Some(error.clone());
-                let _ = entry.close(id);
-                return (Err(error), None);
-            }
-        };
-        let entry = self.entries.get_mut(&id).expect("reconciled entry");
-        let database = entry.database.as_ref().expect("reconciled owner");
-        let active = transaction.filter(|handle| database.transaction_is_active(*handle));
-        let finished: Vec<_> = entry
-            .transactions
-            .keys()
-            .copied()
-            .filter(|handle| !database.transaction_is_active(*handle))
-            .collect();
-        if !ends_transaction && transaction.is_some() && active != transaction && result.is_ok() {
-            result = Err(IndexedDbError::TransactionInactive(
-                "SQL transaction ended while executing a request".into(),
-            ));
-        }
-        // Publish a writer's committed state before releasing any admissions.
-        let metadata = entry.publish();
-        for handle in finished {
-            entry.finish_admission(handle);
-        }
-        if active.is_none() && matches!(result, Ok(CommandResult::Unit)) {
-            result = Ok(CommandResult::Metadata(metadata));
-        }
-        (result, active)
-    }
-
-    fn run_command(
-        &mut self,
-        id: DatabaseId,
-        command: Command,
-        config: ServiceConfig,
-        connection: Option<crate::DatabaseHandle>,
-        preflight: Result<(), IndexedDbError>,
-    ) -> Result<CommandResult, IndexedDbError> {
-        if matches!(command, Command::Close | Command::DeleteDatabase) {
-            let deleting = matches!(command, Command::DeleteDatabase);
-            let entry = self.entries.remove(&id).ok_or_else(|| {
-                IndexedDbError::InvalidState("stale IndexedDB database client".into())
-            })?;
-            let state = entry.state.clone();
-            let catalog = entry.catalog.clone();
-            let location = entry.location.clone();
-            let result = entry.close(id).and_then(|()| {
-                if deleting
-                    && let (Some(catalog), Location::Disk { path, .. }) = (catalog, location)
-                {
-                    catalog.retire(&path)?;
-                }
-                Ok(())
-            });
-            if deleting {
-                match &result {
-                    Ok(()) => state.deleted.store(true, Ordering::Release),
-                    Err(error) => *state.failure.lock() = Some(error.clone()),
-                }
-            }
-            result?;
-            return Ok(CommandResult::Unit);
-        }
-        self.connect(id, config)?;
-        let entry = self.entries.get_mut(&id).expect("connected database");
-        let database = entry.database.as_mut().expect("connected owner");
-        if let Err(error) = preflight {
-            match command {
-                Command::Write { transaction, .. } => {
-                    database.ready(transaction)?;
-                }
-                Command::FinishWrite {
-                    transaction,
-                    request,
-                    ..
-                } => {
-                    database.cancel_write(transaction, request)?;
-                }
-                Command::Commit { transaction, .. } => {
-                    database.abort(transaction)?;
-                }
-                _ => {
-                    return Err(IndexedDbError::InvalidState(
-                        "unsupported SQL preflight rejection".into(),
-                    ));
-                }
-            }
-            return Err(error);
-        }
-        match command {
-            Command::Begin {
-                transaction,
-                mode,
-                stores,
-                version,
-                admission,
-            } => {
-                if let Some(connection) = connection
-                    && !entry.state.connections.lock().contains_key(&connection)
-                {
-                    return Err(IndexedDbError::InvalidState(
-                        "SQL connection is closed".into(),
-                    ));
-                }
-                if mode != TransactionMode::VersionChange {
-                    let key = queue_key(id);
-                    let Some(request) = admission.as_ref() else {
-                        return Err(IndexedDbError::InvalidState(
-                            "regular SQL transactions require admission".into(),
-                        ));
-                    };
-                    if !request.belongs_to(&entry.admissions)
-                        || !request.matches_key(&key.0, &key.1)
-                        || request.mode() != mode
-                        || request
-                            .store_names()
-                            .into_iter()
-                            .collect::<std::collections::BTreeSet<_>>()
-                            != stores
-                        || !request.claim_start()
-                    {
-                        return Err(IndexedDbError::InvalidState(
-                            "invalid or unready transaction admission".into(),
-                        ));
-                    }
-                } else if admission.is_some() {
-                    return Err(IndexedDbError::InvalidState(
-                        "upgrade transaction cannot reuse regular admission".into(),
-                    ));
-                }
-                match database.begin(transaction, mode, stores, version) {
-                    Ok(()) => {
-                        entry.transactions.insert(
-                            transaction,
-                            StartedTransaction {
-                                connection: connection.or_else(|| {
-                                    admission.as_ref().map(TransactionRequestHandle::database)
-                                }),
-                                admission,
-                            },
-                        );
-                        Ok(CommandResult::Unit)
-                    }
-                    Err(error) => {
-                        if let Some(admission) = admission {
-                            admission.finish();
-                        }
-                        Err(error)
-                    }
-                }
-            }
-            Command::CreateStore {
-                transaction,
-                name,
-                options,
-            } => database
-                .create_object_store(transaction, &name, options)
-                .map(|_| CommandResult::Unit),
-            Command::DeleteStore { transaction, name } => database
-                .delete_object_store(transaction, &name)
-                .map(|_| CommandResult::Unit),
-            Command::RenameStore {
-                transaction,
-                name,
-                new_name,
-            } => database
-                .rename_object_store(transaction, &name, &new_name)
-                .map(|_| CommandResult::Unit),
-            Command::CreateIndex {
-                transaction,
-                store,
-                name,
-                options,
-            } => database
-                .create_index(transaction, &store, &name, options)
-                .map(|_| CommandResult::Unit),
-            Command::DeleteIndex {
-                transaction,
-                store,
-                name,
-            } => database
-                .delete_index(transaction, &store, &name)
-                .map(|_| CommandResult::Unit),
-            Command::RenameIndex {
-                transaction,
-                store,
-                name,
-                new_name,
-            } => database
-                .rename_index(transaction, &store, &name, &new_name)
-                .map(|_| CommandResult::Unit),
-            Command::PrepareWrite {
-                transaction,
-                store,
-                add_only,
-            } => database
-                .prepare_write(transaction, &store, None, add_only)
-                .map(CommandResult::Prepared),
-            Command::Write {
-                transaction,
-                store,
-                key,
-                value,
-                indexes,
-                add_only,
-                quota,
-            } => database
-                .write(
-                    transaction,
-                    &store,
-                    RecordWrite {
-                        key,
-                        value,
-                        indexes,
-                        add_only,
-                        quota,
-                    },
-                )
-                .map(CommandResult::Key),
-            Command::FinishWrite {
-                transaction,
-                request,
-                value,
-                indexes,
-                quota,
-            } => database
-                .finish_write(transaction, request, value, indexes, quota)
-                .map(CommandResult::Key),
-            Command::CancelWrite {
-                transaction,
-                request,
-            } => database
-                .cancel_write(transaction, request)
-                .map(|_| CommandResult::Unit),
-            Command::BackfillIndex {
-                transaction,
-                store,
-                name,
-                primary_key,
-                keys,
-            } => database
-                .backfill_index_record(transaction, &store, &name, &primary_key, keys)
-                .map(|_| CommandResult::Unit),
-            Command::Query {
-                transaction,
-                store,
-                query,
-            } => database
-                .query(transaction, &store, &query)
-                .map(CommandResult::Records),
-            Command::QueryPage {
-                transaction,
-                store,
-                query,
-            } => database
-                .query_page(transaction, &store, &query)
-                .map(CommandResult::RecordPage),
-            Command::Count {
-                transaction,
-                store,
-                source,
-                range,
-            } => database
-                .query_count(transaction, &store, &source, &range)
-                .map(CommandResult::Count),
-            Command::Delete {
-                transaction,
-                store,
-                range,
-            } => database
-                .delete_range(transaction, &store, &range)
-                .map(|_| CommandResult::Unit),
-            Command::Commit { transaction, quota } => {
-                let result = database
-                    .commit_with_quota(transaction, quota)
-                    .map(|_| CommandResult::Unit);
-                if result.is_err() && database.is_transaction_active() {
-                    let _ = database.abort(transaction);
-                }
-                result
-            }
-            Command::Abort { transaction } => {
-                database.abort(transaction).map(|_| CommandResult::Unit)
-            }
-            Command::Close | Command::DeleteDatabase => {
-                unreachable!("close handled without reopening")
-            }
-        }
-    }
 }
 
 #[cfg(test)]

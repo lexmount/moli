@@ -115,7 +115,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 },
             )?;
             receive(receiver)?;
-            let connection = client.open_connection(Arc::new(|| {}))?;
+            let (sender, receiver) = mpsc::channel();
+            client.open_connection(Arc::new(|| {}), move |reply| {
+                let _ = sender.send(reply);
+            })?;
+            let CommandResult::Connection(connection) = receive(receiver)?.result? else {
+                return Err("expected connection receipt".into());
+            };
             let transaction = client.allocate_transaction_handle()?;
             let (sender, receiver) = mpsc::channel();
             connection.begin_upgrade(transaction, 1, move |reply| {

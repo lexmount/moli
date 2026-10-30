@@ -112,8 +112,7 @@ fn failed_schema_read_before_commit_rolls_back_and_allows_a_later_upgrade() {
 
 #[test]
 fn shared_snapshots_outlive_shutdown_and_release_at_the_last_owner() {
-    let mut settings = config();
-    settings.executor.workers = 2;
+    let settings = config();
     let service = Service::new(settings).unwrap();
     let clients = ["first", "second"].map(|name| {
         let client = open(&service, name, Location::Memory);

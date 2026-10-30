@@ -50,6 +50,14 @@ impl Drop for ConnectionRequestLease {
 }
 
 impl ConnectionRequestQueues {
+    pub(crate) fn has_requests(&self, storage_key: &str, name: &crate::IndexedDbName) -> bool {
+        self.state
+            .lock()
+            .queues
+            .keys()
+            .any(|(owner, database)| owner == storage_key && database == name)
+    }
+
     pub fn enqueue(
         self: &Arc<Self>,
         storage_key: &str,

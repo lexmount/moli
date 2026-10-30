@@ -26,7 +26,17 @@ async fn storage_clear_finishes_window_and_worker_admissions_and_closes_idle_con
         let client = seed_indexed_db_usage(&manager, &key);
         // Hold a real native transaction, so both the Window and Worker
         // requests remain admitted but unstarted until the CDP clear.
-        let connection = client.open_connection(Arc::new(|| {})).unwrap();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        client
+            .open_connection(Arc::new(|| {}), move |reply| {
+                let _ = sender.send(reply);
+            })
+            .unwrap();
+        let moli_indexeddb::sqlite::service::CommandResult::Connection(connection) =
+            receiver.await.unwrap().result.unwrap()
+        else {
+            panic!("expected a logical connection receipt");
+        };
         let blocker = connection
             .queue_transaction_start(
                 &["items".into()],

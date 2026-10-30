@@ -51,6 +51,14 @@ impl ConnectionRecord {
 #[derive(Clone)]
 pub struct DatabaseConnection(Arc<ConnectionOwner>);
 
+impl fmt::Debug for DatabaseConnection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DatabaseConnection")
+            .field("handle", &self.handle())
+            .finish_non_exhaustive()
+    }
+}
+
 /// A host's lifecycle index must not keep an otherwise collected Web
 /// connection alive. Upgrading still targets the original logical connection.
 #[derive(Clone)]
@@ -149,6 +157,35 @@ pub(super) fn request_owner_key(owner_key: &[u8]) -> Result<String, IndexedDbErr
 
 impl DatabaseClient {
     pub fn open_connection(
+        &self,
+        wake: VersionChangeWake,
+        completion: impl FnOnce(Completion) + Send + 'static,
+    ) -> Result<(), DispatchError> {
+        if self.is_closed() {
+            return Err(DispatchError::Closed);
+        }
+        let client = self.clone();
+        let id = self.id;
+        let generation = self.identity.generation;
+        self.owner.submit(
+            move |owner| {
+                owner.entry()?;
+                client
+                    .register_connection(wake)
+                    .map(CommandResult::Connection)
+            },
+            move |result| {
+                completion(Completion {
+                    database: id,
+                    generation,
+                    active_transaction: None,
+                    result,
+                })
+            },
+        )
+    }
+
+    fn register_connection(
         &self,
         wake: VersionChangeWake,
     ) -> Result<DatabaseConnection, IndexedDbError> {
@@ -400,21 +437,23 @@ fn retire(
     {
         return Err(DispatchError::Closed);
     }
-    let lane = client.lane.clone();
-    let id = client.id;
     let pending = status.clone();
-    // Owner retirement does not require V8 activity.
-    let submitted = client.executor.submit(id.0, move || {
-        let result = lane.lock().retire_connection(
-            id,
-            handle,
-            forced || pending.retire_requested.load(Ordering::Acquire),
-        );
-        if result.is_err() && !pending.closed.load(Ordering::Acquire) {
-            pending.retirement_in_flight.store(false, Ordering::Release);
-        }
-        completion(result);
-    });
+    let failed = status.clone();
+    // Retirement and registration share the database mailbox with SQL work.
+    let submitted = client.owner.submit(
+        move |owner| {
+            owner.retire_connection(
+                handle,
+                forced || pending.retire_requested.load(Ordering::Acquire),
+            )
+        },
+        move |result| {
+            if result.is_err() && !failed.closed.load(Ordering::Acquire) {
+                failed.retirement_in_flight.store(false, Ordering::Release);
+            }
+            completion(result);
+        },
+    );
     if submitted.is_err() {
         status.retirement_in_flight.store(false, Ordering::Release);
     }
@@ -422,14 +461,13 @@ fn retire(
     Ok(())
 }
 
-impl Lane {
+impl DatabaseOwner {
     fn retire_connection(
         &mut self,
-        id: DatabaseId,
         handle: DatabaseHandle,
         forced: bool,
     ) -> Result<(), IndexedDbError> {
-        let Some(entry) = self.entries.get_mut(&id) else {
+        let Some(entry) = self.entry.as_mut() else {
             // Physical retirement already completed rollback and signalled all
             // connections. This task may have been queued immediately after it.
             return Ok(());
@@ -444,9 +482,8 @@ impl Lane {
         if forced && let Some(database) = entry.database.as_mut() {
             for transaction in &owned_transactions {
                 if let Err(error) = database.abort(*transaction) {
-                    let entry = self.entries.remove(&id).expect("registered database");
                     *entry.state.failure.lock() = Some(error.clone());
-                    let _ = entry.close(id);
+                    let _ = self.close();
                     return Err(error);
                 }
             }

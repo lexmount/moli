@@ -51,8 +51,8 @@ impl Backend {
         indexes: Vec<IndexInfo>,
         quota: Option<u64>,
     ) -> Self {
-        let mut config = ServiceConfig::default();
-        config.executor.workers = 1;
+        let config = ServiceConfig::default();
+
         let service = Service::new(config).unwrap();
         let service_client = service.client();
         let manager = Arc::new(parking_lot::Mutex::new(
@@ -92,7 +92,15 @@ impl Backend {
             )
             .unwrap();
         receive(&receiver).result.unwrap();
-        let connection = client.open_connection(Arc::new(|| {})).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        client
+            .open_connection(Arc::new(|| {}), move |reply| {
+                let _ = sender.send(reply);
+            })
+            .unwrap();
+        let CommandResult::Connection(connection) = receive(&receiver).result.unwrap() else {
+            panic!("expected connection receipt");
+        };
         let backend = Self {
             client,
             _service: service_client,

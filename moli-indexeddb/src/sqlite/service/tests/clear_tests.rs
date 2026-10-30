@@ -3,6 +3,68 @@ use std::sync::atomic::AtomicUsize;
 
 const OWNER: &[u8] = b"opaque\0bucket/one";
 
+#[test]
+fn owner_clear_waits_for_delete_catalog_retirement_after_sqlite_close() {
+    let directory = Directory::new();
+    let mut service = Service::on_disk(directory.0.join("idb-lite"), config()).unwrap();
+    let client = resolve(&service, OWNER, "delete-and-clear");
+    seed(&client);
+    let (entered, waiting) = mpsc::channel();
+    let (release, blocked) = mpsc::channel();
+    let held = HeldDatabase(release);
+    service.catalog.as_ref().unwrap().on_boundary(
+        super::super::catalog::Boundary::Retiring,
+        move || {
+            entered.send(()).unwrap();
+            blocked.recv_timeout(Duration::from_secs(10)).unwrap();
+        },
+    );
+    let (deleted, deletion) = mpsc::channel();
+    client
+        .submit(Command::DeleteDatabase, move |reply| {
+            let _ = deleted.send(reply.result);
+        })
+        .unwrap();
+    waiting.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(client.is_retired());
+    assert!(!client.state.deleted.load(Ordering::Acquire));
+
+    let clear = service.prepare_clear_owner(OWNER.to_vec()).unwrap();
+    let (cleared, clearing) = mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let _ = cleared.send(clear.execute());
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !client.owner.is_stopping() {
+        assert!(
+            matches!(clearing.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "clear must not retire a generation while delete still owns it"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "clear did not seal the database owner"
+        );
+        std::thread::yield_now();
+    }
+    assert!(matches!(
+        clearing.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    drop(held);
+    deletion
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    clearing
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    thread.join().unwrap();
+    assert!(client.state.deleted.load(Ordering::Acquire));
+    assert!(service.databases(OWNER).unwrap().is_empty());
+    service.shutdown().unwrap();
+}
+
 fn resolve(service: &Service, owner: &[u8], name: &str) -> DatabaseClient {
     let (sender, receiver) = mpsc::channel();
     let client = service
@@ -71,9 +133,8 @@ fn duplicate_owner_clear_requests_can_be_dropped_without_mutating_the_owner() {
 }
 
 #[test]
-fn owner_clear_fences_old_clients_and_fifo_until_all_workers_confirm_cleanup() {
-    let mut settings = config();
-    settings.executor.workers = 2;
+fn owner_clear_fences_old_clients_and_fifo_until_all_database_owners_confirm_cleanup() {
+    let settings = config();
     let service = Service::new(settings).unwrap();
     let mut clients = Vec::new();
     let mut connections = Vec::new();
@@ -81,7 +142,7 @@ fn owner_clear_fences_old_clients_and_fifo_until_all_workers_confirm_cleanup() {
     for name in ["a", "b", "c", "d"] {
         let client = resolve(&service, OWNER, name);
         seed(&client);
-        let connection = client.open_connection(Arc::new(|| {})).unwrap();
+        let connection = client.open_connection_for_test(Arc::new(|| {})).unwrap();
         let lease = connection
             .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, Arc::new(|| {}))
             .unwrap();
@@ -108,7 +169,7 @@ fn owner_clear_fences_old_clients_and_fifo_until_all_workers_confirm_cleanup() {
         .queue_connection_request(b"opaque\0bucket/one-more", "unregistered", Arc::new(|| {}))
         .unwrap();
 
-    let held_worker = service.lanes[0].lock();
+    let held_worker = hold_database(&clients[0]);
     let clear = service.prepare_clear_owner(OWNER.to_vec()).unwrap();
     assert!(clients.iter().all(DatabaseClient::is_closed));
     assert!(clients.iter().all(|client| !client.is_retired()));
@@ -185,10 +246,14 @@ fn owner_clear_rejects_a_sql_worker_before_waiting_on_itself() {
     let controller = service.client();
     let (sender, receiver) = mpsc::channel();
     client
-        .executor
-        .submit(client.id.0, move || {
-            let _ = sender.send(controller.prepare_clear_owner(OWNER.to_vec()).map(|_| ()));
-        })
+        .owner
+        .submit(
+            move |_| {
+                let _ = sender.send(controller.prepare_clear_owner(OWNER.to_vec()).map(|_| ()));
+                Ok(())
+            },
+            |_| {},
+        )
         .unwrap();
     assert!(matches!(
         receiver.recv_timeout(Duration::from_secs(10)).unwrap(),
@@ -199,10 +264,14 @@ fn owner_clear_rejects_a_sql_worker_before_waiting_on_itself() {
     let request = service.request_clear_owner(OWNER.to_vec()).unwrap();
     let (sender, receiver) = mpsc::channel();
     client
-        .executor
-        .submit(client.id.0, move || {
-            let _ = sender.send(request.execute());
-        })
+        .owner
+        .submit(
+            move |_| {
+                let _ = sender.send(request.execute());
+                Ok(())
+            },
+            |_| {},
+        )
         .unwrap();
     assert!(matches!(
         receiver.recv_timeout(Duration::from_secs(10)).unwrap(),
@@ -215,10 +284,14 @@ fn owner_clear_rejects_a_sql_worker_before_waiting_on_itself() {
     let clear = service.prepare_clear_owner(OWNER.to_vec()).unwrap();
     let (sender, receiver) = mpsc::channel();
     client
-        .executor
-        .submit(client.id.0, move || {
-            let _ = sender.send(clear.execute());
-        })
+        .owner
+        .submit(
+            move |_| {
+                let _ = sender.send(clear.execute());
+                Ok(())
+            },
+            |_| {},
+        )
         .unwrap();
     assert!(matches!(
         receiver.recv_timeout(Duration::from_secs(10)).unwrap(),
@@ -316,8 +389,7 @@ fn owner_clear_refuses_non_catalog_files_without_mutating_the_registration() {
 fn disk_owner_clear_retires_all_generations_and_preserves_other_owners_after_restart() {
     let directory = Directory::new();
     let root = directory.0.join("idb-lite");
-    let mut settings = config();
-    settings.executor.workers = 3;
+    let settings = config();
     let mut service = Service::on_disk(root.clone(), settings).unwrap();
     let foreign = resolve(&service, b"foreign", "same");
     seed(&foreign);
@@ -389,8 +461,7 @@ fn uncertain_disk_clear_keeps_owner_fenced_and_restart_uses_durable_locations() 
 
 #[test]
 fn prefix_clear_fences_new_owners_and_retires_unregistered_factory_requests() {
-    let mut settings = config();
-    settings.executor.workers = 2;
+    let settings = config();
     let service = Service::new(settings).unwrap();
     let first = resolve(&service, b"origin\0first", "records");
     let second = resolve(&service, b"origin\0second", "records");

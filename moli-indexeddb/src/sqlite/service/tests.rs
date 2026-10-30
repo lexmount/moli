@@ -8,13 +8,13 @@ mod connection_tests;
 mod metadata_tests;
 mod quota_tests;
 mod registration_tests;
+mod runtime_tests;
 mod schema_rename_tests;
 
 const TX: TransactionHandle = TransactionHandle::from_raw(11);
 
 fn config() -> ServiceConfig {
     ServiceConfig {
-        executor: ExecutorConfig { workers: 1 },
         connection: ConnectionOptions {
             cache_kib: 128,
             ..Default::default()
@@ -343,7 +343,7 @@ fn delivered_query_value_survives_commit_and_shutdown() {
 }
 
 #[test]
-fn two_databases_progress_on_one_worker_while_the_first_waits_for_js() {
+fn two_databases_progress_with_one_async_worker_while_the_first_waits_for_js() {
     let service = Service::new(config()).unwrap();
     let first = open(&service, "first", Location::Memory);
     let second = open(&service, "second", Location::Memory);
@@ -619,7 +619,7 @@ impl Drop for Directory {
 }
 
 #[test]
-fn active_disk_transactions_allow_more_than_eight_databases_on_one_worker() {
+fn active_disk_transactions_allow_more_than_eight_databases() {
     let directory = Directory::new();
     let mut service = Service::new(config()).unwrap();
     let mut clients = Vec::new();
@@ -1034,25 +1034,26 @@ fn recoverable_write_failure_and_inline_cancellation_keep_transaction_admission(
 }
 
 fn with_database(client: &DatabaseClient, operation: impl FnOnce(&mut Database) + Send + 'static) {
-    let lane = client.lane.clone();
-    let id = client.id;
     let (sender, receiver) = mpsc::channel();
     client
-        .executor
-        .submit(id.0, move || {
-            operation(
-                lane.lock()
-                    .entries
-                    .get_mut(&id)
-                    .unwrap()
-                    .database
-                    .as_mut()
-                    .unwrap(),
-            );
-            let _ = sender.send(());
-        })
+        .owner
+        .submit(
+            move |owner| {
+                let config = owner.config;
+                let entry = owner.entry()?;
+                entry.connect(config)?;
+                operation(entry.database.as_mut().unwrap());
+                Ok(())
+            },
+            move |result| {
+                let _ = sender.send(result);
+            },
+        )
         .unwrap();
-    receiver.recv_timeout(Duration::from_secs(10)).unwrap();
+    receiver
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
 }
 
 #[test]
@@ -1361,4 +1362,88 @@ fn stale_request_receipt_identifies_but_does_not_end_the_successor_sql_owner() {
     )
     .unwrap();
     assert!(third.handle().is_ready());
+}
+
+// Synchronous bridges belong to native test boundaries, never the renderer API.
+impl DatabaseClient {
+    fn open_connection_for_test(
+        &self,
+        wake: crate::VersionChangeWake,
+    ) -> Result<DatabaseConnection, IndexedDbError> {
+        let (sender, receiver) = mpsc::channel();
+        self.open_connection(wake, move |reply| {
+            let _ = sender.send(reply);
+        })
+        .map_err(catalog::dispatch_error)?;
+        match receive(&receiver).result? {
+            CommandResult::Connection(connection) => Ok(connection),
+            _ => panic!("expected a logical connection receipt"),
+        }
+    }
+}
+
+fn physical_connection(client: &DatabaseClient) -> bool {
+    let (sender, receiver) = mpsc::channel();
+    client
+        .owner
+        .submit(
+            |owner| {
+                Ok(owner
+                    .entry
+                    .as_ref()
+                    .is_some_and(|entry| entry.database.is_some()))
+            },
+            move |result| {
+                let _ = sender.send(result);
+            },
+        )
+        .unwrap();
+    receiver
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap()
+}
+
+struct HeldDatabase(mpsc::Sender<()>);
+impl Drop for HeldDatabase {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+fn hold_database(client: &DatabaseClient) -> HeldDatabase {
+    let (entered, waiting) = mpsc::channel();
+    let (release, blocked) = mpsc::channel();
+    client
+        .owner
+        .submit(
+            move |_| {
+                entered.send(()).unwrap();
+                blocked.recv_timeout(Duration::from_secs(10)).unwrap();
+                Ok(())
+            },
+            |_| {},
+        )
+        .unwrap();
+    waiting.recv_timeout(Duration::from_secs(10)).unwrap();
+    HeldDatabase(release)
+}
+
+fn maintain_all(service: &Service, now: Instant) {
+    let mut pending = maintenance::PendingChecks::new();
+    maintenance::submit_round(&service.registry, now, &mut pending);
+    service
+        .client
+        .runtime
+        .wait(async move {
+            for receipt in pending.into_values() {
+                receipt.await.unwrap().unwrap();
+            }
+        })
+        .unwrap();
+}
+fn reap_idle(service: &Service) {
+    maintain_all(
+        service,
+        Instant::now() + maintenance::IDLE_GRACE + Duration::from_secs(1),
+    );
 }

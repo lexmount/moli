@@ -365,11 +365,7 @@ fn ready<'s>(
             ));
         }
         if version == old_version {
-            let connection = create_connection(scope, request, &client)?;
-            payload.borrow_mut().connection = Some(connection);
-            materialize(scope, request, payload, old_version, version)?;
-            table.borrow_mut().factory_requests.remove(&id);
-            return Ok(());
+            return open_connection(scope, request, payload, table, id, old_version, version);
         }
     }
     let batch = client.begin_version_change(
@@ -388,16 +384,112 @@ fn ready<'s>(
     Ok(())
 }
 
-fn create_connection<'s>(
+fn open_connection<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
-    client: &DatabaseClient,
-) -> Result<DatabaseConnection, IndexedDbError> {
+    payload: &Rc<RefCell<FactoryRequest>>,
+    table: &Rc<RefCell<IndexedDbRuntimeStateTable>>,
+    id: IndexedDbTaskId,
+    old_version: u64,
+    version: u64,
+) -> Result<(), IndexedDbError> {
     let owner = indexed_db_typed_execution_owner(scope, request)
         .ok_or_else(|| IndexedDbError::InvalidState("factory request lost its owner".into()))?;
-    client.open_connection(super::super::runtime::indexed_db_transaction_start_wake(
-        scope, owner,
-    ))
+    let wake = super::super::runtime::indexed_db_transaction_start_wake(scope, owner);
+    let client = payload
+        .borrow()
+        .client
+        .clone()
+        .expect("resolved SQL factory");
+    let awaiting = AwaitCompletion::new(payload);
+    let table = Rc::downgrade(table);
+    sql::submit_indexed_db_sql_completion_task(
+        scope,
+        request,
+        move |completion| {
+            client.open_connection(wake, completion)?;
+            Ok(client)
+        },
+        move |scope, request, reply| {
+            let Some(payload) = awaiting.accept() else {
+                return;
+            };
+            let Some(table) = table.upgrade() else {
+                return;
+            };
+            let result = reply.result.and_then(|result| {
+                let CommandResult::Connection(connection) = result else {
+                    return Err(IndexedDbError::Corruption(
+                        "invalid logical connection result".into(),
+                    ));
+                };
+                payload.borrow_mut().connection = Some(connection);
+                if version > old_version {
+                    begin_upgrade(scope, request, &payload, &table, id, old_version, version)
+                } else {
+                    materialize(scope, request, &payload, old_version, version)?;
+                    table.borrow_mut().factory_requests.remove(&id);
+                    Ok(())
+                }
+            });
+            if let Err(error) = result {
+                fail(scope, request, &payload, &table, id, error);
+            }
+        },
+    )
+}
+
+fn begin_upgrade<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+    payload: &Rc<RefCell<FactoryRequest>>,
+    table: &Rc<RefCell<IndexedDbRuntimeStateTable>>,
+    id: IndexedDbTaskId,
+    old_version: u64,
+    version: u64,
+) -> Result<(), IndexedDbError> {
+    let (client, connection) = {
+        let state = payload.borrow();
+        (
+            state.client.clone().expect("resolved SQL factory"),
+            state.connection.clone().expect("registered SQL connection"),
+        )
+    };
+    let transaction = client.allocate_transaction_handle()?;
+    let rollback = sql::SqlTransactionRollback::new(client.clone(), transaction);
+    payload.borrow_mut().rollback = Some(rollback);
+    let awaiting = AwaitCompletion::new(payload);
+    let table = Rc::downgrade(table);
+    sql::submit_indexed_db_sql_completion_task(
+        scope,
+        request,
+        move |completion| {
+            connection.begin_upgrade(transaction, version, completion)?;
+            Ok(client)
+        },
+        move |scope, request, reply| {
+            let Some(payload) = awaiting.accept() else {
+                return;
+            };
+            let Some(table) = table.upgrade() else {
+                return;
+            };
+            let result = reply.result.and_then(|_| {
+                if reply.active_transaction != Some(transaction) {
+                    return Err(IndexedDbError::TransactionInactive(
+                        "upgrade SQL owner was lost".into(),
+                    ));
+                }
+                materialize(scope, request, &payload, old_version, version)
+            });
+            match result {
+                Ok(()) => {
+                    table.borrow_mut().factory_requests.remove(&id);
+                }
+                Err(error) => fail(scope, request, &payload, &table, id, error),
+            }
+        },
+    )
 }
 
 fn finish_wait<'s>(
@@ -415,46 +507,7 @@ fn finish_wait<'s>(
         .clone()
         .expect("resolved SQL factory");
     if let Some(version) = new_version {
-        let transaction = client.allocate_transaction_handle()?;
-        let rollback = sql::SqlTransactionRollback::new(client.clone(), transaction);
-        let connection = create_connection(scope, request, &client)?;
-        {
-            let mut state = payload.borrow_mut();
-            state.rollback = Some(rollback);
-            state.connection = Some(connection.clone());
-        }
-        let awaiting = AwaitCompletion::new(payload);
-        let table = Rc::downgrade(table);
-        sql::submit_indexed_db_sql_completion_task(
-            scope,
-            request,
-            move |completion| {
-                connection.begin_upgrade(transaction, version, completion)?;
-                Ok(client)
-            },
-            move |scope, request, reply| {
-                let Some(payload) = awaiting.accept() else {
-                    return;
-                };
-                let Some(table) = table.upgrade() else {
-                    return;
-                };
-                let result = reply.result.and_then(|_| {
-                    if reply.active_transaction != Some(transaction) {
-                        return Err(IndexedDbError::TransactionInactive(
-                            "upgrade SQL owner was lost".into(),
-                        ));
-                    }
-                    materialize(scope, request, &payload, old_version, version)
-                });
-                match result {
-                    Ok(()) => {
-                        table.borrow_mut().factory_requests.remove(&id);
-                    }
-                    Err(error) => fail(scope, request, &payload, &table, id, error),
-                }
-            },
-        )
+        open_connection(scope, request, payload, table, id, old_version, version)
     } else {
         let awaiting = AwaitCompletion::new(payload);
         let table = Rc::downgrade(table);

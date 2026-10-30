@@ -12,8 +12,8 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let mut config = ServiceConfig::default();
-        config.executor.workers = 1;
+        let config = ServiceConfig::default();
+
         let manager = Arc::new(Mutex::new(IndexedDbManager::with_sqlite_service(
             Service::new(config).unwrap(),
         )));

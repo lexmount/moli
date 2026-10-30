@@ -52,7 +52,7 @@ fn queued_schema_renames_follow_create_without_waiting_for_sql_ids() {
     begin_upgrade(&client, 2);
     // The owner is held until all operations are queued. The caller cannot
     // observe a Create receipt (or its SQL id) before submitting the renames.
-    let lane = client.lane.lock();
+    let held = hold_database(&client);
     let commands = [
         Command::CreateStore {
             transaction: TX,
@@ -128,7 +128,7 @@ fn queued_schema_renames_follow_create_without_waiting_for_sql_ids() {
     }
     drop(sender);
     assert!(Arc::ptr_eq(&committed, &client.committed().unwrap()));
-    drop(lane);
+    drop(held);
     for position in 0..7 {
         let (actual, reply) = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(actual, position);

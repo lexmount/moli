@@ -28,14 +28,39 @@ impl Service {
     pub fn on_disk(root: PathBuf, config: ServiceConfig) -> Result<Self, IndexedDbError> {
         let mut service =
             Self::new(config).map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-        let catalog = Arc::new(DiskCatalog::open(root)?);
+        let options = service.config.connection;
+        let worker = service.client.runtime.clone();
+        let (catalog, headers) = service
+            .client
+            .runtime
+            .wait(async move {
+                worker
+                    .blocking(move || {
+                        let catalog = Arc::new(DiskCatalog::open(root)?);
+                        let mut headers = Vec::new();
+                        catalog.visit(|path, preparing| {
+                            if let Some(header) =
+                                inspect_header(path, preparing, options, &catalog)?
+                            {
+                                catalog.verify(&header.identity, &header.path)?;
+                                headers.push(header);
+                            }
+                            Ok(())
+                        })?;
+                        catalog.cleanup_trash();
+                        Ok::<_, IndexedDbError>((catalog, headers))
+                    })
+                    .await
+                    .map_err(|error| IndexedDbError::Io(error.to_string()))?
+            })
+            .map_err(|error| IndexedDbError::Io(error.to_string()))??;
         service.client.catalog = Some(catalog.clone());
-        catalog.visit(|path, preparing| {
-            let Some(header) = service.inspect(path, preparing)? else {
-                return Ok(());
-            };
-            catalog.verify(&header.identity, &header.path)?;
-            let Header { identity, path } = header;
+        for Header {
+            identity,
+            path,
+            metadata,
+        } in headers
+        {
             let mut registry = service.registry.lock();
             if registry
                 .entries
@@ -55,6 +80,7 @@ impl Service {
                         mode: OpenMode::Existing,
                     },
                     Some(catalog.clone()),
+                    Some(metadata),
                     move |reply| {
                         let _ = sender.send(reply);
                     },
@@ -63,11 +89,9 @@ impl Service {
             drop(registry);
             receiver
                 .recv()
-                .map_err(|_| corruption("IndexedDB recovery worker stopped"))?
+                .map_err(|_| corruption("IndexedDB recovery owner stopped"))?
                 .result?;
-            Ok(())
-        })?;
-        catalog.cleanup_trash();
+        }
         Ok(service)
     }
 }
@@ -132,6 +156,7 @@ impl ServiceClient {
                 generation,
                 location,
                 self.catalog.clone(),
+                None,
                 completion,
             );
         }
@@ -151,6 +176,7 @@ impl ServiceClient {
             generation,
             location,
             self.catalog.clone(),
+            None,
             completion,
         )
     }
@@ -265,25 +291,6 @@ impl ServiceClient {
     }
 }
 
-impl Service {
-    fn inspect(&self, path: PathBuf, preparing: bool) -> Result<Option<Header>, IndexedDbError> {
-        let options = self.config.connection;
-        let catalog = self.catalog.clone().expect("disk catalog");
-        let (sender, receiver) = mpsc::channel();
-        self.executor
-            .handle()
-            .submit(0, move || {
-                let result = inspect_header(path, preparing, options, &catalog);
-                // Closing the probe precedes normal registration of this file.
-                let _ = sender.send(result);
-            })
-            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-        receiver
-            .recv()
-            .map_err(|_| corruption("IndexedDB inspection worker stopped"))?
-    }
-}
-
 impl DatabaseClient {
     fn catalog_metadata(&self) -> Result<Option<Arc<DatabaseMetadata>>, IndexedDbError> {
         if self.state.deleted.load(Ordering::Acquire) {
@@ -302,7 +309,7 @@ impl DatabaseClient {
     }
 }
 
-fn dispatch_error(error: DispatchError) -> IndexedDbError {
+pub(super) fn dispatch_error(error: DispatchError) -> IndexedDbError {
     match error {
         DispatchError::Storage(error) => error,
         error => IndexedDbError::Resource(error.to_string()),
@@ -312,6 +319,7 @@ fn dispatch_error(error: DispatchError) -> IndexedDbError {
 struct Header {
     identity: DatabaseIdentity,
     path: PathBuf,
+    metadata: Arc<DatabaseMetadata>,
 }
 
 fn inspect_header(
@@ -374,13 +382,23 @@ fn inspect_header(
     };
     drop(rows);
     drop(statement);
-    connection
-        .close()
-        .map_err(|(_, error)| IndexedDbError::from(error))?;
     if preparing {
+        connection
+            .close()
+            .map_err(|(_, error)| IndexedDbError::from(error))?;
         catalog.verify(&identity, &path)?;
         catalog.discard_preparing(&path)?;
         return Ok(None);
     }
-    Ok(Some(Header { identity, path }))
+    // Validate and detach the committed snapshot while this temporary probe is
+    // open. Recovered owners start with no physical connection, even when the
+    // entire profile is inspected before the first maintenance round.
+    let database = Database::open_shared(connection, Arc::new(identity.clone()))?;
+    let metadata = database.committed().clone();
+    database.close()?;
+    Ok(Some(Header {
+        identity,
+        path,
+        metadata,
+    }))
 }

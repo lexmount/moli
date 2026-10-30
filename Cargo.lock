@@ -3042,6 +3042,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "strum",
+ "tokio",
  "unicode-id-start",
 ]
 
@@ -3515,6 +3516,7 @@ version = "0.1.0"
 dependencies = [
  "parking_lot",
  "rusqlite",
+ "tokio",
 ]
 
 [[package]]
