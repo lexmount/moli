@@ -106,6 +106,22 @@ fn settle<'s>(
     }
 }
 
+/// Platform consumers govern their own promise delivery. Reading their RAM
+/// snapshots does not invoke the public Blob file-reading algorithm.
+pub(crate) fn read_internal_promise<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data: moli_file_api::BlobData,
+    format: BlobReadFormat,
+) -> Option<v8::Local<'s, v8::Promise>> {
+    let Some(bytes) = data.as_bytes() else {
+        return read_promise(scope, data, format);
+    };
+    let resolver = v8::PromiseResolver::new(scope)?;
+    let promise = resolver.get_promise(scope);
+    settle(scope, resolver, format, Ok(bytes.to_vec()));
+    Some(promise)
+}
+
 pub(crate) fn read_promise<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     data: moli_file_api::BlobData,
