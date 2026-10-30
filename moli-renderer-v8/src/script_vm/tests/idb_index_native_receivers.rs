@@ -54,6 +54,17 @@ fn idb_index_native_receivers_reject_forgery_before_conversion_in_the_callee_rea
                 }
             }
         }
+        for (const realm of [window, other]) {
+            for (const name of ['get', 'getKey', 'count', 'getAll', 'getAllKeys',
+                                'openCursor', 'openKeyCursor']) {
+                let error;
+                try { realm.IDBIndex.prototype[name].call(index, Symbol()); }
+                catch (caught) { error = caught; }
+                if (!error || Object.getPrototypeOf(error) !== realm.DOMException.prototype ||
+                    error.name !== 'DataError')
+                    throw new Error('conversion realm: IDBIndex.' + name);
+            }
+        }
         if (conversions !== 0 || traps !== 0)
             throw new Error('receiver validation ran author code before rejection');
         return 'ok';
