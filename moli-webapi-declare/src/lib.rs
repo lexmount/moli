@@ -256,6 +256,7 @@ extern crate self as moli_webapi_declare;
 
 mod brand;
 mod callback;
+mod constructor;
 mod cross_origin;
 mod declaration;
 mod error;
@@ -298,6 +299,10 @@ pub use brand::{
     register_web_api_proxy, web_api_object_target, web_api_object_type,
 };
 
+pub use constructor::{
+    initialize_web_api_constructor_receiver, web_api_constructor_new_target,
+    web_api_constructor_with_deferred_prototype,
+};
 pub use cross_origin::{
     CrossOriginFunction, CrossOriginGetter, CrossOriginProperty, CrossOriginSetter,
     WebApiCrossOriginDeclaration,
