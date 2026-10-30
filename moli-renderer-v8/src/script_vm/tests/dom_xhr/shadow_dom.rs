@@ -1,3 +1,6 @@
+#[path = "shadow_dom/split30_slot_derived_options.rs"]
+mod split30_slot_derived_options;
+
 use super::*;
 
 #[test]
