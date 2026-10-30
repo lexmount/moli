@@ -2403,3 +2403,5 @@ mod hyperlink_audit_owner;
 mod image_bitmap_pixels;
 
 mod bitmap_renderer;
+
+mod offscreen_canvas_transfer;

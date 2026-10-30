@@ -402,3 +402,33 @@ pub(super) fn canvas_like_has_context<'s>(
     get_private_value(scope, canvas, CANVAS_HAS_CONTEXT_SLOT)
         .is_some_and(|value| value.boolean_value(scope))
 }
+
+pub(super) fn transfer_canvas_bitmap<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let (pixels, width, height) = canvas_like_pixel_view(scope, canvas)?;
+    let blank = blank_canvas_pixels(scope, canvas, pixels.byte_length());
+    let replacement = new_uint8_clamped_array_from_bytes(scope, blank)?;
+    let premultiplied = get_private_value(scope, canvas, CANVAS_BITMAP_PREMULTIPLIED_SLOT)
+        .is_some_and(|value| value.boolean_value(scope));
+    let bitmap = super::image_bitmap::build_image_bitmap_from_data(
+        scope,
+        super::image_bitmap::BitmapData {
+            pixels,
+            width,
+            height,
+            premultiplied,
+        },
+    )?;
+    // Both allocations succeeded: move the old view without resetting drawing
+    // state or the natural dimensions of a bitmaprenderer output.
+    set_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT, replacement.into());
+    set_private_value(
+        scope,
+        canvas,
+        CANVAS_BITMAP_PREMULTIPLIED_SLOT,
+        v8::Boolean::new(scope, false).into(),
+    );
+    Some(bitmap)
+}

@@ -1562,3 +1562,5 @@ mod performance_user_timing;
 mod abort_controller_receivers;
 
 mod bitmap_renderer;
+
+mod offscreen_canvas_transfer;
