@@ -17,8 +17,11 @@ fn database() -> Connection {
             "INSERT INTO database_metadata
              (singleton, name, generation, version, state,
               key_format, key_path_format, value_format, usage)
-             VALUES (1, 'database', zeroblob(16), 0, 'creating', 1, 1, 1, 0)",
-            [],
+             VALUES (1, ?1, zeroblob(16), 0, 'creating', 1, 1, 1, 0)",
+            ["database"
+                .encode_utf16()
+                .flat_map(u16::to_be_bytes)
+                .collect::<Vec<_>>()],
         )
         .unwrap();
     transaction.commit().unwrap();
@@ -54,7 +57,7 @@ fn schema_uses_eleven_strict_without_rowid_tables_and_explicit_ids() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        1
+        i64::from(crate::sqlite::SCHEMA_VERSION)
     );
     for statement in [
         "INSERT INTO object_stores(name, auto_increment, generator) VALUES ('store', 0, 0)",
@@ -238,4 +241,29 @@ fn schema_rejects_invalid_external_objects_and_unbounded_chunks() {
             [],
         )
         .unwrap();
+}
+
+#[test]
+fn schema_database_names_are_even_utf16_blobs_and_preserve_lone_surrogates() {
+    let connection = database();
+    assert!(
+        connection
+            .execute("UPDATE database_metadata SET name='text'", [])
+            .is_err()
+    );
+    assert!(
+        connection
+            .execute("UPDATE database_metadata SET name=X'D8'", [])
+            .is_err()
+    );
+    connection
+        .execute("UPDATE database_metadata SET name=X'D800'", [])
+        .unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT name FROM database_metadata", [], |row| row
+                .get::<_, Vec<u8>>(0))
+            .unwrap(),
+        vec![0xd8, 0]
+    );
 }

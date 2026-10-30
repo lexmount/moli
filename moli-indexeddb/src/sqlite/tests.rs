@@ -1,3 +1,4 @@
+mod database_names;
 mod schema_rename;
 mod storage_contracts;
 use super::*;

@@ -5,6 +5,7 @@
 //! worker connection under object-store scope admission. No overlapping writer
 //! can modify a reader's stores. Records and rollback state stay in SQLite.
 
+mod names;
 mod query;
 mod records;
 mod schema;
@@ -27,7 +28,7 @@ use crate::{
 pub use query::{Query, QuerySource, Seek};
 pub use records::RecordWrite;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 pub const CHUNK_BYTES: usize = 256 * 1024;
 const REQUEST_SAVEPOINT: &str = "SAVEPOINT idb_request";
 
@@ -60,7 +61,7 @@ impl QuotaCheck {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatabaseIdentity {
     pub owner_key: Vec<u8>,
-    pub name: String,
+    pub name: crate::IndexedDbName,
     pub generation: [u8; 16],
 }
 
@@ -81,7 +82,7 @@ pub type StoreDefinitions = BTreeMap<String, StoreMetadata>;
 
 #[derive(Debug)]
 pub struct DatabaseMetadata {
-    pub name: String,
+    pub name: crate::IndexedDbName,
     pub version: u64,
     pub usage: u64,
     pub stores: Arc<StoreDefinitions>,
@@ -169,7 +170,7 @@ impl Database {
             )?;
             transaction.execute(
                 "INSERT INTO database_metadata(singleton, name, generation, version, state, key_format, key_path_format, value_format, usage) VALUES(1, ?1, ?2, 0, 'creating', 1, 1, 1, ?3)",
-                rusqlite::params![identity.name, identity.generation.as_slice(), sql_integer(identity.name.len() as u64 + 8)?],
+                rusqlite::params![names::encode(&identity.name)?, identity.generation.as_slice(), sql_integer(identity.name.usage_bytes() + 8)?],
             )?;
             transaction.commit()?;
         }
@@ -185,24 +186,34 @@ impl Database {
     }
 
     fn open_shared(
-        connection: Connection,
+        mut connection: Connection,
         identity: Arc<DatabaseIdentity>,
     ) -> Result<Self, IndexedDbError> {
-        moli_sqlite::require_schema_version(&connection, SCHEMA_VERSION)
-            .map_err(|error| corruption(&error.to_string()))?;
+        let version = names::schema_version(&connection)?;
         let saved: Option<bool> = connection.query_row(
             "SELECT owner_key=?1 FROM database_info WHERE singleton=1 AND backend='indexeddb' AND identity_format=1", [&identity.owner_key], |row| row.get(0),
         ).optional()?;
         if saved != Some(true) {
             return Err(corruption("IndexedDB owner identity mismatch"));
         }
-        let generation: bool = connection.query_row(
-            "SELECT generation=?1 FROM database_metadata WHERE singleton=1 AND name=?2",
-            rusqlite::params![identity.generation.as_slice(), identity.name],
-            |row| row.get(0),
-        )?;
-        if !generation {
+        let mut statement = connection
+            .prepare("SELECT name, generation FROM database_metadata WHERE singleton=1")?;
+        let mut rows = statement.query([])?;
+        let row = rows
+            .next()?
+            .ok_or_else(|| corruption("missing IndexedDB identity"))?;
+        let name = names::read_name(row, 0, version)?;
+        let generation = row
+            .get_ref(1)?
+            .as_blob()
+            .map_err(|_| corruption("invalid IndexedDB generation"))?;
+        if name != identity.name || generation != identity.generation.as_slice() {
             return Err(corruption("IndexedDB generation mismatch"));
+        }
+        drop(rows);
+        drop(statement);
+        if version == 1 {
+            names::migrate_legacy(&mut connection, &identity.name)?;
         }
         let committed = schema::read_metadata(&connection)?;
         Ok(Self {
@@ -347,7 +358,7 @@ impl Database {
         }
         let usage: Option<i64> = self.connection.query_row(
             "SELECT usage FROM database_metadata WHERE singleton=1 AND name=?1 AND version=?2 AND state='live' AND key_format=1 AND key_path_format=1 AND value_format=1",
-            rusqlite::params![self.committed.name, sql_integer(self.committed.version)?],
+            rusqlite::params![names::encode(&self.committed.name)?, sql_integer(self.committed.version)?],
             |row| row.get(0),
         ).optional()?;
         let usage = usage

@@ -36,7 +36,7 @@ pub(super) struct FactoryRequest {
     request: RealmValueHandle,
     service: ServiceClient,
     storage_scope: IndexedDbStorageScope,
-    name: String,
+    name: IndexedDbName,
     operation: FactoryOperation,
     client: Option<DatabaseClient>,
     stage: Stage,
@@ -69,7 +69,7 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_sql_factory_request<'s>(
     request: v8::Local<'s, v8::Object>,
     service: ServiceClient,
     storage_scope: IndexedDbStorageScope,
-    name: String,
+    name: IndexedDbName,
     operation: FactoryOperation,
 ) -> Result<(), IndexedDbError> {
     let owner = indexed_db_typed_execution_owner(scope, request)
@@ -84,7 +84,7 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_sql_factory_request<'s>(
     );
     let wake = super::super::runtime::indexed_db_sql_completion_wake(scope, owner, id);
     let queued_wake = wake.clone();
-    let lease = match service.queue_connection_request(
+    let lease = match service.queue_connection_request_named(
         storage_scope.storage_key().as_bytes(),
         &name,
         Arc::new(move || {
@@ -312,7 +312,7 @@ fn resolve<'s>(
         scope,
         request,
         move |completion| {
-            let client = service.resolve(owner, name, completion)?;
+            let client = service.resolve_named(owner, name, completion)?;
             if let Some(payload) = target.upgrade() {
                 payload.borrow_mut().client = Some(client.clone());
             }

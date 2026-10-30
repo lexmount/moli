@@ -200,7 +200,7 @@ struct Lane {
 struct Registry {
     closed: bool,
     next_id: u64,
-    entries: BTreeMap<(Vec<u8>, String), DatabaseClient>,
+    entries: BTreeMap<(Vec<u8>, crate::IndexedDbName), DatabaseClient>,
     clearing: BTreeMap<clear::ClearScope, clear::ClearingOwner>,
 }
 
@@ -304,7 +304,7 @@ impl ServiceClient {
     fn register_client(
         &self,
         registry: &mut Registry,
-        key: (Vec<u8>, String),
+        key: (Vec<u8>, crate::IndexedDbName),
         generation: [u8; 16],
         location: Location,
         catalog: Option<Arc<catalog::DiskCatalog>>,

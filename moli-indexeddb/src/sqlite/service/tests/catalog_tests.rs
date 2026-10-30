@@ -156,7 +156,7 @@ fn catalog_lists_committed_metadata_and_snapshots_survive_upgrade_and_shutdown()
     assert_eq!(
         snapshot
             .iter()
-            .map(|metadata| metadata.name.as_str())
+            .map(|metadata| String::from_utf16(metadata.name.as_utf16()).unwrap())
             .collect::<Vec<_>>(),
         ["\u{10000}", "\u{e000}"]
     );
@@ -505,7 +505,9 @@ fn catalog_refuses_a_second_owner_and_unsupported_sql_schema_without_erasing_dat
     let file = path(&client);
     let connection =
         moli_sqlite::open_disk(&file, OpenMode::Existing, config().connection).unwrap();
-    connection.pragma_update(None, "user_version", 2).unwrap();
+    connection
+        .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+        .unwrap();
     connection.close().unwrap();
     assert!(Service::on_disk(root.clone(), config()).is_err());
     let connection =
@@ -514,9 +516,11 @@ fn catalog_refuses_a_second_owner_and_unsupported_sql_schema_without_erasing_dat
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        2
+        i64::from(SCHEMA_VERSION + 1)
     );
-    connection.pragma_update(None, "user_version", 1).unwrap();
+    connection
+        .pragma_update(None, "user_version", SCHEMA_VERSION)
+        .unwrap();
     connection.close().unwrap();
     let recovered = Service::on_disk(root, config()).unwrap();
     verify_record(&resolve(&recovered, OWNER, "protected"));
@@ -632,4 +636,270 @@ fn catalog_root_initialization_is_retryable_but_never_fills_holes_in_published_o
         fs::read(old.join("owner.json")).unwrap(),
         b"legacy or foreign"
     );
+}
+
+fn resolve_dom_name(service: &Service, name: crate::IndexedDbName) -> DatabaseClient {
+    let (sender, receiver) = mpsc::channel();
+    let client = service
+        .resolve_named(OWNER.to_vec(), name, move |reply| {
+            let _ = sender.send(reply);
+        })
+        .unwrap();
+    receive(&receiver).result.unwrap();
+    client
+}
+
+#[test]
+fn catalog_utf16_database_names_survive_recovery_without_path_or_identity_collisions() {
+    let directory = Directory::new();
+    let root = directory.0.join("idb-lite");
+    let mut names = [
+        vec![],
+        vec![0],
+        vec![0xd800],
+        vec![0xd801],
+        vec![0xfffd],
+        vec![0xd800, 0xdc00],
+        vec![0xdc00, 0xd800],
+        vec![0xd800, 0],
+    ]
+    .into_iter()
+    .map(crate::IndexedDbName::from_utf16)
+    .collect::<Vec<_>>();
+    names.sort();
+    let mut first_paths = None;
+    for write in [true, false] {
+        let mut service = Service::on_disk(root.clone(), config()).unwrap();
+        let mut paths = Vec::new();
+        for name in &names {
+            let client = resolve_dom_name(&service, name.clone());
+            if write {
+                seed(&client);
+            }
+            verify_record(&client);
+            assert_eq!(&client.identity().name, name);
+            assert_eq!(
+                service.database_version_named(OWNER, name).unwrap(),
+                Some(1)
+            );
+            paths.push(path(&client));
+        }
+        assert_eq!(
+            service
+                .databases(OWNER)
+                .unwrap()
+                .into_iter()
+                .map(|metadata| metadata.name.clone())
+                .collect::<Vec<_>>(),
+            names
+        );
+        assert_eq!(
+            paths
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            names.len()
+        );
+        if let Some(first) = &first_paths {
+            assert_eq!(&paths, first);
+        } else {
+            first_paths = Some(paths);
+        }
+        service.shutdown().unwrap();
+    }
+}
+
+#[test]
+fn utf16_connection_requests_share_only_the_exact_code_unit_name() {
+    let service = Service::new(config()).unwrap();
+    let surrogate = crate::IndexedDbName::from_utf16(vec![0xd800]);
+    let replacement = crate::IndexedDbName::from("\u{fffd}");
+    let first = service
+        .queue_connection_request_named(OWNER, &surrogate, Arc::new(|| {}))
+        .unwrap();
+    let second = service
+        .queue_connection_request_named(OWNER, &surrogate, Arc::new(|| {}))
+        .unwrap();
+    let independent = service
+        .queue_connection_request_named(OWNER, &replacement, Arc::new(|| {}))
+        .unwrap();
+    assert!(first.handle().is_head());
+    assert!(!second.handle().is_head());
+    assert!(independent.handle().is_head());
+    drop(first);
+    assert!(second.handle().is_head());
+    assert!(independent.handle().is_head());
+}
+
+#[test]
+fn utf16_database_names_keep_transaction_admission_separate() {
+    let service = Service::new(config()).unwrap();
+    let clients = [0xd800, 0xdfff, 0xfffd].map(|unit| {
+        let client = resolve_dom_name(&service, crate::IndexedDbName::from_utf16(vec![unit]));
+        initialize(&client);
+        client
+    });
+    let leases = clients
+        .each_ref()
+        .map(|client| queue(client, "a", TransactionMode::ReadWrite));
+    let same = queue(&clients[0], "a", TransactionMode::ReadWrite);
+    assert!(leases.iter().all(|lease| lease.handle().is_ready()));
+    assert!(!same.handle().is_ready());
+    for (index, (client, lease)) in clients.iter().zip(leases).enumerate() {
+        start(client, "a", TransactionMode::ReadWrite, &lease);
+        write(client, &[index as u8]);
+        execute(
+            client,
+            Command::Commit {
+                transaction: TX,
+                quota: None,
+            },
+        )
+        .unwrap();
+    }
+    assert!(same.handle().is_ready());
+    start(&clients[0], "a", TransactionMode::ReadWrite, &same);
+    assert_eq!(query(&clients[0])[0].value, Some(vec![0].into()));
+    execute(
+        &clients[0],
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn utf16_database_name_quota_rollback_preserves_other_database_versions_and_usage() {
+    let service = Service::new(config()).unwrap();
+    let clients = [0xd800, 0xdfff, 0xfffd].map(|unit| {
+        let client = resolve_dom_name(&service, crate::IndexedDbName::from_utf16(vec![unit]));
+        execute(
+            &client,
+            Command::Begin {
+                transaction: TX,
+                mode: TransactionMode::VersionChange,
+                stores: BTreeSet::new(),
+                version: Some(1),
+                admission: None,
+            },
+        )
+        .unwrap();
+        execute(
+            &client,
+            Command::Commit {
+                transaction: TX,
+                quota: None,
+            },
+        )
+        .unwrap();
+        client
+    });
+    assert_eq!(service.owner_usage_bytes(OWNER).unwrap(), 33);
+    let client = &clients[0];
+    execute(
+        client,
+        Command::Begin {
+            transaction: TX,
+            mode: TransactionMode::VersionChange,
+            stores: BTreeSet::new(),
+            version: Some(2),
+            admission: None,
+        },
+    )
+    .unwrap();
+    execute(
+        client,
+        Command::CreateStore {
+            transaction: TX,
+            name: "new".into(),
+            options: Default::default(),
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        execute(
+            client,
+            Command::Commit {
+                transaction: TX,
+                quota: Some(QuotaCheck {
+                    quota: 33,
+                    other_usage: 22
+                })
+            }
+        ),
+        Err(IndexedDbError::QuotaExceeded { .. })
+    ));
+    assert_eq!(service.owner_usage_bytes(OWNER).unwrap(), 33);
+    assert!(
+        service
+            .databases(OWNER)
+            .unwrap()
+            .iter()
+            .all(|metadata| metadata.version == 1)
+    );
+}
+
+#[test]
+fn catalog_recovers_legacy_text_names_in_the_existing_generation_directory() {
+    let directory = Directory::new();
+    let root = directory.0.join("idb-lite");
+    let legacy_name = "legacy-\0-数据库-\u{1f4be}";
+    let mut service = Service::on_disk(root.clone(), config()).unwrap();
+    let client = resolve(&service, OWNER, legacy_name);
+    seed(&client);
+    let file = path(&client);
+    let generation = client.identity().generation;
+    service.shutdown().unwrap();
+    // Recreate the exact v1 metadata representation while keeping this actual
+    // generation's records, store ids and allocator counters untouched.
+    let mut connection = Connection::open(&file).unwrap();
+    let transaction = connection.transaction().unwrap();
+    transaction
+        .execute_batch("ALTER TABLE database_metadata RENAME TO database_metadata_v2")
+        .unwrap();
+    let schema = include_str!("../../tests/fixtures/schema-v1.sql");
+    let metadata = schema
+        .split_once("CREATE TABLE database_metadata")
+        .unwrap()
+        .1
+        .split_once("CREATE TABLE object_stores")
+        .unwrap()
+        .0;
+    transaction
+        .execute_batch(&format!("CREATE TABLE database_metadata{metadata}"))
+        .unwrap();
+    transaction.execute("INSERT INTO database_metadata SELECT singleton,?1,generation,version,state,key_format,key_path_format,value_format,usage,next_store_id,next_index_id,next_record_id,next_object_id FROM database_metadata_v2",[legacy_name]).unwrap();
+    transaction
+        .execute_batch("DROP TABLE database_metadata_v2; PRAGMA user_version=1")
+        .unwrap();
+    transaction.commit().unwrap();
+    drop(connection);
+    let mut service = Service::on_disk(root, config()).unwrap();
+    let client = resolve(&service, OWNER, legacy_name);
+    assert_eq!(
+        client.identity().name,
+        crate::IndexedDbName::from(legacy_name)
+    );
+    assert_eq!(client.identity().generation, generation);
+    assert_eq!(path(&client), file);
+    verify_record(&client);
+    service.shutdown().unwrap();
+    let connection = Connection::open(&file).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT typeof(name) FROM database_metadata", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+        "blob"
+    );
+    drop(connection);
 }

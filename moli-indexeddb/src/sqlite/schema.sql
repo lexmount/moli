@@ -1,4 +1,4 @@
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 
 CREATE TABLE database_info (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -9,7 +9,7 @@ CREATE TABLE database_info (
 
 CREATE TABLE database_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-    name TEXT NOT NULL,
+    name BLOB NOT NULL CHECK (length(name) % 2 = 0),
     generation BLOB NOT NULL CHECK (length(generation) = 16),
     version INTEGER NOT NULL CHECK (version >= 0),
     state TEXT NOT NULL CHECK (state IN ('creating', 'live')),

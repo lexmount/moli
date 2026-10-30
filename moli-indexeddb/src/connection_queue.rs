@@ -18,7 +18,7 @@ pub struct ConnectionRequestQueues {
 struct QueueState {
     closed: bool,
     next_id: u64,
-    queues: BTreeMap<(String, String), VecDeque<QueuedRequest>>,
+    queues: BTreeMap<(String, crate::IndexedDbName), VecDeque<QueuedRequest>>,
 }
 
 struct QueuedRequest {
@@ -31,7 +31,7 @@ struct QueuedRequest {
 #[derive(Clone)]
 pub struct ConnectionRequestHandle {
     queues: Weak<ConnectionRequestQueues>,
-    key: (String, String),
+    key: (String, crate::IndexedDbName),
     id: u64,
 }
 
@@ -64,6 +64,15 @@ impl ConnectionRequestQueues {
         self: &Arc<Self>,
         storage_key: &str,
         name: &str,
+        wake: ConnectionRequestWake,
+    ) -> Result<ConnectionRequestLease, crate::IndexedDbError> {
+        self.try_enqueue_named(storage_key, &name.into(), wake)
+    }
+
+    pub fn try_enqueue_named(
+        self: &Arc<Self>,
+        storage_key: &str,
+        name: &crate::IndexedDbName,
         wake: ConnectionRequestWake,
     ) -> Result<ConnectionRequestLease, crate::IndexedDbError> {
         let mut state = self.state.lock();

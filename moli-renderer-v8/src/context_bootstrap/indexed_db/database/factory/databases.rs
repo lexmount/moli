@@ -120,20 +120,20 @@ fn database_info_array<'s>(
     let snapshot = service.databases(storage_scope.storage_key().as_bytes())?;
     Ok(info_array(
         scope,
-        snapshot
-            .iter()
-            .map(|info| (info.name.as_str(), info.version)),
+        snapshot.iter().map(|info| (&info.name, info.version)),
     ))
 }
 
 fn info_array<'s, 'a>(
     scope: &mut v8::PinScope<'s, '_>,
-    infos: impl ExactSizeIterator<Item = (&'a str, u64)>,
+    infos: impl ExactSizeIterator<Item = (&'a IndexedDbName, u64)>,
 ) -> v8::Local<'s, v8::Array> {
     let array = v8::Array::new(scope, infos.len() as i32);
     for (index, (name, version)) in infos.enumerate() {
         let object = ObjectLiteralDeclaration::bind(scope);
-        if let Some(name) = v8_string(scope, name) {
+        if let Some(name) =
+            v8::String::new_from_two_byte(scope, name.as_utf16(), v8::NewStringType::Normal)
+        {
             object.set_string_property(scope, "name", name.into());
         }
         let version = v8::Number::new(scope, version as f64);

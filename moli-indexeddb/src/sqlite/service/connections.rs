@@ -110,13 +110,23 @@ impl ServiceClient {
         name: &str,
         wake: crate::ConnectionRequestWake,
     ) -> Result<crate::ConnectionRequestLease, IndexedDbError> {
+        self.queue_connection_request_named(owner_key, &name.into(), wake)
+    }
+
+    pub fn queue_connection_request_named(
+        &self,
+        owner_key: &[u8],
+        name: &crate::IndexedDbName,
+        wake: crate::ConnectionRequestWake,
+    ) -> Result<crate::ConnectionRequestLease, IndexedDbError> {
         let registry = self.registry.lock();
         if registry.closed {
             return Err(IndexedDbError::InvalidState("SQL service is closed".into()));
         }
         registry.check_owner(owner_key)?;
         let owner = request_owner_key(owner_key)?;
-        self.connection_requests.try_enqueue(&owner, name, wake)
+        self.connection_requests
+            .try_enqueue_named(&owner, name, wake)
     }
 }
 

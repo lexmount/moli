@@ -6777,3 +6777,73 @@ fn indexed_db_roundtrips_image_data_and_geometry_objects() {
         r#"{"image":[true,true,true,2,1,"display-p3","1,2,3,4,5,6,7,8",true],"pointReadOnly":true,"point":true,"rectReadOnly":true,"rect":true,"quad":true,"matrixReadOnly":true,"matrix":true,"expandosExcluded":true}"#
     );
 }
+
+#[test]
+fn indexed_db_utf16_database_names_survive_sqlite_profile_restart() {
+    let root = indexed_db_test_root("database-names-profile-restart");
+    let units: Vec<Vec<u16>> = vec![
+        vec![],
+        vec![0],
+        vec![0xd800],
+        vec![0xd801],
+        vec![0xdfff],
+        vec![0xfffd],
+        vec![0xd800, 0xdc00],
+        vec![0xdc00, 0xd800],
+        vec![0xd800, 0],
+        vec![0x64, 0x38, 0x30, 0x30],
+    ];
+    for write in [true, false] {
+        let manager = crate::new_indexed_db_manager(Some(root.clone())).unwrap();
+        let mut vm = new_storage_page_task_executor_test_vm(
+            "https://indexeddb-database-names-profile.test/",
+        );
+        vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+        vm.set_storage_bucket_store(
+            crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+        );
+        vm.eval(&format!(
+            "globalThis.writeNames={write}; globalThis.nameUnits={};",
+            serde_json::to_string(&units).unwrap()
+        ))
+        .unwrap();
+        vm.eval(r#"
+globalThis.databaseNameProfile = 'pending';
+(async () => {
+  const result = request => new Promise((resolve,reject) => {
+    request.onsuccess=()=>resolve(request.result); request.onerror=()=>reject(request.error);
+  });
+  const complete = transaction => new Promise((resolve,reject) => {
+    transaction.oncomplete=resolve; transaction.onabort=()=>reject(transaction.error);
+  });
+  const records=[];
+  for (let i=0;i<nameUnits.length;i++) {
+    const name=String.fromCharCode(...nameUnits[i]);
+    const open=indexedDB.open(name,1);
+    open.onupgradeneeded=()=>open.result.createObjectStore('s');
+    const db=await result(open);
+    if(db.name!==name) throw Error('database name identity');
+    if(writeNames) {
+      const transaction=db.transaction('s','readwrite');const done=complete(transaction);
+      transaction.objectStore('s').put(i,'key');await done;
+    }
+    const transaction=db.transaction('s');const done=complete(transaction);
+    records.push(await result(transaction.objectStore('s').get('key')));await done;db.close();
+  }
+  const listed=(await indexedDB.databases()).map(info=>Array.from({length:info.name.length},(_,i)=>info.name.charCodeAt(i)));
+  return {records,listed};
+})().then(result=>databaseNameProfile=JSON.stringify(result),error=>databaseNameProfile=String(error));
+"#).unwrap();
+        let actual = vm
+            .eval_after_selected_page_tasks("databaseNameProfile")
+            .unwrap();
+        let mut ordered = units.clone();
+        ordered.sort();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
+            serde_json::json!({"records":(0..units.len()).collect::<Vec<_>>(),"listed":ordered}),
+            "profile write: {write}"
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

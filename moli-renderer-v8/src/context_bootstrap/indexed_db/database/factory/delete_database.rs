@@ -5,8 +5,8 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBFactory.deleteDatabase")]
 struct IdbFactoryDeleteDatabaseArgs {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, converter = "raw")]
+    name: webidl::DomString16,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_factory_delete_database_callback<'s>(
@@ -17,7 +17,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_delete_database_call
     let Some(parsed) = webidl::parse_args::<IdbFactoryDeleteDatabaseArgs>(scope, &args) else {
         return;
     };
-    let name = parsed.name;
+    let name = IndexedDbName::from_utf16(parsed.name.0);
     let Some(owner) = idb_factory_effective_execution_owner(scope, args.this()) else {
         let exception = dom_exception_value(
             scope,

@@ -4,6 +4,7 @@ use crate::context_bootstrap::{
     simple_event_target_handler_setter_callback,
 };
 use crate::web_api_interfaces;
+use moli_indexeddb::IndexedDbName;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -13,12 +14,12 @@ use moli_webapi_declare::WebApiObject;
     data_properties,
     enumerable
 )]
-struct IdbDatabaseObjectDeclaration {
+struct IdbDatabaseObjectDeclaration<'scope> {
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 
     #[webapi(slot = crate::context_bootstrap::indexed_db::DATABASE_NAME_SLOT)]
-    name: String,
+    name: v8::Local<'scope, v8::String>,
     #[webapi(slot = crate::context_bootstrap::indexed_db::DATABASE_VERSION_SLOT)]
     version: f64,
     #[webapi(
@@ -68,11 +69,13 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
     storage_scope: IndexedDbStorageScope,
     owner: IndexedDbExecutionOwner,
     handle: DatabaseHandle,
-    name: &str,
+    name: &IndexedDbName,
     version: u64,
     client: moli_indexeddb::sqlite::service::DatabaseClient,
 ) -> Result<v8::Local<'s, v8::Object>, IndexedDbError> {
-    let database = IdbDatabaseObjectDeclaration::new(name.to_owned(), version as f64)
+    let name = v8::String::new_from_two_byte(scope, name.as_utf16(), v8::NewStringType::Normal)
+        .ok_or_else(|| IndexedDbError::Resource("Unable to allocate IndexedDB name".into()))?;
+    let database = IdbDatabaseObjectDeclaration::new(name, version as f64)
         .bind(scope)
         .map_err(|error| IndexedDbError::InvalidState(error.to_string()))?;
     register_indexed_db_wrapper_with_owner(

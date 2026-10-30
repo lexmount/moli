@@ -22,7 +22,7 @@ fn config() -> ServiceConfig {
     }
 }
 
-fn identity(name: &str) -> DatabaseIdentity {
+fn identity(name: impl Into<crate::IndexedDbName>) -> DatabaseIdentity {
     DatabaseIdentity {
         owner_key: b"partition/default/storage-key/top-site/bucket-17".to_vec(),
         name: name.into(),
@@ -36,7 +36,11 @@ fn receive(receiver: &mpsc::Receiver<Completion>) -> Completion {
         .expect("SQL worker must complete without waiting for the JS owner")
 }
 
-fn register(service: &Service, name: &str, location: Location) -> (DatabaseClient, Completion) {
+fn register(
+    service: &Service,
+    name: impl Into<crate::IndexedDbName>,
+    location: Location,
+) -> (DatabaseClient, Completion) {
     let (sender, receiver) = mpsc::channel();
     let client = service
         .open(identity(name), location, move |reply| {
@@ -46,7 +50,11 @@ fn register(service: &Service, name: &str, location: Location) -> (DatabaseClien
     (client, receive(&receiver))
 }
 
-fn open(service: &Service, name: &str, location: Location) -> DatabaseClient {
+fn open(
+    service: &Service,
+    name: impl Into<crate::IndexedDbName>,
+    location: Location,
+) -> DatabaseClient {
     let (client, reply) = register(service, name, location);
     assert!(matches!(reply.result.unwrap(), CommandResult::Metadata(_)));
     client
@@ -56,7 +64,7 @@ fn open(service: &Service, name: &str, location: Location) -> DatabaseClient {
 fn registration_accepts_more_than_1024_databases_and_reuses_each_owner() {
     let service = Service::new(config()).unwrap();
     let clients = (0..1030)
-        .map(|id| open(&service, &format!("registration-{id}"), Location::Memory))
+        .map(|id| open(&service, format!("registration-{id}"), Location::Memory))
         .collect::<Vec<_>>();
     assert_eq!(service.registry.lock().entries.len(), clients.len());
     let first = open(&service, "registration-0", Location::Memory);
@@ -567,7 +575,12 @@ fn private_memory_databases_survive_more_than_eight_connections_on_one_worker() 
         assert_eq!(records.len(), 1);
         assert_eq!(
             records[0].value,
-            Some(client.identity().name.as_bytes().to_vec().into())
+            Some(
+                String::from_utf16(client.identity().name.as_utf16())
+                    .unwrap()
+                    .into_bytes()
+                    .into()
+            )
         );
         execute(
             &reopened,
@@ -662,7 +675,12 @@ fn active_disk_transactions_allow_more_than_eight_databases_on_one_worker() {
         if let Some(record) = records.first() {
             assert_eq!(
                 record.value,
-                Some(client.identity().name.as_bytes().to_vec().into())
+                Some(
+                    String::from_utf16(client.identity().name.as_utf16())
+                        .unwrap()
+                        .into_bytes()
+                        .into()
+                )
             );
         }
         execute(

@@ -5,8 +5,8 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBFactory.open")]
 struct IdbFactoryOpenArgs {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, converter = "raw")]
+    name: webidl::DomString16,
     #[webidl(converter = "enforce_range_unsigned_long_long")]
     version: Option<u64>,
 }
@@ -19,7 +19,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_open_callback<'s>(
     let Some(parsed) = webidl::parse_args::<IdbFactoryOpenArgs>(scope, &args) else {
         return;
     };
-    let name = parsed.name;
+    let name = IndexedDbName::from_utf16(parsed.name.0);
     let version = parsed.version;
     if version == Some(0) {
         throw_type_error(

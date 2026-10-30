@@ -32,7 +32,7 @@ fn registration_identity_is_released_independently_of_retained_schema() {
     assert_eq!(service.registry.lock().entries.len(), 1);
     drop(client);
     assert!(identity.upgrade().is_none());
-    assert_eq!(held_snapshot.name, "old");
+    assert_eq!(held_snapshot.name, crate::IndexedDbName::from("old"));
     drop(held_snapshot);
     drop(other);
 }

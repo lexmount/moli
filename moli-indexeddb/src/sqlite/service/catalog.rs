@@ -81,6 +81,15 @@ impl ServiceClient {
         name: String,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<DatabaseClient, DispatchError> {
+        self.resolve_named(owner_key, name.into(), completion)
+    }
+
+    pub fn resolve_named(
+        &self,
+        owner_key: Vec<u8>,
+        name: crate::IndexedDbName,
+        completion: impl FnOnce(Completion) + Send + 'static,
+    ) -> Result<DatabaseClient, DispatchError> {
         if owner_key.is_empty() {
             return Err(DispatchError::Storage(IndexedDbError::Data(
                 "empty IndexedDB owner identity".into(),
@@ -166,9 +175,7 @@ impl ServiceClient {
             };
             databases.push(metadata);
         }
-        databases.sort_unstable_by(|left, right| {
-            left.name.encode_utf16().cmp(right.name.encode_utf16())
-        });
+        databases.sort_unstable_by(|left, right| left.name.cmp(&right.name));
         Ok(databases)
     }
 
@@ -176,6 +183,14 @@ impl ServiceClient {
         &self,
         owner_key: &[u8],
         name: &str,
+    ) -> Result<Option<u64>, IndexedDbError> {
+        self.database_version_named(owner_key, &name.into())
+    }
+
+    pub fn database_version_named(
+        &self,
+        owner_key: &[u8],
+        name: &crate::IndexedDbName,
     ) -> Result<Option<u64>, IndexedDbError> {
         let registry = self.registry.lock();
         if registry.closed {
@@ -335,8 +350,7 @@ fn inspect_header(
             return Ok(None);
         }
     }
-    moli_sqlite::require_schema_version(&connection, SCHEMA_VERSION)
-        .map_err(|error| corruption(&error.to_string()))?;
+    let version = names::schema_version(&connection)?;
     let mut statement = connection.prepare("SELECT i.owner_key, m.name, m.generation FROM database_info i JOIN database_metadata m ON m.singleton=i.singleton WHERE i.singleton=1 AND i.backend='indexeddb' AND i.identity_format=1")?;
     let mut rows = statement.query([])?;
     let row = rows
@@ -346,10 +360,7 @@ fn inspect_header(
         .get_ref(0)?
         .as_blob()
         .map_err(|_| corruption("invalid IndexedDB owner"))?;
-    let name = row
-        .get_ref(1)?
-        .as_str()
-        .map_err(|_| corruption("invalid IndexedDB name"))?;
+    let name = names::read_name(row, 1, version)?;
     let generation: [u8; 16] = row
         .get_ref(2)?
         .as_blob()
@@ -358,7 +369,7 @@ fn inspect_header(
         .map_err(|_| corruption("invalid IndexedDB generation length"))?;
     let identity = DatabaseIdentity {
         owner_key: owner.to_vec(),
-        name: name.to_owned(),
+        name,
         generation,
     };
     drop(rows);

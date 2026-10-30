@@ -112,11 +112,16 @@ impl DiskCatalog {
         })
     }
 
-    pub(super) fn path(&self, owner: &[u8], name: &str, generation: [u8; 16]) -> PathBuf {
+    pub(super) fn path(
+        &self,
+        owner: &[u8],
+        name: &crate::IndexedDbName,
+        generation: [u8; 16],
+    ) -> PathBuf {
         self.root
             .join("live")
             .join(hash(1, owner))
-            .join(hash(2, name.as_bytes()))
+            .join(hash_database_name(name))
             .join(hex(&generation))
             .join("db.sqlite")
     }
@@ -450,4 +455,63 @@ pub(super) fn hex(bytes: &[u8]) -> String {
 
 pub(super) fn io_error(action: &str, path: &Path, error: std::io::Error) -> IndexedDbError {
     IndexedDbError::Io(format!("IndexedDB {action} `{}`: {error}", path.display()))
+}
+
+/// Keep every schema-v1 Unicode name in its original generation directory.
+/// Canonical WTF-8 extends the same hash domain to unpaired surrogates without
+/// projecting distinct DOMStrings onto the same replacement character.
+fn hash_database_name(name: &crate::IndexedDbName) -> String {
+    let mut hash = moli_crypto::Sha256Context::new();
+    hash.update(b"moli-indexeddb-path-v1\0");
+    hash.update([2]);
+    hash.update(name.usage_bytes().to_be_bytes());
+    for character in char::decode_utf16(name.as_utf16().iter().copied()) {
+        match character {
+            Ok(character) => {
+                let mut bytes = [0; 4];
+                hash.update(character.encode_utf8(&mut bytes).as_bytes());
+            }
+            Err(error) => {
+                let surrogate = error.unpaired_surrogate();
+                hash.update([
+                    0xe0 | (surrogate >> 12) as u8,
+                    0x80 | ((surrogate >> 6) & 0x3f) as u8,
+                    0x80 | (surrogate & 0x3f) as u8,
+                ]);
+            }
+        }
+    }
+    hex(&hash.finish())
+}
+
+#[cfg(test)]
+mod database_name_tests {
+    use super::*;
+
+    #[test]
+    fn database_name_paths_keep_legacy_unicode_hashes_and_distinguish_surrogates() {
+        for text in [
+            "",
+            "\0",
+            "ordinary",
+            "\u{1f4be}",
+            "\u{e000}",
+            "legacy-\0-数据库-\u{1f4be}",
+        ] {
+            assert_eq!(hash_database_name(&text.into()), hash(2, text.as_bytes()));
+        }
+        let names = [
+            vec![0xd800],
+            vec![0xd801],
+            vec![0xfffd],
+            vec![0x64, 0x38, 0x30, 0x30],
+            vec![0xdfff, 0xd800],
+            vec![0xfffd, 0xfffd],
+        ];
+        let hashes = names
+            .into_iter()
+            .map(|units| hash_database_name(&crate::IndexedDbName::from_utf16(units)))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(hashes.len(), 6);
+    }
 }

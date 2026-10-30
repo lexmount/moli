@@ -19,7 +19,7 @@ pub(super) fn read_metadata(
     if version < 0 || usage < 0 || !matches!((state, version), ("creating", 0) | ("live", 1..)) {
         return Err(corruption("invalid IndexedDB database metadata"));
     }
-    let name = owned_text(text(row, 0)?)?;
+    let name = names::read_name(row, 0, SCHEMA_VERSION)?;
     drop(rows);
     drop(statement);
     let mut stores = BTreeMap::new();
@@ -94,7 +94,7 @@ pub(super) fn read_metadata(
 
 impl DatabaseMetadata {
     pub(super) fn with_usage(&self, usage: u64) -> Result<Arc<Self>, IndexedDbError> {
-        let name = owned_text(&self.name)?;
+        let name = names::copy(&self.name)?;
         Ok(Arc::new(Self {
             name,
             usage,

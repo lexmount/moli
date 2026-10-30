@@ -72,7 +72,7 @@ fn dispatch_factory_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     storage_scope: IndexedDbStorageScope,
-    name: String,
+    name: IndexedDbName,
     operation: FactoryOperation,
 ) {
     let result = factory_sql_service(scope).and_then(|service| {
