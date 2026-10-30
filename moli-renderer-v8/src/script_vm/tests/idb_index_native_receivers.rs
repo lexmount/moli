@@ -19,6 +19,8 @@ fn idb_index_native_receivers_reject_forgery_before_conversion_in_the_callee_rea
             get subtree() { conversions++; throw new Error('unexpected options conversion'); }
         };
         const cases = [
+            ["IDBIndex", "name", "get", index, null, []],
+            ["IDBIndex", "name", "set", index, null, [poison]],
             ["IDBIndex", "count", "method", index, [], [poison]],
             ["IDBIndex", "getAll", "method", index, [], [poison]],
             ["IDBIndex", "getAllKeys", "method", index, [], [poison]],

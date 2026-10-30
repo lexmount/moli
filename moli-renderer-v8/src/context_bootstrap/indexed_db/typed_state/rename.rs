@@ -8,19 +8,19 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_object_store<'
     store_id: StoreId,
     new_name: &moli_indexeddb::IndexedDbName,
 ) -> Result<(), IndexedDbError> {
-    let metadata = {
+    let (metadata, old_name) = {
         let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
         let mut mirror = mirror.borrow_mut();
         let current = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
         let source = store_by_id(current, store_id).ok_or_else(missing_mirror)?;
-        let name = &source.info.name;
+        let name = source.info.name.clone();
         let metadata = source.with_name(new_name);
         let candidate = edit_shared(current, |map| {
-            map.remove(name);
+            map.remove(&name);
             map.insert(new_name.clone(), metadata.clone());
         });
         mirror.metadata = Some(candidate);
-        metadata
+        (metadata, name.clone())
     };
     for table in indexed_db_handle_tables(scope, database) {
         for store in table
@@ -38,7 +38,8 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_object_store<'
             }
         }
     }
-    sync_transaction_object_store_names_from_database(scope, transaction, database);
+    sync_transaction_scope_from_database(scope, transaction, database);
+    super::super::core::rekey_object_store_handle_cache(scope, transaction, &old_name, new_name);
     Ok(())
 }
 
@@ -50,19 +51,20 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_index<'s>(
     index_id: IndexId,
     new_name: &moli_indexeddb::IndexedDbName,
 ) -> Result<(), IndexedDbError> {
-    let metadata = {
+    let (metadata, old_name) = {
         let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
         let mut mirror = mirror.borrow_mut();
         let current = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
         let store = store_by_id(current, store_id).ok_or_else(missing_mirror)?;
         let store_name = &store.info.name;
         let index = store.index_by_id(index_id).ok_or_else(missing_mirror)?;
-        let store = store.with_renamed_index(&index.info.name, new_name);
+        let old_name = index.info.name.clone();
+        let store = store.with_renamed_index(&old_name, new_name);
         let candidate = edit_shared(current, |map| {
             map.insert(store_name.clone(), store.clone());
         });
         mirror.metadata = Some(candidate);
-        store
+        (store, old_name)
     };
     let index = metadata
         .index_by_id(index_id)
@@ -83,11 +85,11 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_index<'s>(
                 }
                 state.object_store.to_local(scope)
             };
-            if store.and_then(|store| indexed_db_object_store_transaction(scope, store))
-                == Some(transaction)
+            if let Some(store) = store
+                && indexed_db_object_store_transaction(scope, store) == Some(transaction)
             {
-                let mut state = state.borrow_mut();
-                state.info = Rc::clone(&index.info);
+                state.borrow_mut().info = Rc::clone(&index.info);
+                super::super::core::rekey_index_handle_cache(scope, store, &old_name, new_name);
             }
         }
     }
