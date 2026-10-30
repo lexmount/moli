@@ -1,3 +1,6 @@
+#[path = "auxiliary_pages/split30_registry_native_owner.rs"]
+mod split30_registry_native_owner;
+
 use super::*;
 use crate::RendererPopupActivationSource;
 
