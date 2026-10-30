@@ -60,9 +60,8 @@ test(function () {
   socket.binaryType = "arraybuffer";
   assert_equals(socket.binaryType, "arraybuffer", "binaryType accepts arraybuffer");
 
-  assert_throws_name("SyntaxError", function () {
-    socket.binaryType = "not-a-valid-binary-type";
-  }, "invalid binaryType writes should throw SyntaxError");
+  socket.binaryType = "not-a-valid-binary-type";
+  assert_equals(socket.binaryType, "arraybuffer", "unknown binaryType values are ignored");
   assert_throws_js(TypeError, function () {
     socket.binaryType = Symbol("arraybuffer");
   }, "binaryType Symbol conversion should throw TypeError");

@@ -670,7 +670,7 @@ async fn websocket_binary_echo_delivers_blob_by_default() {
 }
 
 #[tokio::test]
-async fn websocket_binary_type_invalid_values_throw_syntax_error() {
+async fn websocket_binary_type_ignores_invalid_values() {
     run_page_vm_async_test(async move {
         let (url, server) = spawn_text_echo_websocket_server().await;
         let url_literal = serde_json::to_string(&url).expect("serialize websocket url");
@@ -723,7 +723,7 @@ async fn websocket_binary_type_invalid_values_throw_syntax_error() {
             .expect("websocket binaryType server should finish");
         assert_eq!(
             events,
-            r#"["initial:blob","invalid:SyntaxError:blob","arraybuffer:arraybuffer","blob:blob","close:true"]"#
+            r#"["initial:blob","invalid-write:blob","arraybuffer:arraybuffer","blob:blob","close:true"]"#
         );
         })
         .await;
