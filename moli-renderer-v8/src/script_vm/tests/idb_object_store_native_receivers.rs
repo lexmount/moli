@@ -20,6 +20,8 @@ fn idb_object_store_native_receivers_reject_forgery_before_conversion_in_the_cal
             get subtree() { conversions++; throw new Error('unexpected options conversion'); }
         };
         const cases = [
+            ["IDBObjectStore", "name", "get", store, null, []],
+            ["IDBObjectStore", "name", "set", store, null, [poison]],
             ["IDBObjectStore", "count", "method", store, [], [poison]],
             ["IDBObjectStore", "getAll", "method", store, [], [poison]],
             ["IDBObjectStore", "getAllKeys", "method", store, [], [poison]],

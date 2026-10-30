@@ -4,6 +4,50 @@ use crate::util::{get_private_value, set_private_value, v8_string_from_utf16_uni
 const OBJECT_STORE_CACHE_SLOT: &str = "moli.IndexedDb.objectStoreHandles";
 const INDEX_CACHE_SLOT: &str = "moli.IndexedDb.indexHandles";
 
+pub(in crate::context_bootstrap::indexed_db) fn rekey_object_store_handle_cache<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    name: &moli_indexeddb::IndexedDbName,
+    new_name: &moli_indexeddb::IndexedDbName,
+) {
+    rekey_schema_handle_cache(scope, transaction, OBJECT_STORE_CACHE_SLOT, name, new_name);
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn rekey_index_handle_cache<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    store: v8::Local<'s, v8::Object>,
+    name: &moli_indexeddb::IndexedDbName,
+    new_name: &moli_indexeddb::IndexedDbName,
+) {
+    rekey_schema_handle_cache(scope, store, INDEX_CACHE_SLOT, name, new_name);
+}
+
+fn rekey_schema_handle_cache<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    slot: &'static str,
+    name: &moli_indexeddb::IndexedDbName,
+    new_name: &moli_indexeddb::IndexedDbName,
+) {
+    let Some(cache) = get_private_value(scope, owner, slot)
+        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
+    else {
+        return;
+    };
+    let key = v8_string_from_utf16_units(scope, name.as_utf16()).expect("accepted schema name");
+    let new_key =
+        v8_string_from_utf16_units(scope, new_name.as_utf16()).expect("accepted schema name");
+    if let Some(value) = cache.get(scope, key.into())
+        && value.is_object()
+    {
+        // Retain the canonical handle before releasing its old cache key.
+        cache
+            .set(scope, new_key.into(), value)
+            .expect("schema handle cache");
+        cache.delete(scope, key.into());
+    }
+}
+
 pub(in crate::context_bootstrap::indexed_db) fn release_schema_handle_caches<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
