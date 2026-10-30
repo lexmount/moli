@@ -455,7 +455,7 @@ mod tests {
             let (_, _, _, _, _, fence) = output.into_renderer_owner_turn_parts();
             if boundary == 2 {
                 assert!(
-                    fence.is_some(),
+                    !fence.is_empty(),
                     "accepted Native output keeps its original position even when state settlement is rejected"
                 );
             }
@@ -634,7 +634,7 @@ mod tests {
                 };
                 assert_eq!(value.value, json!(42));
                 assert!(
-                    fence.is_some(),
+                    !fence.is_empty(),
                     "ready loss preserves the accepted Native cursor"
                 );
             } else {

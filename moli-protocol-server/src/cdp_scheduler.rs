@@ -1019,7 +1019,7 @@ impl CdpScheduler {
                             post_renderer_output_events,
                         ),
                     )
-                    .with_renderer_output_predecessor(renderer_output_predecessor),
+                    .with_renderer_output_dependencies(renderer_output_predecessor),
                 ))
             }
         }
@@ -2681,16 +2681,9 @@ impl CdpScheduler {
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         let (prefix, suffix, boundary, predecessor) =
             self.materialize_renderer_owner_turn_outcome(outcome);
-        let mut output = ProtocolOutputSequence::empty();
-        if let Some(predecessor) = predecessor {
-            output.append(
-                self.project_renderer_output_predecessor_before_devtools_result(
-                    receivers,
-                    &predecessor,
-                )
-                .await?,
-            );
-        }
+        let mut output = self
+            .project_renderer_output_dependencies_before_devtools_result(receivers, predecessor)
+            .await?;
         // Fetch can commit a Document owned by a different navigation. Its
         // metadata prefix must remain before that independent renderer boundary.
         output.append(prefix);
@@ -2725,19 +2718,37 @@ impl CdpScheduler {
             "non-navigation owner turn must not carry a renderer insertion boundary"
         );
 
-        let mut causal_output = ProtocolOutputSequence::empty();
-        if let Some(predecessor) = renderer_output_predecessor {
-            causal_output.append(
-                self.project_renderer_output_predecessor_before_devtools_result(
-                    receivers,
-                    &predecessor,
-                )
-                .await?,
-            );
-        }
+        let mut causal_output = self
+            .project_renderer_output_dependencies_before_devtools_result(
+                receivers,
+                renderer_output_predecessor,
+            )
+            .await?;
         causal_output.append(output);
         causal_output.append(post_renderer_output);
         Ok(causal_output)
+    }
+
+    async fn project_renderer_output_dependencies_before_devtools_result(
+        &mut self,
+        receivers: &mut CdpSchedulerEventReceivers,
+        dependencies: moli_protocol::RendererOutputDependencies,
+    ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
+        let mut output = ProtocolOutputSequence::empty();
+        for predecessor in dependencies {
+            match self
+                .project_renderer_output_predecessor_before_devtools_result(receivers, &predecessor)
+                .await
+            {
+                Ok(events) => output.append(events),
+                Err(failure) => {
+                    let (events, error) = failure.into_parts();
+                    output.append(events);
+                    return Err(RendererOutputTransportFailure::new(output, error));
+                }
+            }
+        }
+        Ok(output)
     }
 
     fn materialize_protocol_only_turn_outcome(
@@ -2771,7 +2782,7 @@ impl CdpScheduler {
         ProtocolOutputSequence,
         ProtocolOutputSequence,
         Option<moli_core::RendererOutputFence>,
-        Option<moli_core::RendererOutputFence>,
+        moli_protocol::RendererOutputDependencies,
     ) {
         let (
             events,
@@ -3170,7 +3181,7 @@ impl CdpScheduler {
         ProtocolOutputSequence,
         ProtocolOutputSequence,
         Option<moli_core::RendererOutputFence>,
-        Option<moli_core::RendererOutputFence>,
+        moli_protocol::RendererOutputDependencies,
     ) {
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
         let outcome = self
@@ -3214,7 +3225,7 @@ impl CdpScheduler {
         let (completion_prefix, mut suffix, renderer_output_boundary, renderer_output_predecessor) =
             self.drain_background_navigation_completion(completion);
         assert!(
-            renderer_output_predecessor.is_none(),
+            renderer_output_predecessor.is_empty(),
             "navigation completion must use its exact insertion boundary, not a command predecessor"
         );
         prefix.append(completion_prefix);

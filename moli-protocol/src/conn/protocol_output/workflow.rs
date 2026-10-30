@@ -109,31 +109,26 @@ impl CdpConnection {
     ) -> Vec<crate::conn::BackgroundProtocolEvent> {
         let (mut events, boundary, mut after) = context.take_renderer_fenced_protocol_events();
         after.extend(context.take_post_response_events());
-        let predecessor = context.take_renderer_output_predecessor();
+        let dependencies = context.take_renderer_output_dependencies();
         if let Some(boundary) = boundary {
-            if let Some(predecessor) = predecessor.as_ref()
-                && !events.is_empty()
-            {
-                self.publish_renderer_fenced_protocol_output(
+            if !dependencies.is_empty() && !events.is_empty() {
+                self.publish_renderer_fenced_protocol_output_after(
                     std::mem::take(&mut events),
-                    predecessor.clone(),
+                    dependencies.clone().into_iter().collect(),
                     target_id.clone(),
                 );
             }
             // The insertion also releases independently transported Native
             // observations. Its receipt must survive an empty wire suffix.
-            let mut predecessors = Vec::new();
-            predecessors.extend(predecessor);
+            let mut predecessors = dependencies.into_iter().collect::<Vec<_>>();
             predecessors.push(boundary);
             self.publish_renderer_fenced_protocol_output_after(after, predecessors, target_id);
         } else {
             events.extend(after);
-            if let Some(predecessor) = predecessor
-                && !events.is_empty()
-            {
-                self.publish_renderer_fenced_protocol_output(
+            if !dependencies.is_empty() && !events.is_empty() {
+                self.publish_renderer_fenced_protocol_output_after(
                     std::mem::take(&mut events),
-                    predecessor,
+                    dependencies.into_iter().collect(),
                     target_id,
                 );
             }

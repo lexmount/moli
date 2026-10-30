@@ -328,7 +328,7 @@ async fn internal_create_isolated_world_restart_does_not_inherit_the_stale_rende
     };
     let (events, after, boundary, post, scheduler, predecessor) =
         outcome.into_renderer_owner_turn_parts();
-    if let Some(predecessor) = &predecessor {
+    for predecessor in predecessor.iter() {
         assert!(
             matches!(predecessor.cursor().stream().residence(), moli_core::RendererOutputResidenceIdentity::Page { page_id, .. } if page_id == replacement_page_id),
             "an abandoned renderer stream cannot precede the replacement response"
@@ -338,7 +338,7 @@ async fn internal_create_isolated_world_restart_does_not_inherit_the_stale_rende
         events, post, scheduler,
     )
     .with_renderer_output_boundary(boundary, after)
-    .with_renderer_output_predecessor(predecessor);
+    .with_renderer_output_dependencies(predecessor);
     let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
     assert!(
         response(&messages, 2_600_072)["result"]["executionContextId"]

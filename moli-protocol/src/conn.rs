@@ -83,6 +83,8 @@ mod page_state;
 pub(crate) use page_host_scope::ProtocolPageHostScope;
 mod popup_activation_work;
 mod popup_navigation_work;
+mod renderer_output_dependencies;
+pub use renderer_output_dependencies::RendererOutputDependencies;
 mod protocol_output;
 pub(crate) use protocol_output::PendingBackgroundNavigationProtocol;
 pub use protocol_output::{
@@ -430,7 +432,7 @@ pub struct CommandDispatchContext {
     post_renderer_output_events: Vec<BackgroundProtocolEvent>,
     renderer_output_boundary: Option<moli_core::RendererOutputFence>,
     post_response_events: Vec<BackgroundProtocolEvent>,
-    renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
+    renderer_output_dependencies: RendererOutputDependencies,
     command_failure_cleanup: Rc<RefCell<Option<CommandFailureCleanup>>>,
     deferred_command_events: Vec<BackgroundProtocolEvent>,
     runtime_output_projection_permits:
@@ -446,7 +448,7 @@ impl CommandDispatchContext {
             post_renderer_output_events: Vec::new(),
             renderer_output_boundary: None,
             post_response_events: Vec::new(),
-            renderer_output_predecessor: None,
+            renderer_output_dependencies: RendererOutputDependencies::default(),
             command_failure_cleanup: Rc::default(),
             deferred_command_events: Vec::new(),
             runtime_output_projection_permits: Rc::default(),
@@ -592,18 +594,38 @@ impl CommandDispatchContext {
         &mut self,
         predecessor: moli_core::RendererOutputFence,
     ) {
-        predecessor.merge_into_same_stream_tail(&mut self.renderer_output_predecessor);
+        self.renderer_output_dependencies
+            .add_same_stream(predecessor);
     }
 
     pub(crate) fn renderer_output_predecessor_mut(
         &mut self,
     ) -> &mut Option<moli_core::RendererOutputFence> {
-        &mut self.renderer_output_predecessor
+        self.renderer_output_dependencies.single_stream_mut()
     }
 
     #[doc(hidden)]
     pub fn take_renderer_output_predecessor(&mut self) -> Option<moli_core::RendererOutputFence> {
-        self.renderer_output_predecessor.take()
+        self.take_renderer_output_dependencies()
+            .into_single_stream()
+    }
+
+    /// Browser/Target commands explicitly compose independently owned renderer
+    /// streams without moving their response out of the command lifecycle.
+    pub(crate) fn add_renderer_output_dependency(&mut self, fence: moli_core::RendererOutputFence) {
+        self.renderer_output_dependencies.add(fence);
+    }
+
+    pub(crate) fn extend_renderer_output_dependencies(
+        &mut self,
+        dependencies: RendererOutputDependencies,
+    ) {
+        self.renderer_output_dependencies.merge(dependencies);
+    }
+
+    #[doc(hidden)]
+    pub fn take_renderer_output_dependencies(&mut self) -> RendererOutputDependencies {
+        std::mem::take(&mut self.renderer_output_dependencies)
     }
 }
 

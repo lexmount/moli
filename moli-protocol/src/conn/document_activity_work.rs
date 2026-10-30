@@ -22,6 +22,6 @@ impl CdpConnection {
             Err(error) => tracing::debug!(%error, "document activity owner update ended"),
         }
         CdpTurnOutcome::new_with_protocol_events(Vec::new(), self.take_scheduler_events())
-            .with_renderer_output_predecessor(context.take_renderer_output_predecessor())
+            .with_renderer_output_dependencies(context.take_renderer_output_dependencies())
     }
 }

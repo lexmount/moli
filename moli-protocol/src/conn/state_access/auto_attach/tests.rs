@@ -469,7 +469,7 @@ async fn auto_attach_multi_context_sweep_keeps_page_streams_independent() {
     };
     let (events, _, predecessor) = outcome.into_protocol_event_parts();
     assert!(
-        predecessor.is_none(),
+        predecessor.is_empty(),
         "a Browser policy ACK cannot join independent Page tails"
     );
     let messages = events

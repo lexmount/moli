@@ -24,14 +24,14 @@ use moli_cookie_jar::{
 
 #[cfg(test)]
 use crate::conn::build_command_success_response;
-use crate::conn::{BackgroundProtocolEvent, build_event};
+use crate::conn::{BackgroundProtocolEvent, RendererOutputDependencies, build_event};
 use crate::domains::observable_output::log_entry_event;
 
 #[derive(Debug, Default)]
 pub(crate) struct CommandOutputPlan {
     outputs: Vec<CommandOutput>,
     post_response_events: Vec<BackgroundProtocolEvent>,
-    renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
+    renderer_output_dependencies: RendererOutputDependencies,
     renderer_output_boundary: Option<Box<RendererOutputBoundary>>,
 }
 
@@ -161,7 +161,7 @@ impl CommandOutputPlan {
         let CommandOutputPlan {
             outputs,
             post_response_events,
-            renderer_output_predecessor,
+            renderer_output_dependencies,
             renderer_output_boundary,
         } = other;
         if let Some(boundary) = renderer_output_boundary {
@@ -178,9 +178,8 @@ impl CommandOutputPlan {
         }
         self.outputs.extend(outputs);
         self.post_response_events.extend(post_response_events);
-        if let Some(predecessor) = renderer_output_predecessor {
-            self.set_renderer_output_predecessor(predecessor);
-        }
+        self.renderer_output_dependencies
+            .merge(renderer_output_dependencies);
     }
 
     /// Converts a successfully completed nested command into the side effects
@@ -207,13 +206,26 @@ impl CommandOutputPlan {
         &mut self,
         predecessor: moli_core::RendererOutputFence,
     ) {
-        predecessor.merge_into_same_stream_tail(&mut self.renderer_output_predecessor);
+        self.renderer_output_dependencies
+            .add_same_stream(predecessor);
     }
 
     pub(crate) fn take_renderer_output_predecessor(
         &mut self,
     ) -> Option<moli_core::RendererOutputFence> {
-        self.renderer_output_predecessor.take()
+        self.take_renderer_output_dependencies()
+            .into_single_stream()
+    }
+
+    pub(crate) fn extend_renderer_output_dependencies(
+        &mut self,
+        dependencies: RendererOutputDependencies,
+    ) {
+        self.renderer_output_dependencies.merge(dependencies);
+    }
+
+    pub(crate) fn take_renderer_output_dependencies(&mut self) -> RendererOutputDependencies {
+        std::mem::take(&mut self.renderer_output_dependencies)
     }
 
     /// Inserts one exact renderer publication at the current protocol-output
@@ -466,7 +478,7 @@ impl CommandOutputPlan {
                 })
                 .collect(),
             post_response_events: self.post_response_events,
-            renderer_output_predecessor: self.renderer_output_predecessor,
+            renderer_output_dependencies: self.renderer_output_dependencies,
             renderer_output_boundary: self.renderer_output_boundary,
         }
     }

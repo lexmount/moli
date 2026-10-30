@@ -705,7 +705,7 @@ async fn intercepted_target_close_retains_cleanup_across_cancelled_and_discarded
             };
             let (events, scheduler, predecessor) = outcome.into_protocol_event_parts();
             assert!(
-                predecessor.is_some(),
+                !predecessor.is_empty(),
                 "the real failed request retains its renderer predecessor"
             );
             let messages: Vec<_> = events

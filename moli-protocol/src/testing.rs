@@ -1477,13 +1477,9 @@ impl TestContext {
                         mut new_scheduler_events,
                         mut renderer_output_predecessor,
                     ) = outcome.into_renderer_owner_turn_parts();
-                    if let Some(command_predecessor) =
-                        command_context.take_renderer_output_predecessor()
-                    {
-                        command_predecessor
-                            .merge_into_same_stream_tail(&mut renderer_output_predecessor);
-                    }
-                    if let Some(predecessor) = renderer_output_predecessor {
+                    renderer_output_predecessor
+                        .merge(command_context.take_renderer_output_dependencies());
+                    for predecessor in renderer_output_predecessor {
                         Box::pin(
                             self.route_renderer_output_predecessor_before_command_response(
                                 predecessor,
@@ -1718,7 +1714,7 @@ impl TestContext {
             before, post, scheduler,
         )
         .with_renderer_output_boundary(boundary, after)
-        .with_renderer_output_predecessor(predecessor);
+        .with_renderer_output_dependencies(predecessor);
         let (messages, scheduler) = self.route_completed_command_outcome_for_test(output).await;
         self.sent.extend(messages);
         self.route_direct_command_output_for_test(Vec::new(), scheduler)
@@ -1746,7 +1742,7 @@ impl TestContext {
             scheduler_events,
             renderer_output_predecessor,
         ) = outcome.into_renderer_owner_turn_parts();
-        if let Some(predecessor) = renderer_output_predecessor {
+        for predecessor in renderer_output_predecessor {
             Box::pin(self.route_renderer_output_predecessor_before_command_response(predecessor))
                 .await;
         }
@@ -2013,7 +2009,7 @@ impl TestContext {
             renderer_output_predecessor,
         ) = outcome.into_renderer_owner_turn_parts();
         assert!(
-            renderer_output_predecessor.is_none(),
+            renderer_output_predecessor.is_empty(),
             "background navigation completion must use an insertion boundary"
         );
         if !completion_prefix.is_empty() {

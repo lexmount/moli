@@ -98,6 +98,7 @@ impl AutomationCommandDispatchOutcome {
 
     /// Commands with an independent renderer boundary must consume the typed
     /// owner turn to preserve the insertion point between their output pieces.
+    /// Composite renderer dependencies likewise require `into_result_and_owner_turn`.
     #[track_caller]
     pub fn into_complete_parts(
         self,
@@ -115,7 +116,12 @@ impl AutomationCommandDispatchOutcome {
         );
         assert!(after.is_empty());
         before.extend(post);
-        (self.result, scheduler, before, predecessor)
+        (
+            self.result,
+            scheduler,
+            before,
+            predecessor.into_single_stream(),
+        )
     }
 }
 
