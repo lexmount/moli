@@ -112,3 +112,5 @@ mod node_native_aliases;
 mod range_bindings;
 
 mod window_focus;
+
+mod web_transport_error_values;
