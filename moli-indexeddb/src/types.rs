@@ -77,6 +77,14 @@ pub enum TransactionMode {
     VersionChange,
 }
 
+/// Effective SQLite commit synchronization, resolved before a writer starts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TransactionDurability {
+    Strict,
+    #[default]
+    Relaxed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectStoreInfo {
     pub name: crate::IndexedDbName,

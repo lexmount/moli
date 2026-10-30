@@ -186,6 +186,7 @@ fn seed_indexed_db_usage(
     execute_indexed_db_command(
         &client,
         Command::Begin {
+            durability: moli_indexeddb::TransactionDurability::default(),
             transaction,
             mode: moli_indexeddb::TransactionMode::VersionChange,
             stores: Default::default(),

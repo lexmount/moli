@@ -160,6 +160,7 @@ impl Backend {
             .unwrap();
         assert!(admission.handle().is_ready());
         self.execute(Command::Begin {
+            durability: moli_indexeddb::TransactionDurability::default(),
             transaction,
             mode: TransactionMode::ReadWrite,
             stores: stores.into_iter().collect(),
@@ -307,6 +308,7 @@ fn transaction<'s>(
         Some(TX),
         TransactionMode::ReadWrite,
         started,
+        IdbTransactionDurability::Default,
     );
     let id = indexed_db_typed_state_id(scope, transaction).unwrap();
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);

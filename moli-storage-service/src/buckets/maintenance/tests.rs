@@ -103,6 +103,7 @@ impl Fixture {
         receive(&receiver).result.unwrap();
         for command in [
             Command::Begin {
+                durability: moli_indexeddb::TransactionDurability::default(),
                 transaction: TX,
                 mode: TransactionMode::VersionChange,
                 stores: BTreeSet::new(),

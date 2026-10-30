@@ -11,6 +11,7 @@ mod backend;
 mod core;
 mod cursor;
 mod database;
+mod durability;
 mod event_target;
 mod install;
 mod operation_state;
@@ -81,6 +82,7 @@ pub(crate) fn create_sql_upgrade_for_test<'s>(
         database,
         Some(handle),
         TransactionMode::VersionChange,
+        IdbTransactionDurability::Default,
         &names,
     )?;
     typed_state::sql::configure_sql_transaction(scope, transaction, client, handle).ok()?;
@@ -118,6 +120,7 @@ use self::backend::*;
 use self::core::*;
 use self::cursor::*;
 use self::database::*;
+use self::durability::*;
 pub(crate) use self::event_target::dispatch_indexed_db_event_callback;
 use self::event_target::*;
 use self::operation_state::*;
@@ -344,4 +347,12 @@ fn set_indexed_db_internal_name_property(
         return;
     };
     let _ = object.define_own_property(scope, key.into(), value, v8::PropertyAttribute::NONE);
+}
+
+#[cfg(test)]
+pub(crate) fn indexed_db_transaction_durability_for_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> Result<moli_indexeddb::TransactionDurability, IndexedDbError> {
+    transaction_durability_for_begin(scope, transaction)
 }

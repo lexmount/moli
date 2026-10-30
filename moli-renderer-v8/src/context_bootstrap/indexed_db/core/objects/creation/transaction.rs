@@ -61,6 +61,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
     db: v8::Local<'s, v8::Object>,
     handle: Option<TransactionHandle>,
     mode: TransactionMode,
+    durability: crate::context_bootstrap::indexed_db::IdbTransactionDurability,
     store_names: &[moli_indexeddb::IndexedDbName],
 ) -> Option<v8::Local<'s, v8::Object>> {
     let mode_label: &'static str = mode.into();
@@ -78,6 +79,14 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
         owner,
         storage_scope,
     );
-    register_indexed_db_transaction_lifecycle(scope, tx, db, handle, mode, handle.is_some());
+    register_indexed_db_transaction_lifecycle(
+        scope,
+        tx,
+        db,
+        handle,
+        mode,
+        handle.is_some(),
+        durability,
+    );
     Some(tx)
 }

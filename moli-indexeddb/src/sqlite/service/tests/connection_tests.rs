@@ -100,6 +100,7 @@ fn start(
     execute(
         connection.client(),
         Command::Begin {
+            durability: crate::TransactionDurability::default(),
             transaction,
             mode: request.handle().mode(),
             stores: request.handle().store_names().into_iter().collect(),

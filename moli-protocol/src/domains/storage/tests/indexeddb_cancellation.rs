@@ -48,6 +48,7 @@ async fn storage_clear_finishes_window_and_worker_admissions_and_closes_idle_con
         execute_indexed_db_command(
             &client,
             moli_indexeddb::sqlite::service::Command::Begin {
+                durability: moli_indexeddb::TransactionDurability::default(),
                 transaction: backend,
                 mode: moli_indexeddb::TransactionMode::ReadWrite,
                 stores: std::collections::BTreeSet::from(["items".into()]),

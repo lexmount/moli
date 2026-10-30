@@ -76,6 +76,7 @@ fn crash_child(root: PathBuf, case: &str) {
                 execute(
                     &client,
                     Command::Begin {
+                        durability: crate::TransactionDurability::default(),
                         transaction: TX,
                         mode: TransactionMode::VersionChange,
                         stores: BTreeSet::new(),

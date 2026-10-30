@@ -12,6 +12,7 @@ async fn idb_sqlite_small_write_shares_large_schema() {
     let backend = SqlBackend::with_config(config, &mut vm);
     let transaction = backend.client.allocate_transaction_handle().unwrap();
     backend.execute(Command::Begin {
+        durability: moli_indexeddb::TransactionDurability::default(),
         transaction,
         mode: TransactionMode::VersionChange,
         stores: BTreeSet::new(),

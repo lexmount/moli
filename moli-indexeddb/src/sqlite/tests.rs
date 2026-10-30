@@ -1,4 +1,5 @@
 mod database_names;
+mod durability;
 mod query_pages;
 mod schema_names;
 mod schema_rename;

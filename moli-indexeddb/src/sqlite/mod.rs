@@ -23,7 +23,8 @@ use std::{
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::{
-    IndexOptions, IndexedDbError, Key, ObjectStoreOptions, TransactionHandle, TransactionMode,
+    IndexOptions, IndexedDbError, Key, ObjectStoreOptions, TransactionDurability,
+    TransactionHandle, TransactionMode,
 };
 
 pub use query::{Query, QuerySource, RecordPage, Seek};
@@ -273,6 +274,25 @@ impl Database {
         stores: BTreeSet<crate::IndexedDbName>,
         upgrade_version: Option<u64>,
     ) -> Result<(), IndexedDbError> {
+        self.begin_with_durability(
+            handle,
+            mode,
+            stores,
+            upgrade_version,
+            TransactionDurability::default(),
+        )
+    }
+
+    /// Select synchronization only after validation and before BEGIN. A reader
+    /// shares this connection with a disjoint writer and must not alter it.
+    pub fn begin_with_durability(
+        &mut self,
+        handle: TransactionHandle,
+        mode: TransactionMode,
+        stores: BTreeSet<crate::IndexedDbName>,
+        upgrade_version: Option<u64>,
+        durability: TransactionDurability,
+    ) -> Result<(), IndexedDbError> {
         if self.active.is_none() && !self.connection.is_autocommit() {
             return Err(IndexedDbError::InvalidState(
                 "unowned SQL transaction".into(),
@@ -336,6 +356,12 @@ impl Database {
             [],
             |row| row.get(0),
         )?;
+        let synchronous = match durability {
+            TransactionDurability::Strict => "FULL",
+            TransactionDurability::Relaxed => "NORMAL",
+        };
+        self.connection
+            .pragma_update(None, "synchronous", synchronous)?;
         self.connection.execute_batch("BEGIN IMMEDIATE")?;
         if let Some(version) = version
             && let Err(error) = self.connection.execute(

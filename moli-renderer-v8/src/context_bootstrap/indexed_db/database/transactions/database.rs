@@ -25,6 +25,15 @@ struct IdbDatabaseTransactionArgs {
     store_names: names::TransactionStoreNames,
     #[webidl(converter = "enum", default = TransactionModeWebIdl::Readonly)]
     mode: TransactionModeWebIdl,
+    #[webidl(index = 2, dictionary)]
+    options: IdbTransactionOptions,
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "IDBTransactionOptions")]
+struct IdbTransactionOptions {
+    #[webidl(converter = "enum", default = crate::context_bootstrap::indexed_db::IdbTransactionDurability::Default)]
+    durability: crate::context_bootstrap::indexed_db::IdbTransactionDurability,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_database_transaction_callback<'s>(
@@ -108,7 +117,14 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_transaction_callbac
     };
     let result = {
         let scope = &mut v8::ContextScope::new(scope, context);
-        create_regular_transaction(scope, database, handle, &store_names, mode)
+        create_regular_transaction(
+            scope,
+            database,
+            handle,
+            &store_names,
+            mode,
+            parsed.options.durability,
+        )
     };
     match result {
         Ok(Some(transaction)) => rv.set(transaction.into()),
@@ -126,6 +142,7 @@ fn create_regular_transaction<'s>(
     handle: DatabaseHandle,
     store_names: &[moli_indexeddb::IndexedDbName],
     mode: TransactionMode,
+    durability: crate::context_bootstrap::indexed_db::IdbTransactionDurability,
 ) -> Result<Option<v8::Local<'s, v8::Object>>, IndexedDbError> {
     // Objects and task queues belong to the connection's realm even when the
     // operation was borrowed from another Window. Conversion and exceptions
@@ -146,7 +163,8 @@ fn create_regular_transaction<'s>(
     } else {
         client.queue_transaction_start(handle, store_names, mode, wake)?
     };
-    let Some(transaction) = create_transaction_object(scope, database, None, mode, store_names)
+    let Some(transaction) =
+        create_transaction_object(scope, database, None, mode, durability, store_names)
     else {
         return Ok(None);
     };
