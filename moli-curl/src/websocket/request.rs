@@ -74,7 +74,7 @@ pub(super) fn configure(request: &CurlWebSocketRequest) -> Result<Easy2<Handshak
     }
     let mut easy = Easy2::new(Handshake::default());
     easy.url(&request.url)?;
-    easy.http_version(HttpVersion::V11)?;
+    easy.http_version(HttpVersion::V2TLS)?;
     easy.follow_location(false)?;
     easy.signal(false)?;
     easy.ws_connect_only(true)?;

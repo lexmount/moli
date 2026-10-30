@@ -25,6 +25,10 @@
  ***************************************************************************/
 #include "curl_setup.h"
 
+int curl_easy_moli_websocket_pending(CURL *easy);
+CURLcode curl_easy_moli_websocket_poll(CURL *easy, curl_socket_t socket,
+                                      int wanted, int *events);
+
 #if !defined(CURL_DISABLE_WEBSOCKETS) && !defined(CURL_DISABLE_HTTP)
 
 extern const struct Curl_protocol Curl_protocol_ws;

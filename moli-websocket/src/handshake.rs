@@ -20,17 +20,23 @@ pub(crate) fn parse_handshake_response(raw_headers: &[u8]) -> Result<HandshakeRe
         .map_err(|error| format!("WebSocket handshake status is not ASCII: {error}"))?;
     let mut status_parts = status_line.splitn(3, ' ');
     let version = status_parts.next().unwrap_or_default();
-    if version != "HTTP/1.1" && version != "HTTP/1.0" {
-        return Err(format!(
-            "WebSocket handshake response has unsupported HTTP version `{version}`"
-        ));
-    }
+    let version = match version {
+        "HTTP/1.0" => http::Version::HTTP_10,
+        "HTTP/1.1" => http::Version::HTTP_11,
+        "HTTP/2" => http::Version::HTTP_2,
+        _ => {
+            return Err(format!(
+                "WebSocket handshake response has unsupported HTTP version `{version}`"
+            ));
+        }
+    };
     let status = status_parts
         .next()
         .ok_or_else(|| "WebSocket handshake response is missing status code".to_owned())?
         .parse::<u16>()
         .map_err(|error| format!("WebSocket handshake response has invalid status: {error}"))?;
     let mut response = HandshakeResponse::new(());
+    *response.version_mut() = version;
     *response.status_mut() = http::StatusCode::from_u16(status)
         .map_err(|error| format!("WebSocket handshake response has invalid status: {error}"))?;
 
@@ -61,39 +67,52 @@ pub(crate) fn validate_handshake_response(
     request: &http::HeaderMap,
     response: &HandshakeResponse,
 ) -> Result<(), String> {
-    if response.status() != http::StatusCode::SWITCHING_PROTOCOLS {
-        return Err(format!(
-            "WebSocket server returned HTTP status {}",
-            response.status()
-        ));
-    }
-    if !header_values_contain_token(response.headers(), http::header::UPGRADE, "websocket") {
-        return Err("WebSocket handshake response is missing `Upgrade: websocket`".to_owned());
-    }
-    if !header_values_contain_token(response.headers(), http::header::CONNECTION, "upgrade") {
-        return Err("WebSocket handshake response is missing `Connection: Upgrade`".to_owned());
-    }
-    let key = request
-        .get(http::header::SEC_WEBSOCKET_KEY)
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| "WebSocket request is missing Sec-WebSocket-Key".to_owned())?;
-    let expected_accept = derive_accept_key(key.as_bytes());
-    let accept = response
-        .headers()
-        .get(http::header::SEC_WEBSOCKET_ACCEPT)
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| "WebSocket handshake response is missing Sec-WebSocket-Accept".to_owned())?;
-    if accept.trim() != expected_accept {
-        return Err("WebSocket handshake response has invalid Sec-WebSocket-Accept".to_owned());
-    }
-    if response
-        .headers()
-        .get_all(http::header::SEC_WEBSOCKET_ACCEPT)
-        .iter()
-        .count()
-        != 1
-    {
-        return Err("WebSocket server returned multiple Sec-WebSocket-Accept values".to_owned());
+    if response.version() == http::Version::HTTP_2 {
+        if response.status() != http::StatusCode::OK {
+            return Err(format!(
+                "WebSocket server returned HTTP status {}",
+                response.status()
+            ));
+        }
+    } else {
+        if response.status() != http::StatusCode::SWITCHING_PROTOCOLS {
+            return Err(format!(
+                "WebSocket server returned HTTP status {}",
+                response.status()
+            ));
+        }
+        if !header_values_contain_token(response.headers(), http::header::UPGRADE, "websocket") {
+            return Err("WebSocket handshake response is missing `Upgrade: websocket`".to_owned());
+        }
+        if !header_values_contain_token(response.headers(), http::header::CONNECTION, "upgrade") {
+            return Err("WebSocket handshake response is missing `Connection: Upgrade`".to_owned());
+        }
+        let key = request
+            .get(http::header::SEC_WEBSOCKET_KEY)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| "WebSocket request is missing Sec-WebSocket-Key".to_owned())?;
+        let expected_accept = derive_accept_key(key.as_bytes());
+        let accept = response
+            .headers()
+            .get(http::header::SEC_WEBSOCKET_ACCEPT)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| {
+                "WebSocket handshake response is missing Sec-WebSocket-Accept".to_owned()
+            })?;
+        if accept.trim() != expected_accept {
+            return Err("WebSocket handshake response has invalid Sec-WebSocket-Accept".to_owned());
+        }
+        if response
+            .headers()
+            .get_all(http::header::SEC_WEBSOCKET_ACCEPT)
+            .iter()
+            .count()
+            != 1
+        {
+            return Err(
+                "WebSocket server returned multiple Sec-WebSocket-Accept values".to_owned(),
+            );
+        }
     }
     if response
         .headers()
@@ -173,4 +192,40 @@ fn requested_subprotocols(request: &http::HeaderMap) -> Result<Vec<String>, Stri
         );
     }
     Ok(protocols)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http2_requires_200_and_preserves_subprotocol_and_extension_checks() {
+        let mut request = http::HeaderMap::new();
+        request.insert(
+            http::header::SEC_WEBSOCKET_PROTOCOL,
+            "alpha, beta".parse().unwrap(),
+        );
+        let accepted =
+            parse_handshake_response(b"HTTP/2 200\r\nsec-websocket-protocol: beta\r\n\r\n")
+                .unwrap();
+        assert_eq!(accepted.version(), http::Version::HTTP_2);
+        assert!(validate_handshake_response(&request, &accepted).is_ok());
+        for status in [101, 201, 204, 302, 401] {
+            let rejected =
+                parse_handshake_response(format!("HTTP/2 {status}\r\n\r\n").as_bytes()).unwrap();
+            assert!(validate_handshake_response(&request, &rejected).is_err());
+        }
+        for header in [
+            "sec-websocket-protocol: gamma",
+            "sec-websocket-protocol: alpha, beta",
+            "sec-websocket-extensions: permessage-deflate",
+        ] {
+            let rejected =
+                parse_handshake_response(format!("HTTP/2 200\r\n{header}\r\n\r\n").as_bytes())
+                    .unwrap();
+            assert!(validate_handshake_response(&request, &rejected).is_err());
+        }
+        let http1 = parse_handshake_response(b"HTTP/1.1 200 OK\r\n\r\n").unwrap();
+        assert!(validate_handshake_response(&request, &http1).is_err());
+    }
 }
