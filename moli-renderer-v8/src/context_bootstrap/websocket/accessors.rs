@@ -30,7 +30,7 @@ const WEBSOCKET_EVENT_HANDLERS: &[WebSocketEventHandler] = &[
 ];
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WebSocket)]
+#[webapi(interface = web_api_interfaces::WebSocket, receiver)]
 struct WebSocketEventHandlerAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -244,9 +244,7 @@ fn websocket_event_handler_getter_function<'s>(
         rv.set_null();
         return;
     };
-    let target = args.this();
-    let value = get_private_value(scope, target, handler.slot_name)
-        .or_else(|| target.get(scope, v8str(scope, handler.slot_name).into()))
+    let value = super::helpers::websocket_value_slot(scope, args.this(), handler.slot_name)
         .unwrap_or_else(|| v8::null(scope).into());
     if value.is_null_or_undefined() {
         rv.set_null();
@@ -268,9 +266,12 @@ fn websocket_event_handler_setter_function<'s>(
     ) else {
         return;
     };
+    let Some(target) = moli_webapi_declare::web_api_object_target(scope, args.this()) else {
+        return;
+    };
     simple_object_event_set_handler(
         scope,
-        args.this(),
+        target,
         handler.event_type,
         handler.slot_name,
         args.get(0),

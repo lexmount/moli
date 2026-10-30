@@ -14,7 +14,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WebSocket, enumerable)]
+#[webapi(interface = web_api_interfaces::WebSocket, enumerable, receiver)]
 struct WebSocketTemplateMethodsDeclaration {
     #[webapi(constant = "CONNECTING", value = CONNECTING)]
     connecting: (),
@@ -43,7 +43,11 @@ struct WebSocketStreamTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WebSocket)]
+#[webapi(
+    interface = web_api_interfaces::WebSocket,
+    receiver,
+    prototype_to_string_tag = "WebSocket"
+)]
 struct WebSocketPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = websocket_url_getter_function, enumerable)]
     url: (),
@@ -70,13 +74,6 @@ struct WebSocketPrototypeAccessorsDeclaration {
         enumerable
     )]
     binary_type: (),
-
-    #[webapi(
-        accessor_property,
-        symbol = "toStringTag",
-        getter = websocket_to_string_tag_getter
-    )]
-    to_string_tag: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -108,21 +105,4 @@ pub(in crate::context_bootstrap) fn install_websocket_stream_bindings(
     let prototype = template.prototype_template(scope);
     WebSocketStreamTemplateMethodsDeclaration::initialize_prototype_template(scope, prototype);
     WebSocketStreamPrototypeAccessorsDeclaration::initialize_prototype_template(scope, prototype);
-}
-
-fn websocket_to_string_tag_getter(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(prototype) = global_constructor_prototype(scope, "WebSocket") else {
-        rv.set(v8str(scope, "WebSocket").into());
-        return;
-    };
-    let tag = if args.this().strict_equals(prototype.into()) {
-        "WebSocketPrototype"
-    } else {
-        "WebSocket"
-    };
-    rv.set(v8str(scope, tag).into());
 }
