@@ -124,7 +124,7 @@ fn metadata_candidates_preserve_cache_payloads_and_handle_identity_without_cloni
         .get_mut(&StorageBucketCacheName::from("assets"))
         .unwrap()
         .push(StorageBucketCacheEntry {
-            request_url: "resource".into(),
+            request_url: "https://a.test/resource".into(),
             usage_bytes: 1_048_576,
             request: StorageBucketCachedRequest::default(),
             response: StorageBucketCachedResponse {

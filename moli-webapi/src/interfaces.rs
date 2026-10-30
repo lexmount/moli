@@ -30,8 +30,10 @@ interfaces! {
     Lock;
     LockManager;
     MIDIAccess: EventTarget;
+    MIDIConnectionEvent: Event;
     MIDIInput: MIDIPort;
     MIDIInputMap;
+    MIDIMessageEvent: Event;
     MIDIOutput: MIDIPort;
     MIDIOutputMap;
     MIDIPort: EventTarget;
@@ -152,8 +154,6 @@ interfaces! {
     ConvolverNode: AudioNode;
     Blob;
     BlobEvent: Event;
-    MIDIConnectionEvent: Event;
-    MIDIMessageEvent: Event;
     BroadcastChannel: EventTarget;
     ByteLengthQueuingStrategy;
     CDATASection: Text;

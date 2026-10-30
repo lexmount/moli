@@ -406,7 +406,12 @@ pub(crate) fn perform_drop_default_action<'s>(
     }
 
     if let Some(focus_handle) = focus_handle {
-        update_focus_preserving_selection(scope, runtime_ptr, Some(focus_handle));
+        if editing_host.is_some() {
+            // Keep the drop's selection when its editing host gains focus.
+            update_focus_preserving_selection(scope, runtime_ptr, Some(focus_handle));
+        } else {
+            update_focus(scope, runtime_ptr, Some(focus_handle));
+        }
     }
 
     if is_file_input {

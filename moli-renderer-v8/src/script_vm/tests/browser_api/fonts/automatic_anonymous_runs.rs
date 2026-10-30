@@ -3,7 +3,7 @@ use super::selection_order::order_font_data;
 use super::*;
 
 fn assert_anonymous_space_demand(display: &str, whitespace: &str, setup: &str, expected: &str) {
-    let mut vm = font_usage_vm();
+    let (mut vm, mut completions) = font_usage_vm();
     let (_, wide) = order_font_data();
     vm.eval(&format!(r#"
         globalThis.face = new FontFace('AnonymousFace', 'url(data:font/ttf;base64,{wide})', {{unicodeRange:'U+0020'}});
@@ -17,8 +17,8 @@ fn assert_anonymous_space_demand(display: &str, whitespace: &str, setup: &str, e
         document.body.replaceChildren(container);
         {setup}
     "#)).unwrap();
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
-    run_font_tasks(&mut vm);
+    vm.reconcile_document_font_resources();
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(
         vm.eval("face.status").unwrap(),
         expected,
@@ -26,7 +26,7 @@ fn assert_anonymous_space_demand(display: &str, whitespace: &str, setup: &str, e
     );
     vm.eval("document.fonts.ready.then(() => globalThis.ready = true)")
         .unwrap();
-    run_font_tasks(&mut vm);
+    complete_local_font_resources(&mut vm, &mut completions);
     assert_eq!(vm.eval("globalThis.ready === true").unwrap(), "true");
     assert_eq!(vm.eval("face.status").unwrap(), expected);
     if expected == "unloaded" {
@@ -201,7 +201,7 @@ fn font_usage_matches_retained_anonymous_item_text() {
             (" A ", " A", " A"),
             (" \u{00a0} ", " \u{00a0}", " \u{00a0}"),
         ] {
-            let mut vm = font_usage_vm();
+            let (mut vm, _completions) = font_usage_vm();
             let markup = serde_json::to_string(markup).unwrap();
             vm.eval(&format!(r#"
                 document.body.innerHTML = '<div id="container"></div>';

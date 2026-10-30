@@ -62,9 +62,9 @@ impl DomHost {
         source: &mut Self,
         root: DomHandle,
     ) -> Result<DomSubtreeTransfer, DomSubtreeTransferError> {
-        if !self.node(document).is_some_and(Node::is_document) {
+        let Some(target_document) = self.node(document).and_then(Node::as_document) else {
             return Err(DomSubtreeTransferError::InvalidTargetDocument(document));
-        }
+        };
         let plan = source.preflight_subtree_transfer(root)?;
         let needs_template_document = plan
             .nodes
@@ -77,12 +77,10 @@ impl DomHost {
             .and_then(|count| {
                 count.checked_add(usize::from(
                     needs_template_document
-                        && !self.node(document).and_then(Node::as_document).is_some_and(
-                            |document| {
-                                document.is_inert_template_document()
-                                    || document.associated_inert_template_document().is_some()
-                            },
-                        ),
+                        && !target_document.is_inert_template_document()
+                        && target_document
+                            .associated_inert_template_document()
+                            .is_none(),
                 ))
             });
         if capacity.is_none_or(|count| count > u32::MAX as usize) {

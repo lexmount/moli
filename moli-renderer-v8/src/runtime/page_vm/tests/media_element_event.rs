@@ -61,6 +61,18 @@ globalThis.emptyMedia = document.createElement({kind:?});
 emptyMedia.defaultMuted = true;
 emptyMedia.muted = false;
 emptyMedia.volume = 0.25;
+"#,
+                ))?;
+                // Finish setup changes before observing loading notifications.
+                while page
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::MediaElementEvent,
+                        &loader,
+                    )
+                    .await?
+                {}
+                page.vm_mut().eval(&format!(
+                    r#"
 for (const type of ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'volumechange']) {{
   emptyMedia.addEventListener(type, () => emptyMediaTrace.push(type));
 }}
