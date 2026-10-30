@@ -145,6 +145,7 @@ impl ChromeCookieRow {
             },
             source_port: self.source_port,
             creation_index: 0,
+            creation_time: None,
             last_access_index: 0,
         }
     }

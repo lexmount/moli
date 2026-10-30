@@ -1,5 +1,7 @@
 use crate::cookie::Cookie;
 use crate::CookieError;
+use cookie::SameSite;
+use time::{Duration, OffsetDateTime};
 
 use super::{BrowserSiteContext, SameSiteContext, SameSiteContextMetadata};
 
@@ -230,6 +232,8 @@ pub enum CookieExclusionReason {
     /// The cookie's explicit `SameSite=Lax` setting excludes it from the
     /// current request context.
     SameSiteLax,
+    /// An omitted SameSite attribute was defaulted to Lax for this request.
+    SameSiteUnspecifiedTreatedAsLax,
     /// A partitioned cookie belongs to a different top-level-site partition.
     PartitionKeyMismatch,
 }
@@ -277,19 +281,36 @@ pub enum CookieWarningReason {
 }
 
 /// Effective SameSite semantics applied to a cookie during access.
-///
-/// This intentionally starts smaller than Chromium's full taxonomy. The fork
-/// only models the explicit SameSite modes it currently enforces so higher
-/// layers can start carrying the result structure before more nuanced
-/// lax-by-default states arrive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CookieEffectiveSameSite {
     /// The cookie is not restricted by SameSite.
     NoRestriction,
     /// The cookie behaves as `SameSite=Lax`.
     Lax,
+    /// A recently-created default cookie also allows unsafe top-level navigation.
+    LaxAllowUnsafe,
     /// The cookie behaves as `SameSite=Strict`.
     Strict,
+}
+
+impl CookieEffectiveSameSite {
+    /// Applies the browser default without changing the stored SameSite attribute.
+    /// The two-minute allowance applies only to cookies without an explicit mode.
+    pub fn for_cookie(
+        same_site: Option<SameSite>,
+        creation_time: Option<OffsetDateTime>,
+        now: OffsetDateTime,
+    ) -> Self {
+        match same_site {
+            Some(SameSite::None) => Self::NoRestriction,
+            Some(SameSite::Lax) => Self::Lax,
+            Some(SameSite::Strict) => Self::Strict,
+            None if creation_time.is_some_and(|created| now - created <= Duration::minutes(2)) => {
+                Self::LaxAllowUnsafe
+            }
+            None => Self::Lax,
+        }
+    }
 }
 
 /// Access semantics applied to a cookie access.

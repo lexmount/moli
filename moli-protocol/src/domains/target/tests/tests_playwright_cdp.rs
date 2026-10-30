@@ -4834,7 +4834,7 @@ async fn playwright_over_cdp_context_cookie_flows_through_redirect_and_subresour
             "cookieReports": [{
                 "status": { "kind": "Accepted", "storeAction": "Inserted" },
                 "rejectionReasons": [],
-                "effectiveSameSite": "NoRestriction",
+                "effectiveSameSite": "LaxAllowUnsafe",
                 "warningReasons": []
             }]
         }),
@@ -5492,7 +5492,7 @@ async fn playwright_over_cdp_inactive_context_seeded_cookies_apply_to_navigation
             "cookieReports": [{
                 "status": { "kind": "Accepted", "storeAction": "Inserted" },
                 "rejectionReasons": [],
-                "effectiveSameSite": "NoRestriction",
+                "effectiveSameSite": "LaxAllowUnsafe",
                 "warningReasons": []
             }]
         }),

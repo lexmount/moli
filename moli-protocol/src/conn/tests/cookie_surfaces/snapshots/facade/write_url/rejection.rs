@@ -79,6 +79,7 @@ fn browser_context_document_cookie_facade_snapshot_keeps_backend_available_after
                 source_scheme: StoredCookieSourceScheme::Unset,
                 source_port: -1,
                 creation_index: 0,
+                creation_time: None,
                 last_access_index: 0,
             })
             .is_none(),
@@ -122,6 +123,7 @@ fn structured_cookie_write_snapshot_projects_any_primary_rejection_reason_into_r
             source_scheme: StoredCookieSourceScheme::Unset,
             source_port: -1,
             creation_index: 0,
+            creation_time: None,
             last_access_index: 0,
         })
         .expect("primary browser-boundary rejection should always produce a report");
