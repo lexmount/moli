@@ -97,7 +97,10 @@ pub(in crate::network_host) struct PreparedBodyBytes {
 
 impl PreparedBodyBytes {
     fn new(bytes: Vec<u8>, content_type: Option<String>) -> Self {
-        Self { bytes: bytes.into(), content_type }
+        Self {
+            bytes: bytes.into(),
+            content_type,
+        }
     }
 }
 

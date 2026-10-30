@@ -155,8 +155,8 @@ use timers::*;
 pub(crate) use xhr::*;
 
 pub(super) use async_tasks::{
-    PendingWorkerWebCryptoTask, WorkerOpfsOwnerState, 
-    drain_worker_opfs_completion, drain_worker_webcrypto_completion,
+    PendingWorkerWebCryptoTask, WorkerOpfsOwnerState, drain_worker_opfs_completion,
+    drain_worker_webcrypto_completion,
 };
 pub(crate) use async_tasks::{
     WorkerOpfsCompletion, WorkerWebCryptoCompletion, cancel_worker_opfs_task,

@@ -164,7 +164,8 @@ pub(crate) struct WorkerGlobalState {
     /// Worker WebCrypto task id counter (never zero so 0 can mean "unset").
     pub(in crate::worker) next_webcrypto_task_id: u64,
     pub(in crate::worker) next_file_reading_id: u64,
-    pub(in crate::worker) pending_file_reading_tasks: HashMap<u64, crate::context_bootstrap::FileReadingTask>,
+    pub(in crate::worker) pending_file_reading_tasks:
+        HashMap<u64, crate::context_bootstrap::FileReadingTask>,
     pub(in crate::worker) ready_file_reading_tasks:
         Arc<parking_lot::Mutex<std::collections::VecDeque<u64>>>,
     pub(in crate::worker) file_reading_wake: mpsc::UnboundedSender<()>,
