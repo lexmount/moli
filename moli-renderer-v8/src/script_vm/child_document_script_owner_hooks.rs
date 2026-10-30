@@ -299,21 +299,6 @@ impl<'vm> ChildDocumentScriptOwnerHooks<'vm> {
         let attempted_script_job = action.attempted_script_job();
         let failed_script_job = action.failed_script_job();
         match action.completion() {
-            FrameDocumentJavascriptUrlCompletion::FailedScriptJob => {
-                let target = action.target();
-                self.vm
-                    ._context_host
-                    .borrow_mut()
-                    .finish_child_javascript_url_without_string_completion(target, false);
-                return FrameDocumentJavascriptUrlPostExecutionApplication {
-                    attempted_script_job,
-                    failed_script_job,
-                    string_completion_committed: false,
-                    lifecycle_followup_queued: false,
-                    initial_classic_ready_work: None,
-                    owner_transition: None,
-                };
-            }
             FrameDocumentJavascriptUrlCompletion::String(markup) => {
                 let target = action.target();
                 let url = action.url().clone();
@@ -350,7 +335,8 @@ impl<'vm> ChildDocumentScriptOwnerHooks<'vm> {
                 }
                 return application;
             }
-            FrameDocumentJavascriptUrlCompletion::NonString => {}
+            FrameDocumentJavascriptUrlCompletion::NonString
+            | FrameDocumentJavascriptUrlCompletion::FailedScriptJob => {}
         }
         let lifecycle_followup_queued = self
             .vm
