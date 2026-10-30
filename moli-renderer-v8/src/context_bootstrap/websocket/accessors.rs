@@ -166,13 +166,9 @@ pub(super) fn websocket_binary_type_setter_function<'s>(
             return;
         }
     };
+    // Enum attribute setters ignore unknown tokens after DOMString conversion.
+    // Observable conversion errors still propagate above.
     let Ok(binary_type) = WebSocketBinaryType::from_str(&value) else {
-        super::helpers::throw_websocket_dom_exception(
-            scope,
-            "SyntaxError",
-            12,
-            "Failed to set 'binaryType' on 'WebSocket': The provided value is not a valid enum value of type BinaryType.",
-        );
         return;
     };
 

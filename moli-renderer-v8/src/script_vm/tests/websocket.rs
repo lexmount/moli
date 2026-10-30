@@ -1470,22 +1470,12 @@ fn websocket_wpt_target_binary_type_accessor_surface() {
             if (socket.binaryType !== 'arraybuffer') {
                 throw new Error('binaryType should accept arraybuffer');
             }
-            let invalidDidThrow = (() => {
-                try {
-                    socket.binaryType = 'notBlobOrArrayBuffer';
-                    return false;
-                } catch (error) {
-                    if (error?.name !== 'SyntaxError') {
-                        throw error;
-                    }
-                    return true;
+            for (const value of ['notBlobOrArrayBuffer', 'ArrayBuffer', '', undefined,
+                                 null, false, 7, 7n, '\ud800']) {
+                socket.binaryType = value;
+                if (socket.binaryType !== 'arraybuffer') {
+                    throw new Error('invalid binaryType assignments should preserve the previous value');
                 }
-            })();
-            if (!invalidDidThrow) {
-                throw new Error('invalid binaryType assignments should throw SyntaxError');
-            }
-            if (socket.binaryType !== 'arraybuffer') {
-                throw new Error('invalid binaryType assignments should preserve the previous value');
             }
             Object.defineProperty(WebSocket.prototype, 'binaryType', {
                 configurable: true,
@@ -1508,7 +1498,53 @@ fn websocket_wpt_target_binary_type_accessor_surface() {
         })()
         "#,
     )
-    .expect("target WebSocket binaryType accessor surface test should pass once implemented");
+    .expect("WebSocket binaryType descriptors, enum values, and overrides should evaluate");
+}
+
+#[test]
+fn websocket_binary_type_conversion_preserves_reentry_and_errors() {
+    let mut vm = new_storage_test_vm("https://websocket-binary-type.test/");
+    let result = vm.eval(
+        r#"
+        (() => {
+            function check(value, message) { if (!value) throw new Error(message); }
+            const socket = new WebSocket('wss://example.test/socket');
+            socket.binaryType = 'arraybuffer';
+            const calls = [];
+            socket.binaryType = {
+                [Symbol.toPrimitive](hint) {
+                    calls.push(hint);
+                    check(socket.binaryType === 'arraybuffer', 'read the current value during conversion');
+                    socket.binaryType = 'blob';
+                    return 'invalid';
+                }
+            };
+            check(calls.join(',') === 'string', 'convert exactly once with a string hint');
+            check(socket.binaryType === 'blob', 'an invalid outer value keeps reentrant mutations');
+            socket.binaryType = {
+                toString() { calls.push('toString'); return 'arraybuffer'; }
+            };
+            check(calls.join(',') === 'string,toString', 'ordinary ToString also runs once');
+            check(socket.binaryType === 'arraybuffer', 'accept a converted enum value');
+            let caught;
+            try { socket.binaryType = Symbol('invalid'); } catch (error) { caught = error; }
+            check(caught instanceof TypeError, 'Symbol conversion must still throw TypeError');
+            check(socket.binaryType === 'arraybuffer', 'Symbol failure preserves the current value');
+            const marker = {};
+            caught = undefined;
+            try { socket.binaryType = {toString() { throw marker; }}; }
+            catch (error) { caught = error; }
+            check(caught === marker, 'propagate the original conversion exception');
+            check(socket.binaryType === 'arraybuffer', 'conversion failure preserves the current value');
+            socket.close();
+            socket.binaryType = 'blob';
+            socket.binaryType = 'invalid';
+            check(socket.binaryType === 'blob', 'enum assignment remains available after close');
+            return 'ok';
+        })()
+        "#,
+    ).expect("WebSocket binaryType should preserve observable conversion semantics");
+    assert_eq!(result, "ok");
 }
 
 #[test]
