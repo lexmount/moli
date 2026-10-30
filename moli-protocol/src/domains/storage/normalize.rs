@@ -55,7 +55,12 @@ pub(super) fn normalize_cookie_param(
     // semantic issues become structured cookie reports instead of aborting the
     // whole batch.
     let same_site = stored_cookie_same_site_from_cdp(param.same_site.as_deref());
-    let effective_same_site = Some(effective_same_site_from_stored_same_site(same_site));
+    let now = time::OffsetDateTime::now_utc();
+    let effective_same_site = Some(StoredCookieEffectiveSameSite::for_cookie(
+        same_site,
+        Some(now),
+        now,
+    ));
     let mut rejection_reasons = Vec::new();
 
     // Blink's Cookie Store API rejects several structured-name/value edge
@@ -188,6 +193,7 @@ pub(super) fn normalize_cookie_param(
             source_scheme,
             source_port,
             creation_index: 0,
+            creation_time: Some(now),
             last_access_index: 0,
         }),
         parsed_url,
@@ -238,18 +244,6 @@ fn rejected_cookie_param_report(
         rejection_reasons,
         warning_reasons: Vec::new(),
         effective_same_site,
-    }
-}
-
-fn effective_same_site_from_stored_same_site(
-    same_site: StoredCookieSameSite,
-) -> StoredCookieEffectiveSameSite {
-    match same_site {
-        StoredCookieSameSite::Strict => StoredCookieEffectiveSameSite::Strict,
-        StoredCookieSameSite::Lax => StoredCookieEffectiveSameSite::Lax,
-        StoredCookieSameSite::None | StoredCookieSameSite::Unspecified => {
-            StoredCookieEffectiveSameSite::NoRestriction
-        }
     }
 }
 

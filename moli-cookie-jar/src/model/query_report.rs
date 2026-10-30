@@ -1,15 +1,35 @@
 //! Request-side cookie access diagnostics.
 
+use time::OffsetDateTime;
 use url::Url;
 
-use super::stored_cookie::StoredCookie;
+use super::stored_cookie::{StoredCookie, StoredCookieSameSite};
 
 /// SameSite value after browser policy has normalized unspecified attributes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoredCookieEffectiveSameSite {
     NoRestriction,
     Lax,
+    LaxAllowUnsafe,
     Strict,
+}
+
+impl StoredCookieEffectiveSameSite {
+    pub fn for_cookie(
+        same_site: StoredCookieSameSite,
+        creation_time: Option<OffsetDateTime>,
+        now: OffsetDateTime,
+    ) -> Self {
+        let same_site = match same_site {
+            StoredCookieSameSite::Unspecified => None,
+            StoredCookieSameSite::None => Some(cookie_store::SameSite::None),
+            StoredCookieSameSite::Lax => Some(cookie_store::SameSite::Lax),
+            StoredCookieSameSite::Strict => Some(cookie_store::SameSite::Strict),
+        };
+        super::core_conversion::stored_effective_same_site_from_core(
+            cookie_store::CookieEffectiveSameSite::for_cookie(same_site, creation_time, now),
+        )
+    }
 }
 
 /// Whether the cookie is evaluated under legacy or modern access semantics.
@@ -123,6 +143,7 @@ pub enum StoredCookieExclusionReason {
     SchemeMismatch,
     SameSiteStrict,
     SameSiteLax,
+    SameSiteUnspecifiedTreatedAsLax,
     PartitionKeyMismatch,
 }
 

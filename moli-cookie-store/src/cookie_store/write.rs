@@ -178,6 +178,12 @@ impl CookieStore {
             return prior_result;
         }
 
+        if preserve_ordering {
+            cookie.restore_creation_time();
+        } else {
+            cookie.initialize_creation_time();
+        }
+
         if cookie.partitioned().unwrap_or(false) && cookie.partition_key().is_none() {
             cookie.set_partition_key(context.browser_context.cookie_partition_key.clone());
         } else if !cookie.partitioned().unwrap_or(false) {
@@ -305,15 +311,15 @@ impl CookieStore {
             let cookie_path = String::from(&cookie.path);
             let cookie_name = cookie.name().to_owned();
             let cookie_key = CookieKey::for_cookie(&cookie);
-            let existing_creation_index = self
+            let existing_creation = self
                 .get_with_partition_key(
                     &cookie_domain,
                     &cookie_path,
                     &cookie_name,
                     cookie.partition_key(),
                 )
-                .map(|existing| existing.creation_index());
-            let replacing_existing = existing_creation_index.is_some();
+                .map(|existing| (existing.creation_index(), existing.creation_time()));
+            let replacing_existing = existing_creation.is_some();
             if !self.make_room_for_cookie(
                 &cookie_domain,
                 cookie.partition_key(),
@@ -330,24 +336,26 @@ impl CookieStore {
                     .next_access_index
                     .max(cookie.last_access_index().saturating_add(1));
             } else {
-                let creation_index = if let Some(creation_index) = existing_creation_index {
-                    creation_index
-                } else {
-                    // Expired tombstones should not count as an in-place replacement. Remove any
-                    // stale entry for this key before inserting so quota checks and store actions
-                    // treat the new cookie as a fresh live entry.
-                    let _ = self.remove_with_partition_key(
-                        &cookie_domain,
-                        &cookie_path,
-                        &cookie_name,
-                        cookie.partition_key(),
-                    );
-                    self.bump_creation_index()
-                };
+                let creation_index =
+                    if let Some((creation_index, creation_time)) = existing_creation {
+                        cookie.set_creation_time(creation_time);
+                        creation_index
+                    } else {
+                        // Expired tombstones should not count as an in-place replacement. Remove any
+                        // stale entry for this key before inserting so quota checks and store actions
+                        // treat the new cookie as a fresh live entry.
+                        let _ = self.remove_with_partition_key(
+                            &cookie_domain,
+                            &cookie_path,
+                            &cookie_name,
+                            cookie.partition_key(),
+                        );
+                        self.bump_creation_index()
+                    };
                 cookie.set_creation_index(creation_index);
                 cookie.touch_with_access_index(self.bump_access_index());
             }
-            let observed = self.observer.is_some().then(|| cookie.clone());
+            let observed = self.observer.is_some().then(|| Box::new(cookie.clone()));
             let replaced = self
                 .cookies
                 .entry(cookie_domain)

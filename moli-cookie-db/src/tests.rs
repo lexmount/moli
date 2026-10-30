@@ -20,6 +20,7 @@ fn cookie(name: &str) -> StoredCookie {
         source_scheme: StoredCookieSourceScheme::Secure,
         source_port: 443,
         creation_index: 0,
+        creation_time: None,
         last_access_index: 0,
     }
 }
@@ -121,6 +122,10 @@ fn complete_metadata_and_unsigned_ordering_indices_survive_reopen() {
     let runtime = Runtime::new().unwrap();
     let (store, owner) = open(root.path(), &runtime);
     let mut row = cookie("metadata");
+    row.creation_time = Some(
+        OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap()
+            + TimeDuration::nanoseconds(123456789),
+    );
     row.http_only = true;
     row.host_only = false;
     row.same_site = StoredCookieSameSite::None;
@@ -366,4 +371,107 @@ fn retrying_a_published_put_with_a_later_delete_does_not_resurrect_the_cookie() 
             .unwrap(),
         0
     );
+}
+
+#[test]
+fn sqlite_cookie_creation_time_preserves_navigation_policy_across_reopen() {
+    use moli_cookie_jar::StoredCookieEffectiveSameSite;
+
+    let root = tempfile::tempdir().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let now = OffsetDateTime::now_utc();
+    let (store, owner) = open(root.path(), &runtime);
+    for (name, created) in [
+        ("recent", Some(now - TimeDuration::seconds(30))),
+        ("old", Some(now - TimeDuration::minutes(3))),
+        ("unknown", None),
+    ] {
+        let mut row = cookie(name);
+        row.creation_time = created;
+        put(&store, row);
+    }
+    owner.close().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    for row in store.lock().unwrap().cookies() {
+        let (created, mode) = match row.name.as_str() {
+            "recent" => (
+                Some(now - TimeDuration::seconds(30)),
+                StoredCookieEffectiveSameSite::LaxAllowUnsafe,
+            ),
+            "old" => (
+                Some(now - TimeDuration::minutes(3)),
+                StoredCookieEffectiveSameSite::Lax,
+            ),
+            "unknown" => (None, StoredCookieEffectiveSameSite::Lax),
+            _ => unreachable!(),
+        };
+        assert_eq!(row.creation_time, created);
+        assert_eq!(row.effective_same_site(), mode);
+    }
+    owner.close().unwrap();
+}
+
+#[test]
+fn version_one_cookie_database_migrates_without_granting_a_new_cookie_age() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("cookies.sqlite");
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection.execute_batch("CREATE TABLE cookies(
+        partition_key BLOB NOT NULL,domain TEXT NOT NULL,path TEXT NOT NULL,name TEXT NOT NULL,value TEXT NOT NULL,
+        host_only INTEGER NOT NULL,secure INTEGER NOT NULL,http_only INTEGER NOT NULL,
+        expires_seconds INTEGER,expires_nanos INTEGER,same_site INTEGER NOT NULL,priority INTEGER,
+        source_scheme INTEGER NOT NULL,source_port INTEGER NOT NULL,creation_index BLOB NOT NULL,last_access_index BLOB NOT NULL,
+        PRIMARY KEY(partition_key,domain,path,name)) WITHOUT ROWID;
+        INSERT INTO cookies VALUES(X'00','cookie.test','/','legacy','keep',1,1,0,NULL,NULL,0,NULL,2,443,X'0000000000000011',X'0000000000000022');
+        PRAGMA user_version=1;").unwrap();
+    connection
+        .pragma_update(None, "application_id", codec::APPLICATION_ID)
+        .unwrap();
+    drop(connection);
+    let runtime = Runtime::new().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    let legacy = store.lock().unwrap().cookies().pop().unwrap();
+    assert_eq!(legacy.value, "keep");
+    assert_eq!(legacy.creation_index, 17);
+    assert_eq!(legacy.last_access_index, 34);
+    assert_eq!(legacy.creation_time, None);
+    assert_eq!(
+        legacy.effective_same_site(),
+        moli_cookie_jar::StoredCookieEffectiveSameSite::Lax
+    );
+    assert_eq!(
+        owner
+            .owner
+            .client()
+            .query(|connection| {
+                Ok(connection
+                    .pragma_query_value::<i32, _>(None, "user_version", |row| row.get(0))?)
+            })
+            .unwrap(),
+        2
+    );
+    let mut replacement = cookie("legacy");
+    replacement.creation_time = Some(OffsetDateTime::now_utc());
+    put(&store, replacement);
+    let mut fresh = cookie("fresh");
+    fresh.creation_time = Some(OffsetDateTime::now_utc());
+    put(&store, fresh.clone());
+    owner.close().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    let rows = store.lock().unwrap().cookies();
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.name == "legacy")
+            .unwrap()
+            .creation_time,
+        None
+    );
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.name == "fresh")
+            .unwrap()
+            .creation_time,
+        fresh.creation_time
+    );
+    owner.close().unwrap();
 }

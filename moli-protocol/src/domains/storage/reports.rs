@@ -302,6 +302,9 @@ fn cookie_exclusion_reason_to_str(reason: &StoredCookieExclusionReason) -> &'sta
         StoredCookieExclusionReason::SchemeMismatch => "SchemeMismatch",
         StoredCookieExclusionReason::SameSiteStrict => "SameSiteStrict",
         StoredCookieExclusionReason::SameSiteLax => "SameSiteLax",
+        StoredCookieExclusionReason::SameSiteUnspecifiedTreatedAsLax => {
+            "SameSiteUnspecifiedTreatedAsLax"
+        }
         StoredCookieExclusionReason::PartitionKeyMismatch => "PartitionKeyMismatch",
     }
 }
@@ -323,6 +326,9 @@ fn cdp_cookie_blocked_reason_to_str(reason: &StoredCookieExclusionReason) -> &'s
         StoredCookieExclusionReason::SchemeMismatch => "SchemeMismatch",
         StoredCookieExclusionReason::SameSiteStrict => "SameSiteStrict",
         StoredCookieExclusionReason::SameSiteLax => "SameSiteLax",
+        StoredCookieExclusionReason::SameSiteUnspecifiedTreatedAsLax => {
+            "SameSiteUnspecifiedTreatedAsLax"
+        }
         StoredCookieExclusionReason::PartitionKeyMismatch => "UnknownError",
     }
 }
@@ -409,6 +415,7 @@ fn cookie_effective_same_site_to_str(same_site: StoredCookieEffectiveSameSite) -
     match same_site {
         StoredCookieEffectiveSameSite::NoRestriction => "NoRestriction",
         StoredCookieEffectiveSameSite::Lax => "Lax",
+        StoredCookieEffectiveSameSite::LaxAllowUnsafe => "LaxAllowUnsafe",
         StoredCookieEffectiveSameSite::Strict => "Strict",
     }
 }

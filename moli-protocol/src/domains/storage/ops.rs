@@ -1158,6 +1158,7 @@ fn cookie_matches_any_url(cookie: &Value, urls: &[Url]) -> bool {
             .and_then(|value| i32::try_from(value).ok())
             .unwrap_or(-1),
         creation_index: 0,
+        creation_time: None,
         last_access_index: 0,
     };
     urls.iter()
