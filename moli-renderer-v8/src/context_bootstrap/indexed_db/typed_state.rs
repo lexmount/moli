@@ -780,6 +780,21 @@ pub(crate) fn indexed_db_request_state_entries_for_test(
             .count()
 }
 
+#[cfg(test)]
+pub(crate) fn indexed_db_transaction_state_entries_for_test(
+    scope: &mut v8::PinScope<'_, '_>,
+    source: v8::Local<'_, v8::Object>,
+) -> usize {
+    let table = indexed_db_runtime_state_table_for_object(scope, source);
+    let table = table.borrow();
+    table.transactions.len()
+        + table
+            .wrappers
+            .values()
+            .filter(|state| matches!(state.kind, IndexedDbWrapperKind::Transaction))
+            .count()
+}
+
 pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
@@ -801,6 +816,7 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     );
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     table.borrow_mut().transactions.insert(id, state);
+    track_collectible_wrapper(scope, transaction, id, &table, ());
     track_indexed_db_handle_table(scope, database, &table);
 }
 

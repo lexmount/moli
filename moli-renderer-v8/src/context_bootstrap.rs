@@ -437,6 +437,7 @@ pub(crate) use self::indexed_db::{
 pub(crate) use self::indexed_db::{
     indexed_db_manager_context_slot_present_for_test,
     indexed_db_manager_isolate_slot_present_for_test, indexed_db_request_state_entries_for_test,
+    indexed_db_transaction_state_entries_for_test,
 };
 pub(in crate::context_bootstrap) use self::indexed_db::{
     indexed_db_usage_bytes_for_storage_key, scoped_storage_bucket_indexed_db_factory,
