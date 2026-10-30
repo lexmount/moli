@@ -506,6 +506,23 @@ impl DomHost {
         }
     }
 
+    /// Whether root is a shadow-including inclusive ancestor of node.
+    pub fn shadow_including_contains(&self, root: DomHandle, node: DomHandle) -> bool {
+        let mut current = node;
+        loop {
+            if current == root {
+                return true;
+            }
+            if let Some(parent) = self.node(current).and_then(Node::parent_node) {
+                current = parent;
+            } else if let Some(host) = self.shadow_root_host(current) {
+                current = host;
+            } else {
+                return false;
+            }
+        }
+    }
+
     /// Compare nodes in the order of a traversal that visits shadow children
     /// before light children. Ordinary document-position comparison treats
     /// different shadow trees as disconnected and cannot order these queries.
@@ -1579,6 +1596,48 @@ impl DomHost {
         handles
     }
 
+    /// Frame owners in physical shadow-including order, independently of slot
+    /// distribution. Connected trees use the candidate index; disconnected
+    /// trees are walked because compaction may have retired their candidates.
+    pub fn child_browsing_context_host_candidate_handles_in_shadow_including_subtree_order(
+        &self,
+        root: DomHandle,
+    ) -> Vec<DomHandle> {
+        if self.node(root).is_none() {
+            return Vec::new();
+        }
+        if !self.is_connected(root) {
+            let mut handles = Vec::new();
+            let mut stack = vec![root];
+            while let Some(handle) = stack.pop() {
+                if self.is_child_browsing_context_host_candidate(handle) {
+                    handles.push(handle);
+                }
+                stack.extend(self.child_handles_reversed(handle));
+                if let Some(shadow_root) = self.shadow_root_handle(handle) {
+                    stack.push(shadow_root);
+                }
+            }
+            return handles;
+        }
+
+        let mut handles = self
+            .child_browsing_context_host_candidates
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|handle| {
+                self.is_child_browsing_context_host_candidate(*handle)
+                    && self.shadow_including_contains(root, *handle)
+            })
+            .collect::<Vec<_>>();
+        handles.sort_unstable_by(|left, right| {
+            self.compare_handles_in_shadow_including_tree_order(*left, *right)
+        });
+        handles.dedup();
+        handles
+    }
+
     pub fn compact_child_browsing_context_host_candidates(&self) {
         let mut seen = std::collections::HashSet::new();
         self.child_browsing_context_host_candidates
@@ -1997,6 +2056,16 @@ impl DomHost {
         let mut touched_shadow_root = false;
         let mut stack = vec![(root, owner_document, connected)];
         while let Some((handle, owner_document, connected)) = stack.pop() {
+            // A detached shadow tree may have lost its frame candidates to
+            // compaction. Restore them during the existing connection walk.
+            if connected && let Some(element) = self.node(handle).and_then(Node::as_element) {
+                self.record_child_browsing_context_host_candidate_if_needed(
+                    handle,
+                    element.local_name(),
+                    element.namespace(),
+                );
+            }
+
             stack.extend(
                 self.child_handles_reversed(handle)
                     .map(|child| (child, owner_document, connected)),
