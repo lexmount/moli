@@ -3420,6 +3420,7 @@ dependencies = [
  "moli-v8-util",
  "moli-web-errors",
  "moli-web-mime",
+ "moli-web-storage",
  "moli-webapi-declare",
  "moli-webcrypto",
  "moli-webidl",
@@ -3693,6 +3694,19 @@ dependencies = [
  "mime",
  "moli-content-type",
  "moli-header-field",
+]
+
+[[package]]
+name = "moli-web-storage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "moli-browser-profile",
+ "moli-storage-key",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "typed-num",
 ]
 
 [[package]]

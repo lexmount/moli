@@ -1,0 +1,17 @@
+[package]
+license.workspace = true
+name = "moli-web-storage"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+moli-browser-profile = { path = "../moli-browser-profile" }
+moli-storage-key = { path = "../moli-storage-key" }
+parking_lot = "0.12.5"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.145", features = ["raw_value"] }
+typed-num = { version = "0.3.0", default-features = false, features = ["serde"] }
+
+[lints]
+workspace = true

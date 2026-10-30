@@ -67,6 +67,7 @@ members = [
     "moli-v8-test-util",
     "moli-v8-util",
     "moli-web-mime",
+    "moli-web-storage",
     "moli-web-bot-auth",
     "moli-web-errors",
     "moli-protocol-webdriver-bidi",
