@@ -38,7 +38,7 @@ async function upgradeCompleteOrderProbe(prefix) {
             });
           }
           queueMicrotask(() => {
-            check(closing + ': transaction cleared after complete', opening.transaction === null);
+            check(closing + ': transaction retained through complete microtasks', opening.transaction === upgrade);
           });
         };
         upgrade.onabort = () => reject(upgrade.error || new Error('unexpected upgrade abort'));
