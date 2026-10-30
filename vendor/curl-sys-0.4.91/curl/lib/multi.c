@@ -2011,6 +2011,28 @@ static CURLcode mspeed_check(struct Curl_easy *data)
   return CURLE_OK;
 }
 
+#ifndef CURL_DISABLE_HTTP
+static CURLcode retry_http1_request(struct Curl_easy *data, char **newurl)
+{
+  CURLcode result = Curl_retry_request(data, newurl);
+  if(result)
+    return result;
+
+  infof(data, "Downgrades to HTTP/1.1");
+  streamclose(data->conn);
+  data->state.http_neg.wanted = CURL_HTTP_V1x;
+  data->state.http_neg.allowed = CURL_HTTP_V1x;
+  /* Ignore the HTTP/2 error while negotiating a new HTTP/1.1 connection. */
+  data->state.errorbuf = FALSE;
+  if(!*newurl)
+    *newurl = Curl_bufref_dup(&data->state.url);
+  if(!*newurl)
+    return CURLE_OUT_OF_MEMORY;
+  data->req.done = TRUE;
+  return CURLE_OK;
+}
+#endif
+
 static CURLMcode multistate_performing(struct Curl_easy *data,
                                        bool *stream_errorp,
                                        CURLcode *resultp)
@@ -2048,31 +2070,8 @@ static CURLMcode multistate_performing(struct Curl_easy *data,
 #ifndef CURL_DISABLE_HTTP
   else if((result == CURLE_HTTP2_STREAM) &&
           Curl_h2_http_1_1_error(data)) {
-    CURLcode ret = Curl_retry_request(data, &newurl);
-
-    if(!ret) {
-      infof(data, "Downgrades to HTTP/1.1");
-      streamclose(data->conn);
-      data->state.http_neg.wanted = CURL_HTTP_V1x;
-      data->state.http_neg.allowed = CURL_HTTP_V1x;
-      /* clear the error message bit too as we ignore the one we got */
-      data->state.errorbuf = FALSE;
-      if(!newurl)
-        /* typically for HTTP_1_1_REQUIRED error on first flight */
-        newurl = Curl_bufref_dup(&data->state.url);
-      if(!newurl) {
-        result = CURLE_OUT_OF_MEMORY;
-      }
-      else {
-        /* if we are to retry, set the result to OK and consider the request
-          as done */
-        retry = TRUE;
-        result = CURLE_OK;
-        data->req.done = TRUE;
-      }
-    }
-    else
-      result = ret;
+    result = retry_http1_request(data, &newurl);
+    retry = !result;
   }
 #endif
 
@@ -2156,6 +2155,7 @@ static CURLMcode multistate_do(struct Curl_easy *data,
 {
   CURLMcode mresult = CURLM_OK;
   CURLcode result = CURLE_OK;
+  bool http1_retry = FALSE;
   /* Snapshot the selected connection while it is attached. Closed sockets
    * and later pool eviction cannot erase this transfer's native observations. */
   data->progress.moli_connection = data->conn->moli_timing;
@@ -2190,6 +2190,12 @@ static CURLMcode multistate_do(struct Curl_easy *data,
     bool dophase_done = FALSE;
     /* Perform the protocol's DO action */
     result = multi_do(data, &dophase_done);
+#ifndef CURL_DISABLE_HTTP
+    /* Peer SETTINGS can already be available during DO. Handle the same
+     * typed downgrade here as when they arrive later in PERFORMING. */
+    http1_retry = (result == CURLE_HTTP2_STREAM) &&
+      Curl_h2_http_1_1_error(data);
+#endif
 
     if(!result) {
       if(!dophase_done) {
@@ -2227,8 +2233,8 @@ static CURLMcode multistate_do(struct Curl_easy *data,
         mresult = CURLM_CALL_MULTI_PERFORM;
       }
     }
-    else if((result == CURLE_SEND_ERROR) &&
-            data->conn->bits.reuse) {
+    else if(http1_retry || ((result == CURLE_SEND_ERROR) &&
+                           data->conn->bits.reuse)) {
       /*
        * In this situation, a connection that we were trying to use may have
        * unexpectedly died. If possible, send the connection back to the
@@ -2239,7 +2245,15 @@ static CURLMcode multistate_do(struct Curl_easy *data,
       followtype follow = FOLLOW_NONE;
       CURLcode drc;
 
-      drc = Curl_retry_request(data, &newurl);
+#ifndef CURL_DISABLE_HTTP
+      if(http1_retry) {
+        drc = retry_http1_request(data, &newurl);
+        if(!drc)
+          result = CURLE_OK;
+      }
+      else
+#endif
+        drc = Curl_retry_request(data, &newurl);
       if(drc) {
         /* a failure here pretty much implies an out of memory */
         result = drc;
