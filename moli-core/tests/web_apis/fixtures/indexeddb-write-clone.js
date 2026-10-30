@@ -68,7 +68,10 @@ async function writeCloneProbe(prefix = 'write-clone-probe') {
       writeThrows(`${label}: uncloneable value`, () => out[method](() => {}, 'function'), 'DataCloneError');
       writeThrows(`${label}: invalid inline key`, () => store[method]({id: null, tag: 'invalid'}), 'DataError');
       writeThrows(`${label}: invalid explicit key`, () => out[method]({}, null), 'DataError');
-      writeThrows(`${label}: inline explicit key before clone`, () => store[method]({get id() { throw sentinel; }}, 1), 'DataError');
+      writeThrows(`${label}: inline explicit key preserves clone exception`, () => store[method]({get id() { throw sentinel; }}, 1), sentinel);
+      let inlineKeyClones = 0;
+      writeThrows(`${label}: inline explicit key rejected after clone`, () => store[method]({get id() { inlineKeyClones++; return 7; }}, 1), 'DataError');
+      writeCheck(`${label}: inline explicit key clones once`, inlineKeyClones === 1, inlineKeyClones);
       writeThrows(`${label}: injection through undefined`, () => nested[method]({a: undefined}), 'DataError');
       writeThrows(`${label}: injection through primitive`, () => nested[method]({a: {b: 'text'}}), 'DataError');
       const throwingKey = [];
@@ -180,14 +183,19 @@ async function writeCloneProbe(prefix = 'write-clone-probe') {
       const blockerDone = blocker && writeTransaction(blocker);
       if (blocker) blocker.objectStore('out').get(99);
       const aborted = db.transaction('out', 'readwrite');
+      const abortOrder = [];
+      aborted.addEventListener('abort', () => abortOrder.push('abort'));
       const abortedDone = writeTransaction(aborted);
       const target = aborted.objectStore('out');
       let request;
       try {
         request = target[method]({get value() { aborted.abort(); return 'cancelled'; }}, 99);
         writeCheck(`${label}: returns request`, request instanceof IDBRequest && request.readyState === 'pending');
+        request.onerror = event => { abortOrder.push('request:' + request.error.name); event.preventDefault(); };
       } catch (error) { writeCheck(`${label}: returns request`, false, error); }
       writeCheck(`${label}: transaction aborts`, await abortedDone === 'abort');
+      writeCheck(`${label}: request error precedes abort`, JSON.stringify(abortOrder) === '["request:AbortError","abort"]', JSON.stringify(abortOrder));
+      writeCheck(`${label}: aborted request completes`, request?.readyState === 'done', request?.readyState);
       writeThrows(`${label}: remains inactive`, () => target.get(99), 'TransactionInactiveError');
       if (blockerDone) await blockerDone;
       const verification = db.transaction('out');

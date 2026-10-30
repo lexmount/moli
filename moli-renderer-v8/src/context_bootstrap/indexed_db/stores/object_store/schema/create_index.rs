@@ -13,7 +13,7 @@ use moli_webapi::indexed_db_values::options::IdbIndexParameters;
 struct IdbObjectStoreCreateIndexArgs {
     #[webidl(required, converter = "raw")]
     index_name: webidl::DomString16,
-    #[webidl(name = "keyPath", with = parse_create_index_key_path_arg)]
+    #[webidl(required, name = "keyPath", with = parse_create_index_key_path_arg)]
     key_path: KeyPath,
     #[webidl(index = 2, dictionary)]
     options: IdbIndexParameters,
