@@ -64,6 +64,168 @@ async fn close_instance(socket: &mut TestCdpSocket, id: u64) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn browser_disconnect_with_fetch_on_two_pages_preserves_each_output_stream() {
+    for leave_paused in [false, true] {
+        let fixture = Router::new().route(
+            "/page",
+            get(|| async { axum::response::Html("<p>Fetch teardown</p>") }),
+        );
+        let (fixture_addr, _fixture_server) =
+            spawn_dedicated_fixture_server(fixture, "multi-page-fetch-disconnect");
+        let (addr, task, _) = instance(None).await;
+        let mut root = browser(addr).await;
+        let targets = [
+            create_dynamic_target(&mut root, 1).await,
+            create_dynamic_target(&mut root, 2).await,
+        ];
+        let attached = send_cdp_command(
+            &mut root,
+            3,
+            "Target.setAutoAttach",
+            None,
+            json!({"autoAttach": true, "waitForDebuggerOnStart": false,
+                "flatten": true, "filter": [{"type": "page"}]}),
+        )
+        .await;
+        assert_eq!(response_by_id(&attached, 3)["result"], json!({}));
+        let mut sessions = Vec::new();
+        for (index, target) in targets.iter().enumerate() {
+            let session = attached
+                .iter()
+                .find(|event| {
+                    event["method"] == "Target.attachedToTarget"
+                        && event["params"]["targetInfo"]["targetId"] == *target
+                })
+                .expect("each Page is auto-attached")["params"]["sessionId"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let enabled = send_cdp_command(
+                &mut root,
+                10,
+                "Fetch.enable",
+                Some(&session),
+                if index == 0 {
+                    json!({})
+                } else {
+                    json!({"patterns": [{"urlPattern": "*"}]})
+                },
+            )
+            .await;
+            assert_eq!(response_by_id(&enabled, 10)["result"], json!({}));
+            send_cdp_command_without_wait(
+                &mut root,
+                12,
+                "Page.navigate",
+                Some(&session),
+                json!({"url": format!("http://{fixture_addr}/page?{index}")}),
+            )
+            .await;
+            let paused = recv_until_match(&mut root, |event| {
+                event["method"] == "Fetch.requestPaused" && event["sessionId"] == session
+            })
+            .await;
+            let request_id = paused.last().unwrap()["params"]["requestId"].clone();
+            let continued = send_cdp_command(
+                &mut root,
+                13,
+                "Fetch.continueRequest",
+                Some(&session),
+                json!({"requestId": request_id}),
+            )
+            .await;
+            assert_eq!(response_by_id(&continued, 13)["result"], json!({}));
+            wait_for_cdp_runtime_string(
+                &mut root,
+                &session,
+                100,
+                "document.querySelector('p')?.textContent ?? ''",
+                "Fetch teardown",
+            )
+            .await;
+            if leave_paused {
+                send_cdp_command_without_wait(
+                    &mut root,
+                    20,
+                    "Runtime.evaluate",
+                    Some(&session),
+                    json!({"expression": "globalThis.fetchOutcome = 'pending'; fetch('/paused').then(() => fetchOutcome = 'fulfilled', () => fetchOutcome = 'rejected'); 'started'"}),
+                )
+                .await;
+                recv_until_match(&mut root, |event| {
+                    event["method"] == "Fetch.requestPaused"
+                        && event["sessionId"] == session
+                        && event["params"]["request"]["url"]
+                            .as_str()
+                            .is_some_and(|url| url.ends_with("/paused"))
+                })
+                .await;
+            }
+            sessions.push(session);
+        }
+
+        // Playwright disconnects a CDP browser by disabling auto-attachment
+        // before closing its socket. Both Fetch handlers produce independent
+        // Page output prefixes, even when every request was continued.
+        let detached = send_cdp_command(
+            &mut root,
+            30,
+            "Target.setAutoAttach",
+            None,
+            json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true}),
+        )
+        .await;
+        assert_eq!(response_by_id(&detached, 30)["result"], json!({}));
+        let response_index = detached.iter().position(|event| event["id"] == 30).unwrap();
+        for session in &sessions {
+            let detach_index = detached
+                .iter()
+                .position(|event| {
+                    event["method"] == "Target.detachedFromTarget"
+                        && event["params"]["sessionId"] == *session
+                })
+                .expect("each Page session detaches before the command response");
+            assert!(detach_index < response_index, "{detached:#?}");
+        }
+        if leave_paused {
+            // Domain disposal also disables Network observation. Verify the
+            // native requests actually settle through fresh sessions rather
+            // than requiring notifications on the removed subscriptions.
+            for target in &targets {
+                let attached = send_cdp_command(
+                    &mut root,
+                    31,
+                    "Target.attachToTarget",
+                    None,
+                    json!({"targetId": target, "flatten": true}),
+                )
+                .await;
+                let session = response_by_id(&attached, 31)["result"]["sessionId"]
+                    .as_str()
+                    .unwrap();
+                wait_for_cdp_runtime_string(
+                    &mut root,
+                    session,
+                    100,
+                    "globalThis.fetchOutcome",
+                    "rejected",
+                )
+                .await;
+            }
+        }
+        root.close(None)
+            .await
+            .expect("disconnect Playwright frontend");
+        let mut observer = browser(addr).await;
+        let version =
+            send_cdp_command(&mut observer, 40, "Browser.getVersion", None, json!({})).await;
+        assert!(response_by_id(&version, 40)["result"]["protocolVersion"].is_string());
+        close_instance(&mut observer, 41).await;
+        joined(task).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn browser_close_joins_its_listener_connections_and_checkpoint_only() {
     assert_instance_shutdown(false).await;
 }

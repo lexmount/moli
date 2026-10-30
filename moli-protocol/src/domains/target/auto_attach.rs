@@ -388,6 +388,7 @@ pub(super) fn start_set_auto_attach_command(
         .flatten();
     let command = PreparedAutoAttachCommand::prepare(
         conn,
+        cmd.id,
         params.auto_attach,
         cmd.session_id,
         initial_document,
