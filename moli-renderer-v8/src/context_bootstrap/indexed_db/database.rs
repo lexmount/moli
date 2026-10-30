@@ -11,7 +11,7 @@ use super::{
     origin_allows_indexed_db, register_indexed_db_databases_settle_task,
     register_regular_transaction, remove_database_store_metadata, request_error_object,
     require_idb_key, set_database_store_metadata, storage_scope_for_window_execution_context,
-    store_request_error, sync_transaction_object_store_names_from_database, throw_type_error,
+    store_request_error, sync_transaction_scope_from_database, throw_type_error,
     transaction_handle_from_value, unregister_regular_transaction, validate_storage_bucket_scope,
     with_indexed_db_manager,
 };

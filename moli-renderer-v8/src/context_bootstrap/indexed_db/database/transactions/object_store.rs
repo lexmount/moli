@@ -1,5 +1,5 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::indexed_db_transaction_status;
+use crate::context_bootstrap::indexed_db::validate_indexed_db_transaction_store;
 use crate::webidl;
 
 #[derive(webidl::WebIdlArgs)]
@@ -20,16 +20,12 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_transaction_object_store_cal
     let Some(parsed) = webidl::parse_args::<IdbTransactionObjectStoreArgs>(scope, &args) else {
         return;
     };
-    if !indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.active) {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
+    let name = moli_indexeddb::IndexedDbName::from_utf16(parsed.name.0);
+    if let Err(error) = validate_indexed_db_transaction_store(scope, transaction, &name) {
+        let error = request_error_object(scope, &error);
         scope.throw_exception(error);
         return;
     }
-    let name = moli_indexeddb::IndexedDbName::from_utf16(parsed.name.0);
     let Some(database) =
         crate::context_bootstrap::indexed_db::indexed_db_transaction_database(scope, transaction)
     else {

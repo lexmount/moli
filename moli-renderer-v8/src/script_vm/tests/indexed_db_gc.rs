@@ -95,7 +95,7 @@ fn indexed_db_schema_getters_accept_registered_native_proxies_in_callee_realms()
       request.onupgradeneeded=()=>{
         const store=request.result.createObjectStore('s',{keyPath:['id']});
         const index=store.createIndex('i',['value']);
-        globalThis.schemaValues=[store,index];
+        globalThis.schemaValues=[store,index,request.transaction];
       };
       request.onsuccess=()=>globalThis.schemaDatabase=request.result;"#,
     )
@@ -107,8 +107,8 @@ fn indexed_db_schema_getters_accept_registered_native_proxies_in_callee_realms()
         let key = crate::util::v8str(scope, "schemaValues");
         let values =
             v8::Local::<v8::Array>::try_from(global.get(scope, key.into()).unwrap()).unwrap();
-        let proxies = v8::Array::new(scope, 2);
-        for index in 0..2 {
+        let proxies = v8::Array::new(scope, 3);
+        for index in 0..3 {
             let target =
                 v8::Local::<v8::Object>::try_from(values.get_index(scope, index).unwrap()).unwrap();
             let handler = crate::util::new_null_prototype_object(scope);
@@ -125,12 +125,12 @@ fn indexed_db_schema_getters_accept_registered_native_proxies_in_callee_realms()
     })
     .unwrap();
     assert_eq!(vm.eval(r#"(()=>{
-      const interfaces=['IDBObjectStore','IDBIndex'];
-      const fields=[['keyPath','autoIncrement','indexNames','transaction'],['keyPath','multiEntry','unique','objectStore']];
-      for(const realm of [window,schemaChild]) for(let i=0;i<2;i++) for(const name of fields[i]) {
+      const interfaces=['IDBObjectStore','IDBIndex','IDBTransaction'];
+      const fields=[['keyPath','autoIncrement','indexNames','transaction'],['keyPath','multiEntry','unique','objectStore'],['objectStoreNames']];
+      for(const realm of [window,schemaChild]) for(let i=0;i<3;i++) for(const name of fields[i]) {
         const getter=Object.getOwnPropertyDescriptor(realm[interfaces[i]].prototype,name).get;
         const expected=getter.call(schemaValues[i]),actual=getter.call(schemaProxies[i]);
-        if(name==='indexNames') {
+        if(name==='indexNames' || name==='objectStoreNames') {
           if(Object.getPrototypeOf(actual)!==realm.DOMStringList.prototype ||
              JSON.stringify(Array.from(actual))!==JSON.stringify(Array.from(expected))) throw Error('native list realm');
         } else if(actual!==expected) throw Error('native schema identity');

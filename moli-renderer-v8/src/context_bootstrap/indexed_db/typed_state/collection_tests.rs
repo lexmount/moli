@@ -30,6 +30,7 @@ fn transaction_collection_defers_registry_mutation_and_keeps_retained_state() {
                 database,
                 None,
                 TransactionMode::ReadOnly,
+                &[],
                 false,
             );
             let id = indexed_db_typed_state_id(scope, transaction).unwrap();

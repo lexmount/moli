@@ -18,6 +18,7 @@ mod dom_rect_factory_descriptors;
 #[cfg(feature = "devtools")]
 mod drag_drop_outcomes;
 mod idb_transaction_gc;
+mod idb_transaction_scope;
 mod message_port_transfer;
 #[cfg(feature = "devtools")]
 mod native_drag_payloads;
