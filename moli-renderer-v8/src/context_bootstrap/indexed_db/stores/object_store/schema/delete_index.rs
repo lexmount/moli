@@ -40,6 +40,10 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_index_ca
             "The index was not found".into(),
         ))
     } else {
+        let Some(context) = store.get_creation_context(scope) else {
+            return;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
         schedule_schema_operation(
             scope,
             transaction,
@@ -51,17 +55,16 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_index_ca
             },
             None,
         )
-    };
-    match result {
-        Ok(()) => {
+        .map(|()| {
             if let Err(error) =
                 remove_database_index_metadata(scope, database, &store_name, &index_name)
             {
                 schedule_schema_failure(scope, transaction, error);
-                return;
             }
-            rv.set_undefined();
-        }
+        })
+    };
+    match result {
+        Ok(()) => rv.set_undefined(),
         Err(error) => {
             let error = request_error_object(scope, &error);
             scope.throw_exception(error);

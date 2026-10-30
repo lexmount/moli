@@ -12,7 +12,7 @@ use moli_indexeddb::{IndexOptionsValidationError, validate_index_options};
 struct IdbObjectStoreCreateIndexArgs {
     #[webidl(required)]
     index_name: String,
-    #[webidl(name = "keyPath", with = parse_create_index_key_path_arg)]
+    #[webidl(required, name = "keyPath", with = parse_create_index_key_path_arg)]
     key_path: KeyPath,
     #[webidl(index = 2, dictionary)]
     options: IdbIndexParameters,
@@ -71,6 +71,12 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
             unique,
             multi_entry,
         };
+        let Some(context) = store.get_creation_context(scope) else {
+            return;
+        };
+        // Convert arguments and report synchronous errors in the method realm;
+        // queue SQL and create handles in the store's realm.
+        let scope = &mut v8::ContextScope::new(scope, context);
         schedule_schema_operation(
             scope,
             transaction,
@@ -87,23 +93,18 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
             },
             Some((store_name.clone(), info.clone())),
         )
-        .map(|()| info)
-    };
-    match result {
-        Ok(info) => {
+        .map(|()| {
             if let Err(error) = set_database_index_metadata(scope, database, &store_name, &info) {
                 schedule_schema_failure(scope, transaction, error);
-                if let Some(index) = create_failed_index_object(scope, store, &info) {
-                    rv.set(index.into());
-                }
-                return;
-            }
-            if let Some(index) = create_index_object(scope, store, &info) {
-                rv.set(index.into());
+                create_failed_index_object(scope, store, &info)
             } else {
-                rv.set_undefined();
+                create_index_object(scope, store, &info)
             }
-        }
+        })
+    };
+    match result {
+        Ok(Some(index)) => rv.set(index.into()),
+        Ok(None) => rv.set_undefined(),
         Err(error) => {
             let error = request_error_object(scope, &error);
             scope.throw_exception(error);
@@ -116,11 +117,6 @@ fn parse_create_index_key_path_arg<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     index: i32,
 ) -> Result<KeyPath, webidl::WebIdlError> {
-    if args.length() <= index {
-        return Err(webidl::WebIdlError::custom_message(
-            "Failed to execute 'createIndex': 2 arguments required, but only 1 present.",
-        ));
-    }
     parse_idb_key_path(
         scope,
         args.get(index),
