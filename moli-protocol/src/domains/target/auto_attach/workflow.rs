@@ -46,6 +46,7 @@ impl AutoAttachSweepRollback {
 }
 
 pub(crate) struct PreparedAutoAttachCommand {
+    command_id: Option<u64>,
     owner_session_id: Option<String>,
     policy: Option<AutoAttachPolicyIdentity>,
     initial_document: Option<InitialDocumentPageBuildWaiter>,
@@ -69,11 +70,13 @@ pub(crate) struct PreparedAutoAttachSweep {
 impl PreparedAutoAttachCommand {
     pub(in crate::domains::target) fn prepare(
         conn: &mut CdpConnection,
+        command_id: Option<u64>,
         enabled: bool,
         owner_session_id: Option<&str>,
         initial_document: Option<InitialDocumentPageBuildWaiter>,
     ) -> Self {
         Self {
+            command_id,
             policy: enabled.then(|| {
                 AutoAttachPolicyIdentity::capture(conn, owner_session_id)
                     .expect("an enabled auto-attach command retains its installed policy")
@@ -147,7 +150,12 @@ impl PreparedAutoAttachCommand {
         if let Some(detach) = self.detach {
             let completed = detach.run(driver).await;
             context.defer_owner_turn_completion(move |state, context| {
-                state.finish_auto_attach_detachment(completed, context)
+                state.finish_auto_attach_detachment(
+                    completed,
+                    context,
+                    self.command_id,
+                    self.owner_session_id.as_deref(),
+                )
             });
             return Ok(());
         }

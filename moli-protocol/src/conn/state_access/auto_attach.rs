@@ -102,8 +102,10 @@ impl ProtocolWorkflowState<'_> {
         self,
         completed: TargetDetachmentOutput,
         context: &mut CommandDispatchContext,
+        command_id: Option<u64>,
+        response_session_id: Option<&str>,
     ) -> CommandOutputPlan {
-        completed.finish(self.connection, context)
+        completed.finish(self.connection, context, command_id, response_session_id)
     }
 
     pub(crate) fn prepare_auto_attach_detachment_recovery(

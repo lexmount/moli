@@ -482,7 +482,7 @@ impl CompletedTargetCommandDispatch {
             }
             CompletedTargetCommandKind::DetachFromTarget(output) => {
                 context.take_command_failure_cleanup();
-                output.finish(conn, context)
+                output.finish(conn, context, self.command_id, self.session_id.as_deref())
             }
             CompletedTargetCommandKind::RecoveredDetachment(recovery) => recovery.finish(conn),
             CompletedTargetCommandKind::AttachToTarget { .. }
