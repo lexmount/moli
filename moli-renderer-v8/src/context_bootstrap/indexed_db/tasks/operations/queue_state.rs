@@ -13,11 +13,10 @@ pub(in crate::context_bootstrap::indexed_db) fn queue_transaction_request(
         INDEXED_DB_TRANSACTION_PENDING_SLOT,
         v8::Number::new(scope, pending + 1.0).into(),
     );
-    set_indexed_db_request_surface_value(
+    set_indexed_db_slot_value(
         scope,
         request,
         INDEXED_DB_REQUEST_TRANSACTION_SLOT,
-        "transaction",
         transaction.into(),
     );
 }

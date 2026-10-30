@@ -41,22 +41,16 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
         set_transaction_active_for_request_event(scope, transaction);
     }
     if let Some(error) = object_hidden_value(scope, request, INDEXED_DB_PENDING_ERROR_SLOT) {
-        set_indexed_db_request_surface_value(
-            scope,
-            request,
-            INDEXED_DB_REQUEST_ERROR_SLOT,
-            "error",
-            error,
-        );
+        set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_ERROR_SLOT, error);
     }
-    let done = v8str(scope, "done").into();
-    set_indexed_db_request_surface_value(
+    set_indexed_db_slot_value(
         scope,
         request,
-        INDEXED_DB_REQUEST_READY_STATE_SLOT,
-        "readyState",
-        done,
+        INDEXED_DB_REQUEST_RESULT_SLOT,
+        v8::undefined(scope).into(),
     );
+    let done = v8str(scope, "done").into();
+    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT, done);
     let cancel =
         crate::context_bootstrap::indexed_db::typed_state::sql::indexed_db_request_sql_client(
             scope, request,

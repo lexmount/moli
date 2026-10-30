@@ -22,8 +22,7 @@ use super::{
     object_number_property, object_string_property, pop_first_indexed_db_task,
     push_indexed_db_transaction_operation, push_object_to_indexed_db_runtime_array,
     refresh_cursor_surface, refresh_database_surface, request_error_object,
-    set_indexed_db_request_surface_value, set_indexed_db_slot_value,
-    signal_worker_indexed_db_task_wake, take_indexed_db_task_by_id,
+    set_indexed_db_slot_value, signal_worker_indexed_db_task_wake, take_indexed_db_task_by_id,
     take_indexed_db_transaction_operations, transaction_handle_from_value,
     unregister_regular_transaction, v8str,
 };

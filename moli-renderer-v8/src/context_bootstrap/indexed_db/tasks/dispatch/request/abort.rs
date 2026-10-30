@@ -23,21 +23,15 @@ pub(super) fn finish_request_with_abort_error<'s>(
     request: v8::Local<'s, v8::Object>,
     error: v8::Local<'s, v8::Value>,
 ) {
-    set_indexed_db_request_surface_value(
+    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_ERROR_SLOT, error);
+    set_indexed_db_slot_value(
         scope,
         request,
-        INDEXED_DB_REQUEST_ERROR_SLOT,
-        "error",
-        error,
+        INDEXED_DB_REQUEST_RESULT_SLOT,
+        v8::undefined(scope).into(),
     );
     let done = v8str(scope, "done").into();
-    set_indexed_db_request_surface_value(
-        scope,
-        request,
-        INDEXED_DB_REQUEST_READY_STATE_SLOT,
-        "readyState",
-        done,
-    );
+    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT, done);
     let _ = dispatch_idb_named_event(scope, request, "error", |_, _| {});
     finish::finish_request_dispatch(scope, request);
 }

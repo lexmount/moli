@@ -28,30 +28,12 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_success_task<'s>(
     }
     refresh_pending_cursor_surface(scope, request);
     if let Some(result) = object_hidden_value(scope, request, INDEXED_DB_PENDING_RESULT_SLOT) {
-        set_indexed_db_request_surface_value(
-            scope,
-            request,
-            INDEXED_DB_REQUEST_RESULT_SLOT,
-            "result",
-            result,
-        );
+        set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_RESULT_SLOT, result);
     }
     let null = v8::null(scope).into();
-    set_indexed_db_request_surface_value(
-        scope,
-        request,
-        INDEXED_DB_REQUEST_ERROR_SLOT,
-        "error",
-        null,
-    );
+    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_ERROR_SLOT, null);
     let done = v8str(scope, "done").into();
-    set_indexed_db_request_surface_value(
-        scope,
-        request,
-        INDEXED_DB_REQUEST_READY_STATE_SLOT,
-        "readyState",
-        done,
-    );
+    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT, done);
     let cancel =
         crate::context_bootstrap::indexed_db::typed_state::sql::indexed_db_request_sql_client(
             scope, request,

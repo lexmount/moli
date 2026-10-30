@@ -17,8 +17,7 @@ use super::{
     remove_indexed_db_database_store_metadata, replace_indexed_db_database_metadata,
     replace_indexed_db_runtime_array, set_indexed_db_database_index_metadata,
     set_indexed_db_database_store_metadata, set_indexed_db_internal_name_property,
-    set_indexed_db_internal_object_property, set_indexed_db_request_surface_value,
-    set_indexed_db_slot_value, v8_string, v8str,
+    set_indexed_db_internal_object_property, set_indexed_db_slot_value, v8_string, v8str,
 };
 use crate::context_bootstrap::indexed_db::{
     INDEX_OBJECT_STORE, OBJECT_STORE_DATABASE, OBJECT_STORE_TRANSACTION,

@@ -413,7 +413,7 @@ fn indexed_db_request_declared_properties_preserve_own_enumerable_surface() {
 
     assert_eq!(
         result,
-        r#"{"openKeys":["error","onblocked","onerror","onsuccess","onupgradeneeded","readyState","result","source","transaction"],"openHandlers":[true,true],"databaseKeys":["onabort","onclose","onerror","onversionchange"],"databaseHandlers":[true,true,true,true],"databaseVersion":1,"databaseStores":true,"transactionKeys":["objectStoreNames","onabort","oncomplete","onerror"],"transactionHandlers":[true,true,true],"transactionMode":"readonly","transactionStores":true,"requestKeys":["error","onerror","onsuccess","readyState","result","source","transaction"],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
+        r#"{"openKeys":["onblocked","onerror","onsuccess","onupgradeneeded"],"openHandlers":[true,true],"databaseKeys":["onabort","onclose","onerror","onversionchange"],"databaseHandlers":[true,true,true,true],"databaseVersion":1,"databaseStores":true,"transactionKeys":["objectStoreNames","onabort","oncomplete","onerror"],"transactionHandlers":[true,true,true],"transactionMode":"readonly","transactionStores":true,"requestKeys":["onerror","onsuccess"],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
     );
 }
 
@@ -6846,4 +6846,67 @@ globalThis.databaseNameProfile = 'pending';
         );
     }
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn indexed_db_request_getters_preserve_native_proxy_identity_and_reject_author_wrappers() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-request-proxy.test/");
+    vm.eval(
+        r#"document.body.innerHTML='<iframe></iframe>';
+      globalThis.childWindow=document.querySelector('iframe').contentWindow;
+      globalThis.nativeRequest=indexedDB.open('native-proxy',1);
+      nativeRequest.onupgradeneeded=()=>nativeRequest.result.createObjectStore('s');"#,
+    )
+    .unwrap();
+    let context_ptr = &vm.page_default_runtime.context as *const _;
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let key = crate::util::v8str(scope, "nativeRequest");
+        let request =
+            v8::Local::<v8::Object>::try_from(global.get(scope, key.into()).unwrap()).unwrap();
+        let handler = crate::util::new_null_prototype_object(scope);
+        let proxy = v8::Proxy::new(scope, request, handler).unwrap();
+        moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+        assert!(crate::web_api_interfaces::IDBRequest::is_instance(
+            scope,
+            proxy.into()
+        ));
+        let key = crate::util::v8str(scope, "nativeRequestProxy");
+        assert_eq!(
+            global.create_data_property(scope, key.into(), proxy.into()),
+            Some(true)
+        );
+        Ok(())
+    })
+    .unwrap();
+    vm.eval(r#"globalThis.checkRequestProxy=()=>{
+      for(const realm of [window,childWindow]) for(const name of ['result','error','source','transaction','readyState']) {
+        const getter=Object.getOwnPropertyDescriptor(realm.IDBRequest.prototype,name).get;
+        let expected,expectedError;
+        try { expected=getter.call(nativeRequest); } catch(error) { expectedError=error; }
+        let actual,actualError;
+        try { actual=getter.call(nativeRequestProxy); } catch(error) { actualError=error; }
+        if(expectedError) {
+          if(Object.getPrototypeOf(expectedError)!==realm.DOMException.prototype ||
+             Object.getPrototypeOf(actualError)!==realm.DOMException.prototype ||
+             expectedError.name!==actualError.name) throw Error('native pending exception realm');
+        } else if(actualError || actual!==expected) throw Error('native request value identity');
+        let traps=0;
+        const author=new Proxy(nativeRequestProxy,{get(){traps++;throw 42;},getPrototypeOf(){traps++;throw 43;}});
+        const revoked=Proxy.revocable(nativeRequestProxy,{});revoked.revoke();
+        for(const receiver of [author,revoked.proxy,Object.create(nativeRequest)]) {
+          let error;try {getter.call(receiver);} catch(caught) {error=caught;}
+          if(Object.getPrototypeOf(error)!==realm.TypeError.prototype || traps) throw Error('author receiver rejection');
+        }
+      }
+      return true;
+    };checkRequestProxy()"#).unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks(
+            "checkRequestProxy() && nativeRequestProxy.readyState==='done'"
+        )
+        .unwrap(),
+        "true"
+    );
+    vm.eval("nativeRequest.result.close()").unwrap();
 }

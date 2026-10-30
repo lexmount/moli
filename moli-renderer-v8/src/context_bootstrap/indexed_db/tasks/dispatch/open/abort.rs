@@ -6,36 +6,24 @@ pub(in crate::context_bootstrap::indexed_db::tasks::dispatch) fn finish_aborted_
     database: v8::Local<'s, v8::Object>,
 ) {
     close_indexed_db_database_connection(scope, database);
-    let error = dom_exception_value(scope, "The database open was aborted.", "AbortError");
-    set_indexed_db_request_surface_value(
+    // The upgrade's abort event has finished. Reset the open request until its
+    // own error task publishes the final result and done flag.
+    set_indexed_db_slot_value(
         scope,
         request,
         INDEXED_DB_REQUEST_ERROR_SLOT,
-        "error",
-        error,
+        v8::null(scope).into(),
     );
-    let done = v8str(scope, "done").into();
-    set_indexed_db_request_surface_value(
-        scope,
-        request,
-        INDEXED_DB_REQUEST_READY_STATE_SLOT,
-        "readyState",
-        done,
-    );
+    let pending = v8str(scope, "pending").into();
+    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT, pending);
     let undefined = v8::undefined(scope).into();
-    set_indexed_db_request_surface_value(
-        scope,
-        request,
-        INDEXED_DB_REQUEST_RESULT_SLOT,
-        "result",
-        undefined,
-    );
-    set_indexed_db_request_surface_value(
+    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_RESULT_SLOT, undefined);
+    set_indexed_db_slot_value(
         scope,
         request,
         INDEXED_DB_REQUEST_TRANSACTION_SLOT,
-        "transaction",
         v8::null(scope).into(),
     );
-    enqueue_request_task(scope, "request-error", request);
+    let error = dom_exception_value(scope, "The database open was aborted.", "AbortError");
+    store_request_error(scope, request, error);
 }
