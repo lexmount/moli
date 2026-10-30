@@ -12,6 +12,7 @@ moli-header-field = { path = "../moli-header-field" }
 base64 = "0.22"
 moli-curl = { path = "../moli-curl" }
 moli-crypto = { path = "../moli-crypto" }
+moli-file-api = { path = "../moli-file-api" }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"], optional = true }
 http = "1"
 moli-url = { path = "../moli-url" }
@@ -25,6 +26,7 @@ tokio-tungstenite = { version = "0.28.0", default-features = false, features = [
 url = "2.5.7"
 
 [dev-dependencies]
+parking_lot = "0.12"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "logging", "prefer-post-quantum", "std", "tls12"] }
 tokio = { version = "1.51.0", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }

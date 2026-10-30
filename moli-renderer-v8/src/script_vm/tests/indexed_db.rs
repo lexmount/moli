@@ -1181,9 +1181,13 @@ fn indexed_db_roundtrips_blob_file_and_array_buffer_values() {
     );
 }
 
-#[test]
-fn indexed_db_roundtrips_opfs_handles_with_durable_external_objects() {
-    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-opfs-handle.test/");
+#[tokio::test]
+async fn indexed_db_roundtrips_opfs_handles_with_durable_external_objects() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://indexeddb-opfs-handle.test/",
+        &loader,
+    );
 
     vm.eval(
         r#"
@@ -1247,8 +1251,17 @@ globalThis.__indexedDbOpfsHandleResult = "pending";
     )
     .expect("IndexedDB OPFS handle workflow should schedule");
 
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__indexedDbOpfsHandleResult !== 'pending')",
+        "true",
+        "IndexedDB OPFS handles and Blob body should finish reading",
+    )
+    .await;
+
     let result = vm
-        .eval_after_selected_page_tasks("String(globalThis.__indexedDbOpfsHandleResult)")
+        .eval("String(globalThis.__indexedDbOpfsHandleResult)")
         .expect("IndexedDB OPFS handle result should be readable");
     assert_eq!(
         result,

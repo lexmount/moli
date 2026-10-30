@@ -140,6 +140,11 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) pending_webcrypto: HashMap<u64, PendingWorkerWebCryptoTask>,
     /// Worker WebCrypto task id counter (never zero so 0 can mean "unset").
     pub(in crate::worker) next_webcrypto_task_id: u64,
+    pub(in crate::worker) next_blob_read_id: u64,
+    pub(in crate::worker) pending_blob_reads: HashMap<u64, crate::blob::read::BlobReadTask>,
+    pub(in crate::worker) ready_blob_reads:
+        Arc<parking_lot::Mutex<std::collections::VecDeque<u64>>>,
+    pub(in crate::worker) file_reading_wake: mpsc::UnboundedSender<()>,
     /// OPFS completions routed from the partition-owned storage IO sequence.
     pub(in crate::worker) opfs_completion_tx: mpsc::UnboundedSender<WorkerOpfsCompletion>,
     pub(in crate::worker) opfs_owner_state: Option<WorkerOpfsOwnerState>,

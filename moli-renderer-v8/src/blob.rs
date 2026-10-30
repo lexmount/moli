@@ -1,5 +1,7 @@
 use crate::web_api_interfaces;
-use moli_file_api::{BlobId, BlobStore, blob_slice_relative_index, normalize_blob_mime_type};
+use moli_file_api::{
+    BlobData, BlobId, BlobStore, blob_slice_relative_index, normalize_blob_mime_type,
+};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::sync::{Arc, OnceLock};
 
@@ -13,6 +15,8 @@ use super::{
 const BLOB_ID_SLOT: &str = "__lmBlobId";
 
 mod parts;
+pub(crate) mod read;
+mod stream;
 pub(crate) use parts::{BlobParts, BlobPropertyBag, required_blob_parts_argument};
 
 #[derive(webidl::WebIdlArgs)]
@@ -106,10 +110,7 @@ pub(super) fn blob_constructor_callback<'s>(
     let Some(parsed) = webidl::parse_args::<BlobConstructorArgs>(scope, &args) else {
         return;
     };
-    let bytes = match parsed
-        .parts
-        .into_bytes(scope, parsed.options.line_endings())
-    {
+    let bytes = match parsed.parts.into_data(scope, parsed.options.line_endings()) {
         Ok(bytes) => bytes,
         Err(error) => {
             webidl::throw_error(scope, &error);
@@ -118,7 +119,7 @@ pub(super) fn blob_constructor_callback<'s>(
     };
     let mime_type = normalize_blob_mime_type(&parsed.options.r#type);
 
-    init_blob_object(scope, args.this(), bytes, mime_type);
+    init_blob_object_from_data(scope, args.this(), bytes, mime_type);
     rv.set(args.this().into());
 }
 
@@ -164,13 +165,7 @@ pub(super) fn blob_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
-    let text = moli_encoding::decode_utf8(&bytes);
-    let Some(value) = v8_string(scope, &text) else {
-        rv.set(v8::undefined(scope).into());
-        return;
-    };
-    set_resolved_promise(scope, &mut rv, value.into());
+    read::start(scope, args.this(), read::BlobReadFormat::Text, &mut rv);
 }
 
 pub(super) fn blob_array_buffer_callback<'s>(
@@ -178,11 +173,12 @@ pub(super) fn blob_array_buffer_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
-    let value = array_buffer_from_bytes(scope, bytes)
-        .map(|buffer| buffer.into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    set_resolved_promise(scope, &mut rv, value);
+    read::start(
+        scope,
+        args.this(),
+        read::BlobReadFormat::ArrayBuffer,
+        &mut rv,
+    );
 }
 
 pub(super) fn blob_bytes_callback<'s>(
@@ -190,11 +186,7 @@ pub(super) fn blob_bytes_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
-    let value = new_uint8_array_from_bytes(scope, bytes)
-        .map(|array| array.into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    set_resolved_promise(scope, &mut rv, value);
+    read::start(scope, args.this(), read::BlobReadFormat::Bytes, &mut rv);
 }
 
 pub(super) fn blob_stream_callback<'s>(
@@ -202,22 +194,9 @@ pub(super) fn blob_stream_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(bytes) = blob_bytes_from_object(scope, args.this()) else {
-        rv.set(v8::undefined(scope).into());
-        return;
-    };
-    let len = bytes.len();
-    let Some(buffer) = array_buffer_from_bytes(scope, bytes) else {
-        rv.set(v8::undefined(scope).into());
-        return;
-    };
-    let Some(stream) =
-        crate::context_bootstrap::new_readable_stream_from_array_buffer(scope, buffer, len)
-    else {
-        rv.set(v8::undefined(scope).into());
-        return;
-    };
-    rv.set(stream.into());
+    if let Some(stream) = stream::create(scope, args.this()) {
+        rv.set(stream.into());
+    }
 }
 
 pub(super) fn blob_slice_callback<'s>(
@@ -228,7 +207,9 @@ pub(super) fn blob_slice_callback<'s>(
     let Some(parsed) = webidl::parse_args::<BlobSliceArgs>(scope, &args) else {
         return;
     };
-    let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
+    let Some(bytes) = blob_data_from_object(scope, args.this()) else {
+        return;
+    };
     let size = bytes.len();
     let start = parsed.start.unwrap_or(0);
     let end = parsed.end.unwrap_or(size as i64);
@@ -237,10 +218,7 @@ pub(super) fn blob_slice_callback<'s>(
     let relative_start = blob_slice_relative_index(start, size);
     let relative_end = blob_slice_relative_index(end, size);
     let span = relative_end.saturating_sub(relative_start);
-    let sliced = bytes
-        .get(relative_start..relative_start + span)
-        .map(ToOwned::to_owned)
-        .unwrap_or_default();
+    let sliced = bytes.slice(relative_start..relative_start + span);
 
     // Convert arguments in the method's realm, then allocate in the receiver's realm.
     let Some(receiver_context) = args.this().get_creation_context(scope) else {
@@ -248,7 +226,7 @@ pub(super) fn blob_slice_callback<'s>(
         return;
     };
     let scope = &mut v8::ContextScope::new(scope, receiver_context);
-    if let Some(blob) = build_blob_object(scope, sliced, mime_type) {
+    if let Some(blob) = build_blob_object_from_data(scope, sliced, mime_type) {
         rv.set(blob.into());
     } else {
         rv.set(v8::undefined(scope).into());
@@ -271,9 +249,28 @@ pub(super) fn try_init_blob_object_from_shared<'s>(
     bytes: std::sync::Arc<[u8]>,
     mime_type: String,
 ) -> Option<BlobId> {
+    try_init_blob_object_from_data(scope, object, bytes.into(), mime_type)
+}
+
+pub(super) fn init_blob_object_from_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    bytes: BlobData,
+    mime_type: String,
+) -> BlobId {
+    try_init_blob_object_from_data(scope, object, bytes, mime_type)
+        .expect("Blob instance declaration should initialize")
+}
+
+pub(super) fn try_init_blob_object_from_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    bytes: BlobData,
+    mime_type: String,
+) -> Option<BlobId> {
     let owner_id = current_resource_owner_id(scope);
     let partition_id = current_blob_storage_partition_identity(scope);
-    let blob_id = blob_store().create_blob_from_shared(owner_id, partition_id, bytes, mime_type);
+    let blob_id = blob_store().create_blob_from_data(owner_id, partition_id, bytes, mime_type);
     if BlobInstanceDeclaration::new(v8::BigInt::new_from_u64(scope, blob_id))
         .initialize(scope, object)
         .is_err()
@@ -298,19 +295,27 @@ pub(super) fn build_blob_object_from_shared<'s>(
     bytes: std::sync::Arc<[u8]>,
     mime_type: String,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    build_blob_object_from_data(scope, bytes.into(), mime_type)
+}
+
+pub(super) fn build_blob_object_from_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: BlobData,
+    mime_type: String,
+) -> Option<v8::Local<'s, v8::Object>> {
     build_blob_object_unpublished(scope, bytes, mime_type).map(|(object, _)| object)
 }
 
 pub(super) fn build_blob_object_unpublished<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    bytes: std::sync::Arc<[u8]>,
+    bytes: BlobData,
     mime_type: String,
 ) -> Option<(v8::Local<'s, v8::Object>, BlobId)> {
     let prototype =
         crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Blob").ok()?;
     let owner_id = current_resource_owner_id(scope);
     let partition_id = current_blob_storage_partition_identity(scope);
-    let blob_id = blob_store().create_blob_from_shared(owner_id, partition_id, bytes, mime_type);
+    let blob_id = blob_store().create_blob_from_data(owner_id, partition_id, bytes, mime_type);
     let object = BlobInstanceDeclaration::new(v8::BigInt::new_from_u64(scope, blob_id))
         .bind(scope)
         .ok()
@@ -365,6 +370,13 @@ fn blob_id_from_value(
         .number_value(scope)
         .filter(|value| value.is_finite() && *value >= 1.0)
         .map(|value| value as BlobId)
+}
+
+pub(super) fn blob_data_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<BlobData> {
+    blob_store().blob_data(blob_id_from_object(scope, object)?)
 }
 
 pub(super) fn blob_bytes_from_object<'s>(
@@ -532,18 +544,4 @@ fn new_uint8_array_from_bytes<'s>(
     let len = bytes.len();
     let buffer = array_buffer_from_bytes(scope, bytes)?;
     v8::Uint8Array::new(scope, buffer, 0, len)
-}
-
-fn set_resolved_promise(
-    scope: &mut v8::PinScope<'_, '_>,
-    rv: &mut v8::ReturnValue<'_, v8::Value>,
-    value: v8::Local<'_, v8::Value>,
-) {
-    let Some(resolver) = v8::PromiseResolver::new(scope) else {
-        rv.set(v8::undefined(scope).into());
-        return;
-    };
-    let promise = resolver.get_promise(scope);
-    let _ = resolver.resolve(scope, value);
-    rv.set(promise.into());
 }

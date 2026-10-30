@@ -1543,7 +1543,7 @@ fn isolated_realm_destruction_retires_pending_opfs_task() {
             let resolver = v8::PromiseResolver::new(scope).expect("isolated OPFS resolver");
             assert!(
                 unsafe { &mut *host_ptr }
-                    .register_pending_opfs_task(scope, resolver, locator, None)
+                    .register_pending_opfs_task(scope, resolver, locator, None, None)
                     .is_some()
             );
             Ok(())

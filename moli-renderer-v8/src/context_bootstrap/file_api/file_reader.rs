@@ -8,6 +8,7 @@ mod state;
 mod task;
 
 pub(in crate::context_bootstrap) use constructor::file_reader_constructor_callback;
+pub(crate) use read::{FileReaderReadMode, finish_file_reader_read};
 pub(in crate::context_bootstrap) use read::{
     file_reader_abort_callback, file_reader_read_as_array_buffer_callback,
     file_reader_read_as_binary_string_callback, file_reader_read_as_data_url_callback,

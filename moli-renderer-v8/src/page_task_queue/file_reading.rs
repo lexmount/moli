@@ -32,6 +32,7 @@ impl RendererPageFileReadingTaskId {
 /// are not callback-presence flags and do not decide scheduler policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageFileReadingTaskKind {
+    BlobRead,
     /// Complete one active enumeration request, possibly with the first empty
     /// batch that transitions the reader to `done`.
     DirectoryBatch,

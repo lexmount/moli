@@ -4,6 +4,7 @@ use std::fs;
 
 mod crash_tests;
 mod idle_tests;
+mod lazy_blob_tests;
 mod open_retry_tests;
 
 const OWNER: &[u8] = b"partition/default/top-site/storage-key/bucket-7";

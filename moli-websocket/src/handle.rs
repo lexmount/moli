@@ -47,6 +47,11 @@ impl ConnectionHandle {
         self.send(Command::SendBinary(data))
     }
 
+    /// Admits an immutable Blob; its backend is read asynchronously in order.
+    pub fn send_blob(&self, data: moli_file_api::BlobData) -> Result<(), SendError> {
+        self.send(Command::SendBlob(data))
+    }
+
     /// Requests graceful closure after previously admitted messages are sent.
     pub fn close(&self, code: Option<u16>, reason: String) -> Result<(), SendError> {
         self.send(Command::Close { code, reason })

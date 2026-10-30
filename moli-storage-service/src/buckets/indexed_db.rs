@@ -20,6 +20,12 @@ impl StorageBucketQuotaOwner {
         mut command: Command,
         completion: impl FnOnce(Result<Completion, IndexedDbError>) + Send + 'static,
     ) -> Result<(), crate::StorageServiceDispatchError> {
+        if client.is_closed() {
+            completion(Err(IndexedDbError::InvalidState(
+                "IndexedDB database is closed".into(),
+            )));
+            return Ok(());
+        }
         let locator = self.locator.clone();
         let owner = self.clone();
         let sampling_client = client.clone();
@@ -80,6 +86,11 @@ impl StorageBucketQuotaOwner {
         &self,
         client: &DatabaseClient,
     ) -> Result<QuotaCheck, IndexedDbError> {
+        if client.is_closed() {
+            return Err(IndexedDbError::InvalidState(
+                "IndexedDB database is closed".into(),
+            ));
+        }
         let storage_key = match &self.locator {
             StorageBucketLocator::Default { storage_key } => storage_key.clone(),
             StorageBucketLocator::Named {

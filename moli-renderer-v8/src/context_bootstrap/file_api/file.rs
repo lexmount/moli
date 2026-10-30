@@ -179,7 +179,7 @@ pub(in crate::context_bootstrap) fn file_constructor_callback<'s>(
     };
     let bytes = match parsed
         .file_bits
-        .into_bytes(scope, parsed.options.base.line_endings())
+        .into_data(scope, parsed.options.base.line_endings())
     {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -188,7 +188,7 @@ pub(in crate::context_bootstrap) fn file_constructor_callback<'s>(
         }
     };
     let mime_type = moli_file_api::normalize_blob_mime_type(&parsed.options.base.r#type);
-    blob::init_blob_object(scope, args.this(), bytes, mime_type);
+    blob::init_blob_object_from_data(scope, args.this(), bytes, mime_type);
 
     let last_modified = parsed
         .options
@@ -219,20 +219,33 @@ pub(crate) fn build_file_object_from_shared_parts<'s>(
     name: &str,
     last_modified: f64,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    build_file_object_unpublished(scope, bytes, mime_type, name, last_modified)
+    build_file_object_unpublished(scope, bytes.into(), mime_type, name, last_modified)
         .map(|(object, _)| object)
 }
 
 pub(crate) fn build_file_object_unpublished<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    bytes: std::sync::Arc<[u8]>,
+    bytes: moli_file_api::BlobData,
     mime_type: String,
     name: &str,
     last_modified: f64,
 ) -> Option<(v8::Local<'s, v8::Object>, moli_file_api::BlobId)> {
     let object = file_object_with_metadata(scope, name, last_modified)?;
-    let id = blob::try_init_blob_object_from_shared(scope, object, bytes, mime_type)?;
+    let id = blob::try_init_blob_object_from_data(scope, object, bytes, mime_type)?;
     Some((object, id))
+}
+
+pub(crate) fn file_clone_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<(String, f64)> {
+    if !web_api_interfaces::File::is_instance(scope, object) {
+        return None;
+    }
+    let name = file_name_from_object(scope, object)?;
+    let modified =
+        get_private_value(scope, object, FILE_LAST_MODIFIED_SLOT)?.number_value(scope)?;
+    Some((name, modified))
 }
 
 pub(crate) fn selected_file_from_object<'s>(

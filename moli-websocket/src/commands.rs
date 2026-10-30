@@ -113,6 +113,7 @@ impl CommandPort {
         let bytes = match command {
             Command::SendText(text) | Command::ReceiveText(text) => Some(text.len()),
             Command::SendBinary(data) | Command::ReceiveBinary(data) => Some(data.len()),
+            Command::SendBlob(data) => Some(data.len()),
             _ => None,
         };
         let mut permits = Vec::with_capacity(2);

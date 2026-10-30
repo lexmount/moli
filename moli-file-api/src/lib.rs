@@ -1,10 +1,12 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use moli_web_mime::{mime_charset, normalize_web_api_mime_type};
 
+mod blob_data;
 mod blob_store;
 pub mod data_transfer;
 pub mod file;
 
+pub use blob_data::{BlobData, BlobReadCompletion, BlobSource};
 pub use blob_store::{BlobId, BlobStore, ObjectUrlEntry};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

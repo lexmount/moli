@@ -60,6 +60,7 @@ pub(super) fn websocket_send_callback<'s>(
         let sent = match payload {
             WebSocketSendPayload::Text(text) => host.send_websocket_text(socket_id, text),
             WebSocketSendPayload::Binary(bytes) => host.send_websocket_binary(socket_id, bytes),
+            WebSocketSendPayload::Blob(data) => host.send_websocket_blob(socket_id, data),
         };
         if !matches!(sent, Some(Ok(()))) {
             add_buffered_amount(scope, args.this(), -amount);
@@ -72,6 +73,9 @@ pub(super) fn websocket_send_callback<'s>(
             }
             WebSocketSendPayload::Binary(bytes) => {
                 crate::worker::send_worker_websocket_binary(scope, socket_id, bytes)
+            }
+            WebSocketSendPayload::Blob(data) => {
+                crate::worker::send_worker_websocket_blob(scope, socket_id, data)
             }
         };
         if !matches!(sent, Some(true)) {

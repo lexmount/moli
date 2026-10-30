@@ -15,10 +15,77 @@ use super::{JsContextHost, WindowDocumentTaskTarget};
 pub(super) type DirectoryReaderCallbackState = ExactWindowDocumentTaskLedger<
     RendererPageFileReadingTaskId,
     RendererPageFileReadingTaskKind,
-    DirectoryReaderCallbackTask,
+    FileReadingTask,
 >;
 
+pub(crate) enum FileReadingTask {
+    Directory(DirectoryReaderCallbackTask),
+    Blob {
+        task: crate::blob::read::BlobReadTask,
+        execution_context: super::WindowExecutionContextIdentity,
+    },
+}
+
+impl FileReadingTask {
+    fn rollback_admission(&self, scope: &mut v8::PinScope<'_, '_>) {
+        if let Self::Directory(task) = self {
+            task.rollback_admission(scope);
+        }
+    }
+
+    fn invoke(
+        self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host: *mut JsContextHost,
+    ) -> DirectoryReaderCallbackTaskEffect {
+        match self {
+            Self::Directory(task) => task.invoke(scope, host),
+            Self::Blob {
+                task,
+                execution_context,
+            } => {
+                if !unsafe { &*host }
+                    .window_execution_context_identity_is_current(execution_context)
+                {
+                    return DirectoryReaderCallbackTaskEffect::CallbackNotInvoked;
+                }
+                task.settle(scope);
+                DirectoryReaderCallbackTaskEffect::CallbackInvoked
+            }
+        }
+    }
+}
+
 impl JsContextHost {
+    pub(crate) fn register_blob_read_task(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        task: crate::blob::read::BlobReadTask,
+    ) -> Option<moli_file_api::BlobReadCompletion> {
+        let target = self.current_window_document_task_target(scope)?;
+        let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
+        let task_id = self
+            .directory_reader_callbacks
+            .allocate_task_id(RendererPageFileReadingTaskId::from_raw);
+        let sender = self.page_file_reading_sender();
+        let complete = crate::blob::read::completion_slot(&task.result, move || {
+            sender
+                .send(target, task_id, RendererPageFileReadingTaskKind::BlobRead)
+                .is_ok()
+        });
+        self.directory_reader_callbacks
+            .push(PendingExactWindowDocumentTask::new(
+                task_id,
+                target,
+                RendererPageFileReadingTaskKind::BlobRead,
+                FileReadingTask::Blob {
+                    task,
+                    execution_context,
+                },
+            ));
+        Some(complete)
+    }
+
     /// Admit one `readEntries()` operation on the exact calling
     /// Window/Document and publish its immutable envelope to FileReading.
     pub(crate) fn queue_directory_reader_callback_task<'s>(
@@ -47,7 +114,10 @@ impl JsContextHost {
         };
         self.directory_reader_callbacks
             .push(PendingExactWindowDocumentTask::new(
-                task_id, target, kind, task,
+                task_id,
+                target,
+                kind,
+                FileReadingTask::Directory(task),
             ));
 
         if self
@@ -89,7 +159,7 @@ impl JsContextHost {
         task_id: RendererPageFileReadingTaskId,
         target: WindowDocumentTaskTarget,
         kind: RendererPageFileReadingTaskKind,
-    ) -> Option<DirectoryReaderCallbackTask> {
+    ) -> Option<FileReadingTask> {
         self.directory_reader_callbacks
             .remove_exact(task_id, target, kind)
             .map(PendingExactWindowDocumentTask::into_payload)
@@ -114,7 +184,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         target: WindowDocumentTaskTarget,
-        task: DirectoryReaderCallbackTask,
+        task: FileReadingTask,
     ) -> PageFileReadingTargetEffect {
         let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
         else {
@@ -123,6 +193,7 @@ impl JsContextHost {
         let scope = &mut v8::ContextScope::new(scope, resolved.context);
         let dispatch_scope = target.dispatch_scope();
         let previous_scope = dispatch_scope.enter(scope);
+        let settle_promise = matches!(&task, FileReadingTask::Blob { .. });
         let effect = match task.invoke(scope, host_ptr) {
             DirectoryReaderCallbackTaskEffect::CallbackInvoked => {
                 PageFileReadingTargetEffect::CallbackInvokedForCurrentOwner
@@ -134,7 +205,11 @@ impl JsContextHost {
                 PageFileReadingTargetEffect::DiscardedStaleReaderRequest
             }
         };
-        dispatch_scope.restore(scope, previous_scope);
+        if settle_promise {
+            dispatch_scope.defer_restore(scope, previous_scope);
+        } else {
+            dispatch_scope.restore(scope, previous_scope);
+        }
         effect
     }
 }

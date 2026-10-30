@@ -1,12 +1,13 @@
 //! OPFS storage-owner outcomes shared by Window and Worker settlements.
 //!
-//! These values describe only the completed storage operation. They carry no
+//! These values describe completed storage work or immutable Blob input reads. They carry no
 //! Page task identity, scheduler route, or Worker transport identity; those
 //! capabilities remain in their respective execution domains.
 
 use moli_storage_service::{
-    DirectoryEntry, EntryKind, FileSnapshot, OpfsPath, OpfsResult, StorageOpfsMutationLease,
-    StorageOpfsSyncAccessLease, StorageOpfsWritableLease, StorageServiceTaskError, WritableMode,
+    DirectoryEntry, EntryKind, FileSnapshot, FileSnapshotIdentity, OpfsBucketKey, OpfsPath,
+    OpfsResult, SharedStorageService, StorageOpfsMutationLease, StorageOpfsSyncAccessLease,
+    StorageOpfsWritableLease, StorageServiceTaskError, WritableMode,
 };
 
 #[derive(Debug)]
@@ -32,6 +33,13 @@ pub(crate) enum OpfsTaskResult {
     ReadDirectory(OpfsOwnerResult<Vec<DirectoryEntry>>),
     Remove(OpfsOwnerResult<Option<StorageOpfsMutationLease>>),
     Resolve(OpfsOwnerResult<Option<Vec<String>>>),
+    WritableInput {
+        bytes: std::io::Result<Vec<u8>>,
+        position: Option<u64>,
+        snapshot_validation: Option<(OpfsBucketKey, OpfsPath, FileSnapshotIdentity)>,
+        service: SharedStorageService,
+        cleanup: StorageOpfsWritableLease,
+    },
     WritableCommand {
         result: OpfsOwnerResult<()>,
         cleanup: StorageOpfsWritableLease,

@@ -13,15 +13,15 @@ use crate::{
         GeometryClonePayload, ImageDataClonePayload, ReadableStreamClonePayload,
         TransformStreamClonePayload, WritableStreamClonePayload,
         attach_file_system_file_snapshot_clone_payload, build_dom_exception_object,
-        build_encoded_video_chunk_from_clone_payload, build_file_object,
-        build_file_system_handle_from_clone_payload, build_geometry_object_from_clone_payload,
-        build_geometry_quad_from_cloned_points, build_image_data_object_from_clone_payload,
-        build_quota_exceeded_error_object, build_readable_stream_clone_shell,
-        build_transform_stream_clone_shell, build_writable_stream_clone_shell,
-        crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
-        detach_message_port_owner_for_transfer, detach_transferred_message_port,
-        dom_exception_clone_fields, encoded_video_chunk_clone_payload_from_object,
-        ensure_message_port_wrapper_for_id, file_system_file_snapshot_clone_payload_from_object,
+        build_encoded_video_chunk_from_clone_payload, build_file_system_handle_from_clone_payload,
+        build_geometry_object_from_clone_payload, build_geometry_quad_from_cloned_points,
+        build_image_data_object_from_clone_payload, build_quota_exceeded_error_object,
+        build_readable_stream_clone_shell, build_transform_stream_clone_shell,
+        build_writable_stream_clone_shell, crypto_key_clone_payload_from_object,
+        crypto_key_object_from_clone_payload, detach_message_port_owner_for_transfer,
+        detach_transferred_message_port, dom_exception_clone_fields,
+        encoded_video_chunk_clone_payload_from_object, ensure_message_port_wrapper_for_id,
+        file_system_file_snapshot_clone_payload_from_object,
         file_system_handle_clone_payload_from_object, geometry_clone_payload_from_object,
         geometry_quad_clone_points, image_data_clone_payload_from_object,
         initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
@@ -29,9 +29,7 @@ use crate::{
         new_dom_exception_value, prepare_readable_stream_transfer,
         prepare_transform_stream_transfer, prepare_writable_stream_transfer,
         quota_exceeded_error_clone_fields, require_internal_stream_value,
-        selected_file_from_object,
     },
-    dom::native::SelectedFile,
     types::MessagePortId,
 };
 pub(crate) use moli_structured_clone::{
@@ -255,11 +253,14 @@ struct ClonedFileSystemHandle {
 #[derive(Clone, Debug)]
 pub(crate) enum BlobClonePayload {
     Blob {
-        bytes: Vec<u8>,
+        bytes: moli_file_api::BlobData,
         mime_type: String,
     },
     File {
-        file: SelectedFile,
+        bytes: moli_file_api::BlobData,
+        mime_type: String,
+        name: String,
+        last_modified: f64,
         opfs_snapshot: Option<FileSystemFileSnapshotClonePayload>,
     },
 }
@@ -828,14 +829,19 @@ pub(crate) fn blob_clone_payload_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<BlobClonePayload> {
-    if let Some(file) = selected_file_from_object(scope, object) {
+    let bytes = crate::blob::blob_data_from_object(scope, object)?;
+    let mime_type = crate::blob::blob_mime_type_from_object(scope, object).unwrap_or_default();
+    if let Some((name, last_modified)) =
+        crate::context_bootstrap::file_clone_metadata(scope, object)
+    {
         return Some(BlobClonePayload::File {
-            file,
+            bytes,
+            mime_type,
+            name,
+            last_modified,
             opfs_snapshot: file_system_file_snapshot_clone_payload_from_object(scope, object),
         });
     }
-    let bytes = crate::blob::blob_bytes_from_object(scope, object)?;
-    let mime_type = crate::blob::blob_mime_type_from_object(scope, object).unwrap_or_default();
     Some(BlobClonePayload::Blob { bytes, mime_type })
 }
 
@@ -845,13 +851,22 @@ pub(crate) fn build_blob_object_from_clone_payload<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     match payload {
         BlobClonePayload::Blob { bytes, mime_type } => {
-            crate::blob::build_blob_object(scope, bytes.clone(), mime_type.clone())
+            crate::blob::build_blob_object_from_data(scope, bytes.clone(), mime_type.clone())
         }
         BlobClonePayload::File {
-            file,
+            bytes,
+            mime_type,
+            name,
+            last_modified,
             opfs_snapshot,
         } => {
-            let object = build_file_object(scope, file)?;
+            let (object, _) = crate::context_bootstrap::build_file_object_unpublished(
+                scope,
+                bytes.clone(),
+                mime_type.clone(),
+                name,
+                *last_modified,
+            )?;
             if let Some(snapshot) = opfs_snapshot {
                 attach_file_system_file_snapshot_clone_payload(scope, object, snapshot)?;
             }

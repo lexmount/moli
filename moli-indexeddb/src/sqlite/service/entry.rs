@@ -100,6 +100,7 @@ impl Entry {
                     // Reopening a file does not change its published schema.
                     database.committed = previous.clone();
                 }
+                database.blobs = Some(entry.blobs.clone());
                 entry.database = Some(database);
                 entry.initialized = true;
                 entry.publish();

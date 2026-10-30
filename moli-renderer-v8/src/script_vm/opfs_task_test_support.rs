@@ -22,7 +22,7 @@ impl ScriptVm {
                 "https://opfs-executor.test",
             );
             let (_, producer) = unsafe { &mut *host_ptr }
-                .register_pending_opfs_task(scope, resolver, locator, None)
+                .register_pending_opfs_task(scope, resolver, locator, None, None)
                 .ok_or_else(|| {
                     anyhow::anyhow!("OPFS executor test must capture the current Window realm")
                 })?;

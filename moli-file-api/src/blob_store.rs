@@ -1,3 +1,4 @@
+use crate::BlobData;
 use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
@@ -27,7 +28,7 @@ struct BlobState<OwnerId, PartitionId> {
     owner_id: Option<OwnerId>,
     partition_id: Option<PartitionId>,
     uuid: String,
-    bytes: Arc<[u8]>,
+    bytes: BlobData,
     mime_type: String,
     wrapper_refs: usize,
     reader_refs: usize,
@@ -102,6 +103,16 @@ where
         bytes: Arc<[u8]>,
         mime_type: String,
     ) -> BlobId {
+        self.create_blob_from_data(owner_id, partition_id, bytes.into(), mime_type)
+    }
+
+    pub fn create_blob_from_data(
+        &self,
+        owner_id: Option<OwnerId>,
+        partition_id: Option<PartitionId>,
+        bytes: BlobData,
+        mime_type: String,
+    ) -> BlobId {
         let blob_id = self.next_blob_id.fetch_add(1, Ordering::Relaxed).max(1);
         let mut blobs = self.blobs.lock();
         let uuid = loop {
@@ -143,11 +154,15 @@ where
 
     /// Return a copy of the Blob bytes.
     pub fn blob_bytes(&self, blob_id: BlobId) -> Option<Vec<u8>> {
+        self.blob_data(blob_id)?.read_blocking().ok()
+    }
+
+    pub fn blob_data(&self, blob_id: BlobId) -> Option<BlobData> {
         self.blobs
             .lock()
             .by_id
             .get(&blob_id)
-            .map(|blob| blob.bytes.to_vec())
+            .map(|blob| blob.bytes.clone())
     }
 
     /// Return the stable DevTools UUID for a Blob.
@@ -175,13 +190,17 @@ where
         uuid: &str,
         partition_id: &PartitionId,
     ) -> Option<Arc<[u8]>> {
-        let blobs = self.blobs.lock();
-        let blob_id = blobs.ids_by_uuid.get(uuid)?;
-        blobs
-            .by_id
-            .get(blob_id)
-            .filter(|blob| blob.partition_id.as_ref() == Some(partition_id))
-            .map(|blob| blob.bytes.clone())
+        let data = {
+            let blobs = self.blobs.lock();
+            let blob_id = blobs.ids_by_uuid.get(uuid)?;
+            blobs
+                .by_id
+                .get(blob_id)
+                .filter(|blob| blob.partition_id.as_ref() == Some(partition_id))
+                .map(|blob| blob.bytes.clone())?
+        };
+        data.shared_bytes()
+            .or_else(|| data.read_blocking().ok().map(Arc::from))
     }
 
     /// Return the Blob MIME type.
@@ -268,7 +287,7 @@ where
             let object_urls = self.object_urls.lock();
             self.object_url_blob_data(object_urls.get(url)?.blob_id)?
         };
-        Some((bytes.to_vec(), mime_type))
+        Some((bytes.read_blocking().ok()?, mime_type))
     }
 
     /// Atomically capture the Blob backing and the URL creator's access key.
@@ -277,18 +296,24 @@ where
     where
         AccessKey: Clone,
     {
-        let url = url.split_once('#').map_or(url, |(url, _)| url);
-        let object_urls = self.object_urls.lock();
-        let state = object_urls.get(url)?;
-        let (bytes, mime_type) = self.object_url_blob_data(state.blob_id)?;
+        let (data, mime_type, access_key) = {
+            let url = url.split_once('#').map_or(url, |(url, _)| url);
+            let object_urls = self.object_urls.lock();
+            let state = object_urls.get(url)?;
+            let (data, mime_type) = self.object_url_blob_data(state.blob_id)?;
+            (data, mime_type, state.access_key.clone())
+        };
+        let bytes = data
+            .shared_bytes()
+            .or_else(|| data.read_blocking().ok().map(Arc::from))?;
         Some(ObjectUrlEntry {
             bytes,
             mime_type,
-            access_key: state.access_key.clone(),
+            access_key,
         })
     }
 
-    fn object_url_blob_data(&self, blob_id: BlobId) -> Option<(Arc<[u8]>, String)> {
+    fn object_url_blob_data(&self, blob_id: BlobId) -> Option<(BlobData, String)> {
         let blobs = self.blobs.lock();
         let blob = blobs.by_id.get(&blob_id)?;
         Some((blob.bytes.clone(), blob.mime_type.clone()))

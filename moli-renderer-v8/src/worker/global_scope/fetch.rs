@@ -1492,6 +1492,21 @@ pub(crate) fn send_worker_websocket_binary(
     Some(connection.send_binary(bytes).is_ok())
 }
 
+pub(crate) fn send_worker_websocket_blob(
+    scope: &mut v8::PinScope<'_, '_>,
+    socket_id: u64,
+    data: moli_file_api::BlobData,
+) -> Option<bool> {
+    let state = get_worker_state(scope)?;
+    let connection = state
+        .borrow()
+        .websockets
+        .get(&socket_id)?
+        .connection
+        .clone();
+    Some(connection.send_blob(data).is_ok())
+}
+
 pub(crate) fn close_worker_websocket(
     scope: &mut v8::PinScope<'_, '_>,
     socket_id: u64,

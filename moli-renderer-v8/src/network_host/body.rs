@@ -42,6 +42,33 @@ impl PreparedBodyInit {
     }
 }
 
+pub(in crate::network_host) fn object_body_init<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Result<Option<PreparedBodyInit>, webidl::WebIdlError> {
+    if let Some((body, content_type)) =
+        crate::context_bootstrap::form_data_request_body(scope, object)?
+    {
+        return Ok(Some(PreparedBodyInit::new(body, Some(content_type))));
+    }
+    if let Some(body) = crate::context_bootstrap::url_search_params_request_body(scope, object) {
+        return Ok(Some(PreparedBodyInit::new(
+            body.into_bytes(),
+            Some(URL_SEARCH_PARAMS_CONTENT_TYPE.to_owned()),
+        )));
+    }
+    if let Some(data) = blob::blob_data_from_object(scope, object) {
+        // A recognized Blob must never fall through to USVString on I/O failure.
+        let bytes = data
+            .read_blocking()
+            .map_err(|_| webidl::WebIdlError::custom_message("Failed to read Blob body"))?;
+        let mime_type = blob::blob_mime_type_from_object(scope, object).unwrap_or_default();
+        let content_type = (!mime_type.is_empty()).then_some(mime_type);
+        return Ok(Some(PreparedBodyInit::new(bytes, content_type)));
+    }
+    Ok(None)
+}
+
 pub(in crate::network_host) fn body_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -51,22 +78,8 @@ pub(in crate::network_host) fn body_init<'s>(
         return Ok(None);
     }
     if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
-        if let Some((body, content_type)) =
-            crate::context_bootstrap::form_data_request_body(scope, object)
-        {
-            return Ok(Some(PreparedBodyInit::new(body, Some(content_type))));
-        }
-        if let Some(body) = crate::context_bootstrap::url_search_params_request_body(scope, object)
-        {
-            return Ok(Some(PreparedBodyInit::new(
-                body.into_bytes(),
-                Some(URL_SEARCH_PARAMS_CONTENT_TYPE.to_owned()),
-            )));
-        }
-        if let Some(bytes) = blob::blob_bytes_from_object(scope, object) {
-            let mime_type = blob::blob_mime_type_from_object(scope, object).unwrap_or_default();
-            let content_type = (!mime_type.is_empty()).then_some(mime_type);
-            return Ok(Some(PreparedBodyInit::new(bytes, content_type)));
+        if let Some(body) = object_body_init(scope, object)? {
+            return Ok(Some(body));
         }
         if web_api_interfaces::ReadableStream::is_instance(scope, object) {
             return Ok(Some(PreparedBodyInit::new(Vec::new(), None)));

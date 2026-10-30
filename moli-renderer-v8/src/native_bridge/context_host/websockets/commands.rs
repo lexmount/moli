@@ -48,6 +48,17 @@ impl JsContextHost {
             .unwrap_or(false)
     }
 
+    pub(crate) fn send_websocket_blob(
+        &self,
+        socket_id: u64,
+        data: moli_file_api::BlobData,
+    ) -> Option<Result<(), moli_websocket::SendError>> {
+        self.websockets
+            .get(&socket_id)
+            .and_then(|state| state.connection.as_ref())
+            .map(|connection| connection.send_blob(data))
+    }
+
     pub(crate) fn receive_synthetic_websocket_text(&self, socket_id: u64, data: String) -> bool {
         self.websockets
             .get(&socket_id)

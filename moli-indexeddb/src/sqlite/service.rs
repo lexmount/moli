@@ -1,6 +1,7 @@
 //! Native command transport. Connections live exclusively in worker
 //! state; a client reads only published metadata and never locks a SQL owner.
 
+mod blob;
 mod command;
 mod entry;
 mod maintenance;
@@ -134,6 +135,7 @@ struct Entry {
     location: Location,
     state: Arc<Published>,
     database: Option<Database>,
+    blobs: Arc<super::blobs::BlobSnapshots>,
     initialized: bool,
     failure: Option<IndexedDbError>,
     transactions: BTreeMap<TransactionHandle, StartedTransaction>,
@@ -212,7 +214,27 @@ impl Entry {
         result
     }
 
-    fn close(&mut self, id: DatabaseId, _config: ServiceConfig) -> Result<(), IndexedDbError> {
+    fn close(&mut self, id: DatabaseId, config: ServiceConfig) -> Result<(), IndexedDbError> {
+        // An idle physical connection may already be closed. Reopen only when
+        // live Blob objects still need an immutable copy before retirement.
+        if self.blobs.has_live() {
+            if self.database.is_none()
+                && let Location::Disk { path, .. } = &self.location
+            {
+                let reopened = moli_sqlite::open_disk(path, OpenMode::Existing, config.connection)
+                    .map_err(|error| IndexedDbError::Io(error.to_string()))
+                    .and_then(|connection| {
+                        Database::open_shared(connection, self.identity.clone())
+                    });
+                match reopened {
+                    Ok(database) => self.database = Some(database),
+                    Err(error) => self.blobs.fail(&error),
+                }
+            }
+            if let Some(database) = &self.database {
+                self.blobs.preserve_all(database);
+            }
+        }
         let result = self.database.take().map_or(Ok(()), Database::close);
         if let Err(error) = &result {
             *self.state.failure.lock() = Some(error.clone());
@@ -382,12 +404,19 @@ impl ServiceClient {
             metadata: RwLock::new(previous),
             ..Default::default()
         });
-        let owner = Owner::start(self.runtime.clone(), id, self.config, state.clone(), |_| {
-            Entry {
+        let owner = Owner::start(
+            self.runtime.clone(),
+            id,
+            self.config,
+            state.clone(),
+            |owner| Entry {
                 identity: identity.clone(),
                 location: location.clone(),
                 state: state.clone(),
                 database: None,
+                blobs: super::blobs::BlobSnapshots::new(Arc::new(blob::DatabaseBlobReader {
+                    owner,
+                })),
                 initialized,
                 idle_since: None,
                 request_owner,
@@ -403,8 +432,8 @@ impl ServiceClient {
                         ..
                     }
                 ),
-            }
-        })?;
+            },
+        )?;
         let client = DatabaseClient {
             id,
             identity,

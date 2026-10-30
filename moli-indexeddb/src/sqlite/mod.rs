@@ -5,6 +5,7 @@
 //! worker connection under object-store scope admission. No overlapping writer
 //! can modify a reader's stores. Records and rollback state stay in SQLite.
 
+mod blobs;
 mod names;
 mod query;
 mod records;
@@ -103,6 +104,7 @@ struct ActiveTransaction {
     mode: TransactionMode,
     stores: BTreeSet<crate::IndexedDbName>,
     pending: Option<PendingWrite>,
+    first_object_id: i64,
 }
 
 struct PendingWrite {
@@ -133,6 +135,7 @@ pub struct Database {
     active: Option<ActiveTransaction>,
     readers: BTreeMap<TransactionHandle, ActiveTransaction>,
     next_request: u64,
+    blobs: Option<Arc<blobs::BlobSnapshots>>,
 }
 
 impl Database {
@@ -223,6 +226,7 @@ impl Database {
             active: None,
             readers: BTreeMap::new(),
             next_request: 1,
+            blobs: None,
         })
     }
 
@@ -322,10 +326,16 @@ impl Database {
                     mode,
                     stores,
                     pending: None,
+                    first_object_id: i64::MAX,
                 },
             );
             return Ok(());
         }
+        let first_object_id = self.connection.query_row(
+            "SELECT next_object_id FROM database_metadata WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
         self.connection.execute_batch("BEGIN IMMEDIATE")?;
         if let Some(version) = version
             && let Err(error) = self.connection.execute(
@@ -341,6 +351,7 @@ impl Database {
             mode,
             stores,
             pending: None,
+            first_object_id,
         });
         Ok(())
     }

@@ -330,7 +330,8 @@ pub(crate) use self::file_api::{
     replace_drag_data_store_contents, update_drag_data_store_operations_mask,
 };
 pub(crate) use self::file_api::{
-    build_file_list_object, build_file_object, file_list_files_from_object,
+    FileReaderReadMode, build_file_list_object, build_file_object, build_file_object_unpublished,
+    file_clone_metadata, file_list_files_from_object, finish_file_reader_read,
     flush_one_pending_file_reader, is_file_list_object, selected_file_from_object,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;

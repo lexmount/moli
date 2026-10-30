@@ -2,7 +2,6 @@ use super::super::*;
 use crate::network_host::url_helpers::ResolveContextUrlError;
 
 const CONTENT_TYPE_HEADER: &str = "Content-Type";
-const URL_SEARCH_PARAMS_CONTENT_TYPE: &str = "application/x-www-form-urlencoded;charset=UTF-8";
 const TEXT_CONTENT_TYPE: &str = "text/plain;charset=UTF-8";
 
 #[derive(crate::webidl::WebIdlArgs)]
@@ -164,24 +163,13 @@ pub(crate) fn prepare_xhr_send_body<'s>(
         return Ok(PreparedXhrSendBody::empty());
     }
 
-    if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
-        if let Some((body, content_type)) =
-            crate::context_bootstrap::form_data_request_body(scope, object)
-        {
-            return Ok(PreparedXhrSendBody::new(body, Some(content_type)));
-        }
-        if let Some(body) = crate::context_bootstrap::url_search_params_request_body(scope, object)
-        {
-            return Ok(PreparedXhrSendBody::new(
-                body.into_bytes(),
-                Some(URL_SEARCH_PARAMS_CONTENT_TYPE.to_owned()),
-            ));
-        }
-        if let Some(bytes) = blob::blob_bytes_from_object(scope, object) {
-            let mime_type = blob::blob_mime_type_from_object(scope, object).unwrap_or_default();
-            let default_content_type = (!mime_type.is_empty()).then_some(mime_type);
-            return Ok(PreparedXhrSendBody::new(bytes, default_content_type));
-        }
+    if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
+        && let Some(body) = crate::network_host::body::object_body_init(scope, object)?
+    {
+        return Ok(PreparedXhrSendBody {
+            body: Some(body.bytes),
+            default_content_type: body.content_type,
+        });
     }
 
     validate_xhr_buffer_source(value)?;

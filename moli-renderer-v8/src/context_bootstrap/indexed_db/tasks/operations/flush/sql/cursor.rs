@@ -24,6 +24,7 @@ pub(super) fn prepare<'s>(
                 IndexedDbCursorSource::Index(index) => QuerySource::Index(index.name),
             };
             let query = Query {
+                blob_references: true,
                 source,
                 range: input.query.unwrap_or_default(),
                 direction: input.direction,

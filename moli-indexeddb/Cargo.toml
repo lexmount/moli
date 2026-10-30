@@ -6,6 +6,7 @@ edition = "2024"
 
 [dependencies]
 parking_lot = "0.12.5"
+moli-file-api = { path = "../moli-file-api" }
 moli-crypto = { path = "../moli-crypto" }
 moli-sqlite = { path = "../moli-sqlite" }
 rusqlite = { version = "0.40.2", features = ["bundled"] }

@@ -47,7 +47,7 @@ fn idb_sqlite_blob_decode_preserves_identity_and_ignores_unreferenced_slots() {
     // The extra unreferenced slot is deliberately never materialized in the Blob store.
     let mut objects = saved.external_objects().to_vec();
     objects.push(IndexedDbExternalObject::Blob {
-        bytes: vec![0; 1024 * 1024],
+        bytes: vec![0; 1024 * 1024].into(),
         mime_type: String::new(),
     });
     let saved = IndexedDbValue::new(saved.wire_bytes().to_vec(), objects);
@@ -83,7 +83,7 @@ fn seed_partial_blob_collection(vm: &mut ScriptVm, backend: &SqlBackend, blob_si
         let stored = value(
             vm,
             &format!(
-                "(() => {{ const blob = new Blob([new Uint8Array({blob_size})]); (globalThis.seeds ??= []).push(blob); return {{id:{id},group:'g{id}',blob}}; }})()"
+                "(() => {{ const blob = new Blob([new Uint8Array({blob_size})]); (globalThis.seeds ??= []).push(blob); return {{id:{id},group:'g{id}',blob,padding:'x'.repeat({blob_size})}}; }})()"
             ),
         );
         backend.execute(Command::Write {
@@ -134,6 +134,14 @@ async fn idb_sqlite_delivered_blob_and_file_outlive_record_clear_and_database_cl
     backend.drain(&mut vm, &loader).await;
     backend.execute(Command::Close);
     vm.eval("globalThis.contents=[]; kept.blob.text().then(text=>contents.push(text)); kept.file.text().then(text=>contents.push(text)); 'queued'").unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(contents.length)",
+        "2",
+        "delivered Blob/File reads after SQL close",
+    )
+    .await;
     assert_eq!(
         vm.eval("JSON.stringify(contents)").unwrap(),
         r#"["blob-data","file-data"]"#

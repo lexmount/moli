@@ -366,9 +366,20 @@ impl StoragePartitionState {
             .lock()
             .shutdown_sqlite()
             .map_err(anyhow::Error::new);
+        // Accepted Blob reads may finish preparing a write while SQL drains.
+        // Closed clients reject later continuations before quota sampling;
+        // finish sampling already started before releasing the profile lock.
+        let late_maintenance = self
+            .storage_service
+            .drain_maintenance()
+            .map_err(anyhow::Error::new);
         let io = self.storage_service.drain_io().map_err(anyhow::Error::new);
         let flush = self.flush();
-        maintenance.and(sql).and(io).and(flush)
+        maintenance
+            .and(sql)
+            .and(late_maintenance)
+            .and(io)
+            .and(flush)
     }
 }
 

@@ -36,35 +36,41 @@ impl<'s> webidl::WebIdlConverter<'s> for BlobPart<'s> {
 }
 
 impl<'s> BlobParts<'s> {
-    pub(crate) fn into_bytes(
+    pub(crate) fn into_data(
         self,
         scope: &mut v8::PinScope<'s, '_>,
         endings: BlobLineEndings,
-    ) -> Result<Vec<u8>, webidl::WebIdlError> {
+    ) -> Result<moli_file_api::BlobData, webidl::WebIdlError> {
         let mut bytes = Vec::new();
         for part in self.0 {
             match part {
                 BlobPart::Blob(object) => {
-                    let data = super::blob_bytes_from_object(scope, object).ok_or_else(|| {
+                    let data = super::blob_data_from_object(scope, object).ok_or_else(|| {
                         webidl::WebIdlError::cannot_convert(
                             webidl::Context::member("BlobPart", "value"),
                             "Blob",
                         )
                     })?;
-                    bytes.extend(data);
+                    bytes.push(data);
                 }
-                BlobPart::Buffer(source) => bytes.extend(source.to_vec(scope)),
-                BlobPart::Text(text) => bytes.extend(
+                BlobPart::Buffer(source) => bytes.push(source.to_vec(scope).into()),
+                BlobPart::Text(text) => bytes.push(
                     normalize_blob_line_endings_with_native_ending(
                         &text,
                         endings,
                         native_blob_line_ending(),
                     )
-                    .into_bytes(),
+                    .into_bytes()
+                    .into(),
                 ),
             }
         }
-        Ok(bytes)
+        moli_file_api::BlobData::concat(bytes).map_err(|_| {
+            webidl::WebIdlError::cannot_convert(
+                webidl::Context::member("BlobPart", "value"),
+                "Blob with supported size",
+            )
+        })
     }
 }
 

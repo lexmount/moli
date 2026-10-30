@@ -29,7 +29,7 @@ fn opfs_completion_rechecks_named_bucket_liveness_before_settlement() {
                 Some(true)
             );
             let (_, completion) = unsafe { &mut *host_ptr }
-                .register_pending_opfs_task(scope, resolver, locator.clone(), None)
+                .register_pending_opfs_task(scope, resolver, locator.clone(), None, None)
                 .expect("OPFS task should capture its Window execution context");
             Ok(completion)
         })

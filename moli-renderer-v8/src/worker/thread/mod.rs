@@ -546,6 +546,7 @@ fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
         || !state.pending_xhrs.is_empty()
         || !state.websockets.is_empty()
         || !state.pending_webcrypto.is_empty()
+        || !state.pending_blob_reads.is_empty()
         || state
             .opfs_owner_state
             .as_ref()
@@ -837,7 +838,14 @@ fn drain_worker_file_reader_queue(
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, context);
         let scope = &mut v8::ContextScope::new(scope, ctx);
-        if !flush_one_pending_file_reader(scope) {
+        if super::global_scope::get_worker_state(scope)
+            .is_some_and(|state| !state.borrow().callback_task_delivery_allowed())
+        {
+            break;
+        }
+        if !super::global_scope::drain_one_worker_blob_read(scope)
+            && !flush_one_pending_file_reader(scope)
+        {
             break;
         }
         perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
@@ -1682,6 +1690,10 @@ async fn worker_main(
         webcrypto_completion_tx,
         pending_webcrypto: std::collections::HashMap::new(),
         next_webcrypto_task_id: 1,
+        next_blob_read_id: 1,
+        pending_blob_reads: std::collections::HashMap::new(),
+        ready_blob_reads: Arc::default(),
+        file_reading_wake: worker_runtime_wake_tx.clone(),
         opfs_completion_tx,
         opfs_owner_state: None,
         pending_service_worker_periodic_sync_events: std::collections::HashMap::new(),

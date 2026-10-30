@@ -39,7 +39,8 @@ pub(crate) use directory_reader::{
 pub(super) use file::bind_file_world_wrapper;
 pub(super) use file::file_constructor_callback;
 pub(crate) use file::{
-    build_file_object, build_file_object_unpublished, selected_file_from_object,
+    build_file_object, build_file_object_unpublished, file_clone_metadata,
+    selected_file_from_object,
 };
 pub(in crate::context_bootstrap) use file::{
     file_last_modified_from_object, file_name_from_object,
@@ -53,7 +54,9 @@ pub(crate) use file_list::{
     build_file_list_object, file_list_files_from_object, is_file_list_object,
     sync_file_list_contents,
 };
-pub(crate) use file_reader::flush_one_pending_file_reader;
+pub(crate) use file_reader::{
+    FileReaderReadMode, finish_file_reader_read, flush_one_pending_file_reader,
+};
 pub(super) use file_reader::{
     file_reader_abort_callback, file_reader_constructor_callback,
     file_reader_read_as_array_buffer_callback, file_reader_read_as_binary_string_callback,

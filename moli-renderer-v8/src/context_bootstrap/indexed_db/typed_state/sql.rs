@@ -342,18 +342,55 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_quota_task
         scope,
         source,
         move |complete| {
-            if let Some(quota) = quota {
-                quota
-                    .dispatch_indexed_db(client.clone(), command, complete)
-                    .map_err(|error| {
-                        moli_indexeddb::sqlite::service::DispatchError::Storage(
-                            IndexedDbError::Resource(error.to_string()),
-                        )
-                    })?;
-            } else {
-                client.submit_checked(command, Ok(()), move |reply| complete(Ok(reply)))?;
+            if !command.has_deferred_blob_bytes() {
+                if let Some(quota) = quota {
+                    quota
+                        .dispatch_indexed_db(client.clone(), command, complete)
+                        .map_err(|error| {
+                            moli_indexeddb::sqlite::service::DispatchError::Storage(
+                                IndexedDbError::Resource(error.to_string()),
+                            )
+                        })?;
+                } else {
+                    client.submit_checked(command, Ok(()), move |reply| complete(Ok(reply)))?;
+                }
+                return Ok(client);
             }
-            Ok(client)
+            let registered_client = client.clone();
+            // A snapshot may retain a lazy Blob from another SQL owner. Read
+            // it before acquiring quota and before entering this SQL worker.
+            // The unified transaction operation stays in flight throughout.
+            command.prepare_blob_bytes(move |command, prepared| {
+                let completion = Arc::new(Mutex::new(Some(complete)));
+                let delivered = completion.clone();
+                let receive = move |reply| {
+                    if let Some(complete) = delivered.lock().take() {
+                        complete(reply);
+                    }
+                };
+                let submitted = match prepared {
+                    Err(error) => client
+                        .submit_checked(command, Err(error), move |reply| receive(Ok(reply)))
+                        .map_err(|error| IndexedDbError::Io(error.to_string())),
+                    Ok(()) => {
+                        if let Some(quota) = quota {
+                            quota
+                                .dispatch_indexed_db(client, command, receive)
+                                .map_err(|error| IndexedDbError::Io(error.to_string()))
+                        } else {
+                            client
+                                .submit_checked(command, Ok(()), move |reply| receive(Ok(reply)))
+                                .map_err(|error| IndexedDbError::Io(error.to_string()))
+                        }
+                    }
+                };
+                if let Err(error) = submitted
+                    && let Some(complete) = completion.lock().take()
+                {
+                    complete(Err(error));
+                }
+            });
+            Ok(registered_client)
         },
         continuation,
     )

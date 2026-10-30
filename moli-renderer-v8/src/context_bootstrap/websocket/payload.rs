@@ -3,6 +3,7 @@ use super::*;
 pub(super) enum WebSocketSendPayload {
     Text(String),
     Binary(Vec<u8>),
+    Blob(moli_file_api::BlobData),
 }
 
 impl WebSocketSendPayload {
@@ -10,6 +11,7 @@ impl WebSocketSendPayload {
         match self {
             Self::Text(text) => text.len(),
             Self::Binary(bytes) => bytes.len(),
+            Self::Blob(data) => data.len(),
         }
     }
 }
@@ -30,9 +32,9 @@ pub(super) fn websocket_send_payload_from_value<'s>(
             return WebSocketSendPayload::Binary(bytes);
         }
         if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
-            && let Some(bytes) = blob::blob_bytes_from_object(scope, object)
+            && let Some(data) = blob::blob_data_from_object(scope, object)
         {
-            return WebSocketSendPayload::Binary(bytes);
+            return blob_payload(data);
         }
     }
     WebSocketSendPayload::Text(
@@ -52,12 +54,19 @@ pub(super) fn websocket_stream_send_payload_from_value<'s>(
             return Ok(WebSocketSendPayload::Binary(bytes));
         }
         if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
-            && let Some(bytes) = blob::blob_bytes_from_object(scope, object)
+            && let Some(data) = blob::blob_data_from_object(scope, object)
         {
-            return Ok(WebSocketSendPayload::Binary(bytes));
+            return Ok(blob_payload(data));
         }
     }
     value_to_string_for_stream_payload(scope, value).map(WebSocketSendPayload::Text)
+}
+
+fn blob_payload(data: moli_file_api::BlobData) -> WebSocketSendPayload {
+    match data.as_bytes() {
+        Some(bytes) => WebSocketSendPayload::Binary(bytes.to_vec()),
+        None => WebSocketSendPayload::Blob(data),
+    }
 }
 
 fn buffer_source_bytes_from_value(

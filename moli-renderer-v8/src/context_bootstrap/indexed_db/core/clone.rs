@@ -418,11 +418,17 @@ fn indexed_db_external_object_from_blob_payload(
         BlobClonePayload::Blob { bytes, mime_type } => {
             IndexedDbExternalObject::Blob { bytes, mime_type }
         }
-        BlobClonePayload::File { file, .. } => IndexedDbExternalObject::File {
-            bytes: file.bytes,
-            mime_type: file.mime_type,
-            name: file.name,
-            last_modified: file.last_modified,
+        BlobClonePayload::File {
+            bytes,
+            mime_type,
+            name,
+            last_modified,
+            ..
+        } => IndexedDbExternalObject::File {
+            bytes,
+            mime_type,
+            name,
+            last_modified,
         },
     }
 }
@@ -433,11 +439,7 @@ fn build_blob_from_external_object<'s>(
 ) -> Option<(v8::Local<'s, v8::Object>, moli_file_api::BlobId)> {
     match object {
         IndexedDbExternalObject::Blob { bytes, mime_type } => {
-            crate::blob::build_blob_object_unpublished(
-                scope,
-                std::sync::Arc::from(bytes.as_slice()),
-                mime_type.clone(),
-            )
+            crate::blob::build_blob_object_unpublished(scope, bytes.clone(), mime_type.clone())
         }
         IndexedDbExternalObject::File {
             bytes,
@@ -448,7 +450,7 @@ fn build_blob_from_external_object<'s>(
             // IndexedDB restores owned bytes, not an OPFS-backed snapshot.
             crate::context_bootstrap::file_api::build_file_object_unpublished(
                 scope,
-                std::sync::Arc::from(bytes.as_slice()),
+                bytes.clone(),
                 mime_type.clone(),
                 name,
                 *last_modified,

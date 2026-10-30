@@ -111,6 +111,68 @@ pub enum Command {
 }
 
 impl Command {
+    pub fn has_deferred_blob_bytes(&self) -> bool {
+        match self {
+            Self::Write { value, .. } | Self::FinishWrite { value, .. } => {
+                value.has_deferred_blob_bytes()
+            }
+            _ => false,
+        }
+    }
+
+    pub fn prepare_blob_bytes(
+        self,
+        complete: impl FnOnce(Self, Result<(), IndexedDbError>) + Send + 'static,
+    ) {
+        match self {
+            Self::Write {
+                transaction,
+                store,
+                key,
+                value,
+                indexes,
+                add_only,
+                quota,
+            } => {
+                value.prepare_blob_bytes(move |value, result| {
+                    complete(
+                        Self::Write {
+                            transaction,
+                            store,
+                            key,
+                            value,
+                            indexes,
+                            add_only,
+                            quota,
+                        },
+                        result,
+                    )
+                });
+            }
+            Self::FinishWrite {
+                transaction,
+                request,
+                value,
+                indexes,
+                quota,
+            } => {
+                value.prepare_blob_bytes(move |value, result| {
+                    complete(
+                        Self::FinishWrite {
+                            transaction,
+                            request,
+                            value,
+                            indexes,
+                            quota,
+                        },
+                        result,
+                    )
+                });
+            }
+            command => complete(command, Ok(())),
+        }
+    }
+
     pub(super) fn transaction(&self) -> Option<TransactionHandle> {
         match self {
             Self::Begin { transaction, .. }

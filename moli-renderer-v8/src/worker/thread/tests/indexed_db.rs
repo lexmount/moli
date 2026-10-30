@@ -2,6 +2,109 @@ use super::super::WorkerGlobalKind;
 use super::*;
 
 #[tokio::test]
+async fn indexed_db_lazy_blob_read_does_not_settle_after_worker_close() {
+    ensure_v8();
+    let manager = crate::new_indexed_db_manager(None).expect("worker IndexedDB manager");
+    let source = r#"
+(async () => {
+  const request = request => new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  const completed = transaction => new Promise((resolve, reject) => {
+    transaction.oncomplete = resolve;
+    transaction.onabort = () => reject(transaction.error);
+  });
+  const open = indexedDB.open('close-blob', 1);
+  open.onupgradeneeded = () => open.result.createObjectStore('values');
+  const db = await request(open);
+  const write = db.transaction('values', 'readwrite');
+  const written = completed(write);
+  write.objectStore('values').put(new Blob(['cached body']), 1);
+  await written;
+
+  const read = db.transaction('values');
+  const readDone = completed(read);
+  const blob = await request(read.objectStore('values').get(1));
+  await readDone;
+  const fileReaderText = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob);
+  });
+  if (fileReaderText !== 'cached body') throw new Error('wrong FileReader contents');
+  const remove = db.transaction('values', 'readwrite');
+  const removed = completed(remove);
+  remove.objectStore('values').delete(1);
+  await removed;
+  db.close();
+
+  // Deleting preserves the handed-out Blob. Its source can now complete the
+  // read inline, while promise settlement still belongs to a future task.
+  const readOrder = [];
+  await Promise.all(Array.from({ length: 16 }, (_, index) => blob.text().then(text => {
+    if (text !== 'cached body') throw new Error('wrong Blob contents');
+    readOrder.push(index);
+  })));
+  postMessage(readOrder.join(','));
+
+  if (closeWithFileReader) {
+    const reader = new FileReader();
+    reader.onloadstart = () => { postMessage('closing'); close(); };
+    for (const type of ['progress', 'load', 'loadend', 'error', 'abort']) {
+      reader.addEventListener(type, () => postMessage('late'));
+    }
+    reader.readAsText(blob);
+    return;
+  }
+  let settled = false;
+  const onRead = () => {
+    if (settled) {
+      postMessage('late');
+    } else {
+      settled = true;
+      postMessage('closing');
+      close();
+    }
+  };
+  blob.text().then(onRead);
+  blob.text().then(onRead);
+})().catch(error => postMessage('error:' + error.name + ':' + error.message));
+"#;
+    for close_with_file_reader in [false, true] {
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(
+                format!("const closeWithFileReader = {close_with_file_reader};\n{source}"),
+                "https://indexeddb-close-blob.test/worker.js".to_owned(),
+            )
+            .with_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager))),
+        );
+        let message = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("worker Blob setup timeout")
+            .expect("worker Blob setup closed");
+        assert_eq!(
+            expect_post_json(message),
+            "\"0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15\""
+        );
+        let closing = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("worker Blob close timeout")
+            .expect("worker Blob close notification");
+        assert_eq!(expect_post_json(closing), "\"closing\"");
+        let after_close = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("closed worker should release its parent channel");
+        handle.terminate_and_join();
+        assert!(
+            after_close.is_none(),
+            "callback ran after close: {after_close:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn indexed_db_global_attribute_preserves_receivers_and_identity_across_worker_kinds() {
     ensure_v8();
     let storage_key = moli_storage_key::MoliStorageKey::new(

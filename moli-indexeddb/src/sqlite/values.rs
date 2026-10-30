@@ -18,7 +18,14 @@ impl Database {
             match object {
                 External::Blob { bytes, mime_type } => {
                     self.connection.execute("INSERT INTO external_objects(object_id, kind, size, mime_type) VALUES(?1, 'blob', ?2, ?3)", rusqlite::params![id, sql_integer(bytes.len() as u64)?, mime_type])?;
-                    self.write_chunks("blob_chunks", "object_id", id, bytes)?;
+                    self.write_chunks(
+                        "blob_chunks",
+                        "object_id",
+                        id,
+                        bytes.as_bytes().ok_or_else(|| {
+                            IndexedDbError::InvalidState("Blob write needs prepared bytes".into())
+                        })?,
+                    )?;
                 }
                 External::File {
                     bytes,
@@ -27,7 +34,14 @@ impl Database {
                     last_modified,
                 } => {
                     self.connection.execute("INSERT INTO external_objects(object_id, kind, size, mime_type, file_name, last_modified_f64) VALUES(?1, 'file', ?2, ?3, ?4, ?5)", rusqlite::params![id, sql_integer(bytes.len() as u64)?, mime_type, name, last_modified.to_bits().to_be_bytes().as_slice()])?;
-                    self.write_chunks("blob_chunks", "object_id", id, bytes)?;
+                    self.write_chunks(
+                        "blob_chunks",
+                        "object_id",
+                        id,
+                        bytes.as_bytes().ok_or_else(|| {
+                            IndexedDbError::InvalidState("Blob write needs prepared bytes".into())
+                        })?,
+                    )?;
                 }
                 External::FileSystemHandle { kind, bucket, path } => {
                     let kind = match kind {
@@ -86,6 +100,7 @@ impl Database {
         &self,
         record: i64,
         wire_size: u64,
+        blob_references: bool,
     ) -> Result<IndexedDbValue, IndexedDbError> {
         let wire = self.read_chunks("record_chunks", "record_id", record, wire_size)?;
         let mut objects = Vec::new();
@@ -113,13 +128,13 @@ impl Database {
             if objects.len() == count {
                 return Err(corruption("external object count changed during read"));
             }
-            let object = self.read_object(id)?;
+            let object = self.read_object(id, blob_references)?;
             objects.push(object);
         }
         Ok(IndexedDbValue::new(wire, objects))
     }
 
-    fn read_object(&self, id: i64) -> Result<External, IndexedDbError> {
+    fn read_object(&self, id: i64, blob_references: bool) -> Result<External, IndexedDbError> {
         let mut statement = self.connection.prepare_cached("SELECT kind, size, mime_type, file_name, last_modified_f64, handle_kind, handle_bucket_kind, handle_bucket_id FROM external_objects WHERE object_id=?1")?;
         let mut rows = statement.query([id])?;
         let row = rows
@@ -136,7 +151,28 @@ impl Database {
         match kind {
             "blob" | "file" => {
                 let mime_type = read_text(row, 2)?;
-                let bytes = self.read_chunks("blob_chunks", "object_id", id, size as u64)?;
+                let bytes = if blob_references
+                    && self
+                        .active
+                        .as_ref()
+                        .is_none_or(|active| id < active.first_object_id)
+                {
+                    match &self.blobs {
+                        Some(blobs) => blobs.snapshot(
+                            id,
+                            usize::try_from(size)
+                                .map_err(|_| corruption("Blob size exceeds address space"))?,
+                        ),
+                        None => self
+                            .read_chunks("blob_chunks", "object_id", id, size as u64)?
+                            .into(),
+                    }
+                } else {
+                    // A Blob created inside the current SQL transaction must
+                    // already own bytes before a later automatic rollback.
+                    self.read_chunks("blob_chunks", "object_id", id, size as u64)?
+                        .into()
+                };
                 if kind == "blob" {
                     return Ok(External::Blob { bytes, mime_type });
                 }
@@ -210,7 +246,7 @@ impl Database {
         }
     }
 
-    fn read_chunks(
+    pub(super) fn read_chunks(
         &self,
         table: &'static str,
         column: &'static str,
@@ -235,7 +271,8 @@ impl Database {
             let ValueRef::Blob(chunk) = row.get_ref(1)? else {
                 return Err(corruption("IndexedDB chunk is not a BLOB"));
             };
-            if chunk.is_empty()
+            if chunk.len() != CHUNK_BYTES.min(expected.saturating_sub(bytes.len()))
+                || chunk.is_empty()
                 || chunk.len() > CHUNK_BYTES
                 || chunk.len() > expected.saturating_sub(bytes.len())
             {
@@ -250,7 +287,30 @@ impl Database {
         Ok(bytes)
     }
 
+    fn preserve_selected_blobs(
+        &self,
+        sql: &str,
+        parameters: &[rusqlite::types::Value],
+    ) -> Result<(), IndexedDbError> {
+        if let Some(blobs) = &self.blobs
+            && blobs.has_live()
+        {
+            let mut statement = self.connection.prepare_cached(sql)?;
+            let ids = statement
+                .query_map(rusqlite::params_from_iter(parameters.iter()), |row| {
+                    row.get(0)
+                })?
+                .collect::<rusqlite::Result<Vec<i64>>>()?;
+            blobs.preserve(self, &ids)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn remove_record_contents(&self, record: i64) -> Result<(), IndexedDbError> {
+        self.preserve_selected_blobs(
+            "SELECT object_id FROM record_objects WHERE record_id=?",
+            &[rusqlite::types::Value::Integer(record)],
+        )?;
         for table in ["blob_chunks", "handle_components", "external_objects"] {
             self.connection.execute(&format!("DELETE FROM {table} WHERE object_id IN (SELECT object_id FROM record_objects WHERE record_id=?1)"), [record])?;
         }
@@ -281,6 +341,10 @@ impl Database {
             |row| row.get(0),
         )?;
         let records = format!("SELECT r.record_id{selection}");
+        self.preserve_selected_blobs(
+            &format!("SELECT object_id FROM record_objects WHERE record_id IN ({records})"),
+            parameters,
+        )?;
         for table in ["blob_chunks", "handle_components", "external_objects"] {
             self.connection.execute(&format!("DELETE FROM {table} WHERE object_id IN (SELECT object_id FROM record_objects WHERE record_id IN ({records}))"), rusqlite::params_from_iter(parameters.iter()))?;
         }

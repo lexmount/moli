@@ -50,7 +50,13 @@ impl ScriptVm {
             );
             let previous_dispatch_scope = bound_dispatch_scope.enter(scope);
             match settlement {
-                crate::opfs_owner_tasks::OpfsTaskSettlement::Promise(resolver) => {
+                crate::opfs_owner_tasks::OpfsTaskSettlement::Promise {
+                    resolver,
+                    writable_cleanup,
+                } => {
+                    if let Some(mut cleanup) = writable_cleanup {
+                        cleanup.disarm();
+                    }
                     let resolver = v8::Local::new(scope, &resolver);
                     crate::context_bootstrap::settle_opfs_task_result(
                         scope,

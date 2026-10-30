@@ -3037,6 +3037,7 @@ name = "moli-indexeddb"
 version = "0.1.0"
 dependencies = [
  "moli-crypto",
+ "moli-file-api",
  "moli-sqlite",
  "parking_lot",
  "rusqlite",
@@ -3775,9 +3776,11 @@ dependencies = [
  "http",
  "moli-crypto",
  "moli-curl",
+ "moli-file-api",
  "moli-header-field",
  "moli-url",
  "openssl",
+ "parking_lot",
  "rcgen",
  "rustls",
  "tokio",

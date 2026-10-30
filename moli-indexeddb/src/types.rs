@@ -97,7 +97,7 @@ pub struct IndexedDbQuotaCheck {
 /// objects are kept as separate typed payloads. The storage backend owns both
 /// parts so record replacement, deletion, quota accounting, and persistence
 /// have one lifecycle boundary.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct IndexedDbValue {
     pub(crate) wire_bytes: Vec<u8>,
     pub(crate) external_objects: Vec<IndexedDbExternalObject>,
@@ -122,6 +122,64 @@ impl IndexedDbValue {
     pub fn into_parts(self) -> (Vec<u8>, Vec<IndexedDbExternalObject>) {
         (self.wire_bytes, self.external_objects)
     }
+
+    pub fn has_deferred_blob_bytes(&self) -> bool {
+        self.external_objects.iter().any(|object| match object {
+            IndexedDbExternalObject::Blob { bytes, .. }
+            | IndexedDbExternalObject::File { bytes, .. } => bytes.as_bytes().is_none(),
+            _ => false,
+        })
+    }
+
+    /// Prepare immutable Blob attachments before enqueueing a SQL write. This
+    /// may read another database, so it must not run inside a SQLite job.
+    pub fn prepare_blob_bytes(
+        mut self,
+        complete: impl FnOnce(Self, Result<(), crate::IndexedDbError>) + Send + 'static,
+    ) {
+        let mut parts = Vec::new();
+        let mut selected = Vec::new();
+        for (index, object) in self.external_objects.iter().enumerate() {
+            if let IndexedDbExternalObject::Blob { bytes, .. }
+            | IndexedDbExternalObject::File { bytes, .. } = object
+                && bytes.as_bytes().is_none()
+            {
+                selected.push((index, bytes.len()));
+                parts.push(bytes.clone());
+            }
+        }
+        if parts.is_empty() {
+            complete(self, Ok(()));
+            return;
+        }
+        let data = match moli_file_api::BlobData::concat(parts) {
+            Ok(data) => data,
+            Err(error) => {
+                complete(self, Err(crate::IndexedDbError::Io(error.to_string())));
+                return;
+            }
+        };
+        data.read_all(Box::new(move |result| {
+            let bytes: moli_file_api::BlobData = match result {
+                Ok(bytes) => bytes.into(),
+                Err(error) => {
+                    complete(self, Err(crate::IndexedDbError::Io(error.to_string())));
+                    return;
+                }
+            };
+            let mut offset = 0;
+            for (index, length) in selected {
+                let data = bytes.slice(offset..offset + length);
+                match &mut self.external_objects[index] {
+                    IndexedDbExternalObject::Blob { bytes, .. }
+                    | IndexedDbExternalObject::File { bytes, .. } => *bytes = data,
+                    _ => unreachable!("selected a Blob attachment"),
+                }
+                offset += length;
+            }
+            complete(self, Ok(()));
+        }));
+    }
 }
 
 impl From<Vec<u8>> for IndexedDbValue {
@@ -130,14 +188,14 @@ impl From<Vec<u8>> for IndexedDbValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum IndexedDbExternalObject {
     Blob {
-        bytes: Vec<u8>,
+        bytes: moli_file_api::BlobData,
         mime_type: String,
     },
     File {
-        bytes: Vec<u8>,
+        bytes: moli_file_api::BlobData,
         mime_type: String,
         name: String,
         last_modified: f64,

@@ -5,6 +5,35 @@ use std::{collections::BTreeSet, sync::mpsc, time::Duration};
 
 const TX: TransactionHandle = TransactionHandle::from_raw(2);
 
+#[test]
+fn retired_sql_client_does_not_wait_for_quota_or_touch_other_backends() {
+    let fixture = Fixture::new();
+    let client = fixture.database("closed-prepare");
+    let storage = fixture.owner.storage_service.clone();
+    let reservation = storage.reserve_quota_commit(&fixture.owner.locator);
+    fixture._manager.lock().shutdown_sqlite().unwrap();
+    let (send, receive) = mpsc::channel();
+    fixture
+        .owner
+        .dispatch_indexed_db(
+            client,
+            Command::Commit {
+                transaction: TX,
+                quota: None,
+            },
+            move |result| {
+                send.send(result).unwrap();
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        receive.recv_timeout(Duration::from_secs(1)).unwrap(),
+        Err(IndexedDbError::InvalidState(_))
+    ));
+    storage.drain_maintenance().unwrap();
+    drop(reservation);
+}
+
 struct Fixture {
     owner: StorageBucketQuotaOwner,
     _manager: SharedStorageBucketIndexedDbManager,

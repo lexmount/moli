@@ -111,6 +111,7 @@ fn command(
         IndexedDbTransactionOperation::ObjectStoreGet { query }
         | IndexedDbTransactionOperation::IndexGet { query } => (
             Query {
+                blob_references: true,
                 range: query,
                 ..Default::default()
             },
@@ -119,6 +120,7 @@ fn command(
         IndexedDbTransactionOperation::ObjectStoreGetKey { query }
         | IndexedDbTransactionOperation::IndexGetKey { query } => (
             Query {
+                blob_references: true,
                 range: query,
                 ..Default::default()
             },
@@ -127,6 +129,7 @@ fn command(
         IndexedDbTransactionOperation::ObjectStoreGetAll(collection)
         | IndexedDbTransactionOperation::IndexGetAll(collection) => (
             Query {
+                blob_references: true,
                 range: collection.query.unwrap_or_default(),
                 direction: collection.direction,
                 limit: collection

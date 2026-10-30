@@ -1166,7 +1166,7 @@ fn build_form_submission_request(
         });
     }
     if method == "post" {
-        let encoded = serialize_submission_body(scope, &entries, enctype?, submission_encoding);
+        let encoded = serialize_submission_body(scope, &entries, enctype?, submission_encoding)?;
         return Some(FormSubmissionMethod::Post {
             resolved_url,
             body: encoded.body.into(),
@@ -1310,15 +1310,16 @@ fn serialize_submission_body(
     entries: &[(String, v8::Global<v8::Value>)],
     enctype: &str,
     submission_encoding: &'static encoding_rs::Encoding,
-) -> EncodedSubmissionBody {
-    match enctype {
+) -> Option<EncodedSubmissionBody> {
+    Some(match enctype {
         "multipart/form-data" => {
             let (body, content_type) = form_data_entries_multipart_body(
                 scope,
                 entries,
                 FORM_SUBMISSION_MULTIPART_BOUNDARY_PREFIX,
                 submission_encoding,
-            );
+            )
+            .ok()?;
             EncodedSubmissionBody { body, content_type }
         }
         "text/plain" => {
@@ -1343,7 +1344,7 @@ fn serialize_submission_body(
             .into_bytes(),
             content_type: "application/x-www-form-urlencoded".to_owned(),
         },
-    }
+    })
 }
 
 fn normalize_form_submission_pairs(entries: Vec<(String, String)>) -> Vec<(String, String)> {

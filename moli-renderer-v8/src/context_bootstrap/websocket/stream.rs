@@ -358,6 +358,7 @@ fn websocket_stream_sink_write_callback<'s>(
         match payload {
             WebSocketSendPayload::Text(text) => host.send_websocket_text(socket_id, text),
             WebSocketSendPayload::Binary(bytes) => host.send_websocket_binary(socket_id, bytes),
+            WebSocketSendPayload::Blob(data) => host.send_websocket_blob(socket_id, data),
         }
     } else {
         None

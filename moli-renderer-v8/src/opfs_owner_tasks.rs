@@ -196,7 +196,12 @@ pub(crate) enum OpfsDirectoryIteratorNextAction {
 }
 
 pub(crate) enum OpfsTaskSettlement {
-    Promise(v8::Global<v8::PromiseResolver>),
+    Promise {
+        resolver: v8::Global<v8::PromiseResolver>,
+        // Source writes can wait for input or quota. Retiring the pending task
+        // must abort its temporary writer without waiting for either.
+        writable_cleanup: Option<moli_storage_service::StorageOpfsWritableLease>,
+    },
     Move {
         resolver: v8::Global<v8::PromiseResolver>,
         handle: v8::Global<v8::Object>,

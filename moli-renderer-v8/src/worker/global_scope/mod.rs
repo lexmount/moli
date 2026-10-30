@@ -151,15 +151,15 @@ use timers::*;
 pub(crate) use xhr::*;
 
 pub(super) use async_tasks::{
-    PendingWorkerWebCryptoTask, WorkerOpfsOwnerState, drain_worker_opfs_completion,
-    drain_worker_webcrypto_completion,
+    PendingWorkerWebCryptoTask, WorkerOpfsOwnerState, drain_one_worker_blob_read,
+    drain_worker_opfs_completion, drain_worker_webcrypto_completion,
 };
 pub(crate) use async_tasks::{
     WorkerOpfsCompletion, WorkerWebCryptoCompletion, cancel_worker_opfs_task,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,
-    register_worker_opfs_iterator_task, register_worker_opfs_move_task, register_worker_opfs_task,
-    register_worker_webcrypto_task, worker_opfs_directory_iterator_registry,
-    worker_opfs_handle_registry,
+    register_worker_blob_read_task, register_worker_opfs_iterator_task,
+    register_worker_opfs_move_task, register_worker_opfs_task, register_worker_webcrypto_task,
+    worker_opfs_directory_iterator_registry, worker_opfs_handle_registry,
 };
 use bootstrap::{
     constructor_prototype, ensure_worker_interface_constructor, set_worker_to_string_tag,

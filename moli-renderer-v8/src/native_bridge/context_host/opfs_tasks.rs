@@ -67,12 +67,15 @@ impl JsContextHost {
         resolver: v8::Local<'_, v8::PromiseResolver>,
         locator: moli_storage_service::StorageBucketLocator,
         handle_access: Option<crate::opfs_owner_tasks::OpfsHandleAccessContext>,
+        writable_cleanup: Option<moli_storage_service::StorageOpfsWritableLease>,
     ) -> Option<(
         crate::page_task_queue::RendererPageOpfsTaskId,
         crate::page_task_queue::RendererPageOpfsTaskProducer,
     )> {
-        let settlement =
-            crate::opfs_owner_tasks::OpfsTaskSettlement::Promise(v8::Global::new(scope, resolver));
+        let settlement = crate::opfs_owner_tasks::OpfsTaskSettlement::Promise {
+            resolver: v8::Global::new(scope, resolver),
+            writable_cleanup,
+        };
         self.register_pending_opfs_settlement_task(scope, locator, settlement, handle_access)
     }
 

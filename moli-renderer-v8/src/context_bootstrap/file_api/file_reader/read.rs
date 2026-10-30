@@ -38,15 +38,14 @@ pub(in crate::context_bootstrap) fn file_reader_read_as_text_callback<'s>(
     let Some(parsed) = webidl::parse_args::<FileReaderReadAsTextArgs<'s>>(scope, &args) else {
         return;
     };
-    if let Some(result) = file_reader_prepare_result(
+    if !file_reader_start_read(
         scope,
+        args.this(),
         parsed.blob,
         FileReaderReadMode::Text {
             encoding_label: parsed.encoding,
         },
     ) {
-        file_reader_begin_read(scope, args.this(), result);
-    } else {
         throw_type_error(scope, "FileReader.readAsText requires a Blob or File");
     }
     rv.set_undefined();
@@ -63,11 +62,7 @@ pub(in crate::context_bootstrap) fn file_reader_read_as_data_url_callback<'s>(
     let Some(parsed) = webidl::parse_args::<FileReaderReadBlobArgs<'s>>(scope, &args) else {
         return;
     };
-    if let Some(result) =
-        file_reader_prepare_result(scope, parsed.blob, FileReaderReadMode::DataUrl)
-    {
-        file_reader_begin_read(scope, args.this(), result);
-    } else {
+    if !file_reader_start_read(scope, args.this(), parsed.blob, FileReaderReadMode::DataUrl) {
         throw_type_error(scope, "FileReader.readAsDataURL requires a Blob or File");
     }
     rv.set_undefined();
@@ -84,11 +79,12 @@ pub(in crate::context_bootstrap) fn file_reader_read_as_array_buffer_callback<'s
     let Some(parsed) = webidl::parse_args::<FileReaderReadBlobArgs<'s>>(scope, &args) else {
         return;
     };
-    if let Some(result) =
-        file_reader_prepare_result(scope, parsed.blob, FileReaderReadMode::ArrayBuffer)
-    {
-        file_reader_begin_read(scope, args.this(), result);
-    } else {
+    if !file_reader_start_read(
+        scope,
+        args.this(),
+        parsed.blob,
+        FileReaderReadMode::ArrayBuffer,
+    ) {
         throw_type_error(
             scope,
             "FileReader.readAsArrayBuffer requires a Blob or File",
@@ -108,11 +104,12 @@ pub(in crate::context_bootstrap) fn file_reader_read_as_binary_string_callback<'
     let Some(parsed) = webidl::parse_args::<FileReaderReadBlobArgs<'s>>(scope, &args) else {
         return;
     };
-    if let Some(result) =
-        file_reader_prepare_result(scope, parsed.blob, FileReaderReadMode::BinaryString)
-    {
-        file_reader_begin_read(scope, args.this(), result);
-    } else {
+    if !file_reader_start_read(
+        scope,
+        args.this(),
+        parsed.blob,
+        FileReaderReadMode::BinaryString,
+    ) {
         throw_type_error(
             scope,
             "FileReader.readAsBinaryString requires a Blob or File",
@@ -136,42 +133,103 @@ pub(in crate::context_bootstrap) fn file_reader_abort_callback<'s>(
     set_file_reader_read_id(scope, reader, next_read_id);
     set_file_reader_ready_state(scope, reader, 2.0);
     set_file_reader_result(scope, reader, v8::null(scope).into());
+    set_file_reader_pending_result(scope, reader, v8::null(scope).into());
     dispatch_file_reader_event(scope, reader, "abort", 0.0, 0.0);
     dispatch_file_reader_event(scope, reader, "loadend", 0.0, 0.0);
     rv.set_undefined();
 }
 
-enum FileReaderReadMode {
+#[derive(Clone)]
+pub(crate) enum FileReaderReadMode {
     Text { encoding_label: Option<String> },
     DataUrl,
     ArrayBuffer,
     BinaryString,
 }
 
-fn file_reader_prepare_result<'s>(
+fn file_reader_start_read<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    reader: v8::Local<'s, v8::Object>,
     blob_value: v8::Local<'s, v8::Value>,
     mode: FileReaderReadMode,
-) -> Option<(v8::Local<'s, v8::Value>, f64)> {
-    let blob = blob_value.to_object(scope)?;
-    let bytes = blob::blob_bytes_from_object(scope, blob)?;
+) -> bool {
+    let Some(blob) = blob_value.to_object(scope) else {
+        return false;
+    };
+    let Some(data) = blob::blob_data_from_object(scope, blob) else {
+        return false;
+    };
     let mime_type = blob::blob_mime_type_from_object(scope, blob).unwrap_or_default();
-    let total = bytes.len() as f64;
+    let total = data.len() as f64;
+    let reader = moli_webapi_declare::web_api_object_target(scope, reader)
+        .expect("FileReader receiver validated by WebIDL");
+    if let Some(bytes) = data.as_bytes() {
+        let Some(result) = file_reader_prepare_result(scope, bytes.to_vec(), mode, &mime_type)
+        else {
+            return false;
+        };
+        file_reader_begin_read(scope, reader, (result, total));
+    } else {
+        file_reader_begin_read(scope, reader, (v8::undefined(scope).into(), total));
+        let read_id = file_reader_read_id(scope, reader);
+        blob::read::file_reader_read(scope, reader, read_id, data, mode, mime_type);
+    }
+    true
+}
+
+fn file_reader_prepare_result<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: Vec<u8>,
+    mode: FileReaderReadMode,
+    mime_type: &str,
+) -> Option<v8::Local<'s, v8::Value>> {
     let value: v8::Local<'s, v8::Value> = match mode {
         FileReaderReadMode::Text { encoding_label } => v8_string(
             scope,
-            &file_reader_text(&bytes, encoding_label.as_deref(), &mime_type),
+            &file_reader_text(&bytes, encoding_label.as_deref(), mime_type),
         )?
         .into(),
         FileReaderReadMode::DataUrl => {
-            v8_string(scope, &file_reader_data_url(&bytes, &mime_type))?.into()
+            v8_string(scope, &file_reader_data_url(&bytes, mime_type))?.into()
         }
         FileReaderReadMode::ArrayBuffer => blob::array_buffer_from_bytes(scope, bytes)?.into(),
         FileReaderReadMode::BinaryString => {
             v8_string(scope, &file_reader_binary_string(&bytes))?.into()
         }
     };
-    Some((value, total))
+    Some(value)
+}
+
+pub(crate) fn finish_file_reader_read<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    reader: v8::Local<'s, v8::Object>,
+    read_id: f64,
+    mode: FileReaderReadMode,
+    mime_type: &str,
+    result: std::io::Result<Vec<u8>>,
+) {
+    if file_reader_ready_state(scope, reader) != 1.0
+        || file_reader_read_id(scope, reader) != read_id
+    {
+        return;
+    }
+    let result = match result {
+        Ok(bytes) => {
+            let Some(value) = file_reader_prepare_result(scope, bytes, mode, mime_type) else {
+                return;
+            };
+            value
+        }
+        Err(error) => crate::context_bootstrap::new_dom_exception_value(
+            scope,
+            &error.to_string(),
+            "NotReadableError",
+        ),
+    };
+    set_file_reader_pending_result(scope, reader, result);
+    if file_reader_task_phase(scope, reader) == 1.0 && !file_reader_scheduled(scope, reader) {
+        super::task::schedule_next_file_reader_phase(scope, reader, read_id, 1.0);
+    }
 }
 
 fn ensure_file_reader_can_start_read<'s>(
@@ -197,8 +255,6 @@ fn file_reader_begin_read<'s>(
     reader: v8::Local<'s, v8::Object>,
     (result, total): (v8::Local<'s, v8::Value>, f64),
 ) {
-    let reader = moli_webapi_declare::web_api_object_target(scope, reader)
-        .expect("FileReader receiver validated by WebIDL");
     set_file_reader_ready_state(scope, reader, 1.0);
     set_file_reader_result(scope, reader, v8::null(scope).into());
     set_file_reader_error(scope, reader, v8::null(scope).into());

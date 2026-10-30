@@ -27,6 +27,8 @@ pub struct Query {
     pub skip: u32,
     pub limit: u32,
     pub keys_only: bool,
+    /// Deliver immutable Blob references instead of eagerly loading their bodies.
+    pub blob_references: bool,
 }
 
 impl Default for Query {
@@ -39,6 +41,7 @@ impl Default for Query {
             skip: 0,
             limit: 1,
             keys_only: false,
+            blob_references: false,
         }
     }
 }
@@ -276,8 +279,8 @@ impl Database {
             let record = record
                 .filter(|id| *id > 0)
                 .ok_or_else(|| corruption("index entry has no matching record"))?;
-            if paged {
-                let payload = if query.keys_only {
+            let payload = if paged {
+                if query.keys_only {
                     let key = row
                         .get_ref(0)?
                         .as_blob()
@@ -290,9 +293,10 @@ impl Database {
                 } else {
                     u64::try_from(row.get::<_, i64>(5)?)
                         .map_err(|_| corruption("negative record usage"))?
-                };
-                bytes = bytes.saturating_add(payload);
-            }
+                }
+            } else {
+                0
+            };
             if output.len() == output.capacity() {
                 let slots = output.capacity().max(4).min(limit as usize - output.len());
                 output.try_reserve_exact(slots).map_err(|_| {
@@ -316,8 +320,25 @@ impl Database {
                 if wire < 0 {
                     return Err(corruption("negative wire byte length"));
                 }
-                Some(self.read_value(record, wire as u64)?)
+                Some(self.read_value(record, wire as u64, query.blob_references)?)
             };
+            // Deferred Blob bodies have not been allocated by this query.
+            // Keep the batch target about delivered buffers, not logical quota.
+            let deferred = value.as_ref().map_or(0, |value| {
+                value
+                    .external_objects()
+                    .iter()
+                    .fold(0u64, |total, object| match object {
+                        crate::IndexedDbExternalObject::Blob { bytes, .. }
+                        | crate::IndexedDbExternalObject::File { bytes, .. }
+                            if bytes.as_bytes().is_none() =>
+                        {
+                            total.saturating_add(bytes.len() as u64)
+                        }
+                        _ => total,
+                    })
+            });
+            bytes = bytes.saturating_add(payload.saturating_sub(deferred));
             output.push(RecordSnapshot {
                 key,
                 primary_key,

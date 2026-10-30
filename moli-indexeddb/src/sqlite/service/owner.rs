@@ -201,6 +201,7 @@ async fn run(
     let state = database.state.clone();
     let entry = database.entry.as_ref().expect("initial database owner");
     let admissions = entry.admissions.clone();
+    let blobs = entry.blobs.clone();
     let id = database.id;
     while let Some(message) = receiver.recv().await {
         let message = match message {
@@ -262,6 +263,7 @@ async fn run(
                         // JoinError means the blocking closure and its connection
                         // have already dropped. Retire published handles even
                         // though its exclusive Entry could not be returned.
+                        blobs.fail(&failed);
                         *state.failure.lock() = Some(failed);
                         let mut connections = {
                             let _gate = state.admission_gate.lock();

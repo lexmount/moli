@@ -330,7 +330,7 @@ fn unique_conflict_restores_old_external_objects_indexes_and_id_counters() {
     let value = IndexedDbValue::new(
         vec![11],
         vec![External::Blob {
-            bytes: vec![7; CHUNK_BYTES + 17],
+            bytes: vec![7; CHUNK_BYTES + 17].into(),
             mime_type: "a/b".into(),
         }],
     );
@@ -351,7 +351,7 @@ fn unique_conflict_restores_old_external_objects_indexes_and_id_counters() {
     let other = IndexedDbValue::new(
         vec![9],
         vec![External::File {
-            bytes: vec![8; CHUNK_BYTES * 2 + 1],
+            bytes: vec![8; CHUNK_BYTES * 2 + 1].into(),
             mime_type: "c/d".into(),
             name: "replacement".into(),
             last_modified: 3.5,
@@ -585,7 +585,7 @@ fn failed_single_command_restores_deleted_values_indexes_and_usage() {
     let value = IndexedDbValue::new(
         b"wire".to_vec(),
         vec![External::Blob {
-            bytes: b"blob".to_vec(),
+            bytes: b"blob".to_vec().into(),
             mime_type: "text/plain".into(),
         }],
     );
@@ -705,11 +705,11 @@ fn chunked_values_roundtrip_and_delivered_bytes_survive_abort_and_close() {
         vec![13; CHUNK_BYTES * 2 + 7],
         vec![
             External::Blob {
-                bytes: vec![],
+                bytes: vec![].into(),
                 mime_type: "empty/type".into(),
             },
             External::File {
-                bytes: vec![17; CHUNK_BYTES + 19],
+                bytes: vec![17; CHUNK_BYTES + 19].into(),
                 mime_type: "file/type".into(),
                 name: "file.name".into(),
                 last_modified: f64::from_bits(0x7ff8_0000_0000_002a),
@@ -744,7 +744,7 @@ fn chunked_values_roundtrip_and_delivered_bytes_survive_abort_and_close() {
     else {
         panic!()
     };
-    assert_eq!(bytes, &vec![17; CHUNK_BYTES + 19]);
+    assert_eq!(bytes.as_bytes().unwrap(), &vec![17; CHUNK_BYTES + 19]);
     assert_eq!(name, "file.name");
     assert_eq!(last_modified.to_bits(), 0x7ff8_0000_0000_002a);
     database.abort(TX).unwrap();
@@ -787,7 +787,7 @@ fn clearing_records_reclaims_chunks_slots_and_indexes_without_resetting_generato
             IndexedDbValue::new(
                 vec![1],
                 vec![External::Blob {
-                    bytes: vec![2; CHUNK_BYTES + 1],
+                    bytes: vec![2; CHUNK_BYTES + 1].into(),
                     mime_type: "x".into(),
                 }],
             ),
@@ -955,7 +955,7 @@ fn missing_external_slots_and_noncontiguous_chunks_are_reported_as_corruption() 
             IndexedDbValue::new(
                 vec![1; CHUNK_BYTES + 1],
                 vec![External::Blob {
-                    bytes: vec![2],
+                    bytes: vec![2].into(),
                     mime_type: "x".into(),
                 }],
             ),

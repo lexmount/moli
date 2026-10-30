@@ -33,6 +33,7 @@ impl Backfill {
             transaction: self.transaction,
             store: self.store.clone(),
             query: Query {
+                blob_references: true,
                 seek: after.map(|key| Seek {
                     key,
                     primary_key: None,

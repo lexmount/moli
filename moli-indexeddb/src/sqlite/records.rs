@@ -369,7 +369,7 @@ impl Database {
                 if wire < 0 {
                     return Err(corruption("negative wire byte length"));
                 }
-                self.read_value(record, wire as u64)
+                self.read_value(record, wire as u64, false)
             })
             .transpose()
     }

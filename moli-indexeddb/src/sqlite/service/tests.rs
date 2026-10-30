@@ -274,7 +274,7 @@ fn large_value() -> crate::IndexedDbValue {
     crate::IndexedDbValue::new(
         vec![9; 4097],
         vec![crate::IndexedDbExternalObject::Blob {
-            bytes: vec![7; 64 * 1024],
+            bytes: vec![7; 64 * 1024].into(),
             mime_type: "application/octet-stream".into(),
         }],
     )
