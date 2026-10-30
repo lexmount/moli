@@ -38,6 +38,8 @@ dropzone.addEventListener("drop", function (event) {
 
 promise_test(async function () {
   await dropPromise;
+  // A microtask still runs inside drop dispatch; the next task observes its cleanup.
+  await new Promise(resolve => step_timeout(resolve, 0));
 
   assert_equals(captured.itemCount, 1, "directory payload should expose one item during drop");
   assert_array_equals(captured.types, ["Files"], "directory payload should expose Files type");
