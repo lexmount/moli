@@ -550,11 +550,12 @@ impl Browser {
                 .await
                 .map(FetchedDocument::Page);
         }
-        let navigation_loader = NavigationResourceLoader::new(
-            self.resource_request_client(),
-            requested_url.clone(),
-            moli_renderer_v8::network::RendererResourceTaskRunner::from_current_tokio()?,
-        );
+        let request_client = self.resource_request_client();
+        let task_runner = request_client
+            .browser_resource_runtime()
+            .resource_task_runner();
+        let navigation_loader =
+            NavigationResourceLoader::new(request_client, requested_url.clone(), task_runner);
         let service_worker_fetch = self
             .fetch_document_wait_timeout(
                 &raw_url,
@@ -886,11 +887,12 @@ impl Browser {
                 )
                 .await;
         }
-        let navigation_loader = NavigationResourceLoader::new(
-            self.resource_request_client(),
-            requested_url.clone(),
-            moli_renderer_v8::network::RendererResourceTaskRunner::from_current_tokio()?,
-        );
+        let request_client = self.resource_request_client();
+        let task_runner = request_client
+            .browser_resource_runtime()
+            .resource_task_runner();
+        let navigation_loader =
+            NavigationResourceLoader::new(request_client, requested_url.clone(), task_runner);
         let service_worker_fetch = self
             .fetch_service_worker_main_resource_for_navigation(&request, &navigation_loader)
             .await?;
@@ -956,11 +958,12 @@ impl Browser {
                 )
                 .await;
         }
-        let navigation_loader = NavigationResourceLoader::new(
-            self.resource_request_client(),
-            requested_url.clone(),
-            moli_renderer_v8::network::RendererResourceTaskRunner::from_current_tokio()?,
-        );
+        let request_client = self.resource_request_client();
+        let task_runner = request_client
+            .browser_resource_runtime()
+            .resource_task_runner();
+        let navigation_loader =
+            NavigationResourceLoader::new(request_client, requested_url.clone(), task_runner);
         let service_worker_fetch = self
             .fetch_service_worker_main_resource_for_navigation(&request, &navigation_loader)
             .await?;
@@ -1022,11 +1025,12 @@ impl Browser {
                 .await
                 .map(FetchedDocument::Page);
         }
-        let navigation_loader = NavigationResourceLoader::new(
-            self.resource_request_client(),
-            requested_url.clone(),
-            moli_renderer_v8::network::RendererResourceTaskRunner::from_current_tokio()?,
-        );
+        let request_client = self.resource_request_client();
+        let task_runner = request_client
+            .browser_resource_runtime()
+            .resource_task_runner();
+        let navigation_loader =
+            NavigationResourceLoader::new(request_client, requested_url.clone(), task_runner);
         let service_worker_fetch = self
             .fetch_service_worker_main_resource_for_navigation(&request, &navigation_loader)
             .await?;

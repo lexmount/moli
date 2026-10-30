@@ -1127,10 +1127,14 @@ impl NavigationEngine {
         requested_url: Url,
         cancel_handle: FetchCancelHandle,
     ) -> Result<NavigationResourceLoader> {
+        let request_client = self.ensure_resource_request_client(cookie_store)?;
+        let task_runner = request_client
+            .browser_resource_runtime()
+            .resource_task_runner();
         Ok(NavigationResourceLoader::new_with_cancel_handle(
-            self.ensure_resource_request_client(cookie_store)?,
+            request_client,
             requested_url,
-            moli_renderer_v8::network::RendererResourceTaskRunner::from_current_tokio()?,
+            task_runner,
             cancel_handle,
         ))
     }
