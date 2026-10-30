@@ -1320,6 +1320,14 @@ pub(super) fn build_router() -> Router {
             get(runtime_inserted_stylesheet_load_syncs_parser_snapshot_page),
         )
         .route(
+            "/assets/runtime_stylesheet_snapshot_applied",
+            get(runtime_stylesheet_snapshot_applied),
+        )
+        .route(
+            "/assets/runtime_stylesheet_snapshot_gated.css",
+            get(asset_runtime_stylesheet_snapshot_gated_css),
+        )
+        .route(
             "/compat/runtime-inserted-stylesheet-load-triggers-location-replace",
             get(runtime_inserted_stylesheet_load_triggers_location_replace_page),
         )
