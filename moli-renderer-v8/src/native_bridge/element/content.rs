@@ -6,6 +6,7 @@ use crate::{
     dom::native::{Element, Node},
     style_engine::{ComputedDisplayKind, ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind},
     util::v8_string,
+    web_api_interfaces, webidl,
 };
 
 use super::super::node::set_text_content_in_reaction_scope;
@@ -24,55 +25,20 @@ use super::{
     trusted_types::{TrustedHtmlSink, trusted_html_sink_string},
 };
 
-fn get_html_options(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    value: v8::Local<'_, v8::Value>,
-) -> (bool, Vec<DomHandle>) {
-    if value.is_null_or_undefined() {
-        return (false, Vec::new());
-    }
-    let Ok(options) = v8::Local::<v8::Object>::try_from(value) else {
-        return (false, Vec::new());
-    };
-    let serializable_shadow_roots = options
-        .get(
-            scope,
-            crate::util::v8str(scope, "serializableShadowRoots").into(),
-        )
-        .is_some_and(|value| value.boolean_value(scope));
-    let Some(shadow_roots_value) =
-        options.get(scope, crate::util::v8str(scope, "shadowRoots").into())
-    else {
-        return (serializable_shadow_roots, Vec::new());
-    };
-    let Ok(shadow_roots) = v8::Local::<v8::Object>::try_from(shadow_roots_value) else {
-        return (serializable_shadow_roots, Vec::new());
-    };
-    let length = shadow_roots
-        .get(scope, crate::util::v8str(scope, "length").into())
-        .and_then(|value| value.uint32_value(scope))
-        .unwrap_or(0);
-    let mut handles = Vec::new();
-    for index in 0..length {
-        let Some(value) = shadow_roots.get_index(scope, index) else {
-            continue;
-        };
-        let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-            continue;
-        };
-        let Ok((candidate_runtime_ptr, handle)) =
-            node_runtime_and_handle_from_object_or_detached(scope, object)
-        else {
-            continue;
-        };
-        if candidate_runtime_ptr == runtime_ptr
-            && unsafe { &*runtime_ptr }.dom_host().is_shadow_root(handle)
-        {
-            handles.push(handle);
-        }
-    }
-    (serializable_shadow_roots, handles)
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "GetHTMLOptions")]
+struct GetHtmlOptions<'scope> {
+    #[webidl(name = "serializableShadowRoots", default = false)]
+    serializable_shadow_roots: bool,
+    #[webidl(name = "shadowRoots", sequence, interface = web_api_interfaces::ShadowRoot, default = Vec::new())]
+    shadow_roots: Vec<v8::Local<'scope, v8::Object>>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "getHTML")]
+struct GetHtmlArgs<'scope> {
+    #[webidl(dictionary)]
+    options: GetHtmlOptions<'scope>,
 }
 
 pub(in crate::native_bridge) fn node_direct_text_content(
@@ -1050,8 +1016,7 @@ pub(in crate::native_bridge) fn node_get_html_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let runtime = unsafe { &*runtime_ptr };
-    if !is_element_or_shadow_root_receiver(runtime, handle) {
+    if !is_element_or_shadow_root_receiver(unsafe { &*runtime_ptr }, handle) {
         crate::webidl::throw_type_error(
             scope,
             "Failed to execute 'getHTML' on 'Element': Illegal invocation.",
@@ -1059,8 +1024,31 @@ pub(in crate::native_bridge) fn node_get_html_callback<'s>(
         rv.set_undefined();
         return;
     }
-    let (serializable_shadow_roots, explicit_shadow_roots) =
-        get_html_options(scope, runtime_ptr, args.get(0));
+    // Dictionary getters and sequence iterators may mutate the DOM. Borrow
+    // native state only after their conversion has completed.
+    let Some(parsed) = webidl::parse_args::<GetHtmlArgs>(scope, &args) else {
+        return;
+    };
+    let GetHtmlOptions {
+        serializable_shadow_roots,
+        shadow_roots,
+    } = parsed.options;
+    let mut explicit_shadow_roots = Vec::with_capacity(shadow_roots.len());
+    for object in shadow_roots {
+        let Ok((candidate_runtime_ptr, shadow_root)) =
+            node_runtime_and_handle_from_object_or_detached(scope, object)
+        else {
+            continue;
+        };
+        if candidate_runtime_ptr == runtime_ptr
+            && unsafe { &*runtime_ptr }
+                .dom_host()
+                .is_shadow_root(shadow_root)
+        {
+            explicit_shadow_roots.push(shadow_root);
+        }
+    }
+    let runtime = unsafe { &*runtime_ptr };
     let should_serialize_registry_attribute =
         |_: DomHandle, shadow_root: DomHandle, _: &crate::dom::native::ShadowRootInit| {
             runtime.should_serialize_shadow_root_registry_attribute(shadow_root)
