@@ -46,6 +46,8 @@ pub(super) struct InspectorOutboundMessage {
 
 #[derive(Default)]
 struct InspectorResponseRoutingState {
+    deactivated: bool,
+    notifications_retired: bool,
     // These fields belong to one agent-local V8 session channel and never
     // cross a renderer agent boundary.
     pending_response_callbacks: HashMap<i32, RendererRuntimeInspectorResponseSender>,
@@ -151,9 +153,15 @@ impl InspectorOutbound {
         )
     }
 
+    pub(super) fn retire_notifications(&self) {
+        self.response_routing.borrow_mut().notifications_retired = true;
+    }
+
     pub(super) fn deactivate(&self) {
         {
             let mut guard = self.response_routing.borrow_mut();
+            guard.deactivated = true;
+            guard.notifications_retired = true;
             debug_assert_eq!(guard.dispatch_response_capture_depth, 0);
             debug_assert!(guard.internal_dispatch_response_call_ids.is_empty());
             debug_assert!(guard.runtime_command_output.is_none());
@@ -230,6 +238,9 @@ impl InspectorOutbound {
     }
 
     pub(super) fn push_value(&self, value: impl Into<InspectorJson>) {
+        if self.response_routing.borrow().notifications_retired {
+            return;
+        }
         let value = value.into();
         #[cfg(feature = "devtools")]
         if let Some(session_route) = self.session_route.borrow().clone() {
@@ -241,6 +252,9 @@ impl InspectorOutbound {
     fn push_local_value(&self, value: InspectorJson) {
         let (runtime_command_output, command_turn_output, dispatch_is_active) = {
             let routing = self.response_routing.borrow();
+            if routing.notifications_retired {
+                return;
+            }
             if routing.runtime_command_output_suppression_depth == 0 {
                 (
                     routing.runtime_command_output.clone(),
@@ -297,6 +311,9 @@ impl InspectorOutbound {
     pub(super) fn push_response_value(&self, call_id: i32, value: impl Into<InspectorJson>) {
         let value = value.into();
         let mut guard = self.response_routing.borrow_mut();
+        if guard.deactivated {
+            return;
+        }
         if guard
             .internal_dispatch_response_call_ids
             .last()

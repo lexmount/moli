@@ -1843,8 +1843,8 @@ async fn unattached_child_frame_activity_uses_captured_owner_for_network_and_lif
             encoded_data_length: 10,
             response_body: Some(SubresourceResponseBody::from_bytes(b"child body".to_vec())),
             from_cache: false,
-            cache_state: Default::default(),
-            preload_state: Default::default(),
+            cache_state: moli_fetch::ResponseCacheState::None,
+            preload_state: moli_fetch::ResponsePreloadState::None,
             resource_timing_body_visible: false,
             resource_timing_response: None,
             resource_timing_allowed: false,
@@ -2545,8 +2545,8 @@ async fn prepared_child_frame_activity_keeps_implicit_owner_after_foreground_cha
                 encoded_data_length: 5,
                 response_body: Some(SubresourceResponseBody::from_bytes(b"child".to_vec())),
                 from_cache: false,
-                cache_state: Default::default(),
-                preload_state: Default::default(),
+                cache_state: moli_fetch::ResponseCacheState::None,
+                preload_state: moli_fetch::ResponsePreloadState::None,
                 resource_timing_body_visible: false,
                 resource_timing_response: None,
                 resource_timing_allowed: false,
@@ -3517,7 +3517,10 @@ async fn initial_document_navigation_noop_history_preserves_accepted_location() 
                     crate::conn::TopLevelNavigationOwnerAction::history(
                         owner.clone(),
                         page,
-                        moli_core::page::RendererPendingTopLevelHistoryTraversal { delta },
+                        moli_core::page::RendererPendingTopLevelHistoryTraversal {
+                            delta,
+                            beforeunload_checked: false,
+                        },
                     ),
                 )
             });
@@ -3591,7 +3594,10 @@ async fn initial_document_navigation_valid_history_supersedes_older_admission() 
                 crate::conn::TopLevelNavigationOwnerAction::history(
                     owner.clone(),
                     page,
-                    moli_core::page::RendererPendingTopLevelHistoryTraversal { delta: -1 },
+                    moli_core::page::RendererPendingTopLevelHistoryTraversal {
+                        delta: -1,
+                        beforeunload_checked: false,
+                    },
                 ),
             )
             .expect("a traversal with an existing destination must remain admissible")

@@ -241,9 +241,9 @@ impl CdpConnection {
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: false,
-            cache_state: Default::default(),
+            cache_state: moli_fetch::ResponseCacheState::None,
+            preload_state: moli_fetch::ResponsePreloadState::None,
             negotiated_http_version: None,
-            preload_state: Default::default(),
         };
         Ok(self.prepare_captured_navigation_response_with_load_inputs(
             &navigation.owner,

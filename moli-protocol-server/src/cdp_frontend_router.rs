@@ -16,12 +16,12 @@ pub(crate) enum CdpPreparedFrontendCommand {
     Command(ParsedCdpCommand),
     TargetMessage {
         frontend_id: u64,
-        acknowledgements: Vec<Value>,
+        acknowledgements: Vec<moli_inspector_json::InspectorJson>,
         command: Option<ParsedCdpCommand>,
     },
     ImmediateResponse {
         frontend_id: u64,
-        message: Value,
+        message: moli_inspector_json::InspectorJson,
     },
 }
 
@@ -47,7 +47,11 @@ impl CdpFrontendRouter {
             .prepare_parsed_command(frontend_id, command)
     }
 
-    pub(crate) fn enqueue_immediate_response(&self, frontend_id: u64, message: Value) {
+    pub(crate) fn enqueue_immediate_response(
+        &self,
+        frontend_id: u64,
+        message: impl Into<moli_inspector_json::InspectorJson>,
+    ) {
         let frontend = self.routing.lock().frontend_by_id(frontend_id);
         if let Some(frontend) = frontend {
             frontend.enqueue_message(message);

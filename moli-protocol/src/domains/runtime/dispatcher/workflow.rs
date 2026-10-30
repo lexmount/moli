@@ -197,10 +197,13 @@ impl RuntimeWorkflow {
             }
             let response = response?;
             if result_kind == DevToolsRuntimeCommandResultKind::Empty {
-                return devtools_empty_result_from_response(response);
+                return devtools_empty_result_from_response(response.into_value());
             }
-            let mut result =
-                devtools_script_result_from_response(response, ownership, realm.clone())?;
+            let mut result = devtools_script_result_from_response(
+                response.into_value(),
+                ownership,
+                realm.clone(),
+            )?;
             // An accepted public-script result still belongs to its original
             // command after navigation. Do not materialize or register its handles
             // against a replacement Document.
@@ -268,7 +271,7 @@ impl RuntimeWorkflow {
         &mut self,
         target: DevToolsRuntimeTarget,
         command: AutomationCommand,
-    ) -> Result<Value, DevToolsError> {
+    ) -> Result<moli_inspector_json::InspectorJson, DevToolsError> {
         let owner = CommandOwnerScope::for_route(target.route.clone());
         let mut listeners = Vec::new();
         let (command, mut params) = match command {

@@ -1565,7 +1565,7 @@ async fn cdp_fetch_then_bidi_network_intercept_request_stage_chain_completes() {
         &ctx.handle(),
         &mut continue_output,
         continue_scheduler_events,
-        crate::conn::BackgroundProtocolEvent::into_protocol_message,
+        |event| event.into_protocol_message(),
     )
     .await;
     ctx.sent.extend(continue_output);
@@ -1835,7 +1835,7 @@ async fn cdp_fetch_then_bidi_network_intercept_response_stage_chain_completes() 
         &ctx.handle(),
         &mut continue_output,
         continue_scheduler_events,
-        crate::conn::BackgroundProtocolEvent::into_protocol_message,
+        |event| event.into_protocol_message(),
     )
     .await;
     ctx.sent.extend(continue_output);

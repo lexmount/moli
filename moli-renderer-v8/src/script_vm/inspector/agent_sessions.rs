@@ -75,6 +75,14 @@ impl RendererInspectorSessions {
         }
     }
 
+    pub(super) fn retire_notifications(&self) {
+        #[cfg(feature = "devtools")]
+        self.frontend.retire_notifications();
+        if let Some(session) = &self.internal_runtime_evaluate {
+            session.outbound.retire_notifications();
+        }
+    }
+
     pub(super) fn deactivate_all(&self) {
         #[cfg(feature = "devtools")]
         self.frontend.deactivate();

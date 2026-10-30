@@ -832,6 +832,7 @@ fn start_create_isolated_world_initial_navigation_or_renderer_phase(
         super::navigation::NavigateCommandStart::CompletePlan(plan) => {
             PageCommandTaskStep::Complete(plan)
         }
+
         super::navigation::NavigateCommandStart::PendingLoad(pending) => {
             pending_create_isolated_world_command_for_session(
                 command_id,

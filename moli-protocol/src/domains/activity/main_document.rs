@@ -1403,6 +1403,115 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn owned_post_load_work_rejoins_its_original_observer_and_output_after_ready_loss() {
+        use crate::conn::{CommandDispatchContext, ParsedCdpCommand, ProtocolStateOwner};
+        for lose_ready in [false, true] {
+            let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .page_domain_enabled = true;
+            assert!(
+                conn.begin_renderer_document_load_visibility_barrier_for_owner(
+                    &CommandOwnerScope::for_session("SID-nav"),
+                    "LID-1"
+                )
+            );
+            assert!(enqueue_load_publication_for_test(&mut conn, binding).is_empty());
+            assert!(
+                conn.take_scheduler_events().is_empty(),
+                "DCL cannot start post-load work"
+            );
+            let load_events =
+                project_lifecycle(&mut conn, vec![renderer_load_event_for_test(started)]);
+            assert_eq!(load_count(load_events.clone()), 1);
+            let work = take_deferred_load_work_for_test(&mut conn);
+            let observation = work.main_document_load_observation_id().unwrap();
+            let owner = ProtocolStateOwner::new(conn);
+            let handle = owner.handle();
+            let pending = handle
+                .with_state(|state| state.try_start_owned_protocol_scheduler_work(work))
+                .unwrap()
+                .unwrap_or_else(|_| {
+                    panic!("the production owner admits the complete load workflow")
+                })
+                .unwrap();
+            let peer =
+                ParsedCdpCommand::parse_str(r#"{"id":50,"method":"Browser.getVersion"}"#).unwrap();
+            assert!(matches!(
+                handle
+                    .with_state(|state| state.start_parsed_command_dispatch_with_context(
+                        &peer,
+                        &mut CommandDispatchContext::default()
+                    ))
+                    .unwrap(),
+                crate::conn::CdpCommandTaskStep::Complete(_)
+            ));
+            let completed = pending.clone().wait().await;
+            assert_eq!(
+                completed.main_document_load_observation_id(),
+                Some(observation)
+            );
+            let completed = if lose_ready {
+                drop(completed);
+                pending.clone().wait().await
+            } else {
+                completed
+            };
+            let outcome = handle
+                .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+                .unwrap();
+            let (events, _) = outcome.into_protocol_event_parts();
+            assert_eq!(
+                load_count(load_events.into_iter().chain(events).collect()),
+                1,
+                "the original Document publishes its load once across post-load ready loss"
+            );
+            // The first completion leaves its real fenced-output work queued.
+            // A repeated observer can wake that queue, but must not publish
+            // another receipt or any duplicate client event.
+            let published = handle
+                .with_state(|state| {
+                    state.fixture(|connection| {
+                        connection.moli_memory_diagnostics()["scheduler"]["pendingProtocolWorkCount"]
+                            .as_u64().expect("native pending protocol work count")
+                    })
+                })
+                .unwrap();
+            let duplicate = pending.wait().await;
+            let (events, scheduler) = handle
+                .with_state(|state| state.complete_owned_protocol_scheduler_work(duplicate))
+                .unwrap()
+                .into_protocol_event_parts();
+            assert!(
+                events.is_empty(),
+                "ready loss cannot emit load twice: events={events:?}"
+            );
+            assert!(
+                scheduler.iter().all(|event| matches!(
+                    event,
+                    crate::conn::CdpSchedulerEvent::ProtocolWorkReady
+                ))
+            );
+            assert_eq!(
+                handle
+                    .with_state(|state| {
+                        state.fixture(|connection| {
+                            connection.moli_memory_diagnostics()["scheduler"]["pendingProtocolWorkCount"]
+                                .as_u64().expect("native pending protocol work count")
+                        })
+                    })
+                    .unwrap(),
+                published,
+                "a duplicate observer must not publish more fenced output"
+            );
+        }
+    }
+
     fn load_count(events: Vec<BackgroundProtocolEvent>) -> usize {
         events
             .into_iter()

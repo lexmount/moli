@@ -47,7 +47,13 @@ fn target_command(
     else {
         panic!("expected an accepted Target transport");
     };
-    (acknowledgements, command)
+    (
+        acknowledgements
+            .into_iter()
+            .map(|message| message.into_value())
+            .collect(),
+        command,
+    )
 }
 
 #[test]

@@ -401,12 +401,27 @@ async fn stop_loading_captures_original_navigation_at_admission_before_a_success
         .unwrap();
     // Deliberately leave the original task unpolled until the successor has
     // been accepted. Its later cleanup must keep that newer request intact.
-    let CdpCommandTaskStep::Complete(paused) = start(
+    let mut successor_context = CommandDispatchContext::default();
+    let mut successor = start(
         &handle,
         json!({"id":2105,"method":"Page.navigate","sessionId":"SID-page-owned","params":{"url":"http://example.test/stop-newer"}}),
-        &mut Default::default(),
-    ) else {
-        panic!("successor request can pause independently");
+        &mut successor_context,
+    );
+    let paused = loop {
+        match successor {
+            CdpCommandTaskStep::Complete(outcome) => break outcome,
+            CdpCommandTaskStep::Pending(next) => {
+                let completed = fixture.drive_owned_wait(next.wait()).await;
+                successor = handle
+                    .with_state(|state| {
+                        state.complete_command_dispatch_with_context(
+                            completed,
+                            &mut successor_context,
+                        )
+                    })
+                    .unwrap();
+            }
+        }
     };
     let (events, _, _) = paused.into_protocol_event_parts();
     let newer = events

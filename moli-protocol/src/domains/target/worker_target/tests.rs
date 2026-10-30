@@ -3705,7 +3705,8 @@ async fn native_worker_console_packets_preserve_utf16_and_exact_session_routing(
     ctx.run_fixture_projection(&mut command, move |driver, context| {
         Box::pin(projection.run(driver, context))
     })
-    .await;
+    .await
+    .expect("project native worker console output");
     let events = command.take_protocol_events();
     assert_eq!(events.len(), 1);
     let message = events.into_iter().next().unwrap().into_cdp_message();

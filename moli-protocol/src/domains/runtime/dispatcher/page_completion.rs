@@ -549,7 +549,7 @@ mod tests {
             let (events, _, _) = outcome.into_protocol_event_parts();
             let messages = events
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message)
+                .map(|event| event.into_protocol_message())
                 .collect::<Vec<_>>();
             assert_eq!(messages.len(), 2, "{messages:?}");
             assert_eq!(messages[0]["method"], "Runtime.consoleAPICalled");
@@ -712,7 +712,7 @@ mod tests {
             let (events, _, _) = outcome.into_protocol_event_parts();
             let messages = events
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message)
+                .map(|event| event.into_protocol_message())
                 .collect::<Vec<_>>();
             let replies = messages
                 .iter()
