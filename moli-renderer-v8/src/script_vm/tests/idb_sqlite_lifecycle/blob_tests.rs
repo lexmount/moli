@@ -324,3 +324,48 @@ async fn idb_sqlite_queued_write_snapshots_can_exceed_64_mib() {
         "[[1,\"queued1\",25165824,1,1],[2,\"queued2\",25165824,2,2],[3,\"queued3\",25165824,3,3]]"
     );
 }
+
+#[tokio::test]
+async fn idb_sqlite_partial_file_list_collection_failure_releases_cached_backings_without_gc() {
+    let (mut vm, loader, backend) = fixture();
+    seed_partial_blob_collection(&mut vm, &backend);
+    vm.eval(
+        r#"(() => {
+        globalThis.inputFile = new File(['file-body'], 'saved.txt');
+        const transfer = new DataTransfer();
+        transfer.items.add(inputFile);
+        const list = transfer.files;
+        db.transaction('records', 'readwrite').objectStore('records')
+          .put({id:1, group:'g1', list, alias:list, file:inputFile});
+        return 'queued';
+    })()"#,
+    )
+    .unwrap();
+    backend.drain(&mut vm, &loader).await;
+    let before = crate::blob::live_blob_count_for_test();
+    vm.eval(
+        r#"(() => {
+        globalThis.fileListEvents = [];
+        const transaction = db.transaction('records');
+        const request = transaction.objectStore('records').getAll();
+        request.onsuccess = () => fileListEvents.push('bad-success');
+        request.onerror = event => {
+          event.preventDefault();
+          fileListEvents.push('error:' + request.error.name);
+        };
+        transaction.oncomplete = () => fileListEvents.push('complete');
+        return 'queued';
+    })()"#,
+    )
+    .unwrap();
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(
+        vm.eval("JSON.stringify(fileListEvents)").unwrap(),
+        r#"["error:Error","complete"]"#
+    );
+    assert_eq!(
+        crate::blob::live_blob_count_for_test(),
+        before,
+        "the FileList/File alias in the first row must release its shared backing when the second row fails to decode"
+    );
+}
