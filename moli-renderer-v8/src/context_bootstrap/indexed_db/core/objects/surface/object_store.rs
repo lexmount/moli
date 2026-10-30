@@ -5,7 +5,7 @@ use moli_webapi_declare::WebApiObject;
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::IDBObjectStore, require_prototype, scope_lifetime = 'scope)]
 struct IdbObjectStoreObjectDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
+    #[webapi(slot = crate::context_bootstrap::indexed_db::STORE_NAME_FALLBACK_SLOT)]
     name: v8::Local<'scope, v8::String>,
     #[webapi(slot = SCHEMA_KEY_PATH_SLOT)]
     key_path: v8::Local<'scope, v8::Value>,
