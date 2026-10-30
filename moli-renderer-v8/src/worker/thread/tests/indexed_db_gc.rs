@@ -32,7 +32,9 @@ async fn cursor_gc_command(
     let response = completion
         .output
         .into_protocol_response(call_id)
-        .expect("worker GC command response");
+        .expect("worker GC command response")
+        .into_json()
+        .expect("GC probes return scalar JSON responses");
     assert!(response.get("error").is_none(), "{response}");
     assert!(
         response["result"].get("exceptionDetails").is_none(),

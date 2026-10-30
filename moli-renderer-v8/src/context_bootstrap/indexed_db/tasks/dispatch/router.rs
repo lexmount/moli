@@ -52,6 +52,7 @@ fn flush_indexed_db_task<'s>(
     let retire =
         crate::context_bootstrap::indexed_db::capture_indexed_db_task_retirement(scope, task);
     let owner_restore = owner.enter(scope);
+    let mut retained = false;
     match kind {
         IndexedDbTaskKind::SqlCompletion => flush_indexed_db_sql_task(scope, task),
         IndexedDbTaskKind::FactoryRequest => {
@@ -67,7 +68,9 @@ fn flush_indexed_db_task<'s>(
         IndexedDbTaskKind::DatabasesSettle => flush_databases_settle_task(scope, task),
         IndexedDbTaskKind::TransactionStart => flush_transaction_start_task(scope, task),
         IndexedDbTaskKind::TransactionCommit => flush_transaction_commit_task(scope, task),
-        IndexedDbTaskKind::TransactionAbort => flush_transaction_abort_task(scope, task),
+        IndexedDbTaskKind::TransactionAbort => {
+            retained = flush_transaction_abort_task(scope, task);
+        }
         IndexedDbTaskKind::TransactionOperationError => {
             flush_transaction_operation_error_task(scope, task)
         }
@@ -105,7 +108,7 @@ fn flush_indexed_db_task<'s>(
         && crate::context_bootstrap::indexed_db::typed_state::factory::retain_pending_factory_task(
             scope, task,
         );
-    if !factory_pending {
+    if !factory_pending && !retained {
         unregister_indexed_db_task(scope, task);
     }
     owner.defer_restore(scope, owner_restore);

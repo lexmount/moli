@@ -302,6 +302,112 @@ async fn isolated_popup_navigation_releases_indexed_db_connections() {
     abort_test_cdp_server(server).await;
 }
 
+#[tokio::test]
+async fn idb_sqlite_popup_close_retires_its_connection_and_preserves_the_opener() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async { axum::response::Html("<p>opener</p>") })),
+        "popup-indexeddb-close-retirement",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(
+        &mut opener,
+        2,
+        &format!("http://{fixture_addr}/opener"),
+    )
+    .await;
+    let seeded = send_cdp_command(&mut opener, 3, "Runtime.evaluate", None, json!({
+        "awaitPromise":true,"returnByValue":true,"expression":r#"(async () => {
+            const request = indexedDB.open('opener-retained', 1);
+            request.onupgradeneeded = () => request.result.createObjectStore('records').put('opener',1);
+            globalThis.keeper = await new Promise((resolve,reject) => {
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+            return 'opened';
+        })()"#
+    })).await;
+    assert_eq!(
+        response_by_id(&seeded, 3)["result"]["result"]["value"],
+        "opened",
+        "{seeded:?}"
+    );
+    let (child_id, mut child) = open_auxiliary(addr, &mut opener, "").await;
+    let opened = send_cdp_command(&mut child, 4, "Runtime.evaluate", None, json!({
+        "awaitPromise":true,"returnByValue":true,"expression":r#"(async () => {
+            const request = indexedDB.open('popup-retired', 1);
+            request.onupgradeneeded = () => request.result.createObjectStore('records').put('popup',1);
+            globalThis.popupHeldDatabase = await new Promise((resolve,reject) => {
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+            return 'opened';
+        })()"#
+    })).await;
+    assert_eq!(
+        response_by_id(&opened, 4)["result"]["result"]["value"],
+        "opened",
+        "{opened:?}"
+    );
+    // Keeping the real foreign wrapper in the opener prevents GC from hiding
+    // a missing connection retirement when the popup's native owner closes.
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            5,
+            "globalThis.popupHeldDatabase=p.popupHeldDatabase;p.close();p.closed"
+        )
+        .await,
+        true
+    );
+    wait_for_target_list(addr, "closed popup owner removed", |targets| {
+        targets.iter().all(|target| target["id"] != child_id)
+    })
+    .await;
+    let result = send_cdp_command(
+        &mut opener,
+        6,
+        "Runtime.evaluate",
+        None,
+        json!({
+            "awaitPromise":true,"returnByValue":true,"expression":r#"(async () => {
+            const request = indexedDB.open('popup-retired', 2);
+            const upgraded = await new Promise((resolve,reject) => {
+                request.onblocked = () => reject(Error('closed popup still blocks upgrade'));
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => resolve(request.result);
+            });
+            const read = db => new Promise((resolve,reject) => {
+                const request = db.transaction('records').objectStore('records').get(1);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+            const value = await read(upgraded);
+            const retained = await read(keeper);
+            const result = {closed:p.closed,version:upgraded.version,value,retained,
+                retainedName:popupHeldDatabase.name};
+            upgraded.close();keeper.close();return result;
+        })()"#
+        }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&result, 6)["result"]["result"]["value"],
+        json!({
+            "closed":true,"version":2,"value":"popup","retained":"opener",
+            "retainedName":"popup-retired"
+        }),
+        "{result:?}"
+    );
+    abort_test_cdp_server(server).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn iframe_popup_location_navigation_uses_incumbent_document_referrer() {
     let requests = Arc::new(parking_lot::Mutex::new(Vec::<(String, String)>::new()));

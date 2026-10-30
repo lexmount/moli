@@ -21,6 +21,7 @@ mod key;
 mod key_codec;
 mod key_path_codec;
 mod manager;
+mod name;
 mod options;
 pub mod sqlite;
 #[cfg(test)]
@@ -42,6 +43,7 @@ pub use cursor::{
 pub use error::IndexedDbError;
 pub use key::{Key, KeyNumber, KeyPath, MAX_KEY_DEPTH};
 pub use manager::IndexedDbManager;
+pub use name::IndexedDbName;
 pub use options::{
     GetAllOptionsCandidate, IndexOptionsValidationError, ObjectStoreOptionsValidationError,
     TransactionModeParseError, parse_regular_transaction_mode, should_parse_get_all_options,

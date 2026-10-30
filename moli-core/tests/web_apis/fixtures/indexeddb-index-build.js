@@ -78,7 +78,10 @@ globalThis.indexBuildProbe = async function (name = "idb-index-build") {
           };
           if (!persisted) records.forEach((value, i) => watch(store.put(value, i + 1), `put${i}`, true));
           index = createIndex(store, "unique", keyPath, { unique: true, multiEntry });
-          check(`${label}:returns-index`, index instanceof StoreRealm.IDBIndex && index.objectStore === store &&
+          // Borrowed methods return the transaction's canonical handles. Their
+          // objects keep the connection's Realm, as in Chromium.
+          check(`${label}:returns-index`, index instanceof Realm.IDBIndex && index.objectStore === store &&
+            Object.getPrototypeOf(store) === Realm.IDBObjectStore.prototype && tx.objectStore("s") === store &&
             index.unique && index.multiEntry === multiEntry, index.name);
           check(`${label}:synchronous-metadata`, store.indexNames.contains("unique") && tx.error === null,
             Array.from(store.indexNames));
