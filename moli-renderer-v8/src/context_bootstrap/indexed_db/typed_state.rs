@@ -316,6 +316,7 @@ struct IndexedDbRequestLifecycleState {
 
 struct IndexedDbTransactionLifecycleState {
     mode: TransactionMode,
+    store_names: Vec<moli_indexeddb::IndexedDbName>,
     database: Option<RealmValueHandle>,
     upgrade_open_request: Option<RealmValueHandle>,
     handle: Option<TransactionHandle>,
@@ -343,10 +344,12 @@ impl IndexedDbTransactionLifecycleState {
         database: RealmValueHandle,
         handle: Option<TransactionHandle>,
         mode: TransactionMode,
+        store_names: Vec<moli_indexeddb::IndexedDbName>,
         started: bool,
     ) -> Self {
         Self {
             mode,
+            store_names,
             database: Some(database),
             upgrade_open_request: None,
             handle,
@@ -441,16 +444,13 @@ pub(super) struct IndexedDbCursorLifecycleState {
 struct IndexedDbObjectStoreLifecycleState {
     transaction: v8::Weak<v8::Object>,
     database: v8::Weak<v8::Object>,
-    name_override: Option<moli_indexeddb::IndexedDbName>,
     metadata: IndexedDbObjectStoreMetadata,
     deleted: bool,
 }
 
 impl IndexedDbObjectStoreLifecycleState {
     fn name(&self) -> &moli_indexeddb::IndexedDbName {
-        self.name_override
-            .as_ref()
-            .unwrap_or(&self.metadata.info.name)
+        &self.metadata.info.name
     }
 
     fn new(
@@ -465,7 +465,6 @@ impl IndexedDbObjectStoreLifecycleState {
         Self {
             transaction: v8::Weak::new(scope, transaction),
             database: v8::Weak::new(scope, database),
-            name_override: None,
             metadata,
             deleted: false,
         }
@@ -779,6 +778,7 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     database: v8::Local<'s, v8::Object>,
     handle: Option<TransactionHandle>,
     mode: TransactionMode,
+    store_names: &[moli_indexeddb::IndexedDbName],
     started: bool,
 ) {
     let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
@@ -788,6 +788,7 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
         RealmValueHandle::new(scope, database.into()),
         handle,
         mode,
+        store_names.to_vec(),
         started,
     );
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
@@ -2105,17 +2106,12 @@ pub(super) fn set_indexed_db_typed_slot_value(
     if let Some(database) = table.databases.get_mut(&id) {
         return set_indexed_db_typed_database_slot_value(scope, database, key, value);
     }
-    if let Some(store) = table
+    if let Some(_store) = table
         .object_stores
         .get(&id)
         .and_then(std::rc::Weak::upgrade)
     {
-        return set_indexed_db_typed_object_store_slot_value(
-            scope,
-            &mut store.borrow_mut(),
-            key,
-            value,
-        );
+        return set_indexed_db_typed_object_store_slot_value(key);
     }
     if let Some(index) = table.indexes.get(&id).and_then(std::rc::Weak::upgrade) {
         return set_indexed_db_typed_index_slot_value(&mut index.borrow_mut(), key, value);
@@ -2364,31 +2360,11 @@ fn indexed_db_typed_object_store_slot_value<'s>(
     }
 }
 
-fn set_indexed_db_typed_object_store_slot_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    store: &mut IndexedDbObjectStoreLifecycleState,
-    key: &str,
-    value: v8::Local<'_, v8::Value>,
-) -> bool {
-    match key {
-        INDEXED_DB_OBJECT_STORE_NAME_SLOT => {
-            store.name_override = Some(
-                value
-                    .to_string(scope)
-                    .map(|value| {
-                        moli_indexeddb::IndexedDbName::from_utf16(
-                            crate::util::v8_string_to_u16_string(scope, value).into_vec(),
-                        )
-                    })
-                    .unwrap_or_default(),
-            );
-            true
-        }
-        // Metadata is typed-state authoritative. Consume migrated slot writes here so they do not
-        // fall through into V8 private storage and become a second metadata source.
-        INDEXED_DB_OBJECT_STORE_METADATA_SLOT => true,
-        _ => false,
-    }
+fn set_indexed_db_typed_object_store_slot_value(key: &str) -> bool {
+    matches!(
+        key,
+        INDEXED_DB_OBJECT_STORE_NAME_SLOT | INDEXED_DB_OBJECT_STORE_METADATA_SLOT
+    )
 }
 
 fn indexed_db_typed_index_slot_value<'s>(
@@ -2813,4 +2789,26 @@ pub(crate) use metadata_sharing_tests::{
 pub(crate) fn indexed_db_native_cursor_count_for_test(scope: &mut v8::PinScope<'_, '_>) -> usize {
     let table = ensure_indexed_db_runtime_state_table(scope);
     table.borrow().cursors.len()
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn indexed_db_transaction_store_names<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> Option<Vec<moli_indexeddb::IndexedDbName>> {
+    let transaction = moli_webapi_declare::web_api_object_target(scope, transaction)?;
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    {
+        let table = table.borrow();
+        let state = table.transactions.get(&id)?;
+        if state.mode != TransactionMode::VersionChange {
+            return Some(state.store_names.clone());
+        }
+    }
+    // Completion releases the native Global, while the wrapper retains its db
+    // through the traced private slot. Finished upgrade scopes remain readable.
+    let database = crate::util::get_private_value(scope, transaction, TRANSACTION_DB_SLOT)
+        .or_else(|| indexed_db_transaction_database(scope, transaction).map(Into::into))?;
+    let database = v8::Local::<v8::Object>::try_from(database).ok()?;
+    Some(indexed_db_database_store_names(scope, database))
 }
