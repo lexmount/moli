@@ -2399,3 +2399,5 @@ mod rtc_encoded_frames;
 mod xml_serializer_receivers;
 
 mod hyperlink_audit_owner;
+
+mod canvas_pixel_geometry;
