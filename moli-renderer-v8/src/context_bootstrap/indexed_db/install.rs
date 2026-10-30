@@ -28,6 +28,7 @@ use super::{
     idb_object_store_get_callback as idb_object_store_get_callback_in_current_context,
     idb_object_store_get_key_callback as idb_object_store_get_key_callback_in_current_context,
     idb_object_store_index_callback, idb_object_store_index_names_getter,
+    idb_object_store_name_getter, idb_object_store_name_setter,
     idb_object_store_open_cursor_callback as idb_object_store_open_cursor_callback_in_current_context,
     idb_object_store_open_key_cursor_callback as idb_object_store_open_key_cursor_callback_in_current_context,
     idb_object_store_put_callback as idb_object_store_put_callback_in_current_context,
