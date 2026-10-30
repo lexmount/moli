@@ -7,7 +7,6 @@ use super::{
     CdpFrontendRoutingState, cdp_error_response,
     frontend_registry::DirectChildLookupError,
     pending_commands::{CdpCommandFrontend, PendingCommandEffect, PendingCommandRoute},
-    set_top_level_session_id,
 };
 use crate::cdp_frontend_router::CdpPreparedFrontendCommand;
 
@@ -20,8 +19,9 @@ fn immediate_error_response(
     code: i32,
     error_message: &str,
 ) -> CdpPreparedFrontendCommand {
-    let mut message = cdp_error_response(command_id, code, error_message);
-    set_top_level_session_id(&mut message, client_session_id);
+    let mut message: moli_inspector_json::InspectorJson =
+        cdp_error_response(command_id, code, error_message).into();
+    message.set_session_id(client_session_id);
     CdpPreparedFrontendCommand::ImmediateResponse {
         frontend_id,
         message,
@@ -66,18 +66,24 @@ impl CdpFrontendRoutingState {
             .and_then(|session| self.frontends.session(session))
             .filter(|session| session.frontend_id == frontend_id)
             .map(|session| session.output.clone());
-        let mut prepared = if command.method() == "Target.sendMessageToTarget" {
+        let prepared = if command.method() == "Target.sendMessageToTarget" {
             self.prepare_target_message(frontend_id, command)?
         } else {
             self.prepare_command_core(frontend_id, command)?
         };
-        if let Some(output) = output
-            && let CdpPreparedFrontendCommand::ImmediateResponse { message, .. } = &mut prepared
-            && message.get("sessionId").is_some()
-        {
-            *message = output.encode(std::mem::take(message)).into_value();
-        }
-        Some(prepared)
+        Some(match (output, prepared) {
+            (
+                Some(output),
+                CdpPreparedFrontendCommand::ImmediateResponse {
+                    frontend_id,
+                    message,
+                },
+            ) if message.session_id().is_some() => CdpPreparedFrontendCommand::ImmediateResponse {
+                frontend_id,
+                message: output.encode(message),
+            },
+            (_, prepared) => prepared,
+        })
     }
 
     fn prepare_command_core(

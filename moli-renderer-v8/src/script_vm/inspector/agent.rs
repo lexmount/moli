@@ -162,6 +162,10 @@ impl RendererDevToolsAgent {
             .cancel_internal_runtime_evaluate_response(call_id);
     }
 
+    pub(super) fn retire_notifications(&self) {
+        self.state.borrow().sessions.retire_notifications();
+    }
+
     pub(super) fn deactivate_all_routes(&self) {
         self.state.borrow().sessions.deactivate_all();
     }

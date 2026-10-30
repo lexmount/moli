@@ -1153,7 +1153,7 @@ mod devtools_runtime_entry_tests {
         let messages: Vec<_> = plan
             .into_background_events(Some(42), Some("SID-1"))
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| event.into_protocol_message())
             .collect();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["id"], 42);
@@ -1180,7 +1180,7 @@ mod devtools_runtime_entry_tests {
         let messages: Vec<_> = plan
             .into_background_events(Some(43), Some("SID-2"))
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| event.into_protocol_message())
             .collect();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["id"], 43);

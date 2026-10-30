@@ -1,7 +1,5 @@
 use super::*;
-use crate::conn::{
-    BackgroundProtocolEvent, CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand,
-};
+use crate::conn::{CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand};
 use futures_util::FutureExt as _;
 use serde_json::json;
 
@@ -80,7 +78,7 @@ async fn placeholder_close_keeps_native_cleanup_owned_across_waiter_and_ready_lo
                 .into_protocol_event_parts()
                 .0
                 .iter()
-                .any(|event| event.clone().into_protocol_message()["id"] == 70)
+                .any(|event| { event.clone().into_protocol_message()["id"] == 70 })
         );
 
         let close = ParsedCdpCommand::parse_value(json!({"id":71,"method":"Target.closeTarget","params":{"targetId":crate::DEFAULT_CDP_PAGE_TARGET_ID}})).unwrap();
@@ -191,7 +189,7 @@ async fn placeholder_close_keeps_native_cleanup_owned_across_waiter_and_ready_lo
             .into_protocol_event_parts()
             .0
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .map(|event| event.into_protocol_message())
             .collect();
         let replies: Vec<_> = messages.iter().filter(|m| m["id"] == 71).collect();
         assert_eq!(replies.len(), 1, "{phase}: {messages:?}");

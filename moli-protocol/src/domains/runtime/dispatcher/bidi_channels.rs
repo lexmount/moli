@@ -6,7 +6,7 @@ use super::*;
 #[error("InvalidChannelArgument")]
 pub(super) struct InvalidBidiChannelArgument;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, serde::Deserialize)]
 #[error("BiDi preload channel Inspector error {code}: {message}")]
 struct BidiPreloadChannelInspectorError {
     code: i32,

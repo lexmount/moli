@@ -66,6 +66,7 @@ pub(crate) struct MainWindowProxyNavigationCommit {
     context: Option<v8::Global<v8::Context>>,
     renderer_document_isolate: RendererIsolateHandle,
     context_host: Rc<RefCell<PageScriptHost>>,
+    devtools_target: crate::devtools::target::RendererDevToolsTargetHandle,
     page_id: u64,
 }
 
@@ -2860,6 +2861,14 @@ impl ScriptVm {
             .deactivate_page_vm_binding_for_teardown();
     }
 
+    pub(super) fn retire_inspector_context_for_replacement(&mut self) {
+        // The successor agent emits the reset on reattachment. Preserve the
+        // source's already-produced unload prefix before retiring its route.
+        self.append_live_command_output_prefix();
+        self.page_inspector.retire_notifications_for_replacement();
+        self.detach_default_inspector_context_for_context_teardown();
+    }
+
     pub(super) fn prepare_main_window_proxy_navigation_commit(
         &mut self,
         page_id: u64,
@@ -2904,6 +2913,7 @@ impl ScriptVm {
             context: Some(context),
             context_host: self._context_host.clone(),
             renderer_document_isolate: self.renderer_document_isolate.clone(),
+            devtools_target: self.devtools_target(),
             page_id,
         })
     }

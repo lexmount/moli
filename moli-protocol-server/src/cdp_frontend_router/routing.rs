@@ -94,20 +94,6 @@ impl CdpFrontendRoutingState {
     }
 }
 
-fn remove_top_level_session_id(message: &mut Value) {
-    if let Some(object) = message.as_object_mut() {
-        object.remove("sessionId");
-    }
-}
-
-fn set_top_level_session_id(message: &mut Value, session_id: Option<&str>) {
-    if let Some(session_id) = session_id {
-        message["sessionId"] = json!(session_id);
-    } else {
-        remove_top_level_session_id(message);
-    }
-}
-
 fn cdp_error_response(id: Option<u64>, code: i32, message: &str) -> Value {
     json!({
         "id": id.map(Value::from).unwrap_or(Value::Null),

@@ -676,7 +676,7 @@ mod tests {
             let messages = events
                 .iter()
                 .cloned()
-                .map(BackgroundProtocolEvent::into_protocol_message)
+                .map(|event| event.into_protocol_message())
                 .collect::<Vec<_>>();
             assert_eq!(
                 messages

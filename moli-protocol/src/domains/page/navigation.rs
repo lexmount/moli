@@ -50,13 +50,8 @@ use super::{
     },
 };
 
-mod automation;
-pub(crate) use automation::{AutomationNavigationResult, prepare_automation_navigation};
-
 mod before_unload;
-
 pub(super) use before_unload::PendingBeforeUnloadNavigationCommand;
-
 pub(crate) use before_unload::{
     BeforeUnloadNavigationStep, CompletedBeforeUnloadNavigationCommand,
     PreparedBeforeUnloadNavigation,
@@ -69,6 +64,9 @@ struct PreparedMainDocumentNavigation {
     fetch_request_stage: FetchRequestStage,
     allow_background_navigation: bool,
 }
+
+mod automation;
+pub(crate) use automation::{AutomationNavigationResult, prepare_automation_navigation};
 
 pub(super) struct PendingNavigateLoadCommand {
     pub(super) prefix_events: Vec<BackgroundProtocolEvent>,
@@ -213,7 +211,7 @@ impl CompletedSameDocumentHistoryTraversalCommand {
 
 impl PendingNavigateLoadCommand {
     pub(super) async fn wait(self) -> CompletedNavigateLoadCommand {
-        let (navigation, _early_result_sent) = self.job.run(None).await;
+        let (navigation, _early_result_sent) = Box::pin(self.job.run(None)).await;
         CompletedNavigateLoadCommand {
             prefix_events: self.prefix_events,
             token: self.token,
@@ -1802,6 +1800,7 @@ pub(super) fn finish_started_navigation_command_for_parts(
                 reloaded_after_crash_session_ids,
             )
         }
+
         NavigateCommandStart::PendingLoad(pending) => clear_crash_state_after_navigation(
             conn,
             &mut pending.prefix_events,
@@ -1831,6 +1830,7 @@ pub(super) fn finish_started_navigation_command_for_parts(
         }
         NavigateCommandStart::CompletePlan(plan) => PageCommandTaskStep::Complete(plan),
         NavigateCommandStart::CompleteImmediate(plan) => PageCommandTaskStep::Complete(plan),
+
         NavigateCommandStart::PendingLoad(pending) => {
             PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
                 command_id,
@@ -2630,6 +2630,7 @@ fn clear_crash_state_for_renderer_navigation(
                 reloaded_after_crash_session_ids,
             )
         }
+
         NavigateCommandStart::PendingLoad(pending) => clear_crash_state_after_navigation(
             conn,
             &mut pending.prefix_events,

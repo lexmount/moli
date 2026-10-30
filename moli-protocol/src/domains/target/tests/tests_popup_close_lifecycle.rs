@@ -120,6 +120,16 @@ async fn assert_close_keeps_history_until_beforeunload_finishes(features: &str, 
                         .is_some_and(|context| context.page_target(&popup_id).is_none())
             })
             .await;
+            if !events.iter().any(|message| message["method"] == "Target.targetDestroyed"
+                && message["params"]["targetId"] == popup_id)
+            {
+                crate::testing::wait_until_scheduler_message(
+                    &mut ctx,
+                    "scripted popup close publishes its target retirement",
+                    |message| message["method"] == "Target.targetDestroyed"
+                        && message["params"]["targetId"] == popup_id,
+                ).await;
+            }
             events.extend(ctx.take_all());
             assert_eq!(events.iter().filter(|message| {
                 message["method"] == "Target.targetDestroyed"

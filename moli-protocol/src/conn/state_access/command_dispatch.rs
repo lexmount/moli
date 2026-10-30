@@ -732,7 +732,7 @@ impl ProtocolWorkflowState<'_> {
         completed: CompletedCommandWorkflow,
         id: u64,
         context: &mut CommandWorkflowContext,
-    ) -> Option<serde_json::Value> {
+    ) -> Option<moli_inspector_json::InspectorJson> {
         let outcome = finish_command(self.connection, completed, Some(context.context_mut()));
         let (events, after, boundary, post, scheduler, predecessor) =
             outcome.into_renderer_owner_turn_parts();
@@ -744,7 +744,10 @@ impl ProtocolWorkflowState<'_> {
                     response.is_none(),
                     "one Runtime subcommand has one terminal"
                 );
-                response = Some(event.into_parts().0);
+                response = Some(match event.protocol_json() {
+                    Some(message) => message.clone(),
+                    None => event.into_parts().0.into(),
+                });
             } else {
                 output.push_background_event(event);
             }

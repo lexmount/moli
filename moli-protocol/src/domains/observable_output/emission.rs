@@ -215,7 +215,7 @@ impl ObservableActivityEmissionPlan {
         out.extend(
             events
                 .into_iter()
-                .filter_map(BackgroundProtocolEvent::into_wire_message),
+                .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message),
         );
     }
 
@@ -343,10 +343,7 @@ mod tests {
     };
     use serde_json::json;
 
-    use crate::conn::{
-        BackgroundProtocolEvent, BrowserContext, PageTargetHost, TargetIdentityState,
-        TargetPageSlot,
-    };
+    use crate::conn::{BrowserContext, PageTargetHost, TargetIdentityState, TargetPageSlot};
     use crate::domains::observable_output::{
         ObservablePreparedOutputSlot, TargetRuntimeObservableSourceSummary,
         observable_backlog_activity_outputs_for_session_owner as observable_backlog_activity_outputs,
@@ -580,7 +577,7 @@ mod tests {
         });
         let out = out
             .into_iter()
-            .filter_map(BackgroundProtocolEvent::into_wire_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
 
         let console_events = out

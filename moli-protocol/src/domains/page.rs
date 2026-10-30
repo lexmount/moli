@@ -340,13 +340,14 @@ impl CompletedPageCommandKind {
             | Self::BringToFront { .. }
             | Self::AddScriptToEvaluateOnNewDocument(_)
             | Self::Navigate(_)
+            | Self::BeforeUnloadNavigation(_)
             | Self::ContinueNavigationWithoutRequestPause(_)
             | Self::Crash(_)
             | Self::Close(_)
             // createIsolatedWorld may restart on a replacement renderer attachment. Its
             // completion handler records the fence only after rejecting a stale completion,
             // so an abandoned stream cannot become the predecessor of the final response.
-            | Self::CreateIsolatedWorld(_)  | Self :: BeforeUnloadNavigation (_) => None,
+            | Self::CreateIsolatedWorld(_) => None,
         }
     }
 }
@@ -466,8 +467,9 @@ impl PendingPageCommandDispatch {
                 transfer_mode,
             },
             PendingPageCommandKind::Navigate(pending) => {
-                CompletedPageCommandKind::Navigate(Box::new(pending.wait().await))
+                CompletedPageCommandKind::Navigate(Box::new(Box::pin(pending.wait()).await))
             }
+
             PendingPageCommandKind::TraverseSameDocumentHistory(pending) => {
                 CompletedPageCommandKind::TraverseSameDocumentHistory(Box::new(
                     pending.wait().await,

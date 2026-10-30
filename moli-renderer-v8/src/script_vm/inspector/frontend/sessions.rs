@@ -328,6 +328,12 @@ impl RendererFrontendInspectorSessions {
         })
     }
 
+    pub(in crate::script_vm::inspector) fn retire_notifications(&self) {
+        for session in self.sessions.values() {
+            session.native.outbound.retire_notifications();
+        }
+    }
+
     pub(in crate::script_vm::inspector) fn deactivate(&self) {
         for session in self.sessions.values() {
             session.native.outbound.deactivate();

@@ -68,7 +68,7 @@ impl CdpConnection {
         let current_attachment = self
             .runtime_session_owner_slot_for_owner(owner)
             .and_then(|slot| slot.current_renderer_attachment());
-        if let Some(current_attachment) = current_attachment {
+        if let Some(slot) = self.runtime_session_owner_slot_for_owner(owner) {
             // Page-creation facts are frozen before protocol installs the new
             // Page attachment. When their exact Page stream reaches ingress,
             // bind only batches from that same DevTools agent to the now
@@ -76,9 +76,10 @@ impl CdpConnection {
             // a projection-time fallback to whichever Page happens to exist.
             for batch in &mut batches {
                 if batch.renderer_agent_attachment_id().is_none()
-                    && batch.agent_token == current_attachment.agent_token()
+                    && let Some(attachment) =
+                        slot.renderer_output_attachment_for_agent(batch.agent_token)
                 {
-                    batch.bind_renderer_agent_attachment(current_attachment.id());
+                    batch.bind_renderer_agent_attachment(attachment.id());
                 }
             }
         }
@@ -104,6 +105,9 @@ impl CdpConnection {
         }
         let state_updates = batches
             .iter()
+            // The outgoing Document may still publish its unload prefix, but
+            // must not overwrite the replacement agent's Inspector state.
+            .filter(|_| current_attachment.is_some_and(|current| current.id() == attachment_id))
             .filter_map(|batch| {
                 batch
                     .v8_state_update

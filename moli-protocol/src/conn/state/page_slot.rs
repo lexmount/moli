@@ -2017,10 +2017,10 @@ mod pending_renderer_page_tests {
             security_origin: "https://example.test".into(),
             secure_context_type: "Secure".into(),
             document_referrer: None,
+            navigation_policy: None,
             timestamp: 1.0,
             session_history_position: None,
             browsing_context_group: None,
-            navigation_policy: None,
         })
     }
 

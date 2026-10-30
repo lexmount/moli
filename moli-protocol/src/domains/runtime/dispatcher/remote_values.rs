@@ -291,7 +291,8 @@ pub(super) async fn devtools_probe_remote_value_using(
 ) -> Result<Option<DevToolsRemoteValue>, DevToolsError> {
     let result_ownership = devtools_runtime_result_ownership(&command);
     let response = workflow.native(target, command).await?;
-    let result = devtools_script_result_from_response(response, result_ownership, None)?;
+    let result =
+        devtools_script_result_from_response(response.into_value(), result_ownership, None)?;
     let AutomationResult::Script(result) = result else {
         return Ok(None);
     };

@@ -1896,6 +1896,7 @@ async fn untracked_fetch_actions_acknowledge_the_handler_and_abort_only_the_orig
         let navigation = NavigationDispatchState {
             web_mcp_invocation: None,
             navigation_initiator: None,
+            navigation_history: None,
             initial_document_environment: None,
             auxiliary_document_response: None,
             redirect_chain: Vec::new(),
@@ -1919,7 +1920,6 @@ async fn untracked_fetch_actions_acknowledge_the_handler_and_abort_only_the_orig
             request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
             timestamp: 0.0,
             source_document_security: Default::default(),
-            navigation_history: None,
         };
         if auth_action.is_some() {
             ctx.with_fixture(|conn| {
