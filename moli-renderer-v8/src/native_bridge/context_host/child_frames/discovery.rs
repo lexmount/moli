@@ -262,26 +262,12 @@ impl JsContextHost {
         root: DomHandle,
         out: &mut Vec<DomHandle>,
     ) {
-        if self.dom_host().is_connected(root) {
-            out.extend(
-                self.dom_host()
-                    .child_browsing_context_host_candidate_handles_in_subtree_in_document_order(
-                        root,
-                    ),
-            );
-            return;
-        }
-        if self.is_child_browsing_context_host_handle(root) {
-            out.push(root);
-        }
-        // Disconnected hosts no longer use the connected-tree candidate index.
-        // Their shadow trees still contain browsing contexts to unload and retire.
-        if let Some(shadow_root) = self.dom_host().shadow_root_handle(root) {
-            self.collect_child_browsing_context_host_handles(shadow_root, out);
-        }
-        for child in self.dom_host().child_handles(root) {
-            self.collect_child_browsing_context_host_handles(child, out);
-        }
+        out.extend(
+            self.dom_host()
+                .child_browsing_context_host_candidate_handles_in_shadow_including_subtree_order(
+                    root,
+                ),
+        );
     }
 
     pub(in crate::native_bridge::context_host) fn next_child_browsing_context_frame_id(
