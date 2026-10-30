@@ -3,12 +3,17 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::IDBObjectStore, require_prototype)]
+#[webapi(interface = web_api_interfaces::IDBObjectStore, require_prototype, scope_lifetime = 'scope)]
 struct IdbObjectStoreObjectDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
+    name: v8::Local<'scope, v8::String>,
+    #[webapi(slot = SCHEMA_KEY_PATH_SLOT)]
+    key_path: v8::Local<'scope, v8::Value>,
+    #[webapi(slot = SCHEMA_AUTO_INCREMENT_SLOT)]
+    auto_increment: bool,
+    #[webapi(slot = OBJECT_STORE_TRANSACTION)]
     transaction: v8::Local<'scope, v8::Object>,
-
-    #[webapi(data_property, enumerable)]
+    #[webapi(slot = OBJECT_STORE_DATABASE)]
     db: v8::Local<'scope, v8::Object>,
 }
 
@@ -19,9 +24,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_object_store_object<'s>(
     info: &ObjectStoreInfo,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let metadata = indexed_db_database_store_metadata(scope, db, &info.name)?;
-    let store = IdbObjectStoreObjectDeclaration::new(tx, db)
-        .bind(scope)
-        .ok()?;
+    let store = create_failed_object_store_object(scope, db, tx, info)?;
     let storage_scope = indexed_db_typed_storage_scope(scope, db);
     let owner = indexed_db_typed_execution_owner(scope, tx)
         .expect("IDBObjectStore should inherit typed owner from transaction");
@@ -33,22 +36,29 @@ pub(in crate::context_bootstrap::indexed_db) fn create_object_store_object<'s>(
         owner,
         storage_scope,
     );
-    register_indexed_db_object_store_lifecycle(scope, store, tx, db, metadata.clone());
-    sync_store_surface_from_metadata(scope, store, metadata)?;
+    register_indexed_db_object_store_lifecycle(scope, store, tx, db, metadata);
     Some(store)
 }
 
-// Creation can fail asynchronously after the method has returned. Such a
-// handle is deleted from birth and owns only its ordinary JavaScript fields.
+// Schema creation can fail asynchronously after the handle has been returned.
+// Its immutable values and parent references remain traced by the V8 object.
 pub(in crate::context_bootstrap::indexed_db) fn create_failed_object_store_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     db: v8::Local<'s, v8::Object>,
     tx: v8::Local<'s, v8::Object>,
     info: &ObjectStoreInfo,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let store = IdbObjectStoreObjectDeclaration::new(tx, db)
-        .bind(scope)
-        .ok()?;
-    sync_store_surface_fields(scope, store, info, &[])?;
-    Some(store)
+    let key_path = match &info.key_path {
+        Some(path) => key_path_to_js_value(scope, path)?,
+        None => v8::null(scope).into(),
+    };
+    IdbObjectStoreObjectDeclaration::new(
+        crate::util::v8_string_from_utf16_units(scope, info.name.as_utf16())?,
+        key_path,
+        info.auto_increment,
+        tx,
+        db,
+    )
+    .bind(scope)
+    .ok()
 }

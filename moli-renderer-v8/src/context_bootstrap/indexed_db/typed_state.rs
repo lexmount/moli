@@ -11,6 +11,7 @@ use mirror::{StoreMap, edit_shared, missing_mirror};
 mod collection;
 mod cursor;
 use collection::*;
+pub(super) use collection::{INDEX_OBJECT_STORE, OBJECT_STORE_DATABASE, OBJECT_STORE_TRANSACTION};
 pub(in crate::context_bootstrap::indexed_db) use cursor::*;
 mod upgrade;
 pub(super) use upgrade::*;
@@ -438,7 +439,6 @@ pub(super) struct IndexedDbCursorLifecycleState {
 }
 
 struct IndexedDbObjectStoreLifecycleState {
-    wrapper: v8::Weak<v8::Object>,
     transaction: v8::Weak<v8::Object>,
     database: v8::Weak<v8::Object>,
     name_override: Option<moli_indexeddb::IndexedDbName>,
@@ -463,7 +463,6 @@ impl IndexedDbObjectStoreLifecycleState {
         set_private_value(scope, wrapper, OBJECT_STORE_TRANSACTION, transaction.into());
         set_private_value(scope, wrapper, OBJECT_STORE_DATABASE, database.into());
         Self {
-            wrapper: v8::Weak::new(scope, wrapper),
             transaction: v8::Weak::new(scope, transaction),
             database: v8::Weak::new(scope, database),
             name_override: None,
@@ -1969,18 +1968,6 @@ pub(super) fn indexed_db_index_info(
             .clone(),
     )
 }
-pub(super) fn set_indexed_db_object_store_metadata<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    store: v8::Local<'s, v8::Object>,
-    metadata: IndexedDbObjectStoreMetadata,
-) -> Option<()> {
-    let state = object_store_native_state(scope, store)?;
-    let mut state = state.borrow_mut();
-    state.name_override = None;
-    state.metadata = metadata;
-    Some(())
-}
-
 pub(super) fn current_indexed_db_execution_owner(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> IndexedDbExecutionOwner {

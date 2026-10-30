@@ -1,10 +1,19 @@
 use super::*;
+use crate::util::v8str;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::IDBIndex, enumerable, receiver)]
 struct IdbIndexPrototypeDeclaration {
+    #[webapi(accessor_property, getter = idb_schema_attribute_getter, data = v8str(scope, SCHEMA_KEY_PATH_SLOT))]
+    key_path: (),
+    #[webapi(accessor_property, getter = idb_schema_attribute_getter, data = v8str(scope, SCHEMA_MULTI_ENTRY_SLOT))]
+    multi_entry: (),
+    #[webapi(accessor_property, getter = idb_schema_attribute_getter, data = v8str(scope, SCHEMA_UNIQUE_SLOT))]
+    unique: (),
+    #[webapi(accessor_property, getter = idb_schema_attribute_getter, data = v8str(scope, INDEX_OBJECT_STORE))]
+    object_store: (),
     #[webapi(method, length = 1, callback = idb_index_get_callback)]
     get: (),
     #[webapi(method, length = 1, callback = idb_index_get_key_callback)]

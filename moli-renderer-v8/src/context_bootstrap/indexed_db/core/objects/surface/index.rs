@@ -3,18 +3,17 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::IDBIndex,
-    require_prototype,
-    scope_lifetime = 'scope,
-    data_properties,
-    enumerable
-)]
+#[webapi(interface = web_api_interfaces::IDBIndex, require_prototype, scope_lifetime = 'scope)]
 struct IdbIndexObjectDeclaration<'scope> {
+    #[webapi(data_property, enumerable)]
     name: v8::Local<'scope, v8::String>,
+    #[webapi(slot = SCHEMA_KEY_PATH_SLOT)]
     key_path: v8::Local<'scope, v8::Value>,
+    #[webapi(slot = SCHEMA_UNIQUE_SLOT)]
     unique: bool,
+    #[webapi(slot = SCHEMA_MULTI_ENTRY_SLOT)]
     multi_entry: bool,
+    #[webapi(slot = INDEX_OBJECT_STORE)]
     object_store: v8::Local<'scope, v8::Object>,
 }
 

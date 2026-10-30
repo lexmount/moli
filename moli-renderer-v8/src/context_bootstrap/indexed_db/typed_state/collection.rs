@@ -1,8 +1,11 @@
 use super::*;
 
-pub(super) const OBJECT_STORE_TRANSACTION: &str = "moli.IndexedDb.traced.objectStoreTransaction";
-pub(super) const OBJECT_STORE_DATABASE: &str = "moli.IndexedDb.traced.objectStoreDatabase";
-pub(super) const INDEX_OBJECT_STORE: &str = "moli.IndexedDb.traced.indexObjectStore";
+pub(in crate::context_bootstrap::indexed_db) const OBJECT_STORE_TRANSACTION: &str =
+    "moli.IndexedDb.traced.objectStoreTransaction";
+pub(in crate::context_bootstrap::indexed_db) const OBJECT_STORE_DATABASE: &str =
+    "moli.IndexedDb.traced.objectStoreDatabase";
+pub(in crate::context_bootstrap::indexed_db) const INDEX_OBJECT_STORE: &str =
+    "moli.IndexedDb.traced.indexObjectStore";
 
 // A finalizer only releases its own native payload and queues an id. It must
 // never borrow the runtime table: V8 can collect while another state lookup

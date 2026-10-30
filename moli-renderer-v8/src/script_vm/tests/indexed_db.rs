@@ -3733,7 +3733,7 @@ fn indexed_db_object_store_index_metadata_is_available() {
 
     assert_eq!(
         result,
-        "autoIncrement,db,indexNames,keyPath,name,transaction|true|true|false|keyPath,multiEntry,name,objectStore,unique|true|true|by-id|id|true|false|by-id|kv"
+        "name|false|false|false|name|false|true|by-id|id|true|false|by-id|kv"
     );
 }
 

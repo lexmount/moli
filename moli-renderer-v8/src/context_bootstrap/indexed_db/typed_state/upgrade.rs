@@ -163,7 +163,6 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
     let version = snapshot.version;
     let names = snapshot.stores.keys().cloned().collect::<Vec<_>>();
     let tables = indexed_db_handle_tables(scope, database);
-    let mut stores = Vec::new();
     for table in &tables {
         for store in table
             .borrow()
@@ -186,10 +185,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
                     .cloned()
                     .expect("existing store has upgrade snapshot")
             };
-            store.metadata = metadata.clone();
-            if let Some(wrapper) = store.wrapper.to_local(scope) {
-                stores.push((wrapper, metadata));
-            }
+            store.metadata = metadata;
         }
     }
     for table in &tables {
@@ -227,20 +223,16 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
         transaction_names.into(),
         v8::PropertyAttribute::NONE,
     );
-    for (store, metadata) in stores {
-        let _ = sync_store_surface_from_metadata(scope, store, metadata);
-    }
 }
 
-// Update every handle for this store, including separately obtained wrappers.
-// V8 surface writes happen after releasing the runtime table's borrow.
+// Update native metadata for every alias. Author shadows and cached keyPath
+// arrays belong to the handle and survive schema edits and rollback.
 pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
     store_name: &moli_indexeddb::IndexedDbName,
 ) {
     let metadata = indexed_db_database_store_metadata(scope, database, store_name);
-    let mut stores = Vec::new();
     for table in indexed_db_handle_tables(scope, database) {
         for store in table
             .borrow()
@@ -262,14 +254,8 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
                     store.metadata.without_indexes()
                 }
             };
-            store.metadata = metadata.clone();
-            if let Some(wrapper) = store.wrapper.to_local(scope) {
-                stores.push((wrapper, metadata));
-            }
+            store.metadata = metadata;
         }
-    }
-    for (store, metadata) in stores {
-        let _ = sync_store_surface_from_metadata(scope, store, metadata);
     }
 }
 
