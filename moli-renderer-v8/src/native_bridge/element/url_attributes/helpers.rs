@@ -68,10 +68,10 @@ pub(in crate::native_bridge) fn parse_url_with_document_query_encoding(
     value: &str,
 ) -> Result<Url, url::ParseError> {
     let Some(encoding) = document_query_encoding_for_handle(runtime, handle) else {
-        return Url::options().base_url(Some(base)).parse(value);
+        return moli_url::parse_url(value, Some(base));
     };
     let value = encode_url_query_for_legacy_web(value, encoding);
-    Url::options().base_url(Some(base)).parse(value.as_ref())
+    moli_url::parse_url(value.as_ref(), Some(base))
 }
 
 fn document_query_encoding_for_handle(

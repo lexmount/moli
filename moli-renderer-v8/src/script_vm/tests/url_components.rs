@@ -32,13 +32,14 @@ for (const [name, doc] of [
     }}
   }}
 }}
-const checkSetter = (href, property, value, expected) => {{
+const checkSetter = (href, property, value, expected, hyperlinkExpected = expected) => {{
   for (const [name, create] of factories) {{
     const object = create(href);
     const params = object.searchParams;
     object[property] = value;
-    assert(object.href === expected,
-      `${{name}}: ${{property}} = ${{JSON.stringify(value)}}: expected ${{expected}}, got ${{object.href}}`);
+    const expectedHref = params ? expected : hyperlinkExpected;
+    assert(object.href === expectedHref,
+      `${{name}}: ${{property}} = ${{JSON.stringify(value)}}: expected ${{expectedHref}}, got ${{object.href}}`);
     if (params) assert(object.searchParams === params, 'setters preserve the URLSearchParams object');
   }}
 }};
@@ -356,24 +357,93 @@ for (const tag of ['a', 'area']) {
 fn file_url_components_preserve_hosts_drive_letters_and_empty_path_segments() {
     assert_url_components(
         r#"
-for (const [input, expected] of [
+for (const [input, expected, reparsed = expected] of [
   ['file://server///?q#f', 'file://server///?q#f'],
   ['file://server/C|/path', 'file://server/C:/path'],
   ['file:///w|/m', 'file:///w:/m'],
-  ['file://localhost////foo', 'file://////foo'],
+  ['file://localhost////foo', 'file://////foo', 'file:///foo'],
 ]) {
   for (const [name, create] of factories) {
     const object = create(input);
     assert(object.href === expected, `${name}: parsing ${input}`);
     assert(object.origin === 'null', `${name}: file origin stays opaque`);
     object.href = object.href;
-    assert(object.href === expected, `${name}: file serialization round-trips`);
+    assert(object.href === reparsed, `${name}: assigning href parses the serialized input`);
   }
 }
 checkSetter('file://monkey/', 'pathname', '\\\\', 'file://monkey//');
-checkSetter('file:///unicorn', 'pathname', '//\\/', 'file://////');
-checkSetter('file:///unicorn', 'pathname', '//monkey/..//', 'file://///');
+checkSetter('file:///unicorn', 'pathname', '//\\/', 'file://////', 'file:///');
+checkSetter('file:///unicorn', 'pathname', '//monkey/..//', 'file://///', 'file:///');
 checkSetter('file://host/old?q#f', 'pathname', 'C|/new', 'file://host/C:/new?q#f');
+"#,
+    );
+}
+
+#[test]
+fn file_url_inputs_collapse_extra_initial_separators() {
+    assert_url_components(
+        r#"
+for (const [input, expected] of [
+  ['file:///a', 'file:///a'],
+  ['file:////a', 'file:///a'],
+  ['file://///a', 'file:///a'],
+  ['file:' + '\\'.repeat(4) + 'a', 'file:///a'],
+  [' FILE://///a?x=1#f ', 'file:///a?x=1#f'],
+  ['fi\nle:\t/\r///a', 'file:///a'],
+  ['file:////?q#f', 'file:///?q#f'],
+  ['file:////a//b', 'file:///a//b'],
+  ['file:////%2F/a', 'file:///%2F/a'],
+  ['file:////x/..//a', 'file:////a'],
+  ['file:////..//a', 'file:////a'],
+  ['file:////C|/file', 'file:///C%7C/file'],
+  ['file://///C|/file', 'file:///C%7C/file'],
+  ['file:////C:/..', 'file:///'],
+  ['file://///C:/../file', 'file:///file'],
+  ['file:////./C|/file', 'file:///C%7C/file'],
+  ['file:////x/../C:/..', 'file:///'],
+  ['file:////C|/a%2Fb/%25', 'file:///C%7C/a%2Fb/%25'],
+  ['file:////C|/file?keep=|#raw|', 'file:///C%7C/file?keep=|#raw|'],
+  ['file:///.//a', 'file:////a'],
+  ['file://server///a', 'file://server///a'],
+]) {
+  for (const [name, create] of factories) {
+    const object = create(input);
+    assert(object.href === expected, `${name}: ${JSON.stringify(input)} gives ${object.href}`);
+    object.href = input;
+    assert(object.href === expected, `${name}: href setter normalizes input`);
+  }
+}
+for (const constructor of [URL, frame.contentWindow.URL]) {
+  assert(new constructor('/////a', 'file://server/base').href === 'file:///a', 'relative file input');
+  assert(constructor.parse('/////a', 'file://server/base').href === 'file:///a', 'relative static parse');
+  assert(new constructor('/////C|/file', 'file://server/base').href === 'file:///C%7C/file', 'relative path is not a drive');
+  assert(constructor.parse('/////C:/..', 'file://server/base').href === 'file:///', 'relative path can traverse the first segment');
+  assert(new constructor('child', 'file://///root/base').href === 'file:///root/child', 'base is parsed first');
+  assert(constructor.parse('file:////a', 'http://[') === null, 'absolute file input still validates the base');
+
+  const object = new constructor('file:///old');
+  const params = object.searchParams;
+  object.pathname = '//a';
+  assert(object.href === 'file:////a' && object.pathname === '//a', 'URL pathname keeps empty segments');
+  params.set('key', 'value');
+  assert(object.href === 'file:////a?key=value', 'query updates preserve the stored path');
+  object.href = object.href;
+  assert(object.href === 'file:///a?key=value' && object.pathname === '/a', 'href assignment reparses input');
+  assert(object.searchParams === params && params.get('key') === 'value', 'href assignment keeps live search params');
+}
+for (const owner of [document, frame.contentDocument,
+    document.implementation.createHTMLDocument('file base')]) {
+  const base = owner.head.appendChild(owner.createElement('base'));
+  base.href = 'file://///root/base';
+  assert(owner.baseURI === 'file:///root/base', 'file base input is normalized');
+  for (const tag of ['a', 'area']) {
+    const link = owner.body.appendChild(owner.createElement(tag));
+    link.href = 'child';
+    assert(link.href === 'file:///root/child', `${tag}: resolves against the normalized file base`);
+    link.remove();
+  }
+  base.remove();
+}
 "#,
     );
 }
