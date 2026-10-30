@@ -140,7 +140,7 @@ async fn blob_sources_stay_lazy_through_metadata_clone_composition_and_stream_cr
         globalThis.childRealm = frame.contentWindow;
         globalThis.foreignBytes = 'pending';
         childRealm.Blob.prototype.bytes.call(controlledBlob.slice(100,108)).then(value => {
-            foreignBytes = String(Object.getPrototypeOf(value) === childRealm.Uint8Array.prototype);
+            foreignBytes = String(Object.getPrototypeOf(value) === Uint8Array.prototype);
         });
         return 'queued';
     })()"#,
@@ -152,7 +152,7 @@ async fn blob_sources_stay_lazy_through_metadata_clone_composition_and_stream_cr
         &loader,
         "foreignBytes",
         "true",
-        "Blob completion in the method realm",
+        "Blob completion in the Blob realm despite a borrowed method",
     )
     .await;
     drop(page);

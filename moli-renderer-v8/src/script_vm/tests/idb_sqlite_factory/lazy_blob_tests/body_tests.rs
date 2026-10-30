@@ -38,6 +38,74 @@ fn install_body_blob(
 }
 
 #[tokio::test]
+async fn constructed_lazy_blob_bodies_wait_for_consumption_and_deliver_io_results() {
+    for fail in [false, true] {
+        let manager = manager(None);
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let mut page = page(&manager, &loader);
+        let source = ControlledSource::install(&mut page);
+        assert_eq!(
+            page.eval(
+                r#"(() => {
+                const blob = controlledBlob.slice(100,108,'text/x-control');
+                globalThis.constructedBodies = [
+                    new Request('/unused', {method:'POST', body:blob}), new Response(blob)
+                ];
+                return constructedBodies.map(body =>
+                    body.headers.get('content-type') + ':' + body.bodyUsed).join('|');
+            })()"#
+            )
+            .unwrap(),
+            "text/x-control:false|text/x-control:false",
+        );
+        assert!(
+            source.pending.lock().is_empty(),
+            "constructing a Blob body must not start or block on source I/O"
+        );
+        page.eval(r#"
+            globalThis.bodyReads = ['pending','pending'];
+            constructedBodies.forEach((body,index) => body.text().then(
+                text => bodyReads[index] = 'text:' + text,
+                error => bodyReads[index] = error instanceof DOMException ? error.name : 'wrong error brand'
+            ));
+        "#).unwrap();
+        let pending = std::mem::take(&mut *source.pending.lock());
+        assert_eq!(
+            pending.len(),
+            2,
+            "both bodies must read their native Blob source"
+        );
+        for (range, complete) in pending {
+            assert_eq!(range, 100..108);
+            complete(if fail {
+                Err(io::Error::other("controlled body source failure"))
+            } else {
+                Ok(source.bytes[range].to_vec())
+            });
+        }
+        assert_eq!(
+            page.eval("bodyReads.join('|')").unwrap(),
+            "pending|pending",
+            "source completion cannot settle public Body promises inline"
+        );
+        advance_page_task_executor_until_eval_equals(
+            &mut page,
+            &loader,
+            "bodyReads.join('|')",
+            if fail {
+                "NotReadableError|NotReadableError"
+            } else {
+                "text:defghijk|text:defghijk"
+            },
+            "controlled native Blob body consumption",
+        )
+        .await;
+        drop(page);
+        manager.lock().shutdown_sqlite().unwrap();
+    }
+}
+
+#[tokio::test]
 async fn unreadable_blob_and_multipart_bodies_fail_without_string_coercion() {
     let manager = manager(None);
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
@@ -54,25 +122,25 @@ async fn unreadable_blob_and_multipart_bodies_fail_without_string_coercion() {
         form.append('good', 'prefix');
         form.append('bad', file);
         const errors = [];
-        const check = operation => {
-            try { operation(); errors.push('success'); }
+        const check = async operation => {
+            try { await operation(); errors.push('success'); }
             catch (error) { errors.push(error.name); }
         };
         for (const body of [unreadableBlob, file, form]) {
-            check(() => new Request('/unused', {method:'POST', body}));
-            check(() => new Response(body));
+            await check(() => new Request('/unused', {method:'POST', body}).text());
+            await check(() => new Response(body).text());
             try { await fetch('/unused', {method:'POST', body}); errors.push('success'); }
             catch (error) { errors.push(error.name); }
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/unused');
-            check(() => xhr.send(body));
+            await check(() => xhr.send(body));
             xhr.abort();
         }
         return [errors, coercions];
     "#).await;
     assert_eq!(
         result,
-        r#"[["TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError"],0]"#
+        r#"[["NotReadableError","NotReadableError","TypeError","TypeError","NotReadableError","NotReadableError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError"],0]"#
     );
 }
 
