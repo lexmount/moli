@@ -804,11 +804,13 @@ CURLcode Curl_cf_https_setup(struct Curl_easy *data,
 {
   CURLcode result = CURLE_OK;
 
-  DEBUGASSERT(conn->scheme->protocol == CURLPROTO_HTTPS);
+  DEBUGASSERT(conn->scheme->protocol == CURLPROTO_HTTPS ||
+              conn->scheme->protocol == CURLPROTO_WSS);
 
   /* This filter is intended for HTTPS using ALPN and does
    * not support HTTPS Eyeballing to a proxy. */
-  if((conn->scheme->protocol != CURLPROTO_HTTPS) ||
+  if((conn->scheme->protocol != CURLPROTO_HTTPS &&
+      conn->scheme->protocol != CURLPROTO_WSS) ||
 #ifndef CURL_DISABLE_PROXY
      conn->bits.origin_is_proxy ||
 #endif

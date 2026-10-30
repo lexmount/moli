@@ -1173,6 +1173,13 @@ extern "C" {
         buflen: size_t,
         n: *mut size_t,
     ) -> CURLcode;
+    pub fn curl_easy_moli_websocket_pending(curl: *mut CURL) -> c_int;
+    pub fn curl_easy_moli_websocket_poll(
+        curl: *mut CURL,
+        socket: curl_socket_t,
+        wanted: c_int,
+        events: *mut c_int,
+    ) -> CURLcode;
 
     #[cfg(feature = "websocket")]
     pub fn curl_ws_recv(
