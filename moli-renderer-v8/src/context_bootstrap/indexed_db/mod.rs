@@ -141,10 +141,12 @@ pub(crate) use self::tasks::{
 };
 pub(crate) use self::typed_state::IndexedDbTaskId;
 pub(crate) use self::typed_state::deactivate_indexed_db_transaction_after_microtask_checkpoint;
-#[cfg(test)]
-pub(crate) use self::typed_state::indexed_db_request_state_entries_for_test;
 pub(crate) use self::typed_state::retain_indexed_db_state_in_retired_realm;
 pub(in crate::context_bootstrap::indexed_db) use self::typed_state::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
+#[cfg(test)]
+pub(crate) use self::typed_state::{
+    indexed_db_request_state_entries_for_test, indexed_db_transaction_state_entries_for_test,
+};
 
 pub(in crate::context_bootstrap) fn new_dom_string_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,

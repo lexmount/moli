@@ -11,6 +11,7 @@ mod current_pass_css_fonts;
 mod document_encodings;
 mod dom_rect_factory_descriptors;
 mod drag_drop_outcomes;
+mod idb_transaction_gc;
 mod idb_transaction_scope;
 mod message_port_transfer;
 mod native_drag_payloads;
