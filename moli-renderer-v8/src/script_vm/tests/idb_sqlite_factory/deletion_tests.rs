@@ -125,34 +125,28 @@ async fn idb_sqlite_bucket_delete_continues_after_the_accepting_page_retires() {
         .bucket_identity(&storage_key(), "retire")
         .unwrap();
     let storage = store.lock().storage_service();
-    // Keep maintenance before the deletion itself starts, so retirement is
-    // tested before metadata publication as well as before SQL cleanup.
-    let (entered, waiting) = std::sync::mpsc::channel();
-    let (release, resume) = std::sync::mpsc::channel();
-    let default = moli_storage_service::StorageBucketLocator::default_bucket(storage_key());
-    // Contention selects the maintenance queue; the uncontended fast path
-    // uses the distinct file-I/O queue and would not gate this operation.
-    let select_maintenance = storage.reserve_quota_commit(&default);
-    storage
-        .dispatch_opfs_quota_commit(
-            default,
-            move |_| {
-                entered.send(()).unwrap();
-                resume
-                    .recv_timeout(std::time::Duration::from_secs(10))
-                    .unwrap();
-            },
-            |result| {
-                result.unwrap();
-            },
-        )
+    // A real earlier bucket operation holds the maintenance sequence before
+    // the target deletion can publish metadata or clean up SQL. OPFS quota
+    // work deliberately uses an independent queue.
+    let gate = store
+        .lock()
+        .open_bucket(&storage_key(), "retirement-gate")
         .unwrap();
-    drop(select_maintenance);
-    waiting
-        .recv_timeout(std::time::Duration::from_secs(10))
-        .unwrap();
-    // The final marker must select the same maintenance queue as deletion.
-    let quota = storage.reserve_quota_commit(&identity.locator());
+    let gate_quota = storage.reserve_quota_commit(&gate.locator());
+    let (sender, receiver) = std::sync::mpsc::channel();
+    moli_storage_service::prepare_sql_bucket_maintenance(
+        &store,
+        moli_storage_service::SqlBucketOperation::Delete {
+            storage_key: storage_key(),
+            name: "retirement-gate".into(),
+        },
+    )
+    .unwrap()
+    .unwrap()
+    .dispatch(move |reply| {
+        let _ = sender.send(reply);
+    })
+    .unwrap();
     page.eval(r#"
         globalThis.deletionSettled = false;
         navigator.storageBuckets.delete('retire').then(() => deletionSettled = true, () => deletionSettled = true);
@@ -163,26 +157,24 @@ async fn idb_sqlite_bucket_delete_continues_after_the_accepting_page_retires() {
             .unwrap(),
         "false:42"
     );
-    assert!(store.lock().pending_deletions().is_empty());
+    assert!(
+        store
+            .lock()
+            .pending_deletions()
+            .iter()
+            .all(|old| old != &identity),
+        "the target deletion must still be behind the earlier maintenance operation"
+    );
     assert!(store.lock().bucket_identity_is_live(&identity));
-    // This marker is behind deletion on the existing maintenance sequence.
-    // Its receipt proves metadata publication and cleanup ran after Page drop.
-    let (sender, receiver) = std::sync::mpsc::channel();
-    storage
-        .dispatch_opfs_quota_commit(
-            identity.locator(),
-            |_| (),
-            move |reply| {
-                let _ = sender.send(reply);
-            },
-        )
-        .unwrap();
     drop(page);
-    release.send(()).unwrap();
-    drop(quota);
+    drop(gate_quota);
+    // The public maintenance receipt covers both deletion jobs, including
+    // the one whose accepting Page and Promise owner have already retired.
+    storage.drain_maintenance().unwrap();
     receiver
         .recv_timeout(std::time::Duration::from_secs(10))
         .unwrap()
+        .result
         .unwrap();
     assert!(store.lock().pending_deletions().is_empty());
     assert_eq!(

@@ -175,7 +175,7 @@ fn bucket_creation_is_queued_before_identity_publication_and_leaves_sql_availabl
     let (release, resume) = mpsc::channel();
     let gate = Gate(Some(release));
     storage
-        .quota_wait_queue
+        .maintenance_queue
         .dispatch(
             move || {
                 entered.send(()).unwrap();

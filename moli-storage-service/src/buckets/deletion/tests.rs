@@ -120,7 +120,7 @@ impl Fixture {
         self.store
             .lock()
             .storage_service()
-            .quota_wait_queue
+            .maintenance_queue
             .dispatch(
                 move || {
                     entered.send(()).unwrap();

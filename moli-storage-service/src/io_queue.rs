@@ -42,16 +42,19 @@ impl Error for StorageServiceDispatchError {
 }
 
 /// Failure produced while executing one accepted storage IO task.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StorageServiceTaskError {
     /// The operation panicked. The queue catches it so later tasks can still run.
     Panicked,
+    /// A deferred quota waiter could not enqueue its now-ready operation.
+    Dispatch(String),
 }
 
 impl fmt::Display for StorageServiceTaskError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Panicked => f.write_str("storage IO task panicked"),
+            Self::Dispatch(error) => f.write_str(error),
         }
     }
 }
@@ -187,6 +190,14 @@ fn advance_cancelled_storage_tickets(state: &mut StorageIoSequenceState) {
 }
 
 impl StorageIoQueue {
+    pub(crate) fn ensure_started(&self) -> Result<(), StorageServiceDispatchError> {
+        self.sender().map(|_| ())
+    }
+
+    pub(crate) fn is_worker_thread(&self) -> bool {
+        self.state.lock().worker == Some(thread::current().id())
+    }
+
     /// The caller has stopped producers. Wait only on the partition owner,
     /// never on this queue's worker or a V8 event loop.
     pub(crate) fn drain(&self) -> Result<(), StorageServiceDispatchError> {

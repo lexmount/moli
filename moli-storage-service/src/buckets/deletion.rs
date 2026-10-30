@@ -57,7 +57,7 @@ impl SqlBucketDeletion {
             clear,
         } = self;
         let worker_service = service.clone();
-        service.quota_wait_queue.dispatch(
+        service.maintenance_queue.dispatch(
             move || -> std::result::Result<(), String> {
                 let _quota = worker_service.reserve_quota_commit(&identity.locator());
                 // Another queued delete may already have completed this exact

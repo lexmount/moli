@@ -1,15 +1,18 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt,
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::Arc,
+};
 
 use parking_lot::{Condvar, Mutex};
 
 use crate::StorageBucketLocator;
 
-/// Partition-owned serializer for aggregate bucket quota commits.
-///
-/// Backend staging may happen independently, but every commit which can grow
-/// a bucket must hold one reservation while it takes a fresh aggregate
-/// usage snapshot and publishes the backend mutation. Reservations are scoped
-/// by persistent bucket locator, so unrelated buckets remain independent.
+type QuotaReady = Box<dyn FnOnce(StorageQuotaReservation) + Send>;
+
+/// Serialize aggregate quota publication for each persistent bucket. Async
+/// callers wait here without occupying a storage or SQLite worker.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StorageQuotaCoordinator {
     inner: Arc<StorageQuotaCoordinatorInner>,
@@ -17,8 +20,27 @@ pub(crate) struct StorageQuotaCoordinator {
 
 #[derive(Debug, Default)]
 struct StorageQuotaCoordinatorInner {
-    active: Mutex<BTreeSet<StorageBucketLocator>>,
-    released: Condvar,
+    state: Mutex<QuotaState>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct QuotaState {
+    active: BTreeSet<StorageBucketLocator>,
+    waiting: BTreeMap<StorageBucketLocator, VecDeque<QuotaReady>>,
+    ready: VecDeque<(StorageBucketLocator, QuotaReady)>,
+    draining: bool,
+}
+
+impl fmt::Debug for QuotaState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QuotaState")
+            .field("active", &self.active)
+            .field("waiting_buckets", &self.waiting.len())
+            .field("ready", &self.ready.len())
+            .field("draining", &self.draining)
+            .finish()
+    }
 }
 
 impl StorageQuotaCoordinator {
@@ -26,12 +48,10 @@ impl StorageQuotaCoordinator {
         &self,
         locator: &StorageBucketLocator,
     ) -> Option<StorageQuotaReservation> {
-        let mut active = self.inner.active.lock();
-        if active.contains(locator) {
+        let mut state = self.inner.state.lock();
+        if !state.active.insert(locator.clone()) {
             return None;
         }
-        let inserted = active.insert(locator.clone());
-        debug_assert!(inserted, "free bucket quota reservation must be insertable");
         Some(StorageQuotaReservation {
             coordinator: self.clone(),
             locator: Some(locator.clone()),
@@ -39,32 +59,112 @@ impl StorageQuotaCoordinator {
     }
 
     pub(crate) fn reserve(&self, locator: &StorageBucketLocator) -> StorageQuotaReservation {
-        let mut active = self.inner.active.lock();
-        while active.contains(locator) {
-            self.inner.released.wait(&mut active);
+        let mut state = self.inner.state.lock();
+        while state.active.contains(locator) {
+            self.inner.changed.wait(&mut state);
         }
-        let inserted = active.insert(locator.clone());
-        debug_assert!(inserted, "waited bucket quota reservation must be free");
+        state.active.insert(locator.clone());
         StorageQuotaReservation {
             coordinator: self.clone(),
             locator: Some(locator.clone()),
         }
     }
 
+    /// The callback only enqueues work; it never performs storage I/O itself.
+    pub(crate) fn reserve_async(
+        &self,
+        locator: StorageBucketLocator,
+        ready: impl FnOnce(StorageQuotaReservation) + Send + 'static,
+    ) {
+        let ready: QuotaReady = Box::new(ready);
+        let drain = {
+            let mut state = self.inner.state.lock();
+            if !state.active.insert(locator.clone()) {
+                state.waiting.entry(locator).or_default().push_back(ready);
+                return;
+            }
+            state.enqueue_ready(locator, ready)
+        };
+        if drain {
+            self.drain_ready();
+        }
+    }
+
+    fn drain_ready(&self) {
+        loop {
+            let next = {
+                let mut state = self.inner.state.lock();
+                let next = state.ready.pop_front();
+                if next.is_none() {
+                    state.draining = false;
+                }
+                next
+            };
+            let Some((locator, ready)) = next else {
+                self.inner.changed.notify_all();
+                return;
+            };
+            // A failed enqueue may immediately drop its reservation. Drain
+            // handoffs iteratively, including panicking completion callbacks.
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                ready(StorageQuotaReservation {
+                    coordinator: self.clone(),
+                    locator: Some(locator),
+                });
+            }));
+        }
+    }
+
+    /// Shutdown waits for accepted waiters to enqueue their work, rather than
+    /// shutting down SQL while a quota callback still needs to submit to it.
+    /// Synchronous reservations without pending async work do not delay this.
+    pub(crate) fn wait_for_dispatch(&self) {
+        let mut state = self.inner.state.lock();
+        while !state.waiting.is_empty() || state.draining {
+            self.inner.changed.wait(&mut state);
+        }
+    }
+
     fn release(&self, locator: StorageBucketLocator) {
-        let mut active = self.inner.active.lock();
-        let removed = active.remove(&locator);
-        debug_assert!(removed, "released bucket quota reservation must be active");
-        drop(active);
-        self.inner.released.notify_all();
+        let drain = {
+            let mut state = self.inner.state.lock();
+            let next = state
+                .waiting
+                .get_mut(&locator)
+                .and_then(VecDeque::pop_front);
+            if state.waiting.get(&locator).is_some_and(VecDeque::is_empty) {
+                state.waiting.remove(&locator);
+            }
+            match next {
+                Some(ready) => state.enqueue_ready(locator, ready),
+                None => {
+                    let removed = state.active.remove(&locator);
+                    debug_assert!(removed, "released bucket quota reservation must be active");
+                    false
+                }
+            }
+        };
+        self.inner.changed.notify_all();
+        if drain {
+            self.drain_ready();
+        }
     }
 }
 
-/// Owned reservation for one bucket's aggregate quota commit window.
-///
-/// The reservation is `Send`, so an asynchronous storage task can acquire it
-/// on the storage worker and release it before its owner-thread completion is
-/// delivered. Dropping it on any error or panic always releases the bucket.
+impl QuotaState {
+    fn enqueue_ready(&mut self, locator: StorageBucketLocator, ready: QuotaReady) -> bool {
+        self.ready.push_back((locator, ready));
+        if self.draining {
+            false
+        } else {
+            self.draining = true;
+            true
+        }
+    }
+}
+
+/// Owned guard for one bucket's aggregate publication window. Release before
+/// delivering the result; dropping on error also advances the next waiter.
 #[derive(Debug)]
 pub struct StorageQuotaReservation {
     coordinator: StorageQuotaCoordinator,
@@ -72,7 +172,6 @@ pub struct StorageQuotaReservation {
 }
 
 impl StorageQuotaReservation {
-    /// Return the exact persistent bucket protected by this reservation.
     pub fn locator(&self) -> &StorageBucketLocator {
         self.locator
             .as_ref()
@@ -172,5 +271,54 @@ mod tests {
             worker.join().expect("quota worker should not panic");
         }
         assert_eq!(peak.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn async_waiters_preserve_bucket_fifo_without_blocking_other_buckets() {
+        let coordinator = StorageQuotaCoordinator::default();
+        let first = coordinator.reserve(&named_bucket(1));
+        let (sender, receiver) = mpsc::channel();
+        for index in [1, 2] {
+            let sender = sender.clone();
+            coordinator.reserve_async(named_bucket(1), move |guard| {
+                sender.send((index, guard)).unwrap();
+            });
+        }
+        coordinator.reserve_async(named_bucket(2), move |guard| {
+            sender.send((3, guard)).unwrap();
+        });
+        let (index, unrelated) = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(index, 3);
+        drop(unrelated);
+        assert!(receiver.try_recv().is_err());
+        drop(first);
+        let (index, second) = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(index, 1);
+        assert!(receiver.try_recv().is_err());
+        drop(second);
+        let (index, third) = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(index, 2);
+        coordinator.wait_for_dispatch();
+        assert!(coordinator.try_reserve(&named_bucket(1)).is_none());
+        drop(third);
+        assert!(coordinator.try_reserve(&named_bucket(1)).is_some());
+    }
+
+    #[test]
+    fn immediately_released_async_waiters_do_not_recurse_or_stall_after_a_panic() {
+        let coordinator = StorageQuotaCoordinator::default();
+        let first = coordinator.reserve(&named_bucket(1));
+        let completed = Arc::new(AtomicUsize::new(0));
+        for index in 0..10_000 {
+            let completed = completed.clone();
+            coordinator.reserve_async(named_bucket(1), move |_guard| {
+                completed.fetch_add(1, Ordering::Relaxed);
+                assert_ne!(index, 5_000, "injected callback panic");
+            });
+        }
+        drop(first);
+        coordinator.wait_for_dispatch();
+        assert_eq!(completed.load(Ordering::Relaxed), 10_000);
+        assert!(coordinator.try_reserve(&named_bucket(1)).is_some());
     }
 }

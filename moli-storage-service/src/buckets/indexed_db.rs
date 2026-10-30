@@ -1,5 +1,5 @@
 //! SQL submissions retain the shared bucket reservation through publication.
-//! Waiting and aggregate usage sampling happen outside both V8 and SQL workers.
+//! Quota contention occupies no worker; usage sampling is off V8 and SQL.
 
 use super::*;
 use moli_indexeddb::{
@@ -20,15 +20,12 @@ impl StorageBucketQuotaOwner {
         mut command: Command,
         completion: impl FnOnce(Result<Completion, IndexedDbError>) + Send + 'static,
     ) -> Result<(), crate::StorageServiceDispatchError> {
-        let quota_coordinator = self.storage_service.quota_coordinator.clone();
         let locator = self.locator.clone();
         let owner = self.clone();
         let sampling_client = client.clone();
-        self.storage_service.quota_wait_queue.dispatch(
-            move || {
-                // Acquire only after this job starts. Holding a reservation
-                // while queued can deadlock an earlier job waiting for it.
-                let quota = quota_coordinator.reserve(&locator);
+        self.storage_service.dispatch_quota_commit(
+            locator,
+            move |quota| {
                 let check = owner.indexed_db_quota_check(&sampling_client);
                 (quota, check)
             },

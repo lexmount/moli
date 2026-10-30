@@ -59,7 +59,8 @@ struct OpfsUniqueIdKey {
 pub struct StorageService {
     opfs: Opfs,
     io_queue: io_queue::StorageIoQueue,
-    quota_wait_queue: io_queue::StorageIoQueue,
+    maintenance_queue: io_queue::StorageIoQueue,
+    quota_queue: io_queue::StorageIoQueue,
     io_sequence: io_queue::StorageIoSequence,
     quota_coordinator: quota::StorageQuotaCoordinator,
     opfs_unique_ids: Arc<Mutex<HashMap<OpfsUniqueIdKey, String>>>,
@@ -72,7 +73,17 @@ impl StorageService {
     /// After renderer/network producers join, finish accepted quota and bucket
     /// maintenance jobs before shutting down the SQL service they may use.
     pub fn drain_maintenance(&self) -> Result<(), StorageServiceDispatchError> {
-        self.quota_wait_queue.drain()
+        if [&self.io_queue, &self.maintenance_queue, &self.quota_queue]
+            .into_iter()
+            .any(|queue| queue.is_worker_thread())
+        {
+            return Err(StorageServiceDispatchError::ReentrantDrain);
+        }
+        // Maintenance may wait for a quota holder, whose ready work runs on
+        // the independent quota queue while SQL is still alive.
+        self.maintenance_queue.drain()?;
+        self.quota_coordinator.wait_for_dispatch();
+        self.quota_queue.drain()
     }
 
     /// After SQL shutdown, finish accepted OPFS work before releasing a profile.
@@ -85,7 +96,8 @@ impl StorageService {
         Arc::new(Self {
             opfs: Opfs::in_memory(),
             io_queue: io_queue::StorageIoQueue::default(),
-            quota_wait_queue: io_queue::StorageIoQueue::default(),
+            maintenance_queue: io_queue::StorageIoQueue::default(),
+            quota_queue: io_queue::StorageIoQueue::default(),
             io_sequence: io_queue::StorageIoSequence::default(),
             quota_coordinator: quota::StorageQuotaCoordinator::default(),
             opfs_unique_ids: Arc::new(Mutex::new(HashMap::new())),
@@ -97,7 +109,8 @@ impl StorageService {
         Ok(Arc::new(Self {
             opfs: Opfs::on_disk(opfs_root)?,
             io_queue: io_queue::StorageIoQueue::default(),
-            quota_wait_queue: io_queue::StorageIoQueue::default(),
+            maintenance_queue: io_queue::StorageIoQueue::default(),
+            quota_queue: io_queue::StorageIoQueue::default(),
             io_sequence: io_queue::StorageIoSequence::default(),
             quota_coordinator: quota::StorageQuotaCoordinator::default(),
             opfs_unique_ids: Arc::new(Mutex::new(HashMap::new())),
@@ -148,6 +161,41 @@ impl StorageService {
         self.quota_coordinator.reserve(locator)
     }
 
+    /// Acquire quota before enqueueing work. A busy bucket retains only its
+    /// callback; it never occupies the shared storage worker while waiting.
+    pub(crate) fn dispatch_quota_commit<T, Operation, Completion>(
+        &self,
+        locator: StorageBucketLocator,
+        operation: Operation,
+        completion: Completion,
+    ) -> Result<(), StorageServiceDispatchError>
+    where
+        T: Send + 'static,
+        Operation: FnOnce(StorageQuotaReservation) -> T + Send + 'static,
+        Completion: FnOnce(Result<T, StorageServiceTaskError>) + Send + 'static,
+    {
+        let queue = self.quota_queue.clone();
+        queue.ensure_started()?;
+        let completion = Arc::new(Mutex::new(Some(completion)));
+        self.quota_coordinator.reserve_async(locator, move |quota| {
+            let delivered = completion.clone();
+            let submitted = queue.dispatch(
+                move || operation(quota),
+                move |result| {
+                    if let Some(completion) = delivered.lock().take() {
+                        completion(result);
+                    }
+                },
+            );
+            if let Err(error) = submitted
+                && let Some(completion) = completion.lock().take()
+            {
+                completion(Err(StorageServiceTaskError::Dispatch(error.to_string())));
+            }
+        });
+        Ok(())
+    }
+
     /// Run one synchronous OPFS commit under the bucket quota reservation and
     /// the partition's ordered storage sequence, in that lock order.
     pub fn with_opfs_quota_commit<T>(
@@ -163,9 +211,9 @@ impl StorageService {
     ///
     /// An uncontended reservation is captured synchronously so later OPFS
     /// submissions cannot overtake this commit. A contended reservation waits
-    /// on a separate storage worker and does not reserve an OPFS sequence turn;
-    /// this lets the current quota holder take the fresh OPFS usage snapshot
-    /// it needs before releasing the bucket.
+    /// in the coordinator without occupying a worker or OPFS sequence turn;
+    /// this lets the current quota holder take its fresh usage snapshot before
+    /// releasing the bucket and enqueueing the next commit.
     pub fn dispatch_opfs_quota_commit<T, Operation, Completion>(
         &self,
         locator: StorageBucketLocator,
@@ -192,9 +240,10 @@ impl StorageService {
         }
 
         let io_sequence = self.io_sequence.clone();
-        self.quota_wait_queue.dispatch(
-            move || {
-                let _quota = quota_coordinator.reserve(&locator);
+        self.dispatch_quota_commit(
+            locator,
+            move |quota| {
+                let _quota = quota;
                 let _turn = io_sequence.reserve().enter();
                 operation(&opfs)
             },

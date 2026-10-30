@@ -115,7 +115,7 @@ impl Fixture {
         let (release, resume) = mpsc::channel();
         self.owner
             .storage_service
-            .quota_wait_queue
+            .quota_queue
             .dispatch(
                 move || {
                     entered.send(()).unwrap();
@@ -273,4 +273,129 @@ fn aborting_during_quota_wait_prevents_a_delayed_commit_from_publishing_data() {
         CommandResult::Count(0)
     ));
     receive(&fixture.commit(&client)).unwrap().result.unwrap();
+}
+
+#[test]
+fn a_waiting_bucket_does_not_block_another_buckets_sql_commit() {
+    let first = Fixture::new();
+    let store = &first.owner.store;
+    let identity = store
+        .lock()
+        .open_bucket("test-storage-key", "independent")
+        .unwrap();
+    let second = Fixture {
+        owner: storage_bucket_quota_owner(store, &identity.locator()).unwrap(),
+        _manager: first._manager.clone(),
+    };
+    assert!(Arc::ptr_eq(
+        &first.owner.storage_service,
+        &second.owner.storage_service
+    ));
+    let blocked = first.database("waiting-for-quota");
+    let independent = second.database("independent");
+    let token = first.owner.reserve_commit();
+    let waiting = first.commit(&blocked);
+    let progressing = second.commit(&independent);
+    receive(&progressing).unwrap().result.unwrap();
+    assert_eq!(independent.committed().unwrap().version, 2);
+    assert_eq!(blocked.committed().unwrap().version, 1);
+    assert!(matches!(waiting.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    drop(token);
+    receive(&waiting).unwrap().result.unwrap();
+    assert_eq!(blocked.committed().unwrap().version, 2);
+}
+
+#[test]
+fn blocked_bucket_maintenance_cannot_block_ready_sql_quota_work() {
+    let first = Fixture::new();
+    let store = &first.owner.store;
+    let identity = store
+        .lock()
+        .open_bucket("test-storage-key", "independent")
+        .unwrap();
+    let second = Fixture {
+        owner: storage_bucket_quota_owner(store, &identity.locator()).unwrap(),
+        _manager: first._manager.clone(),
+    };
+    let blocked = first.database("waiting-behind-maintenance");
+    let independent = second.database("independent");
+    let token = first.owner.reserve_commit();
+    let coordinator = first.owner.storage_service.quota_coordinator.clone();
+    let locator = first.owner.locator.clone();
+    let (entered, waiting) = mpsc::channel();
+    let (done, completed) = mpsc::channel();
+    first
+        .owner
+        .storage_service
+        .maintenance_queue
+        .dispatch(
+            move || {
+                entered.send(()).unwrap();
+                let _quota = coordinator.reserve(&locator);
+            },
+            move |result| {
+                done.send(result).unwrap();
+            },
+        )
+        .unwrap();
+    receive(&waiting);
+    let first_reply = first.commit(&blocked);
+    let second_reply = second.commit(&independent);
+    receive(&second_reply).unwrap().result.unwrap();
+    assert_eq!(independent.committed().unwrap().version, 2);
+    assert!(matches!(
+        first_reply.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    drop(token);
+    receive(&first_reply).unwrap().result.unwrap();
+    receive(&completed).unwrap();
+}
+
+#[test]
+fn shutdown_dispatches_a_waiting_quota_commit_before_closing_sql() {
+    let fixture = Fixture::new();
+    let client = fixture.database("shutdown-with-quota-waiter");
+    let token = fixture.owner.reserve_commit();
+    let reply = fixture.commit(&client);
+    let service = fixture.owner.storage_service.clone();
+    let manager = fixture._manager.clone();
+    let (started, starting) = mpsc::channel();
+    let (done, finished) = mpsc::channel();
+    let shutdown = std::thread::spawn(move || {
+        started.send(()).unwrap();
+        service.drain_maintenance().unwrap();
+        manager.lock().shutdown_sqlite().unwrap();
+        done.send(()).unwrap();
+    });
+    receive(&starting);
+    // The accepted commit cannot be dispatched while this exact bucket's
+    // reservation is held. Shutdown must keep SQL alive until it can be sent.
+    assert!(finished.recv_timeout(Duration::from_millis(50)).is_err());
+    drop(token);
+    receive(&finished);
+    receive(&reply).unwrap().result.unwrap();
+    shutdown.join().unwrap();
+    assert!(client.is_retired());
+    assert_eq!(client.committed().unwrap().version, 2);
+}
+
+#[test]
+fn maintenance_drain_rejects_a_quota_worker_before_waiting_on_its_own_reservation() {
+    let fixture = Fixture::new();
+    let service = fixture.owner.storage_service.clone();
+    let draining = service.clone();
+    let locator = fixture.owner.locator.clone();
+    let (sender, receiver) = mpsc::channel();
+    service
+        .dispatch_quota_commit(
+            locator,
+            move |_quota| draining.drain_maintenance(),
+            move |result| sender.send(result).unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        receive(&receiver).unwrap(),
+        Err(crate::StorageServiceDispatchError::ReentrantDrain)
+    ));
 }

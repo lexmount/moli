@@ -191,7 +191,7 @@ impl SqlBucketMaintenance {
             operation,
         } = self;
         let service = store.lock().storage_service();
-        service.quota_wait_queue.dispatch(
+        service.maintenance_queue.dispatch(
             move || -> std::result::Result<SqlBucketOperationValue, String> {
                 if sql.is_closed() {
                     return Err("IndexedDB storage service is closed".into());
