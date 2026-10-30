@@ -218,7 +218,11 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
             };
             let mut index = index.borrow_mut();
             index.deleted = created_in_upgrade;
-            if !created_in_upgrade {
+            if created_in_upgrade {
+                let name = index.info.name.clone();
+                drop(index);
+                super::super::core::invalidate_index_handle_cache(scope, store, &name);
+            } else {
                 index.info = metadata
                     .index_by_id(index.schema_id)
                     .expect("existing index has upgrade snapshot")

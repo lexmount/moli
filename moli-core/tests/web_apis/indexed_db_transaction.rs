@@ -803,8 +803,9 @@ async fn indexed_db_schema_validation_preserves_key_paths_conversion_and_excepti
         );
         let result = run_probe(&browser, &server, target, &source).await?;
         assert_eq!(result["state"], "pass", "{target}: {result}");
-        assert!(
-            result["checks"].as_array().unwrap().len() >= 160,
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            if target == "worker" { 166 } else { 175 },
             "{target}: {result}"
         );
     }
