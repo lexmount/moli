@@ -905,6 +905,32 @@ pub(crate) fn window_post_message_callback<'s>(
     };
     let source_security =
         crate::context_bootstrap::RuntimeMessageSourceSecurity::window(source_origin.clone());
+    // Retain a page-local same-origin WindowProxy before conversions can
+    // retire its Document. Cross-origin sources keep owner-based resolution,
+    // including null after retirement. Always use the incumbent's default
+    // world rather than the callee's context or an isolated sender world.
+    let source_window = if let Some((_, _, window)) = related_source {
+        Some(window)
+    } else if let Some(identity) =
+        host.current_registered_window_execution_context_identity(source_endpoint.dispatch_scope())
+        && identity.owner() == source_owner
+        && host.window_execution_context_can_access_dispatch_scope(identity, target_dispatch_scope)
+    {
+        // Lightweight popups share their opener's V8 context on this backend.
+        // The registered identity authorizes the actual popup, while its
+        // browsing-context proxy supplies the accepted source object.
+        let window = match source_endpoint {
+            PendingWindowMessageEndpoint::LightweightPopup(popup_id) => {
+                host.lightweight_popup_window(scope, popup_id)
+            }
+            _ => host
+                .window_execution_context(scope, source_owner, source_endpoint.dispatch_scope())
+                .map(|(_, context)| context.global(scope)),
+        };
+        window.map(|window| v8::Global::new(scope, window))
+    } else {
+        None
+    };
 
     let Some(parsed) = webidl::parse_args::<WindowPostMessageArgs>(scope, &args) else {
         return;
@@ -987,7 +1013,7 @@ pub(crate) fn window_post_message_callback<'s>(
     let task_id = host.queue_window_message(PendingWindowMessage {
         target,
         source,
-        source_window: related_source.map(|(_, _, window)| window),
+        source_window,
         data,
         origin: source_origin,
         intended_target_origin: target_origin_match,
@@ -1523,7 +1549,6 @@ fn dispatch_window_message_in_current_target_context(
 ) -> WindowMessageDispatchOutcome {
     let target_endpoint =
         PendingWindowMessageEndpoint::from_dispatch_scope(message.target.dispatch_scope());
-    let source_endpoint = message.source.endpoint();
     let source_window = message
         .source_window
         .as_ref()
@@ -1564,7 +1589,7 @@ fn dispatch_window_message_in_current_target_context(
             host_ptr,
             host,
             target_endpoint,
-            source_endpoint,
+            message.source,
             source_window,
             "messageerror",
             v8::null(scope).into(),
@@ -1612,7 +1637,7 @@ fn dispatch_window_message_in_current_target_context(
             host_ptr,
             host,
             target_endpoint,
-            source_endpoint,
+            message.source,
             source_window,
             "messageerror",
             v8::null(scope).into(),
@@ -1638,7 +1663,7 @@ fn dispatch_window_message_in_current_target_context(
         host_ptr,
         host,
         target_endpoint,
-        source_endpoint,
+        message.source,
         source_window,
         "message",
         data,
@@ -1701,32 +1726,43 @@ fn dispatch_window_message_event<'s>(
     host_ptr: *mut JsContextHost,
     host: &mut JsContextHost,
     target: PendingWindowMessageEndpoint,
-    source_endpoint: PendingWindowMessageEndpoint,
+    source_identity: PendingWindowMessageSource,
     source_window: Option<v8::Local<'s, v8::Object>>,
     event_type: &str,
     data: v8::Local<'s, v8::Value>,
     origin: &str,
     ports: v8::Local<'s, v8::Array>,
 ) {
-    let global = scope.get_current_context().global(scope);
-    let source: v8::Local<'_, v8::Value> =
-        source_window
-            .map(Into::into)
-            .unwrap_or_else(|| match source_endpoint {
-                PendingWindowMessageEndpoint::TopWindow => {
-                    top_window_message_source_for_target(scope, host, target)
-                        .unwrap_or_else(|| global.into())
-                }
-                PendingWindowMessageEndpoint::ChildWindow(handle) => {
-                    child_window_message_source(scope, host, handle)
-                        .map(Into::into)
-                        .unwrap_or_else(|| v8::null(scope).into())
-                }
-                PendingWindowMessageEndpoint::LightweightPopup(popup_id) => host
-                    .lightweight_popup_window(scope, popup_id)
+    let source_endpoint = source_identity.endpoint();
+    // Retained local Windows preserve their accepted proxy. Other local
+    // sources must still match their accepting owner: an endpoint can be
+    // reused by a successor Window.
+    let source: v8::Local<'_, v8::Value> = match source_window {
+        Some(window) => window.into(),
+        None if !host.window_execution_context_owner_is_current(
+            source_identity.owner(),
+            source_endpoint.dispatch_scope(),
+        ) =>
+        {
+            v8::null(scope).into()
+        }
+        None => match source_endpoint {
+            PendingWindowMessageEndpoint::TopWindow => {
+                top_window_message_source_for_target(scope, host, target)
+                    .unwrap_or_else(|| v8::null(scope).into())
+            }
+            PendingWindowMessageEndpoint::ChildWindow(handle) => {
+                child_window_message_source(scope, host, handle)
                     .map(Into::into)
-                    .unwrap_or_else(|| v8::null(scope).into()),
-            });
+                    .unwrap_or_else(|| v8::null(scope).into())
+            }
+            PendingWindowMessageEndpoint::LightweightPopup(popup_id) => host
+                .lightweight_popup_window(scope, popup_id)
+                .map(Into::into)
+                .unwrap_or_else(|| v8::null(scope).into()),
+        },
+    };
+
     let event_name = event_type;
     let Some(event) = crate::context_bootstrap::construct_original_message_event(
         scope,
@@ -1768,7 +1804,9 @@ fn top_window_message_source_for_target<'s>(
     target: PendingWindowMessageEndpoint,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let PendingWindowMessageEndpoint::ChildWindow(handle) = target else {
-        return None;
+        return host
+            .page_default_context(scope)
+            .map(|context| context.global(scope).into());
     };
     let top = host.child_browsing_context_top_window_for_current_realm(scope, handle);
     if moli_trace::window_message_trace_enabled() {

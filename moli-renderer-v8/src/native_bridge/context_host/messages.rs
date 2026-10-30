@@ -8,9 +8,9 @@ use crate::{document_runtime::DomHandle, structured_clone::V8StructuredClonePayl
 pub(crate) struct PendingWindowMessage {
     pub(crate) target: WindowTaskTarget,
     pub(crate) source: PendingWindowMessageSource,
-    // Page-local endpoint ids cannot identify a Window in another Page. Keep
-    // the accepted browsing context proxy through delivery, including a later
-    // navigation or close of its Document.
+    // Retain accepted same-origin local Windows and related-Page proxies.
+    // Other local sources resolve through their owner at delivery: endpoint
+    // ids may be reused, and retired cross-origin sources resolve to null.
     pub(crate) source_window: Option<v8::Global<v8::Object>>,
     pub(crate) data: V8StructuredClonePayload,
     pub(crate) origin: String,
