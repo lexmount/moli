@@ -28,9 +28,9 @@ globalThis.__installDragDefaultPayloadProbe = function(mode, inChild) {
   if (mode === 'link-invalid') rawURL = 'http://[';
   if (!['plain','container','link-nohref'].includes(mode)) source.setAttribute(attribute, rawURL);
   if (mode === 'link-nohref') source.draggable = true;
-  if (mode === 'image-srcset') source.srcset = '/asset.png?source=selected 1x';
+  if (mode === 'image-srcset') { source.srcset = '/asset.png?source=selected 1x'; rawURL = '/asset.png?source=selected'; }
   source.id = 'source'; doc.body.append(source);
-  if (mode === 'image-linked') {
+  if (mode === 'image-linked') { rawURL = 'outer-link';
     const link = doc.createElement('a'); link.href = 'outer-link'; source.replaceWith(link); link.append(source);
   }
   let expected = '';

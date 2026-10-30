@@ -702,7 +702,7 @@ enum SelectionBehaviorOnFocus {
     Preserve,
 }
 
-pub(crate) fn focus_text_control_preserving_selection(
+pub(crate) fn focus_element_preserving_selection(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     target: DomHandle,

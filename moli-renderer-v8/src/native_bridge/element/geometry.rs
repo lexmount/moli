@@ -11,7 +11,7 @@ pub use client_rect::ClientRect;
 #[cfg(test)]
 pub(crate) use hit_test::observable_scrollbar_hit_test;
 pub(crate) use hit_test::{
-    InputSurfaceHit, captured_frame_input_surface_hit_test,
+    InputHit, InputSurfaceHit, captured_frame_input_surface_hit_test,
     drag_start_frame_input_surface_hit_test, draggable_source_at_point,
     element_is_inert_for_hit_testing, input_surface_hit_test, observable_deep_hit_test,
     observable_hit_test, observable_input_hit_test,

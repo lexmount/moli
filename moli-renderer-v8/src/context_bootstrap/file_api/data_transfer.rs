@@ -18,7 +18,10 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 pub(crate) use moli_file_api::data_transfer::DragDataStoreMode;
 
 mod clipboard;
-pub(crate) use clipboard::{build_clipboard_data_transfer, clipboard_data_transfer_contents, disable_clipboard_data_transfer};
+pub(crate) use clipboard::{
+    build_clipboard_data_transfer, clipboard_data_transfer_contents,
+    disable_clipboard_data_transfer,
+};
 
 const DATA_TRANSFER_FILES_SLOT: &str = "__lmDataTransferFiles";
 const DATA_TRANSFER_ITEMS_SLOT: &str = "__lmDataTransferItems";
@@ -1611,9 +1614,7 @@ fn data_transfer_drop_effect_setter<'s>(
             return;
         }
     };
-    if data_transfer_mode(scope, args.this()) != DragDataStoreMode::Disabled
-        && !private_bool_property(scope, args.this(), DATA_TRANSFER_CLIPBOARD_SLOT).unwrap_or(false)
-    {
+    if !private_bool_property(scope, args.this(), DATA_TRANSFER_CLIPBOARD_SLOT).unwrap_or(false) {
         native_set_drag_drop_effect(scope, args.this(), &value);
     }
 }

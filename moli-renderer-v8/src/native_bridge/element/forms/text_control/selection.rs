@@ -758,11 +758,7 @@ pub(in crate::native_bridge) fn text_control_select_callback(
             .len() as u32;
         let _ = text_control_set_selection_range_internal(scope, runtime_ptr, handle, 0, len);
     }
-    crate::native_bridge::element::focus_text_control_preserving_selection(
-        scope,
-        runtime_ptr,
-        handle,
-    );
+    crate::native_bridge::element::focus_element_preserving_selection(scope, runtime_ptr, handle);
     // Focus listeners may redirect focus, replace the value, or set a different
     // cached selection. Restore only the state left by those listeners.
     restore_focused_text_control_selection(scope, runtime_ptr, handle);

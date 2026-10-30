@@ -183,11 +183,19 @@ impl InputTargetPath {
 }
 
 #[derive(Clone, Copy)]
+pub(super) enum MouseFrameCaptureOwner {
+    Main(crate::frame_owner_model::FrameDocumentTaskOwner),
+    Child {
+        frame: DomHandle,
+        owner: crate::frame_owner_model::FrameLaneTaskOwner,
+    },
+}
+
+#[derive(Clone, Copy)]
 pub(super) struct MouseFrameCapture {
-    pub(super) frame: DomHandle,
     // A navigation replaces the Document, but retains this browsing context.
     // Removing and reattaching the same iframe creates a different lane.
-    pub(super) owner: crate::frame_owner_model::FrameLaneTaskOwner,
+    pub(super) owner: MouseFrameCaptureOwner,
     pub(super) root_to_frame: moli_layout::LayoutTransform2D,
 }
 

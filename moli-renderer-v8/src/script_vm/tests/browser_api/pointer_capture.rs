@@ -873,6 +873,7 @@ fn hovering_capture_boundaries_follow_capture_transitions_and_implicit_release()
                                 ..Default::default()
                             },
                             15,
+                            false,
                         )
                         .unwrap();
                     }

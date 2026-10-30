@@ -1921,10 +1921,15 @@ for(const type of ['pointermove','mousemove','pointerup','mouseup','dragstart','
     );
 }
 
-#[test]
-fn cdp_drag_payload_replacement_and_event_view_lifetimes_are_independent() {
+#[tokio::test]
+async fn cdp_drag_payload_replacement_and_event_view_lifetimes_are_independent() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     for empty_enter in [false, true] {
-        let mut vm = new_rendered_test_vm("https://drag-payload-views.test/", DRAG_INTERCEPT_PAGE);
+        let mut vm = new_rendered_page_task_executor_test_vm(
+            "https://drag-payload-views.test/",
+            DRAG_INTERCEPT_PAGE,
+            &loader,
+        );
         vm.eval(
             r#"
 window.__views=[];window.__records=[];window.__priorStates=[];window.__ends=0;
@@ -2017,6 +2022,14 @@ for(const type of ['dragenter','dragover','drop']) target.addEventListener(type,
             .expect("over changes operations only");
         vm.dispatch_drag_event_at_point(20.0, 120.0, "drop", payload("drop", 17), 0)
             .expect("drop replaces payload after pre-over");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(window.__fileText)",
+            "drop",
+            "cdp_drag_payload_replacement_and_event_view_lifetimes_are_independent",
+        )
+        .await;
         let observed: serde_json::Value = serde_json::from_str(&vm.eval(
             "JSON.stringify({records:window.__records,prior:window.__priorStates,distinct:new Set(window.__views).size,ends:window.__ends,end:window.__sourceEnd,sourceTypes:Array.from(window.__sourceTypes),sourceAfter:[window.__sourceTransfer.getData('text/plain'),window.__sourceTransfer.types.length,window.__sourceTransfer.items.length,window.__sourceTransfer.files.length,window.__sourceItem.kind,window.__sourceItem.type],fileBytes:window.__fileText,closed:window.__views.map(view => [view.getData('text/plain'),view.types.length,view.items.length,view.files.length])})",
         ).expect("payload and identity result")).expect("payload JSON");

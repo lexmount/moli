@@ -12,7 +12,7 @@ use drag_source::dispatch_drag_source_event;
 
 use super::input_dispatch_outcome;
 use super::input_helpers::{
-    InputTargetPath, HoverBoundary, HoverTarget, MouseFrameCapture,
+    HoverBoundary, HoverTarget, InputTargetPath, MouseFrameCapture, MouseFrameCaptureOwner,
     mouse_button_mask, single_changed_mouse_button,
 };
 use super::inspector::{
@@ -28,22 +28,24 @@ use crate::dom::{
     native::{Node, SelectedFile},
 };
 use crate::native_bridge::element::{
-    NodePublicEventDispatchOutcome, construct_activation_pointer_event, InputEventCoordinates, TextEditInputType, TouchEventPoint,
+    InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType, TouchEventPoint,
     activate_handle_after_pointer_release, activate_handle_via_click,
     activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
-    drag_start_frame_input_surface_hit_test, draggable_source_at_point, captured_frame_input_surface_hit_test, construct_drag_event_with_related_target, construct_keyboard_event,
-    construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_for_target,
+    captured_frame_input_surface_hit_test, construct_activation_pointer_event,
+    construct_drag_event_with_related_target, construct_keyboard_event,
+    construct_mouse_event_for_target, construct_mouse_event_with_detail_and_modifiers,
     construct_mouse_event_with_related_target_for_target, construct_pointer_event,
-    construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
+    construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_for_target, construct_simple_event,
     construct_touch_event_with_points, construct_wheel_event_for_target,
-    contenteditable_editing_host, dispatch_public_event, input_surface_hit_test, is_text_control,
-    observable_input_hit_test, perform_auxiliary_link_default_action,
-    perform_clipboard_key_default_action, perform_drop_default_action,
-    perform_implicit_submission_from_control, perform_mouse_focus_default_action,
-    perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
-    replace_contenteditable_selection, replace_text_control_selection,
-    select_contenteditable_contents, text_control_set_selection_range_internal,
+    contenteditable_editing_host, dispatch_public_event, drag_start_frame_input_surface_hit_test,
+    draggable_source_at_point, input_surface_hit_test, is_text_control, observable_input_hit_test,
+    perform_auxiliary_link_default_action, perform_clipboard_key_default_action,
+    perform_drop_default_action, perform_implicit_submission_from_control,
+    perform_mouse_focus_default_action, perform_scrollbar_scroll_default_action,
+    perform_wheel_scroll_default_action, replace_contenteditable_selection,
+    replace_text_control_selection, select_contenteditable_contents,
+    text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
 };
 use crate::native_bridge::{
@@ -250,7 +252,7 @@ fn finish_drag_session<'s>(
         );
         crate::context_bootstrap::finish_drag_data_transfer_view(scope, data_transfer);
     }
-    unsafe { &mut *runtime_ptr }.clear_mouse_press();
+    unsafe { &mut *runtime_ptr }.clear_mouse_presses();
 }
 
 fn author_drag_operation<'s>(
@@ -482,19 +484,33 @@ fn native_drag_source(
     let point = moli_layout::LayoutPoint::new(gesture.x as f32, gesture.y as f32);
     let root_point = gesture.root_to_frame.inverse()?.map_point(point);
     let hit = drag_start_frame_input_surface_hit_test(
-        runtime, gesture.document, root_point, gesture.root_to_frame,
-    ).ok()?.input?;
+        runtime,
+        gesture.document,
+        root_point,
+        gesture.root_to_frame,
+    )
+    .ok()?
+    .input?;
     if host.owner_document_handle(hit.handle) != Some(gesture.document) {
         return None;
     }
-    let candidate = draggable_source_at_point(runtime, gesture.document, point).ok()?
+    let candidate = draggable_source_at_point(runtime, gesture.document, point)
+        .ok()?
         .map(|handle| {
-            let source_attribute = host.node(handle).and_then(Node::as_element)
-                .and_then(|element| {
-                    if element.is_html_element("img") { Some("src") }
-                    else if element.is_html_element("a") && element.has_attribute_ns("", "href") { Some("href") }
-                    else { None }
-                });
+            let source_attribute =
+                host.node(handle)
+                    .and_then(Node::as_element)
+                    .and_then(|element| {
+                        if element.is_html_element("img") {
+                            Some("src")
+                        } else if element.is_html_element("a")
+                            && element.has_attribute_ns("", "href")
+                        {
+                            Some("href")
+                        } else {
+                            None
+                        }
+                    });
             (handle, source_attribute)
         });
     if candidate.is_none_or(|(_, attribute)| attribute != Some("src"))
@@ -624,7 +640,8 @@ pub(super) fn dispatch_pointer_hover_boundary_event(
         runtime_ptr,
         boundary.handle,
         pointer_name,
-        InputEventCoordinates::from_root(f64::from(root_point.x), f64::from(root_point.y)).with_client(x, y),
+        InputEventCoordinates::from_root(f64::from(root_point.x), f64::from(root_point.y))
+            .with_client(x, y),
         button,
         buttons,
         pointer,
@@ -660,7 +677,8 @@ fn dispatch_mouse_hover_boundary_event(
         runtime_ptr,
         boundary.handle,
         mouse_name,
-        InputEventCoordinates::from_root(f64::from(root_point.x), f64::from(root_point.y)).with_client(x, y),
+        InputEventCoordinates::from_root(f64::from(root_point.x), f64::from(root_point.y))
+            .with_client(x, y),
         button,
         buttons,
         related,
@@ -821,7 +839,11 @@ impl HoveringPointerInput<'_> {
                 runtime_ptr,
                 self.pointer.pointer_id,
                 std::slice::from_ref(event),
-                InputEventCoordinates::from_root(f64::from(self.root_point.x), f64::from(self.root_point.y)).with_client(f64::from(point.x), f64::from(point.y)),
+                InputEventCoordinates::from_root(
+                    f64::from(self.root_point.x),
+                    f64::from(self.root_point.y),
+                )
+                .with_client(f64::from(point.x), f64::from(point.y)),
                 self.button,
                 self.buttons,
                 self.pointer,
@@ -877,8 +899,10 @@ fn dispatch_drag_pointer_suppression_boundaries(
     if !unsafe { &*runtime_ptr }.dom_host().is_connected(target) {
         return;
     }
-    if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
+    if let Some(event) = construct_pointer_event_with_related_target_for_target(
         scope,
+        runtime_ptr,
+        target,
         "pointerout",
         coordinates,
         -1,
@@ -901,8 +925,10 @@ fn dispatch_drag_pointer_suppression_boundaries(
         }
     };
     for ancestor in ancestors {
-        if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
+        if let Some(event) = construct_pointer_event_with_related_target_for_target(
             scope,
+            runtime_ptr,
+            ancestor,
             "pointerleave",
             coordinates,
             -1,
@@ -1138,7 +1164,9 @@ impl ScriptVm {
             intercept_drags,
         );
         if let Some(button) = released_button {
-            self._context_host.borrow_mut().clear_mouse_button_press(button);
+            self._context_host
+                .borrow_mut()
+                .clear_mouse_button_press(button);
         }
         self.finish_input_event_dispatch_turn(result)
     }
@@ -1223,7 +1251,9 @@ impl ScriptVm {
             intercept_drags,
         );
         if let Some(button) = released_button {
-            self._context_host.borrow_mut().clear_mouse_button_press(button);
+            self._context_host
+                .borrow_mut()
+                .clear_mouse_button_press(button);
         }
         result
     }
@@ -1241,36 +1271,6 @@ impl ScriptVm {
             false,
             matches!(event_name, "mousedown" | "mouseup" | "mousemove"),
         )?)
-    }
-
-    fn mouse_input_root_to_frame(
-        &self,
-        target: DomHandle,
-        hit: crate::native_bridge::element::InputSurfaceHit,
-    ) -> Result<moli_layout::LayoutTransform2D> {
-        let runtime = self._context_host.borrow();
-        let dom = runtime.dom_host();
-        let document = dom
-            .owner_document_handle(target)
-            .ok_or(moli_layout::LayoutError::NoLayoutSnapshot)?;
-        if let Some(hit) = hit
-            .input
-            .filter(|hit| dom.owner_document_handle(hit.handle) == Some(document))
-        {
-            return Ok(hit.root_to_frame);
-        }
-        // Capture keeps its own frame even when the physical hit moves out of
-        // that frame. Read the same frozen content box and inverse transform
-        // used by hit testing, without requiring the point to hit the iframe.
-        if let Some(transform) = root_to_document_frame(&runtime, document) {
-            return Ok(transform);
-        }
-        if let Some(previous) = self.hovered_mouse.as_ref()
-            && dom.owner_document_handle(previous.handle) == Some(document)
-        {
-            return Ok(previous.root_to_frame);
-        }
-        Err(moli_layout::LayoutError::NoLayoutSnapshot.into())
     }
 
     fn prepare_mouse_input_dispatch(
@@ -1326,10 +1326,9 @@ impl ScriptVm {
         // Keep the changed button's native press until release callbacks finish;
         // a synchronous removal must still be able to invalidate that press.
         if matches!(event_name, "mousedown" | "mouseup" | "mousemove") {
-            self._context_host.borrow_mut().retain_mouse_presses(
-                buttons,
-                (event_name == "mouseup").then_some(button),
-            );
+            self._context_host
+                .borrow_mut()
+                .retain_mouse_presses(buttons, (event_name == "mouseup").then_some(button));
         }
         // The final release has already been hit tested in the captured frame.
         // Clear its ownership before callbacks can start another input sequence.
@@ -1349,10 +1348,17 @@ impl ScriptVm {
 
     fn captured_mouse_frame_document(&self, capture: MouseFrameCapture) -> Option<DomHandle> {
         let host = self._context_host.borrow();
-        if host.current_child_frame_lane_task_owner(capture.frame) != Some(capture.owner) {
+        let (frame, owner) = match capture.owner {
+            MouseFrameCaptureOwner::Main(owner) => {
+                return (host.current_main_document_task_owner() == Some(owner))
+                    .then(|| self.document_runtime.document_handle());
+            }
+            MouseFrameCaptureOwner::Child { frame, owner } => (frame, owner),
+        };
+        if host.current_child_frame_lane_task_owner(frame) != Some(owner) {
             return None;
         }
-        let captured_document = host.child_browsing_context_document_handle(capture.frame)?;
+        let captured_document = host.child_browsing_context_document_handle(frame)?;
         let mut document = captured_document;
         let mut visited = HashSet::new();
         while document != self.document_runtime.document_handle() {
@@ -1404,12 +1410,18 @@ impl ScriptVm {
                     .dom_host()
                     .owner_document_handle(input.handle)
                     .and_then(|document| {
-                        host.child_browsing_context_host_for_document_handle(document)
-                    })
-                    .and_then(|frame| {
+                        let owner = if document == self.document_runtime.document_handle() {
+                            MouseFrameCaptureOwner::Main(host.current_main_document_task_owner()?)
+                        } else {
+                            let frame =
+                                host.child_browsing_context_host_for_document_handle(document)?;
+                            MouseFrameCaptureOwner::Child {
+                                frame,
+                                owner: host.current_child_frame_lane_task_owner(frame)?,
+                            }
+                        };
                         Some(MouseFrameCapture {
-                            frame,
-                            owner: host.current_child_frame_lane_task_owner(frame)?,
+                            owner,
                             root_to_frame: input.root_to_frame,
                         })
                     });
@@ -1561,6 +1573,7 @@ impl ScriptVm {
         // These owned snapshots cross synchronous JS callbacks without borrowing
         // ScriptVm fields or holding a context-host RefCell guard.
         let mut pointer_hover = self.hovered_pointers.remove(&pointer_id);
+        let drag_cancel_target = pointer_hover.as_ref().map(|target| target.handle);
         let mut mouse_hover = self.hovered_mouse.take();
         let mut released_mouse_hover = None;
         let release_hit_path = (pointer_event_name == Some("pointerup"))
@@ -1573,46 +1586,51 @@ impl ScriptVm {
         if event_name == "mousemove" && buttons != 1 {
             self.pending_drag_gesture = None;
         }
-        let drag_start = if event_name == "mousemove"
-            && buttons == 1
-            && self.active_drag_session.is_none()
-        {
-            let gesture = self.pending_drag_gesture.filter(|gesture| {
-                let point = gesture.root_to_frame.map_point(root_point);
-                #[cfg(target_os = "macos")]
-                let threshold = 3.0;
-                #[cfg(not(target_os = "macos"))]
-                let threshold = 4.0;
-                (f64::from(point.x).floor() - gesture.x.floor()).abs() >= threshold
-                    || (f64::from(point.y).floor() - gesture.y.floor()).abs() >= threshold
-            });
-            if let Some(gesture) = gesture {
-                // The gesture is consumed even if dragstart is canceled. A
-                // held button cannot start another drag until a fresh press.
-                self.pending_drag_gesture = None;
-                Some(gesture)
+        let drag_start =
+            if event_name == "mousemove" && buttons == 1 && self.active_drag_session.is_none() {
+                let gesture = self.pending_drag_gesture.filter(|gesture| {
+                    let point = gesture.root_to_frame.map_point(root_point);
+                    #[cfg(target_os = "macos")]
+                    let threshold = 3.0;
+                    #[cfg(not(target_os = "macos"))]
+                    let threshold = 4.0;
+                    (f64::from(point.x).floor() - gesture.x.floor()).abs() >= threshold
+                        || (f64::from(point.y).floor() - gesture.y.floor()).abs() >= threshold
+                });
+                if let Some(gesture) = gesture {
+                    // The gesture is consumed even if dragstart is canceled. A
+                    // held button cannot start another drag until a fresh press.
+                    self.pending_drag_gesture = None;
+                    Some(gesture)
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
         if event_name == "mousedown" && button >= 0 {
             let mut host = self._context_host.borrow_mut();
             host.clear_mouse_button_press(button);
             if let Some(handle) = capture_handle.or(hit_handle) {
                 host.begin_mouse_press(handle, button);
-                if button == 0 && buttons == 1 && click_count <= 1
+                if button == 0
+                    && buttons == 1
+                    && click_count <= 1
                     && let Some(document) = host.dom_host().owner_document_handle(handle)
                     && let Some(root_to_frame) = hit
-                        .filter(|hit| host.dom_host().owner_document_handle(hit.handle) == Some(document))
+                        .filter(|hit| {
+                            host.dom_host().owner_document_handle(hit.handle) == Some(document)
+                        })
                         .map(|hit| hit.root_to_frame)
                         .or_else(|| root_to_document_frame(&host, document))
                 {
                     let point = root_to_frame.map_point(root_point);
                     self.pending_drag_gesture = Some(PendingDragGesture {
-                        document, handle, x: f64::from(point.x), y: f64::from(point.y), root_to_frame,
+                        document,
+                        x: f64::from(point.x),
+                        y: f64::from(point.y),
+                        root_to_frame,
                     });
                 }
             }
@@ -1686,7 +1704,8 @@ impl ScriptVm {
                     runtime_ptr,
                     pointer_dispatch_target.handle,
                     "pointerrawupdate",
-                    InputEventCoordinates::from_root(x, y).with_client(f64::from(raw_point.x), f64::from(raw_point.y)),
+                    InputEventCoordinates::from_root(x, y)
+                        .with_client(f64::from(raw_point.x), f64::from(raw_point.y)),
                     button,
                     buttons,
                     &pointer,
@@ -1723,7 +1742,8 @@ impl ScriptVm {
             let client_point = pointer_dispatch_target.root_to_frame.map_point(root_point);
             let client_x = f64::from(client_point.x);
             let client_y = f64::from(client_point.y);
-            let coordinates = InputEventCoordinates::from_root(x, y).with_client(client_x, client_y);
+            let coordinates =
+                InputEventCoordinates::from_root(x, y).with_client(client_x, client_y);
             if tracks_mouse_hover_for_event(event_name) {
                 hover_input.update_mouse_hover(
                     scope,
@@ -1948,15 +1968,20 @@ impl ScriptVm {
                     unsafe { &mut *runtime_ptr }.clear_mouse_presses();
                     let cancel_target = unsafe { &*runtime_ptr }
                         .active_pointer_capture_target(pointer_id)
-                        .unwrap_or(pointer_dispatch_handle);
-                    let cancel_pointer = pointer.clone();
-                    if let Some(event) = construct_pointer_event_with_modifiers(
+                        .or(drag_cancel_target)
+                        .unwrap_or(drag_start_handle);
+                    let mut cancel_pointer = pointer.clone();
+                    cancel_pointer.pressure = 0.0;
+                    if let Some(event) = construct_pointer_event_with_related_target_for_target(
                         scope,
+                        runtime_ptr,
+                        cancel_target,
                         "pointercancel",
                         coordinates,
                         -1,
                         0,
                         &cancel_pointer,
+                        None,
                         modifiers,
                     ) {
                         let _ = dispatch_public_event(scope, runtime_ptr, cancel_target, event);
@@ -2032,7 +2057,9 @@ impl ScriptVm {
             let follow_up = if event_name == "mouseup" {
                 mouse_dispatch_handle.and_then(|target| {
                     unsafe { &mut *runtime_ptr }.mouse_release_follow_up(
-                        target, button, captured_click_target,
+                        target,
+                        button,
+                        captured_click_target,
                     )
                 })
             } else {
@@ -2096,22 +2123,25 @@ impl ScriptVm {
                     {
                         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
                     }
-                    if let Some(click_target) = unsafe { &mut *runtime_ptr }.take_mouse_click_target(
-                        mouse_dispatch_handle.unwrap_or(pointer_dispatch_handle),
-                        button,
-                        captured_click_target,
-                    ) && let Some(event) = construct_activation_pointer_event(
-                        scope,
-                        runtime_ptr,
-                        click_target,
-                        "auxclick",
-                        coordinates,
-                        click_count.max(1),
-                        button,
-                        buttons,
-                        modifiers,
-                        Some(&pointer),
-                    ) {
+                    if let Some(click_target) = unsafe { &mut *runtime_ptr }
+                        .take_mouse_click_target(
+                            mouse_dispatch_handle.unwrap_or(pointer_dispatch_handle),
+                            button,
+                            captured_click_target,
+                        )
+                        && let Some(event) = construct_activation_pointer_event(
+                            scope,
+                            runtime_ptr,
+                            click_target,
+                            "auxclick",
+                            coordinates,
+                            click_count.max(1),
+                            button,
+                            buttons,
+                            modifiers,
+                            Some(&pointer),
+                        )
+                    {
                         let dispatched =
                             dispatch_public_event(scope, runtime_ptr, click_target, event);
                         if dispatched.allows_default() {
@@ -2162,6 +2192,16 @@ impl ScriptVm {
         self.suppress_compat_mouse_events = suppress_compat_mouse_events;
         if !mouse_down_allows_drag.get() {
             self.pending_drag_gesture = None;
+            if matches!(
+                self.mouse_frame_captures
+                    .get(&pointer_id)
+                    .map(|capture| capture.owner),
+                Some(MouseFrameCaptureOwner::Main(_))
+            ) {
+                // A canceled pointerdown produces no compatibility mousedown
+                // that could establish mouse capture in the main frame.
+                self.mouse_frame_captures.remove(&pointer_id);
+            }
         }
         result.map(|mut outcome| {
             outcome.intercepted_drag = intercepted_drag.take();
@@ -2170,13 +2210,14 @@ impl ScriptVm {
     }
 
     fn finish_active_drag(&mut self, reason: DragFinishReason, modifiers: u8) -> Result<()> {
-        let coordinates = self
-            .active_drag_session
-            .as_ref()
-            .map(|session| session.coordinates)
-            .unwrap_or_default();
         self.pending_drag_gesture = None;
-        self._context_host.borrow_mut().clear_mouse_press();
+        let Some(session) = self.active_drag_session.as_ref() else {
+            // Ordinary non-primary mouse input also checks for an old drag.
+            // Its independent button presses must survive that no-op check.
+            return Ok(());
+        };
+        let coordinates = session.coordinates;
+        self._context_host.borrow_mut().clear_mouse_presses();
         let active = &mut self.active_drag_session as *mut Option<ActiveDragSession>;
         self.with_default_context_scope(|scope, runtime_ptr| {
             // SAFETY: with_default_context_scope runs synchronously under
@@ -2928,6 +2969,12 @@ impl ScriptVm {
         auto_repeat: bool,
         should_insert_text: bool,
     ) -> Result<RendererInputDispatchOutcome> {
+        if self.active_drag_session.is_some() {
+            if event_name == "keydown" && key == "Escape" {
+                self.finish_active_drag(DragFinishReason::Canceled, modifiers)?;
+            }
+            return self.finish_input_event_dispatch_turn(Ok(input_dispatch_outcome(true)));
+        }
         if event_name == "keypress" && self.suppress_next_keypress_after_canceled_raw_keydown {
             self.suppress_next_keypress_after_canceled_raw_keydown = false;
             return Ok(input_dispatch_outcome(false));
