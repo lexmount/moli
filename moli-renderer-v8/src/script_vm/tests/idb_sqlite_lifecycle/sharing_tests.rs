@@ -43,10 +43,16 @@ async fn idb_sqlite_metadata_is_shared_across_aliases_realms_and_readonly_commit
         globalThis.indexAliases = aliases.map(store => store.index('compound'));
         return [Object.getPrototypeOf(indexAliases[0].keyPath) === Array.prototype,
             Object.getPrototypeOf(indexAliases[64].keyPath) === realm.Array.prototype,
-            indexAliases[0].keyPath !== indexAliases[1].keyPath].join(',');
-    })()"#).unwrap(), "true,true,true");
+            indexAliases[0].keyPath === indexAliases[1].keyPath,
+            indexAliases[0].keyPath !== indexAliases[64].keyPath,
+            aliases.slice(0,64).every(store => store === aliases[0]),
+            aliases.slice(64).every(store => store === aliases[64]),
+            aliases[0] !== aliases[64],
+            indexAliases.slice(0,64).every(index => index === indexAliases[0]),
+            indexAliases.slice(64).every(index => index === indexAliases[64])].join(',');
+    })()"#).unwrap(), "true,true,true,true,true,true,true,true,true");
     let before = probe(&mut vm);
-    assert_eq!([before.store_handles, before.index_handles], [128, 128]);
+    assert_eq!([before.store_handles, before.index_handles], [2, 2]);
     assert_eq!(before.live_nodes(), [1, 1, 2]);
     backend.drain(&mut vm, &loader).await;
     // The same schema must survive a normal commit: refreshing surfaces must

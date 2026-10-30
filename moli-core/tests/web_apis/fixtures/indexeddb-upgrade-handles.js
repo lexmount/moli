@@ -23,7 +23,11 @@ async function upgradeHandleProbe(name = 'upgrade-handles-' + Math.random()) {
       db = opening.result; tx = opening.transaction;
       store = tx.objectStore('s');
       alias = peer.IDBTransaction.prototype.objectStore.call(tx, 's');
-      if (frame) check('borrowed method preserves wrapper creation realm', Object.getPrototypeOf(alias) === peer.IDBObjectStore.prototype);
+      if (frame) {
+        check('borrowed method preserves wrapper creation realm', Object.getPrototypeOf(alias) === peer.IDBObjectStore.prototype);
+        check('foreign wrapper stays distinct from local wrapper', alias !== store);
+        check('foreign wrapper identity is cached in its creation realm', peer.IDBTransaction.prototype.objectStore.call(tx, 's') === alias);
+      }
       for (const source of [store, alias]) equal('initial index names', Array.from(source.indexNames), ['old']);
       indexes = [store.index('old'), alias.index('old'),
         peer.IDBObjectStore.prototype.index.call(store, 'old'),
