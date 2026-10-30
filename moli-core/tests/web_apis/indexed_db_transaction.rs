@@ -1,4 +1,4 @@
-use super::event_dispatch::run_probe;
+use super::event_dispatch::{run_probe, run_probe_with_timeout};
 use super::*;
 
 async fn assert_multi_entry_keys(scenario: &str) -> Result<()> {
@@ -511,7 +511,11 @@ async fn indexed_db_cursors_observe_writes_without_changing_pending_values() -> 
         let source = format!(
             "{fixture}\ncursorLiveProbe('cursor-live-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: liveChecks}}));"
         );
-        let result = run_probe(&browser, &server, target, &source).await?;
+        // Keep the complete matrix in each realm, with a caller-owned budget
+        // for its hundreds of native transactions under full parallel load.
+        let result =
+            run_probe_with_timeout(&browser, &server, target, &source, Duration::from_secs(90))
+                .await?;
         assert_eq!(result["state"], "pass", "{target}: {result}");
         assert!(
             result["checks"].as_array().unwrap().len() > 500,
