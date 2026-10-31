@@ -758,40 +758,29 @@ impl BrowserContext {
         &self,
         serialized_origin: &str,
     ) -> Result<BrowserContextOriginStorageUsage, String> {
+        // CDP queries the origin's first-party StorageKey, as Chromium does.
+        let url = url::Url::parse(serialized_origin).map_err(|error| error.to_string())?;
+        let storage_key = moli_storage_key::MoliStorageKey::first_party_from_url(&url, None)
+            .serialized_storage_key();
         // Web Storage has its own per-area limit and is not a QuotaManager client.
-        let mut indexed_db_usage = moli_core::storage::indexed_db_origins_with_prefix_usage_bytes(
+        let mut indexed_db_usage = moli_core::storage::indexed_db_origin_usage_bytes(
             self.storage_partition.indexed_db_manager(),
-            &moli_storage_key::storage_key_prefix_for_origin(serialized_origin),
+            &storage_key,
         )?;
-        let (bucket_identities, default_keys, cache_storage_usage, storage_service) = {
+        let (bucket_identities, cache_storage_usage, storage_service) = {
             let store = self.storage_partition.storage_bucket_store().lock();
             (
-                store.bucket_identities_for_origin_areas(serialized_origin),
-                store.keys_for_origin_areas(serialized_origin),
-                store.cache_usage_for_origin_areas(serialized_origin),
+                store.bucket_identities(&storage_key),
+                store.cache_usage_for_origin(&storage_key),
                 store.storage_service(),
             )
         };
-        let mut default_keys = default_keys
-            .into_iter()
-            .map(|(key, _)| key)
-            .collect::<BTreeSet<_>>();
         // OPFS can use the implicit default bucket before any CacheStorage or
         // named-bucket metadata exists. Do not make its usage depend on that registry.
-        let url = url::Url::parse(serialized_origin).map_err(|error| error.to_string())?;
-        default_keys.insert(
-            moli_storage_key::MoliStorageKey::first_party_from_url(&url, None)
-                .serialized_storage_key(),
-        );
-        let mut file_system_usage = 0u64;
-        for key in default_keys {
-            let locator = moli_core::storage::StorageBucketLocator::default_bucket(key);
-            file_system_usage = file_system_usage.saturating_add(
-                storage_service
-                    .opfs_usage(&locator)
-                    .map_err(|error| format!("FailedToReadStorageBucketOpfsUsage: {error}"))?,
-            );
-        }
+        let locator = moli_core::storage::StorageBucketLocator::default_bucket(storage_key);
+        let mut file_system_usage = storage_service
+            .opfs_usage(&locator)
+            .map_err(|error| format!("FailedToReadStorageBucketOpfsUsage: {error}"))?;
         for identity in bucket_identities {
             let bucket_indexed_db_usage = moli_core::storage::indexed_db_origin_usage_bytes(
                 self.storage_partition.indexed_db_manager(),
