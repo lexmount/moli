@@ -450,7 +450,7 @@ fn browser_context_cookie_snapshot_and_delete_use_storage_partition_cookie_handl
 }
 
 #[test]
-fn browser_context_storage_usage_reads_storage_partition_owner() {
+fn browser_context_quota_usage_excludes_web_storage() {
     let browser_context = BrowserContext::new("BID-storage-usage".to_owned());
     let origin = Url::parse("https://usage.example/app")
         .unwrap()
@@ -468,10 +468,10 @@ fn browser_context_storage_usage_reads_storage_partition_owner() {
         .storage_usage_for_origin(&origin)
         .expect("storage usage should be readable");
 
-    assert_eq!(usage.local_storage_usage, "owner".len() as u64);
     assert_eq!(usage.indexed_db_usage, 0);
-    assert_eq!(usage.storage_buckets_usage, 0);
-    assert_eq!(usage.total_usage, usage.local_storage_usage);
+    assert_eq!(usage.cache_storage_usage, 0);
+    assert_eq!(usage.file_system_usage, 0);
+    assert_eq!(usage.total_usage, 0);
 }
 
 #[test]

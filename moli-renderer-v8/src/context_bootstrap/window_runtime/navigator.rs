@@ -483,9 +483,6 @@ enum StorageBucketCachedResponseMaterialization<'scope> {
 
 struct StorageManagerOwnerContext {
     storage_key: String,
-    area_key: Option<String>,
-    host_ptr: Option<*mut crate::native_bridge::JsContextHost>,
-    popup_id: Option<u64>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -706,18 +703,7 @@ pub(in crate::context_bootstrap) fn navigator_storage_estimate_callback<'s>(
     else {
         return;
     };
-    let usage = match storage_manager_usage_bytes(scope, &context) {
-        Ok(usage) => usage,
-        Err(error) => {
-            let error = crate::context_bootstrap::new_dom_exception_value(
-                scope,
-                &error.to_string(),
-                "UnknownError",
-            );
-            let _ = resolver.reject(scope, error);
-            return;
-        }
-    };
+    let usage = storage_manager_usage_bytes(scope, &context);
     let estimate = build_storage_estimate_object_with_quota(
         scope,
         usage.total,
@@ -830,9 +816,6 @@ fn storage_manager_owner_context<'s>(
                 let storage_context = host.storage_context_for_lightweight_popup(popup_id)?;
                 return Some(StorageManagerOwnerContext {
                     storage_key: storage_context.storage_key().serialized_storage_key(),
-                    area_key: Some(storage_context.web_storage_area_key().to_owned()),
-                    host_ptr: Some(host_ptr),
-                    popup_id: Some(popup_id),
                 });
             } else {
                 host.top_document_storage_context()
@@ -840,19 +823,11 @@ fn storage_manager_owner_context<'s>(
         };
         return Some(StorageManagerOwnerContext {
             storage_key: context.storage_key().serialized_storage_key(),
-            area_key: Some(context.web_storage_area_key().to_owned()),
-            host_ptr: Some(host_ptr),
-            popup_id: None,
         });
     }
     let storage_key = crate::worker::worker_storage_key(scope)?;
     let storage_key = storage_key.serialized_storage_key();
-    Some(StorageManagerOwnerContext {
-        storage_key,
-        area_key: None,
-        host_ptr: None,
-        popup_id: None,
-    })
+    Some(StorageManagerOwnerContext { storage_key })
 }
 
 fn storage_manager_child_handle<'s>(
@@ -875,23 +850,7 @@ fn storage_manager_popup_id<'s>(
 fn storage_manager_usage_bytes(
     scope: &mut v8::PinScope<'_, '_>,
     context: &StorageManagerOwnerContext,
-) -> Result<StorageUsageSnapshot, moli_web_storage::WebStorageMutationError> {
-    let web_storage_usage =
-        if let Some((host_ptr, area_key)) = context.host_ptr.zip(context.area_key.as_deref()) {
-            let host = unsafe { &*host_ptr };
-            let local = host.web_storage_store().try_usage_bytes(area_key)?;
-            let session = if let Some(popup_id) = context.popup_id {
-                host.lightweight_popup_session_storage_store(popup_id)
-                    .map(|store| store.try_usage_bytes(area_key))
-                    .transpose()?
-                    .unwrap_or(0)
-            } else {
-                host.session_storage_store().try_usage_bytes(area_key)?
-            };
-            local.saturating_add(session) as u64
-        } else {
-            0
-        };
+) -> StorageUsageSnapshot {
     let locator = moli_storage_service::StorageBucketLocator::default_bucket(&context.storage_key);
     let bucket_usage = storage_bucket_quota_owner_for_locator(scope, &locator)
         .and_then(|owner| owner.usage_snapshot().ok());
@@ -912,16 +871,15 @@ fn storage_manager_usage_bytes(
                 0,
             )
         });
-    Ok(StorageUsageSnapshot {
-        total: web_storage_usage
-            .saturating_add(indexed_db_usage)
+    StorageUsageSnapshot {
+        total: indexed_db_usage
             .saturating_add(cache_storage_usage)
             .saturating_add(opfs_usage),
         quota,
         indexed_db: indexed_db_usage,
         cache_storage: cache_storage_usage,
         opfs: opfs_usage,
-    })
+    }
 }
 
 pub(in crate::context_bootstrap) fn storage_bucket_manager_open_callback<'s>(

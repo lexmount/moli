@@ -422,16 +422,20 @@ fn get_usage_and_quota_command_output_plan(
         "overrideActive": override_active,
         "usageBreakdown": [
             {
-                "storageType": "local_storage",
-                "usage": usage.local_storage_usage as f64,
+                "storageType": "file_systems",
+                "usage": usage.file_system_usage as f64,
             },
             {
                 "storageType": "indexeddb",
                 "usage": usage.indexed_db_usage as f64,
             },
             {
-                "storageType": "storage_buckets",
-                "usage": usage.storage_buckets_usage as f64,
+                "storageType": "cache_storage",
+                "usage": usage.cache_storage_usage as f64,
+            },
+            {
+                "storageType": "service_workers",
+                "usage": 0,
             }
         ]
     }))

@@ -136,9 +136,9 @@ pub(crate) struct BrowserContextPageStorageHandles {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) struct BrowserContextOriginStorageUsage {
-    pub(crate) local_storage_usage: u64,
     pub(crate) indexed_db_usage: u64,
-    pub(crate) storage_buckets_usage: u64,
+    pub(crate) cache_storage_usage: u64,
+    pub(crate) file_system_usage: u64,
     pub(crate) total_usage: u64,
 }
 
@@ -365,10 +365,6 @@ impl std::fmt::Debug for BrowserContext {
             .field("has_loaded_page", &self.has_loaded_page())
             .finish_non_exhaustive()
     }
-}
-
-fn usize_to_u64_saturating(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 impl BrowserContext {
@@ -771,52 +767,59 @@ impl BrowserContext {
         &self,
         serialized_origin: &str,
     ) -> Result<BrowserContextOriginStorageUsage, String> {
-        let local_storage_usage = {
-            let store = self.storage_partition.web_storage_store();
-            usize_to_u64_saturating(
-                store
-                    .try_usage_bytes_for_origin_areas(serialized_origin)
-                    .map_err(|error| error.to_string())?,
-            )
-        };
-        let indexed_db_usage = moli_core::storage::indexed_db_origins_with_prefix_usage_bytes(
+        // Web Storage has its own per-area limit and is not a QuotaManager client.
+        let mut indexed_db_usage = moli_core::storage::indexed_db_origins_with_prefix_usage_bytes(
             self.storage_partition.indexed_db_manager(),
             &moli_storage_key::storage_key_prefix_for_origin(serialized_origin),
         )?;
-        let storage_buckets_usage = self.storage_bucket_usage_for_origin(serialized_origin)?;
-        Ok(BrowserContextOriginStorageUsage {
-            local_storage_usage,
-            indexed_db_usage,
-            storage_buckets_usage,
-            total_usage: local_storage_usage
-                .saturating_add(indexed_db_usage)
-                .saturating_add(storage_buckets_usage),
-        })
-    }
-
-    fn storage_bucket_usage_for_origin(&self, serialized_origin: &str) -> Result<u64, String> {
-        let (bucket_identities, cache_usage, storage_service) = {
+        let (bucket_identities, default_keys, cache_storage_usage, storage_service) = {
             let store = self.storage_partition.storage_bucket_store().lock();
             (
                 store.bucket_identities_for_origin_areas(serialized_origin),
+                store.keys_for_origin_areas(serialized_origin),
                 store.cache_usage_for_origin_areas(serialized_origin),
                 store.storage_service(),
             )
         };
-        let mut usage = cache_usage;
+        let mut default_keys = default_keys
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect::<BTreeSet<_>>();
+        // OPFS can use the implicit default bucket before any CacheStorage or
+        // named-bucket metadata exists. Do not make its usage depend on that registry.
+        let url = url::Url::parse(serialized_origin).map_err(|error| error.to_string())?;
+        default_keys.insert(
+            moli_storage_key::MoliStorageKey::first_party_from_url(&url, None)
+                .serialized_storage_key(),
+        );
+        let mut file_system_usage = 0u64;
+        for key in default_keys {
+            let locator = moli_core::storage::StorageBucketLocator::default_bucket(key);
+            file_system_usage = file_system_usage.saturating_add(
+                storage_service
+                    .opfs_usage(&locator)
+                    .map_err(|error| format!("FailedToReadStorageBucketOpfsUsage: {error}"))?,
+            );
+        }
         for identity in bucket_identities {
-            let indexed_db_usage = moli_core::storage::indexed_db_origin_usage_bytes(
+            let bucket_indexed_db_usage = moli_core::storage::indexed_db_origin_usage_bytes(
                 self.storage_partition.indexed_db_manager(),
                 &identity.indexed_db_storage_key(),
             )?;
             let opfs_usage = storage_service
                 .opfs_usage(&identity.locator())
                 .map_err(|error| format!("FailedToReadStorageBucketOpfsUsage: {error}"))?;
-            usage = usage
-                .saturating_add(indexed_db_usage)
-                .saturating_add(opfs_usage);
+            indexed_db_usage = indexed_db_usage.saturating_add(bucket_indexed_db_usage);
+            file_system_usage = file_system_usage.saturating_add(opfs_usage);
         }
-        Ok(usage)
+        Ok(BrowserContextOriginStorageUsage {
+            indexed_db_usage,
+            cache_storage_usage,
+            file_system_usage,
+            total_usage: indexed_db_usage
+                .saturating_add(cache_storage_usage)
+                .saturating_add(file_system_usage),
+        })
     }
 
     fn complete_storage_bucket_deletions(

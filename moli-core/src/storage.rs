@@ -6,7 +6,7 @@ pub use moli_renderer_v8::{
 };
 pub use moli_storage_service::{
     DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES, SharedStorageBucketStore, StorageBucketIdentity,
-    complete_storage_bucket_deletion, new_shared_json_storage_bucket_store,
+    StorageBucketLocator, complete_storage_bucket_deletion, new_shared_json_storage_bucket_store,
     new_shared_json_storage_bucket_store_with_cache_root,
     new_shared_json_storage_bucket_store_with_cache_root_and_indexed_db_manager,
     new_shared_storage_bucket_store, new_shared_storage_bucket_store_with_indexed_db_manager,

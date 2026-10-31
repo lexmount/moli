@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn storage_estimate_does_not_open_local_storage_or_depend_on_its_connection() {
+    for closed in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("unused/localstorage.sqlite");
+        let runtime = moli_sqlite::Runtime::new().unwrap();
+        let (local, owner) = moli_web_storage::new_lazy_sqlite_web_storage_store(
+            path.clone(),
+            moli_sqlite::OpenMode::Create,
+            runtime.handle(),
+        )
+        .unwrap();
+        let handles =
+            crate::RendererWebStorageHandles::new(local, crate::new_shared_web_storage_store());
+        let mut vm =
+            new_storage_page_task_executor_test_vm("https://quota-without-webstorage.test/");
+        vm.set_web_storage_handles(&handles);
+        if closed {
+            owner.close().unwrap();
+        }
+        vm.eval("globalThis.estimateResult = 'pending'; navigator.storage.estimate().then(value => {estimateResult = JSON.stringify([value.usage, typeof value.quota]);}, error => {estimateResult = error.name;});").unwrap();
+        assert_eq!(
+            vm.eval_after_selected_page_tasks("estimateResult").unwrap(),
+            "[0,\"number\"]"
+        );
+        assert!(!path.parent().unwrap().exists());
+        drop(vm);
+        owner.close().unwrap();
+    }
+}
+
+#[test]
 fn sqlite_storage_wrappers_share_utf16_data_without_sharing_session_storage() {
     let directory = tempfile::tempdir().unwrap();
     let runtime = moli_sqlite::Runtime::new().unwrap();
