@@ -469,9 +469,7 @@ fn crypto_subtle_buffer_source_arguments_use_webidl_conversion() {
           const bytes = new Uint8Array([97, 98, 99]);
           const view = new Uint8Array(bytes.buffer, 1, 1);
           const dataView = new DataView(new Uint8Array([100]).buffer);
-          const shared = typeof SharedArrayBuffer === "function"
-            ? new SharedArrayBuffer(16)
-            : null;
+          const shared = new WebAssembly.Memory({shared:true,initial:1,maximum:1}).buffer.slice(0,16);
           const rejection = (promise) => promise.then(
             () => "resolved",
             (error) => error.name
@@ -562,7 +560,7 @@ fn crypto_subtle_shared_array_buffer_operation_parameters_reject() {
           globalThis.__cryptoSharedArrayBufferOperationProbe = ["pending"];
           (async () => {
             const subtle = crypto.subtle;
-            const shared = new SharedArrayBuffer(32);
+            const shared = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer.slice(0,32);
             const sharedView = () => new Uint8Array(shared);
             const rejectionName = (promise) => promise.then(
               () => "resolved",

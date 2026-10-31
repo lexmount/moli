@@ -87,6 +87,7 @@
         });
       }
       for (const [ownerName, owner] of realms) {
+        const SharedBuffer = new owner.WebAssembly.Memory({shared:true,initial:1,maximum:1}).buffer.constructor;
         const p = prefix + '/' + ownerName;
         const buffer = new owner.ArrayBuffer(3);
         new owner.Uint8Array(buffer).set([3,4,5]);
@@ -117,7 +118,7 @@
           ['proxy', proxy], ['revoked', revoked.proxy], ['number', 1], ['string', 'x'], ['symbol', Symbol()],
           ['resizable', new owner.ArrayBuffer(2, {maxByteLength: 4})],
         ];
-        if (typeof owner.SharedArrayBuffer === 'function') invalid.push(['shared', new owner.SharedArrayBuffer(2)]);
+        invalid.push(['shared', new SharedBuffer(2)]);
         for (const [kind, payload] of invalid) {
           check(p + ' reject ' + kind + ' before string conversion', () => {
             let conversions = 0;

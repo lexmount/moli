@@ -559,7 +559,8 @@ fn window_agent_rejects_blocking_atomics_wait() {
             r#"
             (() => {
               try {
-                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+                const shared = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer;
+                Atomics.wait(new Int32Array(shared), 0, 0, 1);
                 return "unexpected-success";
               } catch (error) {
                 return `${error.name}:${error.message}`;

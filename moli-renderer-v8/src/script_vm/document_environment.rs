@@ -161,7 +161,9 @@ impl ScriptVm {
                 scope,
                 context.global(scope),
                 &origin,
-            )
+            )?;
+            scope.install_conditional_features(context);
+            Ok(())
         })
         .map(|_| ())
     }

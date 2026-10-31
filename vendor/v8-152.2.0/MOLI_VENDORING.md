@@ -39,6 +39,8 @@ Moli extensions:
   `std::span` ABI boundary from the local C++ extension.
 - `src/cpu_profiler_ext.cc` and `src/cpu_profiler.rs` expose the sampling
   profiler used by Moli diagnostics.
+- `src/shared_array_buffer_ext.cc` exposes V8's native per-Context
+  SharedArrayBuffer constructor policy and conditional feature installation.
 
 Version-specific corrections:
 - `src/function.rs` declares `v8::Function::GetName()` as returning `Value`,

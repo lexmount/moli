@@ -91,6 +91,7 @@ fn media_key_status_map_preserves_callback_realms_order_and_conversion_boundarie
     assert_eq!(vm.eval(r#"(() => {
       const assert=(ok,name)=>{if(!ok)throw Error(name)};
       const other=document.querySelector('iframe').contentWindow;
+      const SharedBuffer=new WebAssembly.Memory({shared:true,initial:1,maximum:1}).buffer.constructor;
       const marker={},thisArg={};
       const expect=(C,action,name)=>{let error;try{action()}catch(caught){error=caught}assert(error instanceof C,name)};
       for(const w of [window,other]) {
@@ -109,7 +110,7 @@ fn media_key_status_map_preserves_callback_realms_order_and_conversion_boundarie
         for(const bad of [null,{},1])expect(w.TypeError,()=>P.forEach.call(statuses,bad),'callback callable check');
         for(const name of ['get','has']) {
           expect(w.TypeError,()=>P[name].call(statuses),'required key argument');
-          for(const value of [null,undefined,{},[],1,'1',Symbol(),new Proxy(new Uint8Array([1]),{}),new SharedArrayBuffer(0),new Uint8Array(new SharedArrayBuffer(0)),new SharedArrayBuffer(1),new Uint8Array(new SharedArrayBuffer(1)),new ArrayBuffer(1,{maxByteLength:2}),new Uint8Array(new ArrayBuffer(1,{maxByteLength:2}))])expect(w.TypeError,()=>P[name].call(statuses,value),'fixed nonshared BufferSource');
+          for(const value of [null,undefined,{},[],1,'1',Symbol(),new Proxy(new Uint8Array([1]),{}),new SharedBuffer(0),new Uint8Array(new SharedBuffer(0)),new SharedBuffer(1),new Uint8Array(new SharedBuffer(1)),new ArrayBuffer(1,{maxByteLength:2}),new Uint8Array(new ArrayBuffer(1,{maxByteLength:2}))])expect(w.TypeError,()=>P[name].call(statuses,value),'fixed nonshared BufferSource');
           const detached=new ArrayBuffer(1),detachedView=new Uint8Array(detached);
           structuredClone(detached,{transfer:[detached]});
           assert(P[name].call(statuses,detached)===(name==='has'?false:undefined)&&P[name].call(statuses,detachedView)===(name==='has'?false:undefined),'detached fixed buffers are empty lookups');
