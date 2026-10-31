@@ -379,7 +379,6 @@ fn imports_a_netscape_cookie_jar() -> Result<()> {
     runtime.shutdown()?;
     assert_eq!(summary.cookies, 1);
     assert_eq!(summary.cookies_rejected, 0);
-    assert_eq!(summary.cookies_stored, 1);
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "session");
     for name in ["cookies.json", "localstorage.json"] {
@@ -406,7 +405,7 @@ fn imported_cookies(destination: &Path) -> Result<Vec<moli_cookie_jar::StoredCoo
 }
 
 #[test]
-fn cookie_import_reports_acceptance_replacements_and_rejection_reasons() -> Result<()> {
+fn cookie_import_counts_accepted_and_rejected_writes_including_replacements() -> Result<()> {
     let root = tempfile::tempdir()?;
     let destination = root.path().join("profile");
     let jars = [root.path().join("cookies.txt")];
@@ -434,26 +433,9 @@ fn cookie_import_reports_acceptance_replacements_and_rejection_reasons() -> Resu
     let summary = import_session_state(&request)?;
     assert_eq!(summary.cookies, 2);
     assert_eq!(summary.cookies_rejected, 3);
-    assert_eq!(summary.cookies_stored, 2);
-    assert_eq!(
-        summary.cookie_rejections,
-        vec![
-            CookieImportRejection {
-                reason: StoredCookieSetRejectionReason::PrefixViolation,
-                count: 2
-            },
-            CookieImportRejection {
-                reason: StoredCookieSetRejectionReason::NameValueTooLarge,
-                count: 1
-            },
-        ]
-    );
-    assert_eq!(
-        summary.to_string(),
-        "cookies accepted=2, rejected=3, stored in destination=2, cookie rejections=[PrefixViolation=2, NameValueTooLarge=1]"
-    );
+    assert_eq!(summary.to_string(), "cookies accepted=2, rejected=3");
     let cookies = imported_cookies(&destination)?;
-    assert_eq!(cookies.len(), summary.cookies_stored);
+    assert_eq!(cookies.len(), 2);
     assert!(cookies.iter().any(|c| c.name == "old" && c.value == "keep"));
     assert!(
         cookies
@@ -482,11 +464,7 @@ fn rejected_cookie_imports_do_not_report_successful_writes() -> Result<()> {
     })?;
     assert_eq!(summary.cookies, 0);
     assert_eq!(summary.cookies_rejected, 1);
-    assert_eq!(summary.cookies_stored, 0);
-    assert_eq!(
-        summary.to_string(),
-        "cookies accepted=0, rejected=1, stored in destination=0, cookie rejections=[PrefixViolation=1]"
-    );
+    assert_eq!(summary.to_string(), "cookies accepted=0, rejected=1");
     assert!(imported_cookies(&destination)?.is_empty());
     Ok(())
 }
@@ -512,13 +490,9 @@ fn quota_eviction_is_distinct_from_accepting_cookie_imports() -> Result<()> {
     })?;
     assert_eq!(summary.cookies, 181);
     assert_eq!(summary.cookies_rejected, 0);
-    assert_eq!(summary.cookies_stored, 180);
     let cookies = imported_cookies(&destination)?;
     assert_eq!(cookies.len(), 180);
     assert!(!cookies.iter().any(|c| c.name == "k0"));
-    assert_eq!(
-        summary.to_string(),
-        "cookies accepted=181, rejected=0, stored in destination=180"
-    );
+    assert_eq!(summary.to_string(), "cookies accepted=181, rejected=0");
     Ok(())
 }

@@ -13,7 +13,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use moli_browser_profile::BrowserProfile;
-use moli_cookie_jar::{StoredCookieSetRejectionReason, StoredCookieSetReport};
+use moli_cookie_jar::StoredCookieSetReport;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImportIncludes(u8);
@@ -84,23 +84,11 @@ pub struct ImportRequest<'a> {
     pub cookie_jars: &'a [PathBuf],
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CookieImportRejection {
-    pub reason: StoredCookieSetRejectionReason,
-    pub count: usize,
-}
-
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ImportSummary {
     /// Accepted write attempts, including replacements of the same identity.
     pub cookies: usize,
     pub cookies_rejected: usize,
-    /// Unexpired cookies in the destination after import, including preexisting
-    /// cookies. Zero when no cookie import was attempted. Quotas and replacement
-    /// can make this smaller than the number of accepted writes.
-    pub cookies_stored: usize,
-    /// Counts for all reported reasons; a rejected write can have several reasons.
-    pub cookie_rejections: Vec<CookieImportRejection>,
     pub storage: usize,
 }
 
@@ -110,18 +98,6 @@ impl ImportSummary {
             self.cookies += 1;
         } else {
             self.cookies_rejected += 1;
-            for reason in report.rejection_reasons {
-                if let Some(rejection) = self
-                    .cookie_rejections
-                    .iter_mut()
-                    .find(|r| r.reason == reason)
-                {
-                    rejection.count += 1;
-                } else {
-                    self.cookie_rejections
-                        .push(CookieImportRejection { reason, count: 1 });
-                }
-            }
         }
     }
 }
@@ -134,18 +110,9 @@ impl fmt::Display for ImportSummary {
         }
         if self.cookies > 0 || self.cookies_rejected > 0 {
             parts.push(format!(
-                "cookies accepted={}, rejected={}, stored in destination={}",
-                self.cookies, self.cookies_rejected, self.cookies_stored
+                "cookies accepted={}, rejected={}",
+                self.cookies, self.cookies_rejected
             ));
-        }
-        if !self.cookie_rejections.is_empty() {
-            let reasons = self
-                .cookie_rejections
-                .iter()
-                .map(|r| format!("{:?}={}", r.reason, r.count))
-                .collect::<Vec<_>>()
-                .join(", ");
-            parts.push(format!("cookie rejections=[{reasons}]"));
         }
         formatter.write_str(&parts.join(", "))
     }
@@ -228,7 +195,6 @@ pub fn import_session_state(request: &ImportRequest<'_>) -> Result<ImportSummary
                     moli_cookie_jar::CookieSource::Cdp,
                 ));
             }
-            summary.cookies_stored = store.cookies().len();
         }
         owner.close()?;
     }
