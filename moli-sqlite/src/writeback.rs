@@ -33,9 +33,8 @@ impl From<rusqlite::Error> for WritebackError {
 type Result<T> = std::result::Result<T, WritebackError>;
 
 pub trait WriteBatch: Default + Send + 'static {
-    /// localStorage deltas include absolute area metadata, so a failed batch
-    /// must remain paired with the cache and reject new edits until flush.
-    /// Cookie deltas can be discarded without changing the canonical jar.
+    /// Retain accepted localStorage edits for explicit flush after failure,
+    /// rejecting new edits until recovery. Cookie batches can be discarded.
     const RETAIN_FAILED_BATCH: bool = false;
     fn is_empty(&self) -> bool;
     /// Compose chronological deltas: self happened before newer.
@@ -50,8 +49,6 @@ pub struct WritebackPolicy {
 }
 struct Pending<B> {
     batch: B,
-    accepted: u64,
-    settled: u64,
     operations: usize,
     first_dirty: Option<tokio::time::Instant>,
     failure: Option<WritebackError>,
@@ -121,10 +118,7 @@ where
 }
 enum Message {
     Query(Box<dyn Query>),
-    Flush {
-        through: u64,
-        reply: mpsc::Sender<Result<()>>,
-    },
+    Flush { reply: mpsc::Sender<Result<()>> },
     Close,
 }
 pub struct WritebackClient<B> {
@@ -181,8 +175,6 @@ impl<B: WriteBatch> WritebackOwner<B> {
         let shared = Arc::new(Shared {
             pending: Mutex::new(Pending {
                 batch: B::default(),
-                accepted: 0,
-                settled: 0,
                 operations: 0,
                 first_dirty: None,
                 failure: None,
@@ -281,14 +273,9 @@ impl<B: WriteBatch> WritebackClient<B> {
         {
             return Err(error.clone().into());
         }
-        let next = pending
-            .accepted
-            .checked_add(1)
-            .ok_or_else(|| E::from(WritebackError::new("database sequence exhausted")))?;
         let (result, batch) = mutation()?;
         if !batch.is_empty() {
             pending.batch.merge(batch);
-            pending.accepted = next;
             pending.operations = pending.operations.saturating_add(1);
             pending
                 .first_dirty
@@ -330,10 +317,7 @@ impl<B: WriteBatch> WritebackClient<B> {
             return;
         }
         let (reply, _) = mpsc::channel();
-        let _ = self.sender.send(Message::Flush {
-            through: pending.accepted,
-            reply,
-        });
+        let _ = self.sender.send(Message::Flush { reply });
     }
     pub fn flush(&self) -> Result<()> {
         if self.runtime.is_current() {
@@ -348,10 +332,7 @@ impl<B: WriteBatch> WritebackClient<B> {
                 return Err(WritebackError::new("database is closed"));
             }
             self.sender
-                .send(Message::Flush {
-                    through: pending.accepted,
-                    reply: tx,
-                })
+                .send(Message::Flush { reply: tx })
                 .map_err(WritebackError::new)?;
         }
         rx.recv()
@@ -382,9 +363,9 @@ async fn commit<B: WriteBatch>(
         let batch = std::mem::take(&mut pending.batch);
         let operations = std::mem::take(&mut pending.operations);
         let since = pending.first_dirty.take();
-        (batch, pending.accepted, operations, since)
+        (batch, operations, since)
     };
-    let (batch, through, operations, since) = taken;
+    let (batch, operations, since) = taken;
     let (connection, batch, result) = runtime
         .blocking(move || {
             let mut connection = connection;
@@ -398,7 +379,6 @@ async fn commit<B: WriteBatch>(
     let mut pending = shared.pending.lock();
     match result {
         Ok(()) => {
-            pending.settled = through;
             pending.failure = None;
         }
         Err(error) => {
@@ -408,10 +388,6 @@ async fn commit<B: WriteBatch>(
                 pending.batch = batch;
                 pending.operations = pending.operations.saturating_add(operations);
                 pending.first_dirty = since.or(pending.first_dirty);
-            } else {
-                // This batch is finished even though persistence failed. Only
-                // newly accepted changes can schedule another normal commit.
-                pending.settled = through;
             }
             pending.failure = Some(error);
         }
@@ -447,16 +423,9 @@ async fn run<B: WriteBatch>(
                         shared.pending.lock().failure = Some(error);
                     }
                 }
-                Some(Message::Flush {through, reply}) => {
-                    if shared.pending.lock().settled < through {
-                        connection = commit(connection, &shared, &runtime).await?;
-                    }
-                    let result = {
-                        let pending=shared.pending.lock();
-                        if let Some(error) = &pending.failure {Err(error.clone())}
-                        else if pending.settled>=through {Ok(())}
-                        else {Err(WritebackError::new("flush did not cover its accepted sequence"))}
-                    };
+                Some(Message::Flush {reply}) => {
+                    connection = commit(connection, &shared, &runtime).await?;
+                    let result = shared.pending.lock().failure.clone().map_or(Ok(()), Err);
                     let _ = reply.send(result);
                 }
                 Some(Message::Close) | None => {

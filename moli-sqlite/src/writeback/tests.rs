@@ -283,6 +283,41 @@ fn discarded_failure_does_not_retry_or_block_new_changes() {
         .unwrap();
     assert!(retained.query(|_| Ok(())).is_err());
 }
+
+#[test]
+fn queued_flush_commits_pending_edits_before_the_following_query() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let owner = owner(&runtime, root.path().join("flush-order.sqlite"));
+    let client = owner.client();
+    let control = Arc::new(Control::default());
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let blocked_client = client.clone();
+    let blocked = thread::spawn(move || {
+        blocked_client.query(move |_| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(())
+        })
+    });
+    started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    client.record(Batch::put(1, 10, &control)).unwrap();
+    let (reply, receipt) = mpsc::channel();
+    client.sender.send(Message::Flush { reply }).unwrap();
+    client.record(Batch::put(2, 20, &control)).unwrap();
+    release_tx.send(()).unwrap();
+    blocked.join().unwrap().unwrap();
+    receipt
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    assert_eq!(value(&client, 1), 10);
+    assert_eq!(value(&client, 2), 20);
+    assert_eq!(control.commits.load(Ordering::Acquire), 1);
+    owner.close().unwrap();
+    assert_eq!(control.commits.load(Ordering::Acquire), 1);
+}
 fn virtual_client(
     runtime: &Runtime,
     policy: WritebackPolicy,
@@ -292,8 +327,6 @@ fn virtual_client(
     let shared = Arc::new(Shared {
         pending: Mutex::new(Pending {
             batch: Batch::default(),
-            accepted: 0,
-            settled: 0,
             operations: 0,
             first_dirty: None,
             failure: None,
