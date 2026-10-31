@@ -67,6 +67,14 @@ impl TopLevelNavigationOwnerAction {
         self.owner_scope.session_id()
     }
 
+    pub(crate) fn owner_scope(&self) -> &CommandOwnerScope {
+        &self.owner_scope
+    }
+
+    pub(crate) fn page_owner(&self) -> &TargetPageResidenceIdentity {
+        &self.page_owner
+    }
+
     pub(crate) fn target_id(&self) -> Option<&str> {
         self.page_owner.target_id()
     }
