@@ -66,6 +66,74 @@ fn events(vm: &mut ScriptVm) -> serde_json::Value {
 }
 
 #[test]
+fn native_drag_samples_payload_only_for_accepted_interception_before_pointercancel() {
+    fn read_count(
+        scope: &mut v8::PinScope<'_, '_>,
+        _: v8::FunctionCallbackArguments<'_>,
+        mut rv: v8::ReturnValue<'_, v8::Value>,
+    ) {
+        let count = crate::context_bootstrap::drag_data_read_count_for_test(scope);
+        rv.set(v8::Integer::new(scope, count as i32).into());
+    }
+    for intercept in [false, true] {
+        for canceled in [false, true] {
+            let mut vm = source_drag_vm(false);
+            vm.with_default_context_scope(|scope, _| {
+                let count = v8::Function::new(scope, read_count).unwrap();
+                scope
+                    .get_current_context()
+                    .global(scope)
+                    .set(
+                        scope,
+                        crate::util::v8str(scope, "__dragReadCount").into(),
+                        count.into(),
+                    )
+                    .unwrap();
+                Ok(())
+            })
+            .unwrap();
+            vm.eval(&format!(r#"(() => {{
+                window.__sampleAtCancel = -1;
+                const source = document.getElementById('source');
+                source.addEventListener('dragstart', e => {{
+                    e.dataTransfer.setData('text/plain', 'P'.repeat(1024*1024));
+                    if ({canceled}) e.preventDefault();
+                }});
+                document.addEventListener('pointercancel', () => {{ window.__sampleAtCancel = __dragReadCount(); }}, true);
+            }})()"#)).unwrap();
+            mouse(&mut vm, "mousedown", 20.0, intercept);
+            let outcome = mouse(&mut vm, "mousemove", 120.0, intercept);
+            let expected = usize::from(intercept && !canceled);
+            assert_eq!(
+                vm.eval("String(__dragReadCount())").unwrap(),
+                expected.to_string()
+            );
+            assert_eq!(
+                vm.eval("String(__sampleAtCancel)").unwrap(),
+                if canceled {
+                    "-1"
+                } else if intercept {
+                    "1"
+                } else {
+                    "0"
+                }
+            );
+            if let Some(payload) = outcome.intercepted_drag {
+                let plain = payload
+                    .items
+                    .iter()
+                    .find(|item| item.mime_type == "text/plain")
+                    .unwrap();
+                assert_eq!(plain.data, "P".repeat(1024 * 1024));
+                assert_eq!(payload.drag_operations_mask, 17);
+            } else {
+                assert_eq!(expected, 0);
+            }
+        }
+    }
+}
+
+#[test]
 fn source_drag_updates_preserve_cadence_original_metadata_and_event_view_lifetimes() {
     for cancel_drag in [false, true] {
         let mut vm = source_drag_vm(cancel_drag);

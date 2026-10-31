@@ -483,12 +483,33 @@ pub(crate) fn native_set_drag_drop_effect<'s>(
     }
 }
 
+#[cfg(test)]
+struct DragDataReadCount(std::cell::Cell<usize>);
+
+#[cfg(test)]
+pub(crate) fn drag_data_read_count_for_test(scope: &mut v8::PinScope<'_, '_>) -> usize {
+    scope
+        .get_current_context()
+        .get_slot::<DragDataReadCount>()
+        .map_or(0, |count| count.0.get())
+}
+
 /// Reads the string items and `effectAllowed` that `dragstart` listeners left
 /// in the shared store, in the shape CDP reports as `Input.DragData`.
 pub(crate) fn read_string_drag_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: &NativeDragDataStore,
 ) -> (Vec<RendererDragDataItem>, i32) {
+    #[cfg(test)]
+    {
+        let context = scope.get_current_context();
+        let count = context.get_slot::<DragDataReadCount>().unwrap_or_else(|| {
+            let count = std::rc::Rc::new(DragDataReadCount(std::cell::Cell::new(0)));
+            context.set_slot(count.clone());
+            count
+        });
+        count.0.set(count.0.get() + 1);
+    }
     let backing = store.local(scope);
     let mask = drag_operations_mask_from_effect_allowed(
         &private_string_property(scope, backing, DATA_TRANSFER_EFFECT_ALLOWED_SLOT)
