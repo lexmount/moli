@@ -24,9 +24,9 @@ async function upgradeHandleProbe(name = 'upgrade-handles-' + Math.random()) {
       store = tx.objectStore('s');
       alias = peer.IDBTransaction.prototype.objectStore.call(tx, 's');
       if (frame) {
-        check('borrowed method preserves wrapper creation realm', Object.getPrototypeOf(alias) === peer.IDBObjectStore.prototype);
-        check('foreign wrapper stays distinct from local wrapper', alias !== store);
-        check('foreign wrapper identity is cached in its creation realm', peer.IDBTransaction.prototype.objectStore.call(tx, 's') === alias);
+        check('borrowed method keeps transaction realm', Object.getPrototypeOf(alias) === IDBObjectStore.prototype);
+        check('borrowed lookup returns the original handle', alias === store);
+        check('borrowed lookup keeps handle identity', peer.IDBTransaction.prototype.objectStore.call(tx, 's') === alias);
       }
       for (const source of [store, alias]) equal('initial index names', Array.from(source.indexNames), ['old']);
       indexes = [store.index('old'), alias.index('old'),
@@ -42,7 +42,7 @@ async function upgradeHandleProbe(name = 'upgrade-handles-' + Math.random()) {
         check('new index is immediately found', source.index('transient').name === 'transient');
       }
       check('local metadata keeps receiver realm', Object.getPrototypeOf(store.indexNames) === DOMStringList.prototype);
-      check('foreign metadata keeps receiver realm', Object.getPrototypeOf(alias.indexNames) === peer.DOMStringList.prototype);
+      check('borrowed metadata keeps receiver realm', Object.getPrototypeOf(alias.indexNames) === DOMStringList.prototype);
       store.deleteIndex('old');
       for (const index of indexes) equal('deleteIndex invalidates all index realms', errorName(() => index.get(1)), 'InvalidStateError');
       for (const source of [store, alias]) equal('deleted index lookup', errorName(() => source.index('old')), 'NotFoundError');

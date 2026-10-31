@@ -53,6 +53,8 @@ pub(in crate::context_bootstrap::indexed_db) fn create_failed_object_store_objec
     tx: v8::Local<'s, v8::Object>,
     info: &ObjectStoreInfo,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let context = tx.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let key_path = match &info.key_path {
         Some(path) => key_path_to_js_value(scope, path)?,
         None => v8::null(scope).into(),

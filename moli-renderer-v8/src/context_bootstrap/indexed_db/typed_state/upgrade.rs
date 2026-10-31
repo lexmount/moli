@@ -354,9 +354,9 @@ pub(in crate::context_bootstrap::indexed_db) fn cached_indexed_db_object_store<'
     transaction: v8::Local<'s, v8::Object>,
     name: &moli_indexeddb::IndexedDbName,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    // A borrowed method creates a distinct wrapper in its own realm. Both
-    // registry entries and V8 wrappers remain weak and collectible.
-    let table = ensure_indexed_db_runtime_state_table(scope);
+    // A transaction has one handle per live store, including borrowed method
+    // calls. The owner table and its wrappers remain weak and collectible.
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     let table = table.borrow();
     table.object_stores.iter().find_map(|(id, state)| {
         let state = state.upgrade()?;
@@ -376,7 +376,7 @@ pub(in crate::context_bootstrap::indexed_db) fn cached_indexed_db_index<'s>(
     store: v8::Local<'s, v8::Object>,
     name: &moli_indexeddb::IndexedDbName,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let table = ensure_indexed_db_runtime_state_table(scope);
+    let table = indexed_db_runtime_state_table_for_object(scope, store);
     let table = table.borrow();
     table.indexes.iter().find_map(|(id, state)| {
         let state = state.upgrade()?;

@@ -124,6 +124,7 @@ async function indexRenameProbe(name) {
             ['duplicate', () => d.set.call(original, 'b'), foreign.DOMException],
             ['lookup Symbol', () => foreign.IDBObjectStore.prototype.index.call(store, Symbol()), foreign.TypeError],
           ]) check('callee error realm ' + label, caught(fn) instanceof Constructor);
+          check('foreign store lookup keeps local identity', foreign.IDBTransaction.prototype.objectStore.call(tx, 's') === store);
           check('foreign lookup keeps local identity', foreign.IDBObjectStore.prototype.index.call(store, 'renamed') === original);
         }
       }
@@ -132,7 +133,15 @@ async function indexRenameProbe(name) {
     equal('name retained after initial commit', get.call(original), 'renamed');
     throws('finished upgrade rejects even same name', 'TransactionInactiveError', () => set.call(original, get.call(original)));
     for (const mode of ['readonly', 'readwrite']) {
-      const tx = db.transaction('s', mode), complete = done(tx), index = tx.objectStore('s').index('renamed');
+      const tx = db.transaction('s', mode), complete = done(tx);
+      // First lookup may also use a borrowed method; the owner realm and
+      // handle identity are independent of which method was called first.
+      const store = foreign ? foreign.IDBTransaction.prototype.objectStore.call(tx, 's') : tx.objectStore('s');
+      const index = foreign ? foreign.IDBObjectStore.prototype.index.call(store, 'renamed') : store.index('renamed');
+      check(mode + ' first store lookup uses transaction realm', Object.getPrototypeOf(store) === IDBObjectStore.prototype);
+      check(mode + ' first index lookup uses store realm', Object.getPrototypeOf(index) === IDBIndex.prototype);
+      check(mode + ' local store lookup keeps borrowed identity', tx.objectStore('s') === store);
+      check(mode + ' local index lookup keeps borrowed identity', store.index('renamed') === index);
       throws(mode + ' mode check precedes same-name no-op', 'InvalidStateError', () => { index.name = index.name; });
       const sentinel = {};
       check(mode + ' conversion precedes mode check', caught(() => { index.name = {toString() { throw sentinel; }}; }) === sentinel);
