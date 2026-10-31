@@ -2404,3 +2404,5 @@ mod xml_serializer_receivers;
 mod hyperlink_audit_owner;
 
 mod fetch_referrer;
+
+mod idb_transaction_scope;
