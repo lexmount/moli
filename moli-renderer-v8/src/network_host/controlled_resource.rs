@@ -96,6 +96,12 @@ impl LoadedResponse {
 }
 
 impl ControlledResourceLoad {
+    fn effective_credentials_mode(&self) -> moli_fetch::RequestCredentialsMode {
+        match self.response_policy {
+            ResourceResponsePolicy::Xhr => self.request.credentials_mode,
+            ResourceResponsePolicy::Fetch(policy) => policy.network_credentials_mode(self.request.request_mode, self.request.credentials_mode),
+        }
+    }
     pub(crate) fn with_redirect_owner(mut self, owner: Option<super::RedirectOwner>) -> Self {
         self.redirect_owner = owner;
         self
@@ -547,7 +553,10 @@ impl ControlledResourceLoad {
                     if self.load.network_offline() {
                         return Err("Network emulation offline".into());
                     }
-                    let mut request = self.request.clone();
+                    let mut request = self
+                        .request
+                        .clone()
+                        .with_credentials_mode(self.effective_credentials_mode());
                     if self.interception.observes_request_headers()
                         && let Some(handle) = self.info.network_request_handle
                     {
@@ -555,7 +564,7 @@ impl ControlledResourceLoad {
                         let snapshot = (!output.is_worker())
                             .then(|| self.info.request_snapshot(
                                 self.request_initiator_type,
-                                self.load.disposition() == crate::network::loads::ResourceLoadDisposition::Keepalive,
+                                self.load.disposition().is_keepalive(),
                             ))
                             .flatten()
                             .map(Box::new);

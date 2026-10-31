@@ -260,7 +260,7 @@ impl super::ControlledResourceLoad {
             fetch_id,
             self.interception.clone(),
             self.request.request_mode,
-            self.request.credentials_mode,
+            self.effective_credentials_mode(),
             policy,
             request_origin.clone(),
             Arc::clone(&request_url),
@@ -295,7 +295,7 @@ impl super::ControlledResourceLoad {
                 &delivered.response.head(),
                 delivered.response.body_bytes(),
                 self.request.request_mode,
-                self.request.credentials_mode,
+                self.effective_credentials_mode(),
                 policy,
                 self.load.request_client().web_security_disabled(),
             ) {
