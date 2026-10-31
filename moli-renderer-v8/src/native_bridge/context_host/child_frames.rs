@@ -455,6 +455,7 @@ impl ChildBrowsingContextEntry {
             policy_container.document_isolation_policy;
         self.document_policy_container.cross_origin_isolated =
             policy_container.cross_origin_isolated;
+        self.document_policy_container.coop_coep_isolation = policy_container.coop_coep_isolation;
         self.document_policy_container
             .document_content_security_policies =
             policy_container.document_content_security_policies.clone();
@@ -510,6 +511,8 @@ impl ChildBrowsingContextEntry {
             snapshot.policy_container.document_isolation_policy;
         self.document_policy_container.cross_origin_isolated =
             snapshot.policy_container.cross_origin_isolated;
+        self.document_policy_container.coop_coep_isolation =
+            snapshot.policy_container.coop_coep_isolation;
         self.document_policy_container
             .inherited_meta_content_security_policies = snapshot
             .policy_container

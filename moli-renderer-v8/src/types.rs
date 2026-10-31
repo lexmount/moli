@@ -905,7 +905,8 @@ impl SubresourcePolicyContext {
         Self {
             cross_origin_embedder_policy: policy.cross_origin_embedder_policy,
             document_isolation_policy: policy.document_isolation_policy,
-            cross_origin_isolated: policy.cross_origin_isolated,
+            cross_origin_isolated: policy.cross_origin_isolated
+                && policy.allows_cross_origin_isolation(),
         }
     }
 }

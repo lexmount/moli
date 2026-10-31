@@ -46,7 +46,7 @@ pub(crate) fn effective_subresource_policy_context(
     host: &JsContextHost,
     owner: crate::native_bridge::OwnerDispatchScope,
 ) -> crate::types::SubresourcePolicyContext {
-    match owner {
+    let policy = match owner {
         crate::native_bridge::OwnerDispatchScope::Top => crate::types::SubresourcePolicyContext {
             cross_origin_embedder_policy: host.cross_origin_embedder_policy(),
             document_isolation_policy: host.document_isolation_policy(),
@@ -66,6 +66,10 @@ pub(crate) fn effective_subresource_policy_context(
                 cross_origin_isolated: host.lightweight_popup_cross_origin_isolated(popup_id),
             }
         }
+    };
+    crate::types::SubresourcePolicyContext {
+        cross_origin_isolated: host.window_cross_origin_isolated(owner),
+        ..policy
     }
 }
 

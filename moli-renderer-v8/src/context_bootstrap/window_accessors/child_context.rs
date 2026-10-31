@@ -96,9 +96,8 @@ pub(in crate::context_bootstrap) fn window_cross_origin_isolated_getter<'s>(
         return;
     };
     let host = unsafe { &*host_ptr };
-    let isolated = window_child_context_handle(scope, receiver)
-        .and_then(|handle| host.child_browsing_context_policy_container_snapshot(handle))
-        .map(|policy| policy.cross_origin_isolated)
-        .unwrap_or_else(|| host.cross_origin_isolated());
-    rv.set_bool(isolated);
+    rv.set_bool(
+        window_current_dispatch_scope(scope, receiver, host)
+            .is_some_and(|owner| host.window_cross_origin_isolated(owner)),
+    );
 }

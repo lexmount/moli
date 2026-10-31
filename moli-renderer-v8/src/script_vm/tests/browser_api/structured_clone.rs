@@ -850,6 +850,98 @@ fn encoding_stream_wrappers_do_not_inherit_transform_transferability() {
 }
 
 #[test]
+fn shared_memory_isolation_obeys_document_permissions_policy() {
+    let url = "https://shared-memory-permission.test/";
+    for (dip, expected) in [
+        (false, "false|DataCloneError|DataCloneError"),
+        (true, "true|accepted|accepted"),
+    ] {
+        let mut vm = new_storage_test_vm(url);
+        let mut headers = vec![(
+            "Permissions-Policy".into(),
+            b"cross-origin-isolated=()".to_vec(),
+        )];
+        if dip {
+            headers.push((
+                "Document-Isolation-Policy".into(),
+                b"isolate-and-require-corp".to_vec(),
+            ));
+        } else {
+            headers.extend([
+                ("Cross-Origin-Opener-Policy".into(), b"same-origin".to_vec()),
+                (
+                    "Cross-Origin-Embedder-Policy".into(),
+                    b"require-corp".to_vec(),
+                ),
+            ]);
+        }
+        vm.set_main_navigation_policy_container(
+            crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+                &headers,
+                &Url::parse(url).unwrap(),
+            ),
+        );
+        assert_eq!(vm.eval(r#"(() => {
+            const isolated = crossOriginIsolated;
+            Object.defineProperty(globalThis, 'crossOriginIsolated', {value: true, configurable: true});
+            const buffer = new WebAssembly.Memory({shared:true,initial:1,maximum:1}).buffer;
+            const channel = new MessageChannel();
+            const probe = fn => {try {fn();return 'accepted';}catch(error){return error.name;}};
+            try {return [isolated, probe(() => structuredClone(buffer)),
+                probe(() => channel.port1.postMessage(buffer))].join('|');}
+            finally {channel.port1.close(); channel.port2.close();}
+        })()"#).unwrap(), expected, "DIP={dip}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn shared_memory_isolation_inherits_for_coep_frames_and_honors_container_denial() {
+    let server = StaticHttpServer::spawn_with_responder(
+        2,
+        "Content-Type: text/html\r\nCross-Origin-Embedder-Policy: require-corp\r\n",
+        |_, _| "<!doctype html><title>COEP-only frame</title>".into(),
+    )
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let base = server.base_url();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(base.as_str(), &loader);
+    enable_shared_memory_for_test(&mut vm, base.as_str());
+    vm.eval(r#"
+        const html = document.documentElement || document.appendChild(document.createElement('html'));
+        const body = document.body || html.appendChild(document.createElement('body'));
+        globalThis.isolationFramesLoaded = 0;
+        for (const denied of [false, true]) {
+            const frame = document.createElement('iframe');
+            frame.id = denied ? 'denied-isolation' : 'allowed-isolation';
+            if (denied) frame.setAttribute('allow', "cross-origin-isolated 'none'");
+            frame.onload = () => isolationFramesLoaded++;
+            frame.src = denied ? '/denied' : '/allowed';
+            body.appendChild(frame);
+        }
+    "#).unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(isolationFramesLoaded)",
+        "2",
+        "both COEP-only frames must load",
+    )
+    .await;
+    let result = vm.eval(r#"JSON.stringify(['allowed-isolation','denied-isolation'].map(id => {
+        const child = document.getElementById(id).contentWindow;
+        return child.eval(`(() => {
+            const enabled = crossOriginIsolated;
+            Object.defineProperty(globalThis, 'crossOriginIsolated', {value:true, configurable:true});
+            const buffer = new WebAssembly.Memory({shared:true,initial:1,maximum:1}).buffer;
+            try {return [enabled, structuredClone(buffer) !== buffer];}
+            catch(error){return [enabled,error.name];}
+        })()`);
+    }))"#).unwrap();
+    assert_eq!(result, r#"[[true,true],[false,"DataCloneError"]]"#);
+    assert_eq!(server.finish().await.len(), 2);
+}
+
+#[test]
 fn shared_array_buffer_clones_share_backing_stores_and_preserve_graphs() {
     let url = "https://shared-buffer-clone.test/";
     let mut vm = new_storage_test_vm(url);
