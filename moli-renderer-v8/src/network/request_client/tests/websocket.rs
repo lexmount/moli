@@ -3,20 +3,26 @@ use moli_websocket::{Event, spawn_connection, test_support::test_websocket_conte
 
 #[tokio::test]
 async fn page_and_worker_websocket_connectors_follow_resource_runtime_owner() -> Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let url = format!("ws://{}/pending", listener.local_addr()?);
+    // Opening handshakes to one endpoint serialize. Use distinct ports so both
+    // page and worker have a live pending socket when their shared owner drops.
+    let listeners = [
+        TcpListener::bind("127.0.0.1:0").await?,
+        TcpListener::bind("127.0.0.1:0").await?,
+    ];
     let owner = ResourceRequestClient::new(&FetchConfig::default())?;
     let page = owner.fork_with_isolated_page_network_policy();
     let worker = page.fork_with_isolated_worker_network_policy();
     let mut connections = Vec::new();
     let mut peers = Vec::new();
     for (index, client) in [&page, &worker].into_iter().enumerate() {
+        let listener = &listeners[index];
+        let url = format!("ws://{}/pending", listener.local_addr()?);
         let context = test_websocket_context();
         let (events, incoming) = tokio::sync::mpsc::channel(8);
         let connection = spawn_connection(
             client.websocket_connector(),
             3000 + index as u64,
-            url.clone(),
+            url,
             Vec::new(),
             context,
             events,

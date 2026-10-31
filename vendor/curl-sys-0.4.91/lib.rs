@@ -152,6 +152,14 @@ pub struct curl_moli_connection_timing {
     pub secure_start: curl_off_t,
 }
 
+/// Private Moli extension, borrowed by one Easy until native cleanup.
+#[repr(C)]
+pub struct curl_moli_websocket_gate {
+    pub userdata: usize,
+    pub acquire: Option<extern "C" fn(usize, usize, *const u8, c_uint, u16, c_uint) -> c_int>,
+    pub release: Option<extern "C" fn(usize, usize)>,
+}
+
 pub const CURL_CHUNK_BGN_FUNC_OK: c_long = 0;
 pub const CURL_CHUNK_BGN_FUNC_FAIL: c_long = 1;
 pub const CURL_CHUNK_BGN_FUNC_SKIP: c_long = 2;
@@ -1174,6 +1182,11 @@ extern "C" {
         n: *mut size_t,
     ) -> CURLcode;
     pub fn curl_easy_moli_websocket_pending(curl: *mut CURL) -> c_int;
+    pub fn curl_easy_moli_websocket_set_gate(
+        curl: *mut CURL,
+        gate: *const curl_moli_websocket_gate,
+    ) -> CURLcode;
+    pub fn curl_easy_moli_websocket_resume(curl: *mut CURL) -> CURLcode;
     pub fn curl_easy_moli_websocket_poll(
         curl: *mut CURL,
         socket: curl_socket_t,

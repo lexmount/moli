@@ -99,6 +99,9 @@ impl Session {
             return Ok(Step::Idle);
         }
         let handshake = self.handle.get_mut();
+        if let Some(gate) = &mut handshake.endpoint_gate {
+            gate.complete();
+        }
         let result = match handshake.error.take() {
             Some(error) => Err(error),
             None => result.map_err(|error| error.to_string()),
@@ -123,6 +126,20 @@ impl Session {
         message: &curl::multi::Message<'_>,
     ) -> Option<Result<(), curl::Error>> {
         message.result_for2(&self.handle)
+    }
+
+    pub(super) fn resume_handshake(&mut self) -> Result<(), String> {
+        if self.handshake_deadline().is_none() || self.io.cancelled() {
+            return Ok(());
+        }
+        // SAFETY: The owner alone accesses this live attached Easy. Marking it
+        // dirty resumes its pending TCP attempt on the next owner perform turn.
+        let result = unsafe { curl_sys::curl_easy_moli_websocket_resume(self.handle.raw()) };
+        if result == curl_sys::CURLE_OK {
+            Ok(())
+        } else {
+            Err(curl::Error::new(result).to_string())
+        }
     }
 
     pub(super) fn advance(
@@ -313,7 +330,10 @@ impl Session {
         self.writing.socket_ready();
     }
 
-    pub(super) fn finish(self, multi: &mut Multi, result: Result<(), String>) {
+    pub(super) fn finish(mut self, multi: &mut Multi, result: Result<(), String>) {
+        if let Some(gate) = &mut self.handle.get_mut().endpoint_gate {
+            gate.complete();
+        }
         // Physically release the socket before publishing terminal channel closure.
         let _ = multi.remove2(self.handle);
         self.io.finish(result);

@@ -10,6 +10,7 @@ pub(super) struct Handshake {
     pub request: Vec<u8>,
     pub response: Vec<u8>,
     pub error: Option<String>,
+    pub endpoint_gate: Option<std::sync::Arc<super::endpoint::EndpointGate>>,
     #[cfg(test)]
     pub pool_waiting: Option<std::sync::Arc<tokio::sync::Notify>>,
     proxy_connect: bool,
