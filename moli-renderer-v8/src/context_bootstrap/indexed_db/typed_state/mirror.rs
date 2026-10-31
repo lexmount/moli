@@ -13,6 +13,7 @@ pub(super) fn edit_shared<T: Clone>(value: &Rc<T>, edit: impl FnOnce(&mut T)) ->
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::context_bootstrap::indexed_db) struct IndexedDbObjectStoreMetadata {
     pub(super) data: Rc<IndexedDbObjectStoreMetadataData>,
+    pub(super) identity: Rc<()>,
     pub(super) created_in_upgrade: std::cell::Cell<bool>,
     pub(super) created_indexes: RefCell<Option<Rc<BTreeSet<moli_indexeddb::IndexedDbName>>>>,
     pub(super) visible_indexes: bool,
@@ -21,7 +22,13 @@ pub(in crate::context_bootstrap::indexed_db) struct IndexedDbObjectStoreMetadata
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::context_bootstrap::indexed_db) struct IndexedDbObjectStoreMetadataData {
     pub(super) info: ObjectStoreInfo,
-    pub(super) indexes: BTreeMap<moli_indexeddb::IndexedDbName, Rc<IndexInfo>>,
+    pub(super) indexes: BTreeMap<moli_indexeddb::IndexedDbName, IndexedDbIndexMetadata>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct IndexedDbIndexMetadata {
+    pub(super) info: Rc<IndexInfo>,
+    pub(super) identity: Rc<()>,
 }
 
 impl std::ops::Deref for IndexedDbObjectStoreMetadata {
@@ -35,6 +42,7 @@ impl IndexedDbObjectStoreMetadata {
     fn from_data(data: Rc<IndexedDbObjectStoreMetadataData>) -> Self {
         Self {
             data,
+            identity: Rc::new(()),
             created_in_upgrade: std::cell::Cell::new(false),
             created_indexes: RefCell::new(None),
             visible_indexes: true,
@@ -59,12 +67,15 @@ impl IndexedDbObjectStoreMetadata {
             .map(|(name, index)| {
                 (
                     name.clone(),
-                    Rc::new(IndexInfo {
-                        name: name.clone(),
-                        key_path: index.options.key_path.clone(),
-                        unique: index.options.unique,
-                        multi_entry: index.options.multi_entry,
-                    }),
+                    IndexedDbIndexMetadata {
+                        info: Rc::new(IndexInfo {
+                            name: name.clone(),
+                            key_path: index.options.key_path.clone(),
+                            unique: index.options.unique,
+                            multi_entry: index.options.multi_entry,
+                        }),
+                        identity: Rc::new(()),
+                    },
                 )
             })
             .collect();
@@ -98,7 +109,7 @@ impl IndexedDbObjectStoreMetadata {
         name: &moli_indexeddb::IndexedDbName,
     ) -> Option<&IndexInfo> {
         self.visible_indexes
-            .then(|| self.indexes.get(name).map(|info| &**info))
+            .then(|| self.indexes.get(name).map(|index| &*index.info))
             .flatten()
     }
     pub(in crate::context_bootstrap::indexed_db) fn shared_index(
@@ -106,7 +117,7 @@ impl IndexedDbObjectStoreMetadata {
         name: &moli_indexeddb::IndexedDbName,
     ) -> Option<Rc<IndexInfo>> {
         self.visible_indexes
-            .then(|| self.indexes.get(name).cloned())
+            .then(|| self.indexes.get(name).map(|index| Rc::clone(&index.info)))
             .flatten()
     }
     #[cfg(test)]
@@ -136,8 +147,13 @@ impl IndexedDbObjectStoreMetadata {
             if !data.info.index_names.iter().any(|name| name == &info.name) {
                 data.info.index_names.push(info.name.clone());
             }
-            data.indexes
-                .insert(info.name.clone(), Rc::new(info.clone()));
+            data.indexes.insert(
+                info.name.clone(),
+                IndexedDbIndexMetadata {
+                    info: Rc::new(info.clone()),
+                    identity: Rc::new(()),
+                },
+            );
         });
         Self {
             data,
@@ -150,8 +166,56 @@ impl IndexedDbObjectStoreMetadata {
             data.info.index_names.retain(|candidate| candidate != name);
             data.indexes.remove(name);
         });
+        let mut markers = self
+            .created_indexes
+            .borrow()
+            .as_ref()
+            .map(|names| (**names).clone());
+        if let Some(markers) = &mut markers {
+            markers.remove(name);
+        }
         Self {
             data,
+            created_indexes: RefCell::new(markers.map(Rc::new)),
+            ..self.clone()
+        }
+    }
+    pub(super) fn with_name(&self, name: &moli_indexeddb::IndexedDbName) -> Self {
+        Self {
+            data: edit_shared(&self.data, |data| data.info.name = name.clone()),
+            ..self.clone()
+        }
+    }
+    pub(super) fn with_renamed_index(
+        &self,
+        name: &moli_indexeddb::IndexedDbName,
+        new_name: &moli_indexeddb::IndexedDbName,
+    ) -> Self {
+        let data = edit_shared(&self.data, |data| {
+            let mut index = data.indexes.remove(name).expect("renamed index exists");
+            index.info = edit_shared(&index.info, |info| info.name = new_name.clone());
+            data.indexes.insert(new_name.clone(), index);
+            for candidate in &mut data.info.index_names {
+                if candidate == name {
+                    *candidate = new_name.clone();
+                }
+            }
+        });
+        let mut markers = self
+            .created_indexes
+            .borrow()
+            .as_ref()
+            .map(|names| (**names).clone());
+        if let Some(markers) = &mut markers {
+            let created = markers.remove(name);
+            markers.remove(new_name);
+            if created {
+                markers.insert(new_name.clone());
+            }
+        }
+        Self {
+            data,
+            created_indexes: RefCell::new(markers.map(Rc::new)),
             ..self.clone()
         }
     }
