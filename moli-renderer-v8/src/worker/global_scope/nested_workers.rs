@@ -36,6 +36,7 @@ pub(crate) struct NestedWorkerContext {
     pub(crate) require_trusted_types_for_script: bool,
     pub(crate) network_policy: crate::worker::handle::WorkerNetworkPolicy,
     pub(crate) policy_context: crate::types::SubresourcePolicyContext,
+    pub(crate) shared_memory_agent_cluster: crate::structured_clone::SharedMemoryAgentCluster,
     pub(crate) wake_tx: mpsc::UnboundedSender<WorkerMessage>,
     pub(crate) closed_owner_error_tx: Option<mpsc::UnboundedSender<WorkerToParentMessage>>,
 }
@@ -89,6 +90,7 @@ pub(crate) fn reserve_nested_worker_context(
 
         },
         policy_context: state.policy_context,
+        shared_memory_agent_cluster: state.shared_memory_agent_cluster.clone(),
         wake_tx: state.worker_wake_tx.clone(),
         closed_owner_error_tx: matches!(state.global_kind, WorkerGlobalKind::Dedicated { .. })
             .then(|| state.parent_tx.clone()),
