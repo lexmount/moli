@@ -3294,7 +3294,7 @@ fn critical_client_hints_restart_navigation_before_exposing_the_first_response()
     let later = requests[2].to_ascii_lowercase();
     assert!(!first.contains("sec-ch-ua-arch:"));
     for expected in [
-        "sec-ch-ua-full-version: \"145.0.0.0\"",
+        "sec-ch-ua-full-version: \"156.0.8078.74\"",
         "sec-ch-ua-full-version-list:",
         "sec-ch-ua-arch: \"x86\"",
         "sec-ch-ua-bitness: \"64\"",

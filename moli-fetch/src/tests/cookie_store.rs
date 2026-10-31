@@ -556,7 +556,7 @@ fn top_level_navigation_headers_default_to_browser_style_document_navigation() {
     );
     assert_eq!(
         header_value(&headers, "sec-ch-ua"),
-        Some("\"Not:A-Brand\";v=\"99\", \"Google Chrome\";v=\"145\", \"Chromium\";v=\"145\"")
+        Some("\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"")
     );
     assert_eq!(header_value(&headers, "referer"), None);
     assert_eq!(header_value(&headers, "cache-control"), None);
@@ -743,7 +743,7 @@ fn browser_fetch_and_xhr_subresource_headers_match_chromium_same_origin_shape() 
         assert_eq!(header_value(&headers, "origin"), None);
         assert_eq!(
             header_value(&headers, "sec-ch-ua"),
-            Some("\"Not:A-Brand\";v=\"99\", \"Google Chrome\";v=\"145\", \"Chromium\";v=\"145\"")
+            Some("\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"")
         );
         assert_eq!(header_value(&headers, "sec-ch-ua-mobile"), Some("?0"));
         assert_eq!(

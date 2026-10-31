@@ -24,8 +24,8 @@ pub struct WindowSurfaceProfile {
 /// Keep this token in the default user agent as well. CDP clients commonly use
 /// `product` for Chromium feature detection, while Moli's own product
 /// identity remains available through its binary/package metadata.
-pub const DEFAULT_CDP_PRODUCT: &str = "Chrome/145.0.0.0";
-pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+pub const DEFAULT_CDP_PRODUCT: &str = "Chrome/156.0.8078.74";
+pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.74 Safari/537.36";
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 pub const DEFAULT_SEC_CH_UA_PLATFORM: &str = "\"Windows\"";
 pub const DEFAULT_SEC_CH_UA_PLATFORM_VERSION: &str = "\"19.0.0\"";
@@ -265,7 +265,7 @@ mod tests {
     fn sec_ch_ua_value_matches_chromium_seeded_order_for_chrome() {
         assert_eq!(
             chromium_sec_ch_ua_value(DEFAULT_USER_AGENT).as_deref(),
-            Some("\"Not:A-Brand\";v=\"99\", \"Google Chrome\";v=\"145\", \"Chromium\";v=\"145\"")
+            Some("\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"")
         );
     }
 
@@ -274,10 +274,13 @@ mod tests {
         assert_eq!(
             chromium_sec_ch_ua_full_version_list_value(DEFAULT_USER_AGENT).as_deref(),
             Some(
-                "\"Not:A-Brand\";v=\"99.0.0.0\", \"Google Chrome\";v=\"145.0.0.0\", \"Chromium\";v=\"145.0.0.0\""
+                "\"Not:A-Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"156.0.8078.74\", \"Google Chrome\";v=\"156.0.8078.74\""
             )
         );
-        assert_eq!(chromium_full_version(DEFAULT_USER_AGENT), Some("145.0.0.0"));
+        assert_eq!(
+            chromium_full_version(DEFAULT_USER_AGENT),
+            Some("156.0.8078.74")
+        );
     }
 
     #[test]
@@ -297,7 +300,7 @@ mod tests {
             ),
             Some("145")
         );
-        assert_eq!(chromium_major_version(DEFAULT_USER_AGENT), Some("145"));
+        assert_eq!(chromium_major_version(DEFAULT_USER_AGENT), Some("156"));
         assert!(
             DEFAULT_USER_AGENT.contains(DEFAULT_CDP_PRODUCT),
             "CDP product and default user agent must advertise the same Chromium compatibility version"
