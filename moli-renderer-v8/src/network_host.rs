@@ -138,8 +138,9 @@ pub(crate) use self::request::{
 pub(crate) use self::request::{FetchArgumentError, convert_fetch_arguments};
 pub(crate) use self::request::{
     mark_request_input_body_used_for_fetch, request_body_already_used_error,
-    try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
-    try_resolve_request_constructor_url_for_child, validate_request_method_body,
+    request_headers_guard_for_mode, try_resolve_request_constructor_url,
+    try_resolve_request_constructor_url_for_base, try_resolve_request_constructor_url_for_child,
+    validate_request_method_body,
 };
 pub(in crate::network_host) use self::request_scope::{
     XHR_CHILD_CONTEXT_HANDLE_SLOT, active_subresource_network_partition_key,
