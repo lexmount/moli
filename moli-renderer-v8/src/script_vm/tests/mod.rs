@@ -2299,6 +2299,7 @@ mod audio_source_interfaces;
 mod beacon_request_policy;
 mod bitmap_renderer;
 mod bitmap_rendering_context_interface_interfaces;
+mod blob_navigation_storage_key;
 mod blob_range;
 mod blob_response_headers;
 mod blob_storage_key;

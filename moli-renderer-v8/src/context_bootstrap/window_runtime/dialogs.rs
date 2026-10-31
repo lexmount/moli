@@ -288,13 +288,16 @@ pub(crate) fn window_open_callback<'s>(
         return;
     }
     let parsed_features = WindowOpenFeatures::parse(&parsed.features);
-    let suppress_opener = parsed_features.suppresses_opener();
+    let entry_scope = entered_window_dispatch_scope(scope, unsafe { &*host_ptr });
+    let suppress_opener = parsed_features.suppresses_opener()
+        || url.as_ref().is_some_and(|url| {
+            unsafe { &mut *host_ptr }.blob_navigation_requires_noopener(entry_scope, url)
+        });
     let mut creator_policy_container = {
         let host = unsafe { &*host_ptr };
         window_open_entered_policy_container(scope, host)
     };
     let host = unsafe { &*host_ptr };
-    let entry_scope = entered_window_dispatch_scope(scope, host);
     let initiator_url = host
         .document_referrer_source_url_for_dispatch_scope(entry_scope)
         .unwrap_or_else(|| window_open_document_url(host, entry_scope));
@@ -357,15 +360,13 @@ pub(crate) fn window_open_callback<'s>(
         }
         return;
     }
-    let named_target = if suppress_opener {
-        None
-    } else {
-        unsafe { &mut *host_ptr }.browsing_context_target_by_name_for_navigation(
-            scope,
-            &parsed.target_name,
-            receiver.dispatch_scope(),
-        )
-    };
+    // Chromium still navigates an existing named target with noopener, but
+    // preserves its opener and returns null instead of exposing its Window.
+    let named_target = unsafe { &mut *host_ptr }.browsing_context_target_by_name_for_navigation(
+        scope,
+        &parsed.target_name,
+        receiver.dispatch_scope(),
+    );
     if let Some(target) = named_target {
         let host = unsafe { &*host_ptr };
         let source = entered_window_dispatch_scope(scope, host);
@@ -397,7 +398,9 @@ pub(crate) fn window_open_callback<'s>(
                     rv.set_null();
                     return;
                 };
-                host.set_top_window_opener(scope, opener_endpoint, args.this());
+                if !suppress_opener {
+                    host.set_top_window_opener(scope, opener_endpoint, args.this());
+                }
                 match navigate_existing_browsing_context_target(
                     scope,
                     host_ptr,
@@ -407,8 +410,8 @@ pub(crate) fn window_open_callback<'s>(
                     SpecialBrowsingContextTarget::Current,
                     url.as_deref(),
                 ) {
-                    Some(window) => rv.set(window.into()),
-                    None => rv.set_null(),
+                    Some(window) if !suppress_opener => rv.set(window.into()),
+                    _ => rv.set_null(),
                 }
                 return;
             }
@@ -420,10 +423,18 @@ pub(crate) fn window_open_callback<'s>(
                     return;
                 };
                 let window = context.global(scope);
-                host.set_child_browsing_context_opener(scope, handle, opener_endpoint, args.this());
+                if !suppress_opener {
+                    host.set_child_browsing_context_opener(
+                        scope,
+                        handle,
+                        opener_endpoint,
+                        args.this(),
+                    );
+                }
                 if url
                     .as_deref()
                     .is_none_or(|url| navigate_iframe_target(scope, host_ptr, handle, url, None))
+                    && !suppress_opener
                 {
                     rv.set(window.into());
                 } else {
@@ -432,12 +443,14 @@ pub(crate) fn window_open_callback<'s>(
                 return;
             }
             OwnerDispatchScope::LightweightPopup(id) => {
-                unsafe { &mut *host_ptr }.set_lightweight_popup_opener(
-                    scope,
-                    id,
-                    opener_endpoint,
-                    args.this(),
-                );
+                if !suppress_opener {
+                    unsafe { &mut *host_ptr }.set_lightweight_popup_opener(
+                        scope,
+                        id,
+                        opener_endpoint,
+                        args.this(),
+                    );
+                }
             }
         }
     }

@@ -442,7 +442,14 @@ impl JsContextHost {
         if !self.window_execution_context_identity_is_current(identity) {
             return None;
         }
-        match identity.dispatch_scope() {
+        self.storage_context_for_dispatch_scope(identity.dispatch_scope())
+    }
+
+    pub(crate) fn storage_context_for_dispatch_scope(
+        &mut self,
+        owner: OwnerDispatchScope,
+    ) -> Option<ActiveStorageContext> {
+        match owner {
             OwnerDispatchScope::Top => Some(self.top_document_storage_context()),
             OwnerDispatchScope::Child(handle) => {
                 self.storage_context_for_child_browsing_context(handle)

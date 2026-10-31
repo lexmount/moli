@@ -155,14 +155,15 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
         super::navigation_window::navigation_source_document(scope, owner),
     );
     let host = unsafe { &mut *host_ptr };
-    let request_initiator =
-        host.navigation_initiator_for_owner(host.entered_owner_dispatch_scope(scope));
+    let initiator = host.entered_owner_dispatch_scope(scope);
+    let request_initiator = host.navigation_initiator_for_owner(initiator);
     if host.queue_deferred_child_browsing_context_navigation_from_entry_seed(
         child_handle,
         next_url.as_str(),
         entry_seed,
         None,
         request_initiator,
+        Some(initiator),
     ) && let Some(navigation_load) = host.current_child_navigation_load(child_handle)
     {
         host.check_child_navigation_beforeunload(scope, child_handle, navigation_load);

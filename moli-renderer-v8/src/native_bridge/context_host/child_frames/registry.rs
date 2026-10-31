@@ -479,11 +479,11 @@ impl JsContextHost {
                     let target_url =
                         Self::child_browsing_context_bootstrap_url(&attribute_bootstrap)
                             .unwrap_or_else(|| self.document_url_for_child_context(handle));
+                    let initiator = self.owner_dispatch_scope_for_node(handle);
+                    let blob_resource = self.capture_child_blob_resource(&target_url, initiator);
                     Some(PendingChildAttributeNavigation {
                         target_snapshot: self.snapshot_child_navigation_target(handle, &target_url),
-                        blob_resource: crate::network_host::CapturedBlobResource::capture(
-                            &target_url,
-                        ),
+                        blob_resource,
                     })
                 };
                 let pending_attribute_permissions_policy =

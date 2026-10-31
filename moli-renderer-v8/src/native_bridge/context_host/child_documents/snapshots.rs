@@ -22,12 +22,16 @@ impl JsContextHost {
     }
 
     pub(crate) fn materialize_local_child_snapshot_for_navigation_url(
-        &self,
+        &mut self,
         handle: DomHandle,
         url: &Url,
     ) -> LocalChildDocumentPreparation {
+        let initiator = self.owner_dispatch_scope_for_node(handle);
+        let resource = self.capture_child_blob_resource(url, initiator);
         self.materialize_local_child_snapshot_for_navigation_url_with_blob_resource(
-            handle, url, None,
+            handle,
+            url,
+            resource.as_ref(),
         )
     }
 
@@ -93,6 +97,14 @@ impl JsContextHost {
             "blob" | "data" => {
                 let response =
                     match blob_resource.and_then(|resource| resource.response_blocking(url)) {
+                        Some(Err(error)) if owner.is_some() && error.is_unavailable_blob() => {
+                            return LocalChildDocumentPreparation::ErrorDocument(Box::new(
+                                ChildBrowsingContextSnapshot::html(
+                                    url.clone(),
+                                    "<!doctype html><html><head></head><body></body></html>".into(),
+                                ),
+                            ));
+                        }
                         Some(response) => response.ok(),
                         None => crate::network_host::local_url_response(url),
                     };

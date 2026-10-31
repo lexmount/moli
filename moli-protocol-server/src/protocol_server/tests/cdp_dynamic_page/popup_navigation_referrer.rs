@@ -98,6 +98,7 @@ async fn popup_navigation_uses_source_referrer_policy_and_window_features() {
         &format!("{base}/parent?source=accepted#fragment"),
     )
     .await;
+    let mut first_popup_id = None;
     for (index, (policy, features, expected)) in [
         (
             "strict-origin-when-cross-origin",
@@ -120,14 +121,11 @@ async fn popup_navigation_uses_source_referrer_policy_and_window_features() {
             "(()=>{{let m=document.querySelector('meta[name=referrer]');if(!m){{m=document.createElement('meta');m.name='referrer';document.head.append(m)}}m.content={};return true}})()", json!(policy)
         )).await;
         let url = format!("{base}/child-{index}");
-        let name = if features.is_empty() {
-            format!("child-{index}")
-        } else {
-            // Noopener/noreferrer must create a new context even when this
-            // related name already belongs to the first ordinary popup.
-            "child-0".to_owned()
-        };
-        let (_, mut child) = open_http_popup(addr, &mut parent, &name, &url, features).await;
+        let name = format!("child-{index}");
+        let (id, mut child) = open_http_popup(addr, &mut parent, &name, &url, features).await;
+        if index == 0 {
+            first_popup_id = Some(id);
+        }
         wait_for_http_document(&mut child, &url).await;
         assert_eq!(
             evaluate_window_name_probe(
@@ -142,6 +140,63 @@ async fn popup_navigation_uses_source_referrer_policy_and_window_features() {
                 "same-origin",
                 !features.is_empty()
             ])
+        );
+    }
+
+    // Chromium navigates an existing named target with either feature. The
+    // caller gets null, while the target keeps its current opener.
+    let mut child = connect_dynamic_page(addr, first_popup_id.as_deref().unwrap()).await;
+    let target_count = fetch_server_json(addr, "/json/list")
+        .await
+        .as_array()
+        .unwrap()
+        .len();
+    for (features, expected, disown_opener) in [
+        (
+            "noopener",
+            Some(format!("{base}/parent?source=accepted")),
+            false,
+        ),
+        ("noreferrer", None, true),
+    ] {
+        if disown_opener {
+            assert_eq!(
+                evaluate_window_name_probe(&mut child, 5, "opener=null;true").await,
+                true
+            );
+        }
+        let url = format!("{base}/reused-{features}");
+        assert_eq!(
+            evaluate_window_name_probe(
+                &mut parent,
+                6,
+                &format!("open({},'child-0',{})===null", json!(url), json!(features))
+            )
+            .await,
+            true
+        );
+        wait_for_http_document(&mut child, &url).await;
+        assert_eq!(
+            evaluate_window_name_probe(
+                &mut child,
+                7,
+                "[document.referrer,receivedReferrer,receivedSite,opener===null]"
+            )
+            .await,
+            json!([
+                expected.as_deref().unwrap_or(""),
+                expected,
+                "same-origin",
+                disown_opener
+            ])
+        );
+        assert_eq!(
+            fetch_server_json(addr, "/json/list")
+                .await
+                .as_array()
+                .unwrap()
+                .len(),
+            target_count
         );
     }
     abort_test_cdp_server(server).await;
