@@ -333,8 +333,55 @@ mod tests {
             crate::util::context_host_ptr_from_global_bridge(scope),
             Some(host)
         );
+        assert!(crate::worker::get_worker_state(scope).is_none());
+        {
+            let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+            let mut scope = try_catch.init();
+            let original = v8::String::new(&scope, "pending Window owner exception").unwrap();
+            scope.throw_exception(original.into());
+            assert_eq!(
+                crate::util::context_host_ptr_from_global_bridge(&mut scope),
+                Some(host)
+            );
+            assert!(crate::worker::get_worker_state(&mut scope).is_none());
+            assert!(scope.has_caught());
+            assert!(scope.exception().unwrap().strict_equals(original.into()));
+        }
         lifecycle.set(ContextHostLifecycle::Destroyed);
         assert!(crate::util::context_host_ptr_from_global_bridge(scope).is_none());
+    }
+
+    #[test]
+    fn unbound_context_cannot_claim_a_window_owner_through_its_global_bridge() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let template = v8::ObjectTemplate::new(scope);
+        template.set_internal_field_count(1);
+        let bridge = template.new_instance(scope).unwrap();
+        // This non-owning carrier must never grant ownership or be dereferenced.
+        let host = std::ptr::NonNull::<JsContextHost>::dangling().as_ptr();
+        let external = v8::External::new(scope, host.cast());
+        assert!(bridge.set_internal_field(0, external.into()));
+        let key = v8::String::new(scope, "__moliNativeBridge").unwrap();
+        assert_eq!(
+            context.global(scope).set(scope, key.into(), bridge.into()),
+            Some(true)
+        );
+        assert!(crate::util::context_host_ptr_from_global_bridge(scope).is_none());
+        assert!(crate::worker::get_worker_state(scope).is_none());
+
+        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+        let mut scope = try_catch.init();
+        let original = v8::String::new(&scope, "pending owner lookup exception").unwrap();
+        scope.throw_exception(original.into());
+        assert!(crate::worker::get_worker_state(&mut scope).is_none());
+        assert!(crate::util::context_host_ptr_from_global_bridge(&mut scope).is_none());
+        assert!(scope.has_caught());
+        assert!(scope.exception().unwrap().strict_equals(original.into()));
     }
 
     #[test]

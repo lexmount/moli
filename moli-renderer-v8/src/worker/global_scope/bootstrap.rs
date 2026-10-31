@@ -5,8 +5,6 @@ use super::*;
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct WorkerGlobalBootstrapPropertiesDeclaration<'scope> {
-    #[webapi(slot = WORKER_STATE_SLOT)]
-    worker_state: v8::Local<'scope, v8::External>,
     #[webapi(data_property = "self", readonly)]
     self_value: v8::Local<'scope, v8::Object>,
     #[webapi(data_property = "crossOriginIsolated")]
@@ -108,9 +106,8 @@ struct WorkerPrototypeTagDeclaration {
 
 /// Install the `DedicatedWorkerGlobalScope` APIs on the given V8 global object.
 ///
-/// The `state_ptr` is stored as an external in V8 so callbacks can access
-/// `WorkerGlobalState`.  Callers must ensure the `Rc<RefCell<WorkerGlobalState>>`
-/// outlives the V8 context.
+/// Install the weak native owner binding before exposing callbacks. The Worker
+/// runtime owns `state`; retaining its V8 Context must not extend that lifetime.
 pub(in crate::worker) fn install_worker_global_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
@@ -121,13 +118,6 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
         scope.get_current_context(),
         &state,
     );
-    // Store state pointer as an external on the global so callbacks can find it.
-    let state_ptr = Rc::into_raw(state.clone()) as *mut c_void;
-    let external = v8::External::new(scope, state_ptr);
-    // Prevent leak: the Rc was consumed by into_raw, but we still hold `state`.
-    // We reconstruct it so the ref-count is correct.  The raw pointer stored in
-    // the external is valid as long as the Rc (held by the caller) is alive.
-    unsafe { Rc::from_raw(state_ptr as *const RefCell<WorkerGlobalState>) };
     let global_kind = state.borrow().global_kind.clone();
 
     let (secure_context, cross_origin_isolated) = {
@@ -138,7 +128,6 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
         )
     };
     WorkerGlobalBootstrapPropertiesDeclaration::new(
-        external,
         global,
         cross_origin_isolated,
         secure_context,

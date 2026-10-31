@@ -595,10 +595,11 @@ pub(super) fn call_global_bridge_method<'s>(
     crate::script_execution::call_function(scope, method, bridge.into(), args)
 }
 
-/// Obtain a raw `*mut JsContextHost` pointer from the V8 global bridge.
+/// Resolve the current Context's native Window owner inside V8 callbacks.
 ///
-/// This is the standard way to access the host inside **V8 callbacks**. It reads
-/// the pointer stored in bridge internal field 0 (set during `install_into_bridge`).
+/// Document retention and lifecycle validation belong to native Context slots.
+/// A Context without a live Window binding has no host, regardless of its global
+/// properties.
 ///
 /// We return a raw pointer instead of a `&mut` reference because V8 callbacks are
 /// inherently re-entrant: any V8 API call (property access, object creation, scope
@@ -627,14 +628,11 @@ pub(super) fn context_host_ptr_from_global_bridge(
     if let Some(host_ptr) = context_host_ptr_from_context_slot(context) {
         return Some(host_ptr);
     }
-    if let Some(binding) = context.get_slot::<crate::common_runtime::CommonRuntimeBinding>() {
-        // A bound Worker has no Window host. Probing its global can invoke
-        // author getters and consume an exception pending during port cleanup.
-        return binding.window_host_ptr();
-    }
-    // Read directly from bridge internal field 0 — no Rc ref-count overhead.
-    let global = context.global(scope);
-    context_host_ptr_from_window_object(scope, global)
+    // A Worker or an unbound Context has no Window host. Do not probe its
+    // global, including when cleanup has an exception pending.
+    context
+        .get_slot::<crate::common_runtime::CommonRuntimeBinding>()?
+        .window_host_ptr()
 }
 
 pub(super) fn install_context_host_pointer_slot(
