@@ -2971,6 +2971,7 @@ impl PageScriptHost {
         let (resource_loader, request_origin) = if matches!(
             local_preparation,
             LocalChildDocumentPreparation::Unavailable
+                | LocalChildDocumentPreparation::ErrorDocument(_)
         ) {
             let source_owner = self.current_lightweight_popup_document_owner(popup_id)?;
             let initiating_loader = self.document_resource_loader_for_window_owner(
@@ -3027,7 +3028,8 @@ impl PageScriptHost {
             LocalChildDocumentPreparation::IgnoredNavigation => {
                 Some(PopupDocumentLoadOutcome::IgnoredNavigation)
             }
-            LocalChildDocumentPreparation::Unavailable => None,
+            LocalChildDocumentPreparation::Unavailable
+            | LocalChildDocumentPreparation::ErrorDocument(_) => None,
         };
         if let Some(outcome) = local_outcome {
             let completion = PopupDocumentLoadCompletion::new(target, Ok(outcome));
