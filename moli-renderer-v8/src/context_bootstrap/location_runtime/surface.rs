@@ -54,9 +54,6 @@ pub(in crate::context_bootstrap) fn document_location_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    if !crate::web_api_interfaces::Document::is_instance(scope, receiver) {
-        return None;
-    }
     let (runtime_ptr, handle) =
         crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
             .ok()?;

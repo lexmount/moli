@@ -21,32 +21,6 @@ pub(super) async fn run_probe(
     )?)
 }
 
-/// Long semantic matrices use an explicit workload budget without changing
-/// the production runtime evaluation timeout or their individual assertions.
-pub(super) async fn run_probe_with_timeout(
-    browser: &Browser,
-    server: &FixtureServer,
-    target: &str,
-    source: &str,
-    timeout: Duration,
-) -> Result<serde_json::Value> {
-    let (mut page, expression) = prepare_probe(browser, server, target, source).await?;
-    let completion = format!(
-        "({expression}).then(value => {{ globalThis.__callbackProbeSnapshot = value; return true; }})"
-    );
-    browser
-        .wait_for_script_truthy(&mut page, &completion, timeout)
-        .await?;
-    let value = page
-        .evaluate_runtime_expression_async(
-            "(() => { const value = globalThis.__callbackProbeSnapshot; delete globalThis.__callbackProbeSnapshot; return value; })()",
-        )
-        .await?;
-    Ok(serde_json::from_str(
-        value["value"].as_str().expect("callback probe result"),
-    )?)
-}
-
 async fn prepare_probe(
     browser: &Browser,
     server: &FixtureServer,

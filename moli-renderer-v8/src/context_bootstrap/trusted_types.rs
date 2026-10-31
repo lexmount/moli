@@ -5,7 +5,9 @@ use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi::trusted_values::*;
-pub(crate) use moli_webapi::trusted_values::{TrustedTypeKind, trusted_type_kind, trusted_type_string, trusted_type_string16};
+pub(crate) use moli_webapi::trusted_values::{
+    TrustedTypeKind, trusted_type_kind, trusted_type_string, trusted_type_string16,
+};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod function_constructors;
