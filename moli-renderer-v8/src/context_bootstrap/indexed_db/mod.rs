@@ -8,6 +8,7 @@ mod backend;
 mod core;
 mod cursor;
 mod database;
+mod durability;
 mod event_target;
 mod install;
 mod operation_state;
@@ -99,6 +100,14 @@ pub(crate) fn sql_transaction_handle_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn sql_transaction_durability_for_test(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> Option<moli_indexeddb::TransactionDurability> {
+    indexed_db_transaction_sql_durability(scope, transaction)
+}
+
+#[cfg(test)]
 pub(crate) fn sql_transaction_started_for_test(
     scope: &mut v8::PinScope<'_, '_>,
     transaction: v8::Local<'_, v8::Object>,
@@ -110,6 +119,7 @@ use self::backend::*;
 use self::core::*;
 use self::cursor::*;
 use self::database::*;
+use self::durability::*;
 pub(crate) use self::event_target::dispatch_indexed_db_event_callback;
 use self::event_target::*;
 use self::operation_state::*;

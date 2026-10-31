@@ -140,6 +140,18 @@ async fn idb_sqlite_rename_abort_restores_existing_identity_and_keeps_created_na
     assert_eq!(vm.eval("String(saved)").unwrap(), "0");
 }
 
+pub(super) fn registered_proxy<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let target = v8::Local::<v8::Object>::try_from(args.get(0)).unwrap();
+    let handler = crate::util::new_null_prototype_object(scope);
+    let proxy = v8::Proxy::new(scope, target, handler).unwrap();
+    moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+    rv.set(proxy.into());
+}
+
 #[tokio::test]
 async fn idb_sqlite_rename_uses_native_identity_across_realms_shadows_and_conversion_reentry() {
     let (mut vm, loader, backend) = fixture();
@@ -192,16 +204,4 @@ async fn idb_sqlite_rename_uses_native_identity_across_realms_shadows_and_conver
             .indexes
             .contains_key(&moli_indexeddb::IndexedDbName::from_utf16(vec![0xdc00]))
     );
-}
-
-fn registered_proxy<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let target = v8::Local::<v8::Object>::try_from(args.get(0)).unwrap();
-    let handler = crate::util::new_null_prototype_object(scope);
-    let proxy = v8::Proxy::new(scope, target, handler).unwrap();
-    moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
-    rv.set(proxy.into());
 }
