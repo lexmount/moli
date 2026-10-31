@@ -353,7 +353,7 @@ fn transient_keys_do_not_accumulate_delete_history_in_a_batch() {
 }
 
 #[test]
-fn sqlite_full_keeps_dirty_data_and_explicit_flush_recovers_after_capacity_is_restored() {
+fn sqlite_full_automatically_recovers_dirty_data_and_write_admission_after_capacity_is_restored() {
     let root = tempfile::tempdir().unwrap();
     let runtime = Runtime::new().unwrap();
     let (store, owner) = open(root.path(), &runtime);
@@ -370,6 +370,10 @@ fn sqlite_full_keeps_dirty_data_and_explicit_flush_recovers_after_capacity_is_re
     store.try_set_item("area", "accepted", &value).unwrap();
     assert!(owner.flush().is_err());
     assert_eq!(store.get_item("area", "accepted"), Some(value.clone()));
+    assert!(matches!(
+        store.try_set_item("area", "later", "blocked"),
+        Err(WebStorageMutationError::Persistence(_))
+    ));
     backend(&store)
         .client
         .query(|connection| {
@@ -377,10 +381,37 @@ fn sqlite_full_keeps_dirty_data_and_explicit_flush_recovers_after_capacity_is_re
             Ok(())
         })
         .unwrap();
-    owner.flush().unwrap();
+    // No flush or new accepted write drives recovery. The background retry
+    // must persist the original batch and lift localStorage's failure barrier.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while backend(&store).client.failure().is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "automatic recovery timed out"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        backend(&store)
+            .client
+            .query(|connection| {
+                Ok(
+                    connection.query_row("SELECT length(value) FROM entries", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                )
+            })
+            .unwrap(),
+        i64::try_from(value.len() * 2).unwrap()
+    );
+    store.try_set_item("area", "later", "recovered").unwrap();
     owner.close().unwrap();
     let (store, owner) = open(root.path(), &runtime);
     assert_eq!(store.get_item("area", "accepted"), Some(value));
+    assert_eq!(
+        store.get_item("area", "later").as_deref(),
+        Some("recovered")
+    );
     owner.close().unwrap();
 }
 #[test]

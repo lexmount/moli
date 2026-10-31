@@ -11,6 +11,9 @@ use tokio::sync::oneshot;
 struct Control {
     gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     fail: AtomicBool,
+    failure: Mutex<Option<WritebackError>>,
+    attempts: AtomicUsize,
+    attempted: Mutex<Option<oneshot::Sender<()>>>,
     commits: AtomicUsize,
     committed: Mutex<Option<oneshot::Sender<()>>>,
 }
@@ -37,6 +40,10 @@ impl WriteBatch for Batch {
     }
     fn write(&self, connection: &mut Connection) -> Result<()> {
         let control = self.control.as_ref().unwrap();
+        control.attempts.fetch_add(1, Ordering::AcqRel);
+        if let Some(attempted) = control.attempted.lock().take() {
+            let _ = attempted.send(());
+        }
         let gate = control.gate.lock().take();
         if let Some((started, release)) = gate {
             started.send(()).unwrap();
@@ -44,6 +51,9 @@ impl WriteBatch for Batch {
         }
         if control.fail.swap(false, Ordering::AcqRel) {
             return Err(WritebackError::new("injected failure"));
+        }
+        if let Some(error) = control.failure.lock().clone() {
+            return Err(error);
         }
         let tx = connection.transaction()?;
         for (key, value) in &self.values {
@@ -310,6 +320,7 @@ fn virtual_client(
             operations: 0,
             first_dirty: None,
             failure: None,
+            retry: Retry::default(),
             closed: false,
         }),
         changed: Notify::new(),
@@ -386,4 +397,191 @@ async fn early_commit_counts_accepted_operations_even_when_the_same_key_is_coale
     client.shared.pending.lock().closed = true;
     client.sender.send(Message::Close).unwrap();
     task.await.unwrap().unwrap();
+}
+
+fn sqlite_error(code: i32) -> WritebackError {
+    rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None).into()
+}
+
+#[test]
+fn retry_classification_preserves_sqlite_codes_and_excludes_permanent_failures() {
+    use rusqlite::ffi;
+    for code in [
+        ffi::SQLITE_FULL,
+        ffi::SQLITE_BUSY,
+        ffi::SQLITE_BUSY_SNAPSHOT,
+        ffi::SQLITE_LOCKED,
+        ffi::SQLITE_IOERR_WRITE,
+        ffi::SQLITE_IOERR_FSYNC,
+        ffi::SQLITE_NOMEM,
+        ffi::SQLITE_INTERRUPT,
+    ] {
+        assert!(sqlite_error(code).is_retryable(), "code {code}");
+    }
+    for code in [
+        ffi::SQLITE_CONSTRAINT,
+        ffi::SQLITE_CONSTRAINT_TRIGGER,
+        ffi::SQLITE_CORRUPT,
+        ffi::SQLITE_NOTADB,
+        ffi::SQLITE_READONLY,
+        ffi::SQLITE_TOOBIG,
+        ffi::SQLITE_IOERR_CORRUPTFS,
+        ffi::SQLITE_IOERR_DATA,
+    ] {
+        assert!(!sqlite_error(code).is_retryable(), "code {code}");
+    }
+    // Error text is not a classification API.
+    assert!(!WritebackError::new("database or disk is full").is_retryable());
+}
+
+struct Barrier(oneshot::Sender<()>);
+impl Query for Barrier {
+    fn run(self: Box<Self>, _: &mut LazyConnection) {
+        let _ = self.0.send(());
+    }
+}
+async fn barrier(client: &WritebackClient<Batch>) {
+    let (tx, rx) = oneshot::channel();
+    client
+        .sender
+        .send(Message::Query(Box::new(Barrier(tx))))
+        .unwrap();
+    rx.await.unwrap();
+}
+fn next_attempt(control: &Control) -> oneshot::Receiver<()> {
+    let (tx, rx) = oneshot::channel();
+    *control.attempted.lock() = Some(tx);
+    rx
+}
+fn prevent_time_auto_advance() -> tokio::task::JoinHandle<()> {
+    // Blocking SQL runs on another runtime. Keep virtual time under the test's
+    // control while awaiting those workers, instead of auto-jumping to a retry.
+    tokio::spawn(async {
+        loop {
+            tokio::task::yield_now().await;
+        }
+    })
+}
+
+#[tokio::test(start_paused = true)]
+async fn recoverable_failures_back_off_despite_new_writes_then_restore_admission_and_batching() {
+    let awake = prevent_time_auto_advance();
+    let runtime = Runtime::new().unwrap();
+    let (client, task) = virtual_client(
+        &runtime,
+        WritebackPolicy {
+            delay: Duration::from_secs(30),
+            early_commit_operations: Some(512),
+        },
+    );
+    let control = Arc::new(Control::default());
+    *control.failure.lock() = Some(sqlite_error(rusqlite::ffi::SQLITE_FULL));
+    let attempted = next_attempt(&control);
+    for i in 0..512 {
+        client
+            .record(Batch::put(1, i, &control), FailureAdmission::Retain)
+            .unwrap();
+    }
+    attempted.await.unwrap();
+    barrier(&client).await;
+    assert!(client.failure().is_some());
+    assert!(
+        client
+            .record(Batch::put(2, 99, &control), FailureAdmission::Reject)
+            .is_err()
+    );
+
+    for (i, seconds) in [1, 2, 4, 8, 16, 32, 60, 60].into_iter().enumerate() {
+        let attempted = next_attempt(&control);
+        client
+            .record(
+                Batch::put(1, 1000 + i as i64, &control),
+                FailureAdmission::Retain,
+            )
+            .unwrap();
+        tokio::time::advance(Duration::from_secs(seconds) - Duration::from_millis(1)).await;
+        barrier(&client).await;
+        assert_eq!(control.attempts.load(Ordering::Acquire), i + 1);
+        tokio::time::advance(Duration::from_millis(1)).await;
+        attempted.await.unwrap();
+        barrier(&client).await;
+        assert_eq!(control.attempts.load(Ordering::Acquire), i + 2);
+    }
+
+    *control.failure.lock() = None;
+    let attempted = next_attempt(&control);
+    tokio::time::advance(Duration::from_secs(60)).await;
+    attempted.await.unwrap();
+    barrier(&client).await;
+    assert!(client.failure().is_none());
+    let read_client = client.clone();
+    assert_eq!(
+        tokio::task::spawn_blocking(move || value(&read_client, 1))
+            .await
+            .unwrap(),
+        1007
+    );
+
+    // Successful recovery resets the failure and early-commit operation count.
+    for i in 0..511 {
+        client
+            .record(Batch::put(2, i, &control), FailureAdmission::Reject)
+            .unwrap();
+    }
+    barrier(&client).await;
+    assert_eq!(control.commits.load(Ordering::Acquire), 1);
+    let attempted = next_attempt(&control);
+    let now = tokio::time::Instant::now();
+    client
+        .record(Batch::put(2, 511, &control), FailureAdmission::Reject)
+        .unwrap();
+    attempted.await.unwrap();
+    barrier(&client).await;
+    assert_eq!(tokio::time::Instant::now(), now);
+    assert_eq!(control.commits.load(Ordering::Acquire), 2);
+    tokio::time::advance(Duration::from_secs(3600)).await;
+    barrier(&client).await;
+    assert_eq!(control.attempts.load(Ordering::Acquire), 11);
+    client.shared.pending.lock().closed = true;
+    client.sender.send(Message::Close).unwrap();
+    task.await.unwrap().unwrap();
+    awake.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn permanent_failures_stay_explicit_and_close_never_waits_for_a_retry() {
+    let awake = prevent_time_auto_advance();
+    let runtime = Runtime::new().unwrap();
+    for code in [rusqlite::ffi::SQLITE_CONSTRAINT, rusqlite::ffi::SQLITE_FULL] {
+        let (client, task) = virtual_client(
+            &runtime,
+            WritebackPolicy {
+                delay: Duration::from_secs(5),
+                early_commit_operations: Some(1),
+            },
+        );
+        let control = Arc::new(Control::default());
+        *control.failure.lock() = Some(sqlite_error(code));
+        let attempted = next_attempt(&control);
+        client
+            .record(Batch::put(1, 10, &control), FailureAdmission::Retain)
+            .unwrap();
+        attempted.await.unwrap();
+        barrier(&client).await;
+        if code == rusqlite::ffi::SQLITE_CONSTRAINT {
+            client
+                .record(Batch::put(1, 20, &control), FailureAdmission::Retain)
+                .unwrap();
+            tokio::time::advance(Duration::from_secs(3600)).await;
+            barrier(&client).await;
+            assert_eq!(control.attempts.load(Ordering::Acquire), 1);
+        }
+        let now = tokio::time::Instant::now();
+        client.shared.pending.lock().closed = true;
+        client.sender.send(Message::Close).unwrap();
+        assert!(task.await.unwrap().is_err());
+        assert_eq!(tokio::time::Instant::now(), now);
+        assert_eq!(control.attempts.load(Ordering::Acquire), 2);
+    }
+    awake.abort();
 }

@@ -13,21 +13,47 @@ use std::{
 use tokio::sync::{Notify, mpsc as async_mpsc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WritebackError(Arc<str>);
+pub struct WritebackError {
+    message: Arc<str>,
+    sqlite: Option<rusqlite::ffi::Error>,
+}
 impl WritebackError {
     pub fn new(message: impl fmt::Display) -> Self {
-        Self(message.to_string().into())
+        Self {
+            message: message.to_string().into(),
+            sqlite: None,
+        }
+    }
+    fn is_retryable(&self) -> bool {
+        use rusqlite::{ErrorCode, ffi};
+        self.sqlite.is_some_and(|error| {
+            matches!(
+                error.code,
+                ErrorCode::DiskFull
+                    | ErrorCode::DatabaseBusy
+                    | ErrorCode::DatabaseLocked
+                    | ErrorCode::SystemIoFailure
+                    | ErrorCode::OutOfMemory
+                    | ErrorCode::OperationInterrupted
+            ) && !matches!(
+                error.extended_code,
+                ffi::SQLITE_IOERR_CORRUPTFS | ffi::SQLITE_IOERR_DATA
+            )
+        })
     }
 }
 impl fmt::Display for WritebackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.message)
     }
 }
 impl std::error::Error for WritebackError {}
 impl From<rusqlite::Error> for WritebackError {
     fn from(error: rusqlite::Error) -> Self {
-        Self::new(error)
+        Self {
+            message: error.to_string().into(),
+            sqlite: error.sqlite_error().copied(),
+        }
     }
 }
 type Result<T> = std::result::Result<T, WritebackError>;
@@ -39,7 +65,7 @@ pub trait WriteBatch: Default + Send + 'static {
     /// An error can leave commit publication uncertain. Do not elide a later
     /// delete merely because an older put was originally a new row.
     fn mark_commit_uncertain(&mut self) {}
-    /// Must be atomic and idempotent; a failed batch can be explicitly retried.
+    /// Must be atomic and idempotent; recoverable failures are retried with backoff.
     fn write(&self, connection: &mut Connection) -> Result<()>;
 }
 #[derive(Clone, Copy)]
@@ -52,6 +78,23 @@ pub enum FailureAdmission {
     Retain,
     Reject,
 }
+#[derive(Default)]
+struct Retry {
+    delay: Duration,
+    deadline: Option<tokio::time::Instant>,
+}
+impl Retry {
+    fn schedule(&mut self) {
+        // Cap the interval, not the number of attempts: a long-lived service
+        // must still recover when space becomes available much later.
+        self.delay = if self.delay.is_zero() {
+            Duration::from_secs(1)
+        } else {
+            self.delay.saturating_mul(2).min(Duration::from_secs(60))
+        };
+        self.deadline = Some(tokio::time::Instant::now() + self.delay);
+    }
+}
 struct Pending<B> {
     batch: B,
     accepted: u64,
@@ -59,6 +102,7 @@ struct Pending<B> {
     operations: usize,
     first_dirty: Option<tokio::time::Instant>,
     failure: Option<WritebackError>,
+    retry: Retry,
     closed: bool,
 }
 struct Shared<B> {
@@ -190,6 +234,7 @@ impl<B: WriteBatch> WritebackOwner<B> {
                 operations: 0,
                 first_dirty: None,
                 failure: None,
+                retry: Retry::default(),
                 closed: false,
             }),
             changed: Notify::new(),
@@ -386,6 +431,7 @@ async fn commit<B: WriteBatch>(
             pending.operations = 0;
             pending.first_dirty = None;
             pending.failure = connection.failure();
+            pending.retry = Retry::default();
             return Ok(connection);
         }
         let batch = std::mem::take(&mut pending.batch);
@@ -409,8 +455,16 @@ async fn commit<B: WriteBatch>(
         Ok(()) => {
             pending.committed = through;
             pending.failure = None;
+            pending.retry = Retry::default();
         }
         Err(error) => {
+            // Failed initialization is sticky; retry only commits on a live
+            // connection. Schema/constraint/corruption errors need explicit repair.
+            if matches!(connection, LazyConnection::Open(_)) && error.is_retryable() {
+                pending.retry.schedule();
+            } else {
+                pending.retry = Retry::default();
+            }
             let mut batch = batch;
             batch.mark_commit_uncertain();
             batch.merge(std::mem::take(&mut pending.batch));
@@ -433,7 +487,7 @@ async fn run<B: WriteBatch>(
         let deadline = {
             let pending = shared.pending.lock();
             if pending.failure.is_some() {
-                None
+                pending.retry.deadline
             } else if policy
                 .early_commit_operations
                 .is_some_and(|limit| pending.operations >= limit)
