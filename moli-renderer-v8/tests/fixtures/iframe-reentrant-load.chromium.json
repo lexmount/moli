@@ -1,0 +1,83 @@
+{
+  "browser": {
+    "protocolVersion": "1.3",
+    "product": "Chrome/152.0.7977.82",
+    "revision": "@d04cdb24d67b081f6cf80200ffc5233f44b61109",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+    "jsVersion": "15.2.124.21"
+  },
+  "experimental_features": false,
+  "fixture_sha256": "9f7477119dd5cd2af3122c12e77b450167f0c8f04c7837b548fd1861d02de7cf",
+  "cases": [
+    {
+      "phase": "before-load",
+      "complete": true,
+      "events": [
+        "descendant-insert",
+        "descendant-load",
+        "window-load",
+        "owner-element-load",
+        "pageshow"
+      ]
+    },
+    {
+      "phase": "window-load",
+      "complete": true,
+      "events": [
+        "window-load",
+        "descendant-insert",
+        "owner-element-load",
+        "pageshow",
+        "descendant-load"
+      ]
+    },
+    {
+      "phase": "window-microtask",
+      "complete": true,
+      "events": [
+        "window-load",
+        "window-microtask",
+        "descendant-insert",
+        "owner-element-load",
+        "pageshow",
+        "descendant-load"
+      ]
+    },
+    {
+      "phase": "owner-load",
+      "complete": true,
+      "events": [
+        "window-load",
+        "owner-element-load",
+        "descendant-insert",
+        "pageshow",
+        "descendant-load"
+      ]
+    },
+    {
+      "phase": "pageshow",
+      "complete": true,
+      "events": [
+        "window-load",
+        "owner-element-load",
+        "pageshow",
+        "descendant-insert",
+        "descendant-load"
+      ]
+    },
+    {
+      "phase": "grandparent",
+      "complete": true,
+      "events": [
+        "window-load",
+        "descendant-insert",
+        "owner-element-load",
+        "pageshow",
+        "descendant-load",
+        "grandparent-window-load",
+        "grandparent-owner-load",
+        "grandparent-pageshow"
+      ]
+    }
+  ]
+}

@@ -107,3 +107,45 @@ async fn iframe_load_delivery_discards_queued_load_for_replaced_document() {
             .is_none()
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn iframe_reentrant_load_callbacks_preserve_chromium_descendant_boundaries() {
+    const SOURCE: &str = include_str!("../../../tests/fixtures/iframe-reentrant-load.js");
+    let oracle: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/iframe-reentrant-load.chromium.json"
+    ))
+    .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = crate::runtime::PageVmTaskExecutorTestHarness::new(
+        url::Url::parse("https://iframe-load-delivery.test/").unwrap(),
+        &loader,
+    );
+    vm.eval(&format!(
+        "({SOURCE}).then(value => globalThis.reentrantLoadResult = value, \
+         error => globalThis.reentrantLoadError = error.stack || String(error));"
+    ))
+    .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while vm.eval("typeof reentrantLoadResult").unwrap() == "undefined" {
+        assert_eq!(
+            vm.eval("typeof reentrantLoadError").unwrap(),
+            "undefined",
+            "reentrant load fixture failed: {}",
+            vm.eval("globalThis.reentrantLoadError").unwrap()
+        );
+        vm.run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .unwrap();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "reentrant iframe load fixture did not complete"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    let actual: serde_json::Value =
+        serde_json::from_str(&vm.eval("JSON.stringify(reentrantLoadResult)").unwrap()).unwrap();
+    assert_eq!(
+        actual, oracle["cases"],
+        "late descendants must not interrupt load callbacks, but still delay ancestor completion"
+    );
+}

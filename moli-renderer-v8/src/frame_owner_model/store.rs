@@ -2390,7 +2390,7 @@ impl FrameOwnerStore {
             .lifecycle_progress;
         let finished = lifecycle.finish_child_load_delivery_phase(action.phase())?;
         if !finished {
-            if lifecycle.has_incomplete_child_frames() {
+            if lifecycle.has_incomplete_child_frames() && !lifecycle.load_delivery_is_ready() {
                 return Some(FrameDocumentLoadDeliveryProgress::AwaitingDescendantCompletion(task));
             }
             return Some(FrameDocumentLoadDeliveryProgress::Continue(task));

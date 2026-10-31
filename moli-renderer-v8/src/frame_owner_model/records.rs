@@ -988,14 +988,17 @@ impl DocumentLifecycleRecord {
     pub(super) fn load_delivery_is_ready(&self) -> bool {
         self.load_delivery_kind == DocumentLoadDeliveryKind::Child
             && self.readiness == Some(DocumentReadinessState::Complete)
-            && !self.has_incomplete_child_frames()
-            && matches!(
-                self.load,
+            && match self.load {
                 DocumentLoadEventProgress::Ready
-                    | DocumentLoadEventProgress::WindowLoadDispatched
-                    | DocumentLoadEventProgress::OwnerElementLoadDispatched
-                    | DocumentLoadEventProgress::PageShowDispatched
-            )
+                | DocumentLoadEventProgress::PageShowDispatched => {
+                    !self.has_incomplete_child_frames()
+                }
+                // A descendant started by load callbacks delays aggregate
+                // frame completion, not the remaining load/pageshow callbacks.
+                DocumentLoadEventProgress::WindowLoadDispatched
+                | DocumentLoadEventProgress::OwnerElementLoadDispatched => true,
+                _ => false,
+            }
     }
 
     pub(super) fn child_owner_load_is_complete(&self) -> bool {
