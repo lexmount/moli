@@ -62,6 +62,32 @@ fn idb_object_store_native_receivers_reject_forgery_before_conversion_in_the_cal
                 }
             }
         }
+        // Genuine receivers still report conversion failures in the callee
+        // realm. Request and handle allocation uses its own owner factories.
+        const conversionFailures = [
+            ['index', [Symbol()], 'TypeError'],
+            ['deleteIndex', [Symbol()], 'TypeError'],
+            ['createIndex', [Symbol(), 'key'], 'TypeError'],
+            ['get', [Symbol()], 'DOMException'],
+            ['getKey', [Symbol()], 'DOMException'],
+            ['count', [Symbol()], 'DOMException'],
+            ['delete', [Symbol()], 'DOMException'],
+            ['openCursor', [Symbol()], 'DOMException'],
+            ['openKeyCursor', [Symbol()], 'DOMException'],
+            ['put', ['value', Symbol()], 'DOMException'],
+            ['add', ['value', Symbol()], 'DOMException'],
+        ];
+        for (const realm of [window, other]) {
+            for (const [name, values, kind] of conversionFailures) {
+                let error;
+                try { Reflect.apply(realm.IDBObjectStore.prototype[name], store, values); }
+                catch (caught) { error = caught; }
+                if (!error || Object.getPrototypeOf(error) !== realm[kind].prototype)
+                    throw new Error('conversion realm: IDBObjectStore.' + name);
+                if (kind === 'DOMException' && error.name !== 'DataError')
+                    throw new Error('conversion kind: IDBObjectStore.' + name);
+            }
+        }
         if (conversions !== 0 || traps !== 0)
             throw new Error('receiver validation ran author code before rejection');
         return 'ok';

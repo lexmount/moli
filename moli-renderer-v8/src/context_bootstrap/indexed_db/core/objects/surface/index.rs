@@ -42,6 +42,8 @@ pub(in crate::context_bootstrap::indexed_db) fn create_failed_index_object<'s>(
     store: v8::Local<'s, v8::Object>,
     info: &IndexInfo,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let context = store.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let key_path_value = key_path_to_js_value(scope, &info.key_path)?;
     IdbIndexObjectDeclaration::new(
         crate::util::v8_string_from_utf16_units(scope, info.name.as_utf16())?,
