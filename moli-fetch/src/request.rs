@@ -130,10 +130,12 @@ pub enum BrowserRequestMetadata {
     Manifest,
     Ping,
     Script,
+    SharedWorker,
     Style,
     StyleModule,
     TextTrack,
     Video,
+    Worker,
     Xhr,
 }
 

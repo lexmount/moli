@@ -382,68 +382,51 @@ fn append_browser_subresource_headers(
         return;
     }
 
-    match metadata {
-        BrowserRequestMetadata::Audio
-        | BrowserRequestMetadata::AudioWorklet
-        | BrowserRequestMetadata::Beacon
+    let accept = match metadata {
+        BrowserRequestMetadata::Image => {
+            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        }
+        BrowserRequestMetadata::EventSource => "text/event-stream",
+        BrowserRequestMetadata::Manifest => "*/*",
+        BrowserRequestMetadata::TextTrack => "text/vtt,*/*;q=0.1",
+        _ => "*/*",
+    };
+    append_encoded_header_if_missing(outgoing, "Accept", accept.to_owned());
+    append_encoded_header_if_missing(
+        outgoing,
+        "Accept-Language",
+        request
+            .browser_identity(config)
+            .accept_language()
+            .to_owned(),
+    );
+    let destination = match metadata {
+        BrowserRequestMetadata::Audio => "audio",
+        BrowserRequestMetadata::AudioWorklet => "audioworklet",
+        BrowserRequestMetadata::Font => "font",
+        BrowserRequestMetadata::Image => "image",
+        BrowserRequestMetadata::JsonModule => "json",
+        BrowserRequestMetadata::Manifest => "manifest",
+        BrowserRequestMetadata::Script => "script",
+        BrowserRequestMetadata::SharedWorker => "sharedworker",
+        BrowserRequestMetadata::Worker => "worker",
+        BrowserRequestMetadata::Style | BrowserRequestMetadata::StyleModule => "style",
+        BrowserRequestMetadata::TextTrack => "track",
+        BrowserRequestMetadata::Video => "video",
+        BrowserRequestMetadata::Beacon
         | BrowserRequestMetadata::EventSource
         | BrowserRequestMetadata::Fetch
-        | BrowserRequestMetadata::Font
-        | BrowserRequestMetadata::Image
-        | BrowserRequestMetadata::JsonModule
-        | BrowserRequestMetadata::Manifest
         | BrowserRequestMetadata::Ping
-        | BrowserRequestMetadata::Script
-        | BrowserRequestMetadata::Style
-        | BrowserRequestMetadata::StyleModule
-        | BrowserRequestMetadata::TextTrack
-        | BrowserRequestMetadata::Video
-        | BrowserRequestMetadata::Xhr => {
-            let accept = match metadata {
-                BrowserRequestMetadata::Image => {
-                    "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
-                }
-                BrowserRequestMetadata::EventSource => "text/event-stream",
-                BrowserRequestMetadata::Manifest => "*/*",
-                BrowserRequestMetadata::TextTrack => "text/vtt,*/*;q=0.1",
-                _ => "*/*",
-            };
-            append_encoded_header_if_missing(outgoing, "Accept", accept.to_owned());
-            append_encoded_header_if_missing(
-                outgoing,
-                "Accept-Language",
-                request
-                    .browser_identity(config)
-                    .accept_language()
-                    .to_owned(),
-            );
-            let destination = match metadata {
-                BrowserRequestMetadata::Audio => "audio",
-                BrowserRequestMetadata::AudioWorklet => "audioworklet",
-                BrowserRequestMetadata::Font => "font",
-                BrowserRequestMetadata::Image => "image",
-                BrowserRequestMetadata::JsonModule => "json",
-                BrowserRequestMetadata::Manifest => "manifest",
-                BrowserRequestMetadata::Script => "script",
-                BrowserRequestMetadata::Style | BrowserRequestMetadata::StyleModule => "style",
-                BrowserRequestMetadata::TextTrack => "track",
-                BrowserRequestMetadata::Video => "video",
-                BrowserRequestMetadata::Beacon
-                | BrowserRequestMetadata::EventSource
-                | BrowserRequestMetadata::Fetch
-                | BrowserRequestMetadata::Ping
-                | BrowserRequestMetadata::Xhr => "empty",
-            };
-            append_fetch_metadata_headers(
-                outgoing,
-                request,
-                request_url,
-                request.request_mode.as_ref(),
-                destination,
-            );
-            append_browser_client_hints(outgoing, request.browser_identity(config));
-        }
-    }
+        | BrowserRequestMetadata::Xhr => "empty",
+    };
+    append_fetch_metadata_headers(
+        outgoing,
+        request,
+        request_url,
+        request.request_mode.as_ref(),
+        destination,
+    );
+    append_browser_client_hints(outgoing, request.browser_identity(config));
 }
 
 // Fetch Metadata uses the current URL, including on every redirect hop.

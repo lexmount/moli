@@ -1440,6 +1440,8 @@ async fn fetch_worker_script_source(
     request_url.set_fragment(None);
     let mut request = moli_fetch::Request::new("GET", request_url.as_str(), None, vec![])
         .map_err(WorkerScriptLoadFailure::without_response)?
+        .with_request_mode(moli_fetch::RequestMode::SameOrigin)
+        .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Worker)
         .with_page_network_policy()
         .with_network_partition_key(network_partition_key.clone())
         .with_initiator_url(initiator_url)

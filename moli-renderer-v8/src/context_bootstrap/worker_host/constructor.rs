@@ -470,12 +470,18 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     return;
                 }
             };
-        let (script_url, script_source) =
-            match materialize_nested_worker_script_source(&resolved_url, &nested_context) {
-                Ok(source) => source,
-                Err(message) => {
-                    let _ = nested_context.wake_tx.send(
-                        crate::worker::WorkerMessage::NestedWorkerEvent {
+        let (script_url, script_source) = match materialize_nested_worker_script_source(
+            &resolved_url,
+            &nested_context,
+            worker_options.worker_type,
+            worker_options.credentials_mode.0,
+        ) {
+            Ok(source) => source,
+            Err(message) => {
+                let _ =
+                    nested_context
+                        .wake_tx
+                        .send(crate::worker::WorkerMessage::NestedWorkerEvent {
                             worker_id: nested_context.worker_id,
                             message: Box::new(crate::worker::WorkerToParentMessage::Error {
                                 message,
@@ -486,17 +492,16 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                                 phase: crate::worker::WorkerErrorPhase::Bootstrap,
                                 source: crate::worker::WorkerErrorSource::Runtime,
                             }),
-                        },
-                    );
-                    set_private_value(
-                        scope,
-                        worker,
-                        WORKER_ID_SLOT,
-                        v8::Number::new(scope, nested_context.worker_id.as_u64() as f64).into(),
-                    );
-                    return;
-                }
-            };
+                        });
+                set_private_value(
+                    scope,
+                    worker,
+                    WORKER_ID_SLOT,
+                    v8::Number::new(scope, nested_context.worker_id.as_u64() as f64).into(),
+                );
+                return;
+            }
+        };
         let mut network_policy = nested_context.network_policy.clone();
         network_policy.secure_context = Url::parse(&script_url).ok().is_some_and(|script_url| {
             worker_secure_context_for_script_url(
@@ -796,6 +801,8 @@ fn child_context_handle_from_global<'s>(
 fn materialize_nested_worker_script_source(
     script_url: &Url,
     context: &NestedWorkerContext,
+    script_kind: WorkerScriptKind,
+    module_credentials_mode: moli_fetch::RequestCredentialsMode,
 ) -> Result<(String, String), String> {
     if let Some(source) = materialize_worker_script_source(script_url)? {
         return Ok((script_url.to_string(), source));
@@ -804,6 +811,12 @@ fn materialize_nested_worker_script_source(
     let resource_url = worker_script_resource_url(script_url);
     let request = moli_fetch::Request::new("GET", resource_url.as_str(), None, vec![])
         .map_err(|error| error.to_string())?
+        .with_request_mode(moli_fetch::RequestMode::SameOrigin)
+        .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Worker)
+        .with_credentials_mode(match script_kind {
+            WorkerScriptKind::Classic => moli_fetch::RequestCredentialsMode::SameOrigin,
+            WorkerScriptKind::Module => module_credentials_mode,
+        })
         .with_page_network_policy()
         .with_network_partition_key(context.network_policy.network_partition_key.clone())
         .with_initiator_url(&context.base_url)

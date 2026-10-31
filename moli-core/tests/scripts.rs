@@ -2,6 +2,8 @@
 mod child_script_text;
 #[path = "scripts/integrity.rs"]
 mod integrity;
+#[path = "scripts/worker_fetch_metadata.rs"]
+mod worker_fetch_metadata;
 
 use moli_test_support as support;
 

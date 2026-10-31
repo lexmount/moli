@@ -317,3 +317,48 @@ async fn html_stream_metadata_is_filtered_for_each_redirect_destination() -> Res
 async fn raw_stream_metadata_is_filtered_for_each_redirect_destination() -> Result<()> {
     check_redirects(Transport::Raw).await
 }
+
+#[test]
+fn worker_destinations_use_their_native_request_mode() -> Result<()> {
+    let config = FetchConfig::default();
+    for (metadata, destination) in [
+        (BrowserRequestMetadata::Worker, "worker"),
+        (BrowserRequestMetadata::SharedWorker, "sharedworker"),
+    ] {
+        for target in [
+            "https://example.test/worker.js",
+            "http://127.0.0.1/worker.js",
+        ] {
+            let url = Url::parse(target)?;
+            let request = Request::new("GET", target, None, vec![])?
+                .with_request_mode(RequestMode::SameOrigin)
+                .with_browser_request_metadata(metadata)
+                .with_initiator_url(&url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&url));
+            let headers = crate::outgoing_request_headers(&config, &request, None);
+            let value = |name: &str| {
+                headers
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                    .map(|(_, value)| value.as_str())
+            };
+            assert_eq!(
+                value("Sec-Fetch-Mode"),
+                Some("same-origin"),
+                "{target}, {metadata:?}"
+            );
+            assert_eq!(
+                value("Sec-Fetch-Dest"),
+                Some(destination),
+                "{target}, {metadata:?}"
+            );
+            assert_eq!(
+                value("Sec-Fetch-Site"),
+                Some("same-origin"),
+                "{target}, {metadata:?}"
+            );
+            assert_eq!(value("Sec-Fetch-User"), None, "{target}, {metadata:?}");
+        }
+    }
+    Ok(())
+}

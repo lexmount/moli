@@ -1259,8 +1259,41 @@ try {{
     (format!("http://{addr}"), request_rx, server)
 }
 
-async fn spawn_cross_origin_redirecting_shared_worker_script_servers()
--> (String, JoinHandle<()>, JoinHandle<()>) {
+struct SharedWorkerRedirectServers {
+    origin: String,
+    source_server: JoinHandle<()>,
+    target_server: JoinHandle<()>,
+    source_response: tokio::sync::oneshot::Receiver<()>,
+    target_request: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl SharedWorkerRedirectServers {
+    async fn assert_rejected_before_cross_origin_fetch(&mut self) {
+        tokio::time::timeout(Duration::from_secs(5), &mut self.source_response)
+            .await
+            .expect("the same-origin redirect response must complete")
+            .expect("the source fixture must write its redirect response");
+        assert!(
+            matches!(
+                self.target_request.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "same-origin worker mode must reject before contacting a cross-origin redirect target"
+        );
+    }
+}
+
+impl Drop for SharedWorkerRedirectServers {
+    fn drop(&mut self) {
+        self.source_server.abort();
+        self.target_server.abort();
+    }
+}
+
+async fn spawn_cross_origin_redirecting_shared_worker_script_servers() -> SharedWorkerRedirectServers
+{
+    let (source_response_tx, source_response) = tokio::sync::oneshot::channel();
+    let (target_request_tx, target_request) = tokio::sync::oneshot::channel();
     let target_listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind shared worker redirect target server");
@@ -1273,6 +1306,7 @@ async fn spawn_cross_origin_redirecting_shared_worker_script_servers()
             .accept()
             .await
             .expect("accept shared worker redirect target request");
+        let _ = target_request_tx.send(());
         let request = read_http_request_head(&mut stream)
             .await
             .expect("read shared worker redirect target request");
@@ -1322,12 +1356,21 @@ async fn spawn_cross_origin_redirecting_shared_worker_script_servers()
             .write_all(response.as_bytes())
             .await
             .expect("write shared worker redirect source response");
+        let _ = source_response_tx.send(());
     });
 
-    (source_base_url, source_server, target_server)
+    SharedWorkerRedirectServers {
+        origin: source_base_url,
+        source_server,
+        target_server,
+        source_response,
+        target_request,
+    }
 }
 
-async fn spawn_sw_return_redirect_servers() -> (String, JoinHandle<()>, JoinHandle<()>) {
+async fn spawn_sw_return_redirect_servers() -> SharedWorkerRedirectServers {
+    let (source_response_tx, source_response) = tokio::sync::oneshot::channel();
+    let (target_request_tx, target_request) = tokio::sync::oneshot::channel();
     let cross_listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind shared worker intermediate redirect server");
@@ -1352,6 +1395,7 @@ async fn spawn_sw_return_redirect_servers() -> (String, JoinHandle<()>, JoinHand
             .accept()
             .await
             .expect("accept shared worker intermediate redirect request");
+        let _ = target_request_tx.send(());
         let request = read_http_request_head(&mut stream)
             .await
             .expect("read shared worker intermediate redirect request");
@@ -1391,6 +1435,7 @@ async fn spawn_sw_return_redirect_servers() -> (String, JoinHandle<()>, JoinHand
             .write_all(response.as_bytes())
             .await
             .expect("write shared worker initial redirect response");
+        let _ = source_response_tx.send(());
 
         let (mut stream, _) = source_listener
             .accept()
@@ -1417,7 +1462,13 @@ async fn spawn_sw_return_redirect_servers() -> (String, JoinHandle<()>, JoinHand
             .expect("write shared worker returning redirect target response");
     });
 
-    (source_base_url, source_server, cross_server)
+    SharedWorkerRedirectServers {
+        origin: source_base_url,
+        source_server,
+        target_server: cross_server,
+        source_response,
+        target_request,
+    }
 }
 
 async fn drive_shared_worker_probe(page_vm: &mut PageVm, context: &str) -> anyhow::Result<()> {

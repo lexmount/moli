@@ -571,8 +571,8 @@ async fn worker_script_load_failure_does_not_dispatch_window_error() {
 #[tokio::test]
 async fn shared_worker_rejects_cross_origin_redirected_script() {
     run_page_vm_async_test(async move {
-        let (base_url, source_server, target_server) =
-            spawn_cross_origin_redirecting_shared_worker_script_servers().await;
+        let mut servers = spawn_cross_origin_redirecting_shared_worker_script_servers().await;
+        let base_url = &servers.origin;
         let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document url");
         let mut page_vm = test_page_vm_with_document_url(document_url);
         let local_executor = page_vm.local_executor.clone();
@@ -617,12 +617,7 @@ async fn shared_worker_rejects_cross_origin_redirected_script() {
             .await
             .expect("SharedWorker redirect rejection test should run on owner lane");
 
-        source_server
-            .await
-            .expect("shared worker redirect source server should finish");
-        target_server
-            .await
-            .expect("shared worker redirect target server should finish");
+        servers.assert_rejected_before_cross_origin_fetch().await;
     })
     .await;
 }
@@ -690,8 +685,8 @@ async fn shared_worker_runtime_error_does_not_notify_client_onerror() {
 #[tokio::test]
 async fn shared_worker_rejects_cross_origin_intermediate_redirect() {
     run_page_vm_async_test(async move {
-        let (base_url, source_server, cross_server) =
-            spawn_sw_return_redirect_servers().await;
+        let mut servers = spawn_sw_return_redirect_servers().await;
+        let base_url = &servers.origin;
         let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document url");
         let mut page_vm = test_page_vm_with_document_url(document_url);
         let local_executor = page_vm.local_executor.clone();
@@ -734,12 +729,7 @@ async fn shared_worker_rejects_cross_origin_intermediate_redirect() {
             .await
             .expect("SharedWorker intermediate redirect rejection test should run on owner lane");
 
-        source_server
-            .await
-            .expect("shared worker returning redirect source server should finish");
-        cross_server
-            .await
-            .expect("shared worker intermediate redirect server should finish");
+        servers.assert_rejected_before_cross_origin_fetch().await;
     })
     .await;
 }

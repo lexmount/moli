@@ -564,6 +564,8 @@ fn shared_worker_script_request(
         .map(|request| {
             request
                 .with_credentials_mode(request_policy.credentials_mode)
+                .with_request_mode(moli_fetch::RequestMode::SameOrigin)
+                .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::SharedWorker)
                 .with_page_network_policy()
                 .with_initiator_url(initiator_url)
                 .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
@@ -697,6 +699,11 @@ mod tests {
             )
             .unwrap();
             assert_eq!(request.credentials_mode, expected);
+            assert_eq!(request.request_mode, moli_fetch::RequestMode::SameOrigin);
+            assert_eq!(
+                request.browser_request_metadata(),
+                Some(moli_fetch::BrowserRequestMetadata::SharedWorker)
+            );
             assert!(request.uses_page_network_policy());
         }
     }
