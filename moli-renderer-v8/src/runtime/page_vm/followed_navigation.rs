@@ -70,11 +70,23 @@ pub(super) async fn load_followed_location_navigation(
     request_body: Option<bytes::Bytes>,
     request_headers: Vec<(String, String)>,
     browser_navigation_kind: BrowserNavigationRequestKind,
+    blob_resource: Option<&crate::network_host::CapturedBlobResource>,
 ) -> Result<LoadedFollowedLocationNavigation> {
     debug!(%url, "starting pre-commit location navigation fetch");
-    if let Some(response) = about_blank_navigation_response(&url).map(Ok).or_else(|| {
+    let local_response = match blob_resource {
+        Some(resource) => {
+            resource
+                .response(&url, &request_method, &request_headers)
+                .await
+        }
+        None => None,
+    }
+    .or_else(|| about_blank_navigation_response(&url).map(Ok))
+    .or_else(|| {
         crate::network_host::local_url_response_result(&url, &request_method, &request_headers)
-    }) {
+            .map(|response| response.map_err(Into::into))
+    });
+    if let Some(response) = local_response {
         let response = response?;
         if matches!(response.status, 204 | 205) {
             return Ok(LoadedFollowedLocationNavigation::NoDocument);
@@ -856,6 +868,7 @@ impl PageVm {
             request_body,
             request_headers,
             browser_navigation_kind,
+            pending.blob_resource.as_ref(),
         )
         .await
         {
@@ -1706,6 +1719,7 @@ mod tests {
                 None,
                 Vec::new(),
                 BrowserNavigationRequestKind::Navigate,
+                None,
             )
             .await;
             match result {
@@ -1724,6 +1738,7 @@ mod tests {
             Some(bytes::Bytes::from_static(b"upload")),
             Vec::new(),
             BrowserNavigationRequestKind::Navigate,
+            None,
         )
         .await
         .unwrap();

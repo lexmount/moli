@@ -59,6 +59,7 @@ pub use navigation_history::{
 mod nested_main;
 mod owner;
 mod owner_deadline_index;
+pub use crate::network_host::CapturedBlobResource as RendererBlobUrlResource;
 pub use auxiliary_page::RendererPendingAuxiliaryPage;
 pub(crate) use auxiliary_page::{
     RendererAuxiliaryPageAllocator, RendererRelatedInitialEmptyPageInit,

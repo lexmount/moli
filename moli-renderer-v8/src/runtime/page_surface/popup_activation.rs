@@ -212,6 +212,7 @@ pub struct RendererPopupActivationParts {
     pub initial_document_environment: Option<super::RendererCapturedDocumentEnvironment>,
     pub pending_auxiliary_page: Option<crate::runtime::RendererPendingAuxiliaryPage>,
     pub url: String,
+    pub blob_resource: Option<super::super::RendererBlobUrlResource>,
     pub target_name: String,
     pub session_storage_store: Option<SharedWebStorageStore>,
     pub initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
@@ -273,6 +274,7 @@ impl RendererPendingPopupActivation {
                 document_response: None,
                 initial_document_environment: None,
                 pending_auxiliary_page: None,
+                blob_resource: crate::network_host::CapturedBlobResource::capture_serialized(&url),
                 url,
                 target_name,
                 session_storage_store: None,
@@ -304,6 +306,7 @@ impl RendererPendingPopupActivation {
                 document_response: None,
                 initial_document_environment: None,
                 pending_auxiliary_page: None,
+                blob_resource: crate::network_host::CapturedBlobResource::capture_serialized(&url),
                 url,
                 target_name,
                 session_storage_store: None,
@@ -419,6 +422,7 @@ impl PartialEq for RendererPopupActivationParts {
             && self.initial_document_environment == other.initial_document_environment
             && self.pending_auxiliary_page == other.pending_auxiliary_page
             && self.url == other.url
+            && self.blob_resource == other.blob_resource
             && self.target_name == other.target_name
             && match (&self.session_storage_store, &other.session_storage_store) {
                 (None, None) => true,

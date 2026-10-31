@@ -1,6 +1,7 @@
 use super::*;
 use std::path::Path;
 
+mod blob_url_lifetime;
 mod browser_close;
 mod captured_document_navigation;
 mod child_navigation_wait;

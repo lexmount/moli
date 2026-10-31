@@ -121,6 +121,7 @@ impl JsContextHost {
     ) -> Option<u64> {
         let PendingChildFrameNavigation {
             bootstrap,
+            blob_resource,
             initiator,
             initiator_url,
             target_snapshot,
@@ -247,6 +248,28 @@ impl JsContextHost {
                     target: target_snapshot,
                     source_policy,
                 };
+                if let Some(resource) = blob_resource
+                    && let Some(response) = resource
+                        .response(
+                            &request.url,
+                            &request.method,
+                            &request.request_headers.to_byte_strings(),
+                        )
+                        .await
+                {
+                    let response = response.map_err(|error| error.to_string())?;
+                    let (head, body) = response.into_body();
+                    return child_document_load_outcome_from_response(
+                        request_snapshot,
+                        head,
+                        body,
+                        ChildDocumentTiming {
+                            origin: timing_origin.as_ref(),
+                            response: Default::default(),
+                        },
+                        &encoding_context,
+                    );
+                }
                 if let Some(client_id) = service_worker_client_id
                     && let Some(response) = browser_context_runtime
                         .fetch_service_worker_child_main_resource_for_reserved_client(

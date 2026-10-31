@@ -362,6 +362,7 @@ impl NavigationResultProjection {
 
 #[derive(Debug, Clone)]
 pub struct NavigationDispatchState {
+    pub(crate) blob_resource: Option<moli_core::page::RendererBlobUrlResource>,
     pub(crate) web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     pub(crate) navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
     pub(crate) initial_document_environment:

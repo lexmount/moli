@@ -21,6 +21,7 @@ impl JsContextHost {
     ) -> Option<ChildDocumentCommitResult> {
         let PendingChildFrameNavigation {
             bootstrap,
+            blob_resource,
             initiator,
             initiator_url,
             target_snapshot,
@@ -94,72 +95,75 @@ impl JsContextHost {
                     .as_ref()
                     .and_then(crate::runtime::RendererNavigationPolicy::referrer_policy)
             });
-        let cached_snapshot =
-            match self.materialize_local_child_snapshot_for_bootstrap(handle, &bootstrap) {
-                LocalChildDocumentPreparation::Ready(snapshot) => {
-                    let mut snapshot = *snapshot;
-                    if let Some(policy) = &source_policy {
-                        policy.apply_to(&mut snapshot.policy_container, &snapshot.url);
-                    }
-                    if matches!(&bootstrap, ChildBrowsingContextBootstrap::Srcdoc { .. }) {
-                        let source_url = request_initiator
-                            .as_ref()
-                            .map(|source| source.url().clone())
-                            .or_else(|| initiator_url.clone())
-                            .or_else(|| {
-                                self.owner_dispatch_scope_for_node(handle)
-                                    .and_then(|owner| {
-                                        self.document_referrer_source_url_for_dispatch_scope(owner)
-                                    })
-                            });
-                        snapshot.policy_container.document_referrer = source_url
-                            .and_then(|source| {
-                                moli_fetch::referrer_value(
-                                    &source,
-                                    &snapshot.url,
-                                    Some(
-                                        target_snapshot
-                                            .referrer_policy(initiator, source_referrer_policy),
-                                    ),
-                                    None,
-                                )
-                            })
-                            .unwrap_or_default();
-                    }
-                    snapshot = self.apply_page_csp_bypass_to_child_snapshot(snapshot);
-                    if !target_snapshot.apply_response_policy(
-                        &mut snapshot.policy_container,
-                        &snapshot.url,
-                        &[],
-                    ) {
-                        let policy = crate::document_runtime::DocumentPolicyContainer {
-                            required_content_security_policy: snapshot
-                                .policy_container
-                                .required_content_security_policy,
-                            ..Default::default()
-                        };
-                        snapshot = ChildBrowsingContextSnapshot::html(
-                            snapshot.url,
-                            "<!DOCTYPE html><html><head></head><body></body></html>".to_owned(),
-                        )
-                        .with_policy_container(policy);
-                        creation_kind = DocumentCreationKind::Error;
-                    }
-                    Some(snapshot)
+        let cached_snapshot = match self.materialize_local_child_snapshot_for_bootstrap(
+            handle,
+            &bootstrap,
+            blob_resource.as_ref(),
+        ) {
+            LocalChildDocumentPreparation::Ready(snapshot) => {
+                let mut snapshot = *snapshot;
+                if let Some(policy) = &source_policy {
+                    policy.apply_to(&mut snapshot.policy_container, &snapshot.url);
                 }
-                LocalChildDocumentPreparation::Historical(snapshot) => Some(*snapshot),
-                LocalChildDocumentPreparation::Unavailable => None,
-                LocalChildDocumentPreparation::IgnoredNavigation => {
-                    crate::context_bootstrap::finish_joint_history_without_document_commit(
-                        scope,
-                        self,
-                        super::super::OwnerDispatchScope::Child(handle),
-                    );
-                    self.cancel_child_document_navigation_before_load(handle, navigation_load);
-                    self.sync_existing_child_browsing_context_window_state(scope, handle);
-                    return Some(ChildDocumentCommitResult::ready(None));
+                if matches!(&bootstrap, ChildBrowsingContextBootstrap::Srcdoc { .. }) {
+                    let source_url = request_initiator
+                        .as_ref()
+                        .map(|source| source.url().clone())
+                        .or_else(|| initiator_url.clone())
+                        .or_else(|| {
+                            self.owner_dispatch_scope_for_node(handle)
+                                .and_then(|owner| {
+                                    self.document_referrer_source_url_for_dispatch_scope(owner)
+                                })
+                        });
+                    snapshot.policy_container.document_referrer = source_url
+                        .and_then(|source| {
+                            moli_fetch::referrer_value(
+                                &source,
+                                &snapshot.url,
+                                Some(
+                                    target_snapshot
+                                        .referrer_policy(initiator, source_referrer_policy),
+                                ),
+                                None,
+                            )
+                        })
+                        .unwrap_or_default();
                 }
-            };
+                snapshot = self.apply_page_csp_bypass_to_child_snapshot(snapshot);
+                if !target_snapshot.apply_response_policy(
+                    &mut snapshot.policy_container,
+                    &snapshot.url,
+                    &[],
+                ) {
+                    let policy = crate::document_runtime::DocumentPolicyContainer {
+                        required_content_security_policy: snapshot
+                            .policy_container
+                            .required_content_security_policy,
+                        ..Default::default()
+                    };
+                    snapshot = ChildBrowsingContextSnapshot::html(
+                        snapshot.url,
+                        "<!DOCTYPE html><html><head></head><body></body></html>".to_owned(),
+                    )
+                    .with_policy_container(policy);
+                    creation_kind = DocumentCreationKind::Error;
+                }
+                Some(snapshot)
+            }
+            LocalChildDocumentPreparation::Historical(snapshot) => Some(*snapshot),
+            LocalChildDocumentPreparation::Unavailable => None,
+            LocalChildDocumentPreparation::IgnoredNavigation => {
+                crate::context_bootstrap::finish_joint_history_without_document_commit(
+                    scope,
+                    self,
+                    super::super::OwnerDispatchScope::Child(handle),
+                );
+                self.cancel_child_document_navigation_before_load(handle, navigation_load);
+                self.sync_existing_child_browsing_context_window_state(scope, handle);
+                return Some(ChildDocumentCommitResult::ready(None));
+            }
+        };
         let requires_async_load = cached_snapshot.is_none()
             && self.child_document_bootstrap_requires_async_load(&bootstrap);
         let owner_credentialless = self
@@ -184,6 +188,7 @@ impl JsContextHost {
                         initiator,
                         target_snapshot,
                     )
+                    .with_blob_resource(blob_resource)
                     .with_source_policy(source_policy)
                     .with_request_initiator(request_initiator),
                 )

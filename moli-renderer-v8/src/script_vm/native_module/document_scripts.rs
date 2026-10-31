@@ -983,6 +983,12 @@ impl ScriptVm {
                 return RuntimeModuleScriptGraphStart::Started(actions);
             }
         };
+        let resource = self
+            .document_runtime
+            .runtime_script_work_mut()
+            .dynamic_scripts
+            .take_blob_resource(dynamic_script_owner_id);
+        let job = job.with_blob_resource(resource);
         let continuation = continuation.with_resumed_graph_job(job);
         let advance = continuation.advance_graph(self);
         let actions = self.handle_runtime_module_script_graph_advance_for_dynamic_owner(advance);

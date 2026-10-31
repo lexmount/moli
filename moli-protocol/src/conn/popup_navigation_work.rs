@@ -21,6 +21,7 @@ pub(crate) struct PopupTargetNavigationOwnerAction {
     document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
     navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
+    blob_resource: Option<moli_core::page::RendererBlobUrlResource>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,6 +49,7 @@ impl PopupTargetNavigationOwnerAction {
             document_response: None,
             initial_document_environment: None,
             navigation_initiator: None,
+            blob_resource: None,
         })
     }
 
@@ -69,6 +71,14 @@ impl PopupTargetNavigationOwnerAction {
 
     pub(crate) fn browser_context_id(&self) -> &str {
         &self.browser_context_id
+    }
+
+    pub(crate) fn with_blob_resource(
+        mut self,
+        resource: Option<moli_core::page::RendererBlobUrlResource>,
+    ) -> Self {
+        self.blob_resource = resource;
+        self
     }
 
     pub(crate) fn with_navigation_initiator(
@@ -114,6 +124,7 @@ impl PopupTargetNavigationOwnerAction {
         Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
         Option<moli_core::page::RendererCapturedDocumentEnvironment>,
         Option<moli_core::page::RendererNavigationInitiator>,
+        Option<moli_core::page::RendererBlobUrlResource>,
     ) {
         (
             CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
@@ -128,6 +139,7 @@ impl PopupTargetNavigationOwnerAction {
             self.document_response,
             self.initial_document_environment,
             self.navigation_initiator,
+            self.blob_resource,
         )
     }
 }

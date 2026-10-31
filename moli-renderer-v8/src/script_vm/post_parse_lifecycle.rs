@@ -117,7 +117,7 @@ impl ScriptVm {
     ) {
         // Check CSP before starting the source fetch. A CORS or network failure
         // must not bypass CSP reporting by skipping the execution boundary.
-        let (payload, binding) = admission.into_parts();
+        let (payload, binding, blob_resource) = admission.into_parts();
         let payload = match payload {
             crate::host::RuntimeScriptAdmissionPayload::Script(script)
                 if script.source_kind == crate::types::ScriptSourceKind::External
@@ -162,7 +162,8 @@ impl ScriptVm {
             }
             payload => payload,
         };
-        let admission = RuntimeScriptAdmission::from_boxed_payload(Box::new(payload), binding);
+        let admission = RuntimeScriptAdmission::from_boxed_payload(Box::new(payload), binding)
+            .with_blob_resource(blob_resource);
         let document_character_set = self.document_runtime.document_character_set().to_owned();
         let service_worker_context = {
             let host = self._context_host.borrow();

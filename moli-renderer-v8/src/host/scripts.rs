@@ -242,6 +242,7 @@ pub(crate) struct FailedDynamicScript {
 pub(crate) struct RuntimeScriptAdmission {
     payload: Box<RuntimeScriptAdmissionPayload>,
     load_delay_binding: MainDocumentScriptLoadDelayLease,
+    blob_resource: Option<crate::network_host::CapturedBlobResource>,
 }
 
 #[derive(Debug)]
@@ -266,7 +267,29 @@ impl RuntimeScriptAdmission {
         Self {
             payload,
             load_delay_binding,
+            blob_resource: None,
         }
+    }
+
+    pub(crate) fn capture_blob_resource(
+        mut self,
+        environment: impl FnOnce() -> Option<crate::network_host::BlobUrlFetchEnvironment>,
+    ) -> Self {
+        if let RuntimeScriptAdmissionPayload::Script(script) = &*self.payload
+            && matches!(script.source, crate::planning::ScriptSource::External)
+        {
+            self.blob_resource = crate::network_host::CapturedBlobResource::capture(&script.url)
+                .map(|resource| resource.for_fetch_environment(environment().as_ref()));
+        }
+        self
+    }
+
+    pub(crate) fn with_blob_resource(
+        mut self,
+        resource: Option<crate::network_host::CapturedBlobResource>,
+    ) -> Self {
+        self.blob_resource = resource;
+        self
     }
 
     pub(crate) fn into_parts(
@@ -274,8 +297,9 @@ impl RuntimeScriptAdmission {
     ) -> (
         RuntimeScriptAdmissionPayload,
         MainDocumentScriptLoadDelayLease,
+        Option<crate::network_host::CapturedBlobResource>,
     ) {
-        (*self.payload, self.load_delay_binding)
+        (*self.payload, self.load_delay_binding, self.blob_resource)
     }
 
     pub(crate) fn owner(&self) -> crate::frame_owner_model::FrameDocumentTaskOwner {

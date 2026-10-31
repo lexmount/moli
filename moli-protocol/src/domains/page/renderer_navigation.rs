@@ -215,6 +215,7 @@ impl PreparedRendererNavigation {
                     None,
                     navigation.initial_document_environment().cloned(),
                     navigation.navigation_initiator().cloned(),
+                    navigation.blob_resource().cloned(),
                 );
                 super::navigation::finish_started_navigation_command_for_parts(
                     conn,

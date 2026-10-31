@@ -211,6 +211,7 @@ impl NativeModuleFetchContext {
         self: Arc<Self>,
         load: ResourceLoadLease,
         request: Request,
+        blob_resource: Option<crate::network_host::CapturedBlobResource>,
         callback: impl FnOnce(
             anyhow::Result<(NavigationResponse, Option<FetchResponseFilter>, bool)>,
             Option<moli_fetch::FetchResponseTiming>,
@@ -228,6 +229,11 @@ impl NativeModuleFetchContext {
         runner.clone().spawn(Box::pin(async move {
             let result = tokio::select! {
                 result = async {
+                    if let Some(resource) = blob_resource
+                        && let Some(response) = resource.response(&request.url, "GET", &[]).await
+                    {
+                        return response.map(|response| (response.into(), None, false));
+                    }
                     match self.service_worker.browser_context_runtime.fetch_service_worker_subresource_for_client_with_metadata_and_cancellation(self.service_worker.client_id, self.service_worker.document_url.clone(), &request, &request_client, runner, self.destination, self.resource_type, cancel.clone()).await? {
                         Some(response) => Ok((*response.response, response.response_filter, !response.from_network_fallback)),
                         None => {

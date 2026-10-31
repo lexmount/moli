@@ -1692,6 +1692,7 @@ fn no_content_navigation_retains_response_metadata_with_live_progress() {
             web_mcp_invocation: None,
             navigation_initiator: None,
             initial_document_environment: None,
+            blob_resource: None,
             auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,

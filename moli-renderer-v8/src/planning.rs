@@ -527,6 +527,30 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome_wit
     }
 }
 
+pub(crate) async fn load_captured_blob_script_source_outcome(
+    script: &PreparedScript,
+    request_origin: &moli_url::WebOrigin,
+    resource: &crate::network_host::CapturedBlobResource,
+    document_character_set: Option<&str>,
+) -> PreparedScriptSourceLoadOutcome {
+    match resource.response(&script.url, "GET", &[]).await {
+        Some(Ok(response)) => external_script_source_load_outcome_from_response(
+            script,
+            request_origin,
+            response.into(),
+            document_character_set,
+        ),
+        Some(Err(error)) => failed_external_script_source_load_outcome(format!(
+            "failed to fetch script `{}`: {error}",
+            script.url,
+        )),
+        None => failed_external_script_source_load_outcome(format!(
+            "failed to fetch script `{}`: captured Blob URL does not match",
+            script.url,
+        )),
+    }
+}
+
 fn local_or_unsupported_external_script_source_load_outcome(
     script: &PreparedScript,
     request_origin: &moli_url::WebOrigin,

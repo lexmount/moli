@@ -592,6 +592,7 @@ impl ScriptVm {
                     pending.browser_navigation_kind,
                     runtime_command_cause.clone(),
                 )
+                .with_blob_resource(pending.blob_resource)
                 .with_navigation_history(
                     pending.entry_seed.map(|seed| self.top_level_navigation_history().request(seed)),
                 )

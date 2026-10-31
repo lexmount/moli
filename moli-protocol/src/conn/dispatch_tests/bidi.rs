@@ -25,6 +25,7 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
                     web_mcp_invocation: None,
                     navigation_initiator: None,
                     initial_document_environment: None,
+                    blob_resource: None,
                     auxiliary_document_response: None,
                     redirect_chain: Vec::new(),
                     redirect_headers: None,

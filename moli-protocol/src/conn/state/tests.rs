@@ -28,6 +28,7 @@ fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchS
         web_mcp_invocation: None,
         navigation_initiator: None,
         initial_document_environment: None,
+        blob_resource: None,
         auxiliary_document_response: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,

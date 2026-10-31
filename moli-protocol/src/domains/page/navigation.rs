@@ -1885,6 +1885,7 @@ pub(super) fn start_session_owner_navigation_from_renderer(
     document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
     navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
+    blob_resource: Option<moli_core::page::RendererBlobUrlResource>,
 ) -> NavigateCommandStart {
     if let Some(history) = &navigation_history {
         match history.navigation_type() {
@@ -1989,6 +1990,7 @@ pub(super) fn start_session_owner_navigation_from_renderer(
             document_response,
             initial_document_environment,
             navigation_initiator,
+            blob_resource,
         )
     };
     clear_crash_state_for_renderer_navigation(conn, start, owner, &reloaded_after_crash_session_ids)
@@ -2651,6 +2653,7 @@ fn start_navigate_to_url_command_with_background_policy(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -2681,6 +2684,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
     navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
+    blob_resource: Option<moli_core::page::RendererBlobUrlResource>,
 ) -> NavigateCommandStart {
     let command_session_id = owner.session_id();
     let mut out = Vec::new();
@@ -2736,6 +2740,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         navigation_history,
     );
     let mut navigation_state = NavigationDispatchState {
+        blob_resource,
         web_mcp_invocation,
         navigation_initiator,
         initial_document_environment,

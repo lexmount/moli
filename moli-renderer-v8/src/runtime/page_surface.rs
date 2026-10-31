@@ -323,6 +323,7 @@ pub struct RendererDocumentSourcedTopLevelLocationNavigation {
 struct RendererTopLevelNavigationRequest {
     web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     url: String,
+    blob_resource: Option<super::RendererBlobUrlResource>,
     request_method: String,
     request_body: Option<bytes::Bytes>,
     request_headers: Vec<(String, String)>,
@@ -366,6 +367,7 @@ impl RendererDocumentSourcedTopLevelLocationNavigation {
             source_document,
             request: Box::new(RendererTopLevelNavigationRequest {
                 web_mcp_invocation: None,
+                blob_resource: crate::network_host::CapturedBlobResource::capture_serialized(&url),
                 url,
                 request_method,
                 request_body,
@@ -393,6 +395,18 @@ impl RendererDocumentSourcedTopLevelLocationNavigation {
 
     pub fn navigation_initiator(&self) -> Option<&RendererNavigationInitiator> {
         self.navigation_initiator.as_ref()
+    }
+
+    pub(crate) fn with_blob_resource(
+        mut self,
+        resource: Option<super::RendererBlobUrlResource>,
+    ) -> Self {
+        self.request.blob_resource = resource;
+        self
+    }
+
+    pub fn blob_resource(&self) -> Option<&super::RendererBlobUrlResource> {
+        self.request.blob_resource.as_ref()
     }
 
     pub fn initial_document_environment(&self) -> Option<&RendererCapturedDocumentEnvironment> {
