@@ -91,6 +91,7 @@ fn main() {
     for header in [
         "curl.h",
         "moli_timing.h",
+        "moli_websocket.h",
         "curlver.h",
         "easy.h",
         "options.h",

@@ -1,15 +1,17 @@
 //! Persistent WebSocket residences on their own socket-pool Multi.
 //! The runtime owns perform, completion dispatch and the single wait loop.
 
-use std::{collections::HashMap, time::Instant};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use curl::{
     easy::Easy2,
     multi::{Multi, MultiWaker, WaitFd},
 };
+use parking_lot::Mutex;
 
 use super::{
     SessionIo, Submission,
+    endpoint::{EndpointGate, EndpointLocks},
     readiness::SocketReadiness,
     request::{self, Handshake},
     session::{Session, Step},
@@ -35,6 +37,7 @@ pub(crate) struct WebSocketRegistry {
     receive: Vec<u8>,
     closed: bool,
     owner_waker: MultiWaker,
+    endpoints: Arc<Mutex<EndpointLocks>>,
 }
 
 impl WebSocketRegistry {
@@ -50,6 +53,7 @@ impl WebSocketRegistry {
             receive: Vec::new(),
             closed: false,
             owner_waker,
+            endpoints: Arc::default(),
         }
     }
 
@@ -93,7 +97,7 @@ impl WebSocketRegistry {
                 .finish(Err("curl WebSocket runtime shut down".to_owned()));
             return;
         }
-        let easy = match request::configure(&submission.request) {
+        let mut easy = match request::configure(&submission.request) {
             Ok(easy) => easy,
             Err(error) => {
                 submission.io.finish(Err(error.to_string()));
@@ -101,11 +105,9 @@ impl WebSocketRegistry {
             }
         };
         #[cfg(test)]
-        let easy = {
-            let mut easy = easy;
+        {
             easy.get_mut().pool_waiting = Some(submission.io.control.pool_waiting.clone());
-            easy
-        };
+        }
         let Some(deadline) = Instant::now().checked_add(submission.request.handshake_timeout)
         else {
             submission
@@ -113,6 +115,17 @@ impl WebSocketRegistry {
                 .finish(Err("WebSocket handshake timeout is too large".to_owned()));
             return;
         };
+        if let Err(error) = EndpointGate::install(
+            &mut easy,
+            &submission.request,
+            submission.id,
+            self.endpoints.clone(),
+            #[cfg(test)]
+            submission.io.control.endpoint_waiting.clone(),
+        ) {
+            submission.io.finish(Err(error.to_string()));
+            return;
+        }
         let pending = Pending {
             id: submission.id,
             easy,
@@ -211,6 +224,17 @@ impl WebSocketRegistry {
         }
         for (id, step) in retired {
             self.apply_step(id, step, multi);
+        }
+        let ready = self.endpoints.lock().take_ready();
+        for id in ready {
+            if let Some(session) = self.sessions.get_mut(&id) {
+                // Releasing a handshake lease wakes only real endpoint waiters.
+                // They have no socket yet, so socket polling cannot resume them.
+                progressed = true;
+                if let Err(error) = session.resume_handshake() {
+                    self.apply_step(id, Err(error), multi);
+                }
+            }
         }
         progressed
     }

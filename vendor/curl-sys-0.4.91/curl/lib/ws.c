@@ -1950,6 +1950,30 @@ static CURLcode ws_setup_conn(struct Curl_easy *data,
   return Curl_http_setup_conn(data, conn);
 }
 
+/* The native browser owner uses this opt-in hook to serialize opening
+ * WebSocket handshakes without replacing curl's address selection. */
+CURLcode curl_easy_moli_websocket_set_gate(
+  CURL *easy, const struct curl_moli_websocket_gate *gate)
+{
+  struct Curl_easy *data = easy;
+  if(!GOOD_EASY_HANDLE(data) ||
+     (gate && (!gate->acquire || !gate->release)))
+    return CURLE_BAD_FUNCTION_ARGUMENT;
+  data->set.moli_websocket_gate = gate;
+  return CURLE_OK;
+}
+
+CURLcode curl_easy_moli_websocket_resume(CURL *easy)
+{
+  struct Curl_easy *data = easy;
+  if(!GOOD_EASY_HANDLE(data) || !data->multi)
+    return CURLE_BAD_FUNCTION_ARGUMENT;
+  /* The waiter has no socket to poll. Resume it once after an actual release;
+   * ordinary connect/transfer deadlines remain installed. */
+  Curl_multi_mark_dirty(data);
+  return CURLE_OK;
+}
+
 /* The browser's native owner polls CONNECT_ONLY handles after their opening
  * transfers are DONE. Let the connection filters translate logical read/write
  * interests, including HTTP/2 WINDOW_UPDATE and cross-direction TLS waits. */
@@ -2071,6 +2095,20 @@ const struct Curl_protocol Curl_protocol_ws = {
 };
 
 #else
+
+CURLcode curl_easy_moli_websocket_set_gate(
+  CURL *easy, const struct curl_moli_websocket_gate *gate)
+{
+  (void)easy;
+  (void)gate;
+  return CURLE_NOT_BUILT_IN;
+}
+
+CURLcode curl_easy_moli_websocket_resume(CURL *easy)
+{
+  (void)easy;
+  return CURLE_NOT_BUILT_IN;
+}
 
 int curl_easy_moli_websocket_pending(CURL *easy)
 {

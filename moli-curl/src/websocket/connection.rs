@@ -34,6 +34,8 @@ pub(super) struct Control {
     pub(super) owner_thread: Mutex<Option<std::thread::ThreadId>>,
     #[cfg(test)]
     pub(super) pool_waiting: Arc<tokio::sync::Notify>,
+    #[cfg(test)]
+    pub(super) endpoint_waiting: Arc<tokio::sync::Notify>,
 }
 
 impl Control {
@@ -143,6 +145,8 @@ impl CurlWebSocketConnection {
             owner_thread: Mutex::new(None),
             #[cfg(test)]
             pool_waiting: Arc::new(tokio::sync::Notify::new()),
+            #[cfg(test)]
+            endpoint_waiting: Arc::new(tokio::sync::Notify::new()),
         });
         let (event_tx, events) = mpsc::channel(MAX_PENDING_EVENTS);
         let io = SessionIo {

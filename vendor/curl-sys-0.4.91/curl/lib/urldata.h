@@ -53,6 +53,7 @@
 
 #include "curlx/timeval.h"
 #include <curl/moli_timing.h>
+#include <curl/moli_websocket.h>
 
 #include "api.h"
 #include "cookie.h"
@@ -916,6 +917,7 @@ struct UserDefined {
   uint32_t upload_buffer_size; /* size of upload buffer to use, keep it >=
                                   CURL_MAX_WRITE_SIZE */
   void *private_data; /* application-private data */
+  const struct curl_moli_websocket_gate *moli_websocket_gate;
   curl_moli_clock_callback moli_clock;
   curl_off_t moli_dns_start;
   curl_off_t moli_dns_end;

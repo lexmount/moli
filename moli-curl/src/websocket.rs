@@ -12,6 +12,7 @@
 
 mod connection;
 mod connector;
+mod endpoint;
 mod readiness;
 pub(crate) mod registry;
 mod request;
