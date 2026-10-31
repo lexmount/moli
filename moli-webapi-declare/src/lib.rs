@@ -262,12 +262,14 @@ mod error;
 mod interface;
 mod property;
 mod prototype;
+mod reflect;
 mod value;
 
 pub mod __private;
 
 pub use interface::WebApiInterfaceDescriptor;
 pub use moli_webapi_declare_derive::{WebApiCrossOrigin, WebApiFunctionTemplate, WebApiObject};
+pub use reflect::{capture_web_api_reflect_set, web_api_reflect_set};
 pub use v8;
 
 /// Adapts a manual native constructor to the same identity initialization used
