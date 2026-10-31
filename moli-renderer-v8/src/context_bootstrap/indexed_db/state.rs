@@ -157,6 +157,7 @@ mod tests {
             execute(Command::Begin {
                 transaction,
                 mode: TransactionMode::VersionChange,
+                durability: moli_indexeddb::TransactionDurability::Strict,
                 stores: Default::default(),
                 version: Some(1),
                 admission: None,

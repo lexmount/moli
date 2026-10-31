@@ -54,6 +54,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
         let command = Command::Begin {
             transaction: handle,
             mode,
+            durability: moli_indexeddb::TransactionDurability::Relaxed,
             stores: request.stores().into_iter().collect(),
             version: None,
             admission: Some(request),
