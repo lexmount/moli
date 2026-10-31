@@ -1555,7 +1555,6 @@ mod onerror;
 mod performance_observer_contract;
 mod performance_resource_timing;
 mod postmessage;
-mod stream_clone_failures;
 mod canvas_transfer_to_image_bitmap;
 mod tls;
 mod trusted_types_reporting;
