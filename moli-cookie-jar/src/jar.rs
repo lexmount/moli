@@ -608,6 +608,7 @@ fn canonical_cookie_input_from_stored_cookie(
             priority: cookie.priority,
             source_scheme: core_source_scheme_from_stored(cookie.source_scheme),
             source_port: cookie.source_port,
+            creation_time: cookie.creation_time,
         },
         request_url,
     ))

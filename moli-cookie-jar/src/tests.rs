@@ -1715,6 +1715,7 @@ fn cdp_upsert_updates_network_visible_cookie_header() {
             source_scheme: StoredCookieSourceScheme::Unset,
             source_port: -1,
             creation_index: 999,
+            creation_time: None,
             last_access_index: 999,
         },
         CookieSource::Cdp,
@@ -1745,6 +1746,7 @@ fn cdp_upsert_host_only_cookie_preserves_explicit_domain_without_request_hint() 
             source_scheme: StoredCookieSourceScheme::Unset,
             source_port: -1,
             creation_index: 999,
+            creation_time: None,
             last_access_index: 999,
         },
         CookieSource::Cdp,
@@ -2351,7 +2353,7 @@ fn response_header_reports_project_sanitized_attribute_warnings() {
     );
     assert_eq!(
         reports[0].effective_same_site,
-        Some(StoredCookieEffectiveSameSite::NoRestriction)
+        Some(StoredCookieEffectiveSameSite::LaxAllowUnsafe)
     );
 }
 
@@ -4229,6 +4231,7 @@ fn cdp_upsert_applies_prefix_and_same_site_guards() {
             source_scheme: StoredCookieSourceScheme::Unset,
             source_port: -1,
             creation_index: 999,
+            creation_time: None,
             last_access_index: 999,
         },
         CookieSource::Cdp,
@@ -4249,6 +4252,7 @@ fn cdp_upsert_applies_prefix_and_same_site_guards() {
             source_scheme: StoredCookieSourceScheme::Unset,
             source_port: -1,
             creation_index: 999,
+            creation_time: None,
             last_access_index: 999,
         },
         CookieSource::Cdp,
@@ -4269,6 +4273,7 @@ fn cdp_upsert_applies_prefix_and_same_site_guards() {
             source_scheme: StoredCookieSourceScheme::Unset,
             source_port: -1,
             creation_index: 999,
+            creation_time: None,
             last_access_index: 999,
         },
         CookieSource::Cdp,
@@ -4323,6 +4328,7 @@ fn cdp_upsert_accepts_partitioned_cookie() {
             source_scheme: StoredCookieSourceScheme::Secure,
             source_port: 443,
             creation_index: 999,
+            creation_time: None,
             last_access_index: 999,
         },
         CookieSource::Cdp,
@@ -4402,7 +4408,7 @@ fn cookie_deletion_distinguishes_partition_scopes() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            b"chip=global; Secure; Path=/".to_vec(),
+            b"chip=global; Secure; SameSite=None; Path=/".to_vec(),
         )],
     );
 

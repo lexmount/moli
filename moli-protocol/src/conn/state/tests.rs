@@ -1404,6 +1404,7 @@ fn stored_cookie(name: &str, value: &str) -> moli_cookie_jar::StoredCookie {
         source_scheme: moli_cookie_jar::StoredCookieSourceScheme::NonSecure,
         source_port: -1,
         creation_index: 0,
+        creation_time: None,
         last_access_index: 0,
     }
 }

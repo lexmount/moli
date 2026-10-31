@@ -1,4 +1,194 @@
 use super::*;
+use time::Duration;
+
+#[test]
+fn default_same_site_mode_has_the_chromium_two_minute_boundary() {
+    let now = OffsetDateTime::from_unix_timestamp(2_000_000_000).unwrap();
+    for (created, expected) in [
+        (None, CookieEffectiveSameSite::Lax),
+        (Some(now), CookieEffectiveSameSite::LaxAllowUnsafe),
+        (
+            Some(now - Duration::minutes(2)),
+            CookieEffectiveSameSite::LaxAllowUnsafe,
+        ),
+        (
+            Some(now - Duration::minutes(2) - Duration::nanoseconds(1)),
+            CookieEffectiveSameSite::Lax,
+        ),
+    ] {
+        assert_eq!(
+            CookieEffectiveSameSite::for_cookie(None, created, now),
+            expected
+        );
+        assert_eq!(
+            CookieEffectiveSameSite::for_cookie(Some(::cookie::SameSite::Lax), created, now),
+            CookieEffectiveSameSite::Lax
+        );
+        assert_eq!(
+            CookieEffectiveSameSite::for_cookie(Some(::cookie::SameSite::None), created, now),
+            CookieEffectiveSameSite::NoRestriction
+        );
+    }
+}
+
+#[test]
+fn default_cookie_navigation_allowance_is_limited_by_age_and_request_type() {
+    let mut store = CookieStore::default();
+    let request_url = test_utils::url("https://example.com/");
+    let now = OffsetDateTime::now_utc();
+    for (line, created) in [
+        ("recent=1; Path=/; Secure", now),
+        ("old=1; Path=/; Secure", now - Duration::minutes(3)),
+        ("explicit_lax=1; Path=/; Secure; SameSite=Lax", now),
+        ("strict=1; Path=/; Secure; SameSite=Strict", now),
+        ("none=1; Path=/; Secure; SameSite=None", now),
+    ] {
+        let mut cookie = Cookie::parse(line, &request_url).unwrap().into_owned();
+        cookie.set_creation_time(Some(created));
+        inserted!(store.insert_with_context(cookie, &InsertContext::http(&request_url)));
+    }
+
+    let mut non_navigation = QueryContext::http_cross_site_top_level_unsafe(&request_url);
+    non_navigation.request_type = HttpRequestType::Subresource;
+    for (context, expected) in [
+        (QueryContext::http_cross_site(&request_url), vec!["none"]),
+        (
+            QueryContext::http_cross_site_top_level(&request_url),
+            vec!["explicit_lax", "none", "old", "recent"],
+        ),
+        (
+            QueryContext::http_cross_site_top_level_unsafe(&request_url),
+            vec!["none", "recent"],
+        ),
+        (non_navigation, vec!["none"]),
+        (
+            QueryContext::document(&request_url),
+            vec!["explicit_lax", "none", "old", "recent", "strict"],
+        ),
+    ] {
+        let result = store.get_cookie_query_result(&context);
+        let mut names = result
+            .included_cookies
+            .iter()
+            .map(|cookie| cookie.name())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(names, expected);
+    }
+    let report = store.get_cookie_access_query_result(&QueryContext::http_cross_site(&request_url));
+    for name in ["recent", "old"] {
+        let excluded = report
+            .excluded_cookies
+            .iter()
+            .find(|entry| entry.cookie.name() == name)
+            .unwrap();
+        assert_eq!(
+            excluded.access_result.status.exclusion_reasons,
+            vec![CookieExclusionReason::SameSiteUnspecifiedTreatedAsLax]
+        );
+        assert_eq!(excluded.cookie.same_site(), None);
+    }
+}
+
+#[test]
+fn overwriting_a_default_cookie_keeps_its_age_but_recreation_starts_a_new_allowance() {
+    let mut store = CookieStore::default();
+    let request_url = test_utils::url("https://example.com/");
+    let old_time = OffsetDateTime::now_utc() - Duration::minutes(3);
+    let mut cookie = Cookie::parse("sid=old; Path=/; Secure", &request_url)
+        .unwrap()
+        .into_owned();
+    cookie.set_creation_time(Some(old_time));
+    inserted!(store.insert_with_context(cookie, &InsertContext::http(&request_url)));
+    updated!(store.insert_response_cookie_str("sid=updated; Path=/; Secure", &request_url));
+    assert_eq!(
+        store
+            .get("example.com", "/", "sid")
+            .unwrap()
+            .creation_time(),
+        Some(old_time)
+    );
+    assert!(store
+        .get_cookie_query_result(&QueryContext::http_cross_site_top_level_unsafe(
+            &request_url
+        ))
+        .included_cookies
+        .is_empty());
+
+    expired_existing!(
+        store.insert_response_cookie_str("sid=; Path=/; Secure; Max-Age=0", &request_url)
+    );
+    inserted!(store.insert_response_cookie_str("sid=new; Path=/; Secure", &request_url));
+    assert!(
+        store
+            .get("example.com", "/", "sid")
+            .unwrap()
+            .creation_time()
+            .unwrap()
+            > old_time
+    );
+    let result = store.get_cookie_query_result(&QueryContext::http_cross_site_top_level_unsafe(
+        &request_url,
+    ));
+    assert_eq!(result.included_cookies.len(), 1);
+    assert_eq!(result.included_cookies[0].value(), "new");
+}
+
+#[test]
+fn cloning_and_rebuilding_a_store_preserve_default_cookie_age() {
+    let mut store = CookieStore::default();
+    let request_url = test_utils::url("https://example.com/");
+    let old_time = OffsetDateTime::now_utc() - Duration::minutes(3);
+    let mut cookie = Cookie::parse("sid=old; Path=/; Secure", &request_url)
+        .unwrap()
+        .into_owned();
+    cookie.set_creation_time(Some(old_time));
+    inserted!(store.insert_with_context(cookie, &InsertContext::http(&request_url)));
+    let restored =
+        CookieStore::from_cookies(store.iter_any().cloned().map(Ok::<_, ()>), true).unwrap();
+    for mut snapshot in [store.clone(), restored] {
+        assert_eq!(
+            snapshot
+                .get("example.com", "/", "sid")
+                .unwrap()
+                .creation_time(),
+            Some(old_time)
+        );
+        assert!(snapshot
+            .get_cookie_query_result(&QueryContext::http_cross_site_top_level_unsafe(
+                &request_url
+            ))
+            .included_cookies
+            .is_empty());
+    }
+}
+
+#[test]
+fn restoring_an_unknown_cookie_age_does_not_start_an_unsafe_navigation_allowance() {
+    let request_url = test_utils::url("https://example.com/");
+    let cookie = Cookie::parse("sid=old; Path=/; Secure", &request_url)
+        .unwrap()
+        .into_owned();
+    let mut store = CookieStore::from_cookies([Ok::<_, ()>(cookie)], true).unwrap();
+    updated!(store.insert_response_cookie_str("sid=updated; Path=/; Secure", &request_url));
+    assert_eq!(
+        store
+            .get("example.com", "/", "sid")
+            .unwrap()
+            .creation_time(),
+        None
+    );
+    assert!(store
+        .get_cookie_query_result(&QueryContext::http_cross_site_top_level_unsafe(
+            &request_url
+        ))
+        .included_cookies
+        .is_empty());
+    let safe_navigation =
+        store.get_cookie_query_result(&QueryContext::http_cross_site_top_level(&request_url));
+    assert_eq!(safe_navigation.included_cookies.len(), 1);
+    assert_eq!(safe_navigation.included_cookies[0].value(), "updated");
+}
 
 #[test]
 fn cross_site_subresource_query_excludes_explicit_lax_and_strict_same_site_cookies() {
@@ -23,16 +213,16 @@ fn cross_site_subresource_query_excludes_explicit_lax_and_strict_same_site_cooki
     ));
 
     let result = store.get_cookie_query_result(&QueryContext::http_cross_site(&request_url));
-    assert_eq!(result.included_cookies.len(), 2);
+    assert_eq!(result.included_cookies.len(), 1);
     assert!(result
         .included_cookies
         .iter()
         .any(|cookie| cookie.name() == "none"));
-    assert!(result
-        .included_cookies
-        .iter()
-        .any(|cookie| cookie.name() == "unspecified"));
-    assert_eq!(result.excluded_cookies.len(), 2);
+    assert_eq!(result.excluded_cookies.len(), 3);
+    assert!(result.excluded_cookies.iter().any(|cookie| {
+        cookie.cookie.name() == "unspecified"
+            && cookie.reason == CookieExclusionReason::SameSiteUnspecifiedTreatedAsLax
+    }));
     assert!(result.excluded_cookies.iter().any(|cookie| {
         cookie.cookie.name() == "strict" && cookie.reason == CookieExclusionReason::SameSiteStrict
     }));
@@ -340,7 +530,7 @@ fn access_query_result_reports_unknown_access_semantics_for_unspecified_same_sit
 
     assert_eq!(
         sid.access_result.effective_same_site,
-        CookieEffectiveSameSite::NoRestriction
+        CookieEffectiveSameSite::LaxAllowUnsafe
     );
     assert_eq!(
         sid.access_result.access_semantics,
