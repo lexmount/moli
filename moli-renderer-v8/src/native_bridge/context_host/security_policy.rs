@@ -738,6 +738,57 @@ impl JsContextHost {
         unsafe { &*self.runtime }.cross_origin_isolated()
     }
 
+    pub(crate) fn window_shared_memory_agent_cluster(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<crate::structured_clone::SharedMemoryAgentCluster> {
+        let (isolated, dip) = match owner {
+            OwnerDispatchScope::Top => (
+                self.cross_origin_isolated(),
+                self.document_isolation_policy(),
+            ),
+            OwnerDispatchScope::Child(handle) => {
+                let policy = self.child_browsing_context_policy_container_snapshot(handle)?;
+                (
+                    policy.cross_origin_isolated,
+                    policy.document_isolation_policy,
+                )
+            }
+            OwnerDispatchScope::LightweightPopup(id) => {
+                let policy = self.lightweight_popup_policy_container(id)?;
+                (
+                    policy.cross_origin_isolated,
+                    policy.document_isolation_policy,
+                )
+            }
+        };
+        if !isolated {
+            return None;
+        }
+        let origin = self.window_document_origin(owner)?;
+        // DIP supplies its own isolation origin; otherwise the top-level
+        // isolation origin is inherited, independently from the document origin.
+        let isolation_origin = if dip.enables_cross_origin_isolation() {
+            origin.clone()
+        } else {
+            let root = match owner {
+                OwnerDispatchScope::Child(handle) => {
+                    self.child_browsing_context_root_scope(handle)?
+                }
+                root => root,
+            };
+            self.window_document_origin(root)?
+        };
+        if origin == "null" || isolation_origin == "null" {
+            return None;
+        }
+        Some(crate::structured_clone::SharedMemoryAgentCluster::window(
+            self.browser_context_runtime().storage_partition_identity(),
+            origin,
+            isolation_origin,
+        ))
+    }
+
     pub(crate) fn check_top_document_subresource_csp<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,

@@ -80,9 +80,55 @@ const GEOMETRY_KIND_DOM_MATRIX: u32 = 6;
 // Kind 4 remains readable for existing numeric Quad payloads.
 const GEOMETRY_KIND_DOM_QUAD_REFERENCES: u32 = 7;
 
+/// Native shared-memory identity. Compatible isolated Window agents can share
+/// a cluster even across unrelated browsing contexts. Dedicated Workers inherit
+/// their creator's identity; top-level Worker agents receive a fresh identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SharedMemoryAgentCluster(Arc<SharedMemoryAgentClusterKey>);
+
+#[derive(Debug, Eq, PartialEq)]
+enum SharedMemoryAgentClusterKey {
+    Window {
+        partition: crate::runtime::RendererStoragePartitionIdentity,
+        origin: String,
+        isolation_origin: String,
+    },
+    Worker(crate::resource_owner::ResourceOwnerId),
+}
+
+impl SharedMemoryAgentCluster {
+    pub(crate) fn window(
+        partition: crate::runtime::RendererStoragePartitionIdentity,
+        origin: String,
+        isolation_origin: String,
+    ) -> Self {
+        Self(Arc::new(SharedMemoryAgentClusterKey::Window {
+            partition,
+            origin,
+            isolation_origin,
+        }))
+    }
+
+    pub(crate) fn worker(owner: crate::resource_owner::ResourceOwnerId) -> Self {
+        Self(Arc::new(SharedMemoryAgentClusterKey::Worker(owner)))
+    }
+}
+
+#[derive(Debug)]
+struct ClonedSharedMemory {
+    agent_cluster: SharedMemoryAgentCluster,
+    backing_stores: Vec<v8::SharedRef<v8::BackingStore>>,
+}
+
+enum SharedMemorySource {
+    CurrentRealm,
+    Captured(Option<SharedMemoryAgentCluster>),
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct V8StructuredClonePayload {
     pub(crate) base: StructuredCloneWireBytes<TransferredMessagePort>,
+    shared_memory: Option<Arc<ClonedSharedMemory>>,
     wasm_modules: Vec<ClonedWasmModule>,
     readable_streams: Vec<ClonedReadableStream>,
     writable_streams: Vec<ClonedWritableStream>,
@@ -96,6 +142,15 @@ pub(crate) struct V8StructuredClonePayload {
 }
 
 impl V8StructuredClonePayload {
+    pub(crate) fn shared_memory_allowed_for_agent_cluster(
+        &self,
+        target: Option<&SharedMemoryAgentCluster>,
+    ) -> bool {
+        self.shared_memory
+            .as_ref()
+            .is_none_or(|memory| Some(&memory.agent_cluster) == target)
+    }
+
     pub(crate) fn transferred_message_port_ids(&self) -> impl Iterator<Item = MessagePortId> + '_ {
         self.base
             .transferred_message_ports
@@ -465,6 +520,8 @@ struct WireSerializer {
     transferred_image_bitmaps: Vec<v8::Global<v8::Object>>,
     transferred_offscreen_canvases: Vec<v8::Global<v8::Object>>,
     policy: StructuredClonePolicy,
+    shared_memory_source: SharedMemorySource,
+    shared_memory: Rc<RefCell<Option<ClonedSharedMemory>>>,
     wasm_modules: Rc<RefCell<ClonedWasmModuleStore>>,
     blobs: Rc<RefCell<ClonedBlobStore>>,
     file_system_handles: Rc<RefCell<ClonedFileSystemHandleStore>>,
@@ -827,10 +884,48 @@ impl v8::ValueSerializerImpl for WireSerializer {
     fn get_shared_array_buffer_id<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
-        _buffer: v8::Local<'s, v8::SharedArrayBuffer>,
+        buffer: v8::Local<'s, v8::SharedArrayBuffer>,
     ) -> Option<u32> {
-        throw_data_clone_exception(scope, "SharedArrayBuffer could not be cloned.");
-        None
+        if self.policy == StructuredClonePolicy::Storage {
+            throw_data_clone_exception(
+                scope,
+                "SharedArrayBuffer cannot be serialized for storage.",
+            );
+            return None;
+        }
+        // Resolve native authority only when the graph actually contains shared
+        // memory. Author properties such as crossOriginIsolated cannot grant it.
+        if self.shared_memory.borrow().is_none() {
+            let cluster = match &self.shared_memory_source {
+                SharedMemorySource::CurrentRealm => {
+                    crate::context_bootstrap::current_shared_memory_agent_cluster(scope)
+                }
+                SharedMemorySource::Captured(cluster) => cluster.clone(),
+            };
+            let Some(agent_cluster) = cluster else {
+                throw_data_clone_exception(
+                    scope,
+                    "SharedArrayBuffer requires cross-origin isolation.",
+                );
+                return None;
+            };
+            *self.shared_memory.borrow_mut() = Some(ClonedSharedMemory {
+                agent_cluster,
+                backing_stores: Vec::new(),
+            });
+        }
+        let mut store = self.shared_memory.borrow_mut();
+        let memory = store
+            .as_mut()
+            .expect("shared-memory authority was resolved");
+        let Ok(clone_id) = u32::try_from(memory.backing_stores.len()) else {
+            throw_data_clone_exception(scope, "Too many SharedArrayBuffers in structured clone.");
+            return None;
+        };
+        // V8 handles object references and views in the wire graph. Distinct SAB
+        // wrappers must remain distinct even if their backing stores are equal.
+        memory.backing_stores.push(buffer.get_backing_store());
+        Some(clone_id)
     }
 
     fn get_wasm_module_transfer_id(
@@ -870,6 +965,7 @@ impl v8::ValueSerializerImpl for WireSerializer {
 struct WireDeserializer {
     transferred_message_ports: Vec<TransferredMessagePort>,
     closed_message_ports: Option<ClosedMessagePortObjects>,
+    shared_memory: Option<Arc<ClonedSharedMemory>>,
     wasm_modules: HashMap<u32, ClonedWasmModule>,
     readable_streams: HashMap<u32, ReadableStreamClonePayload>,
     writable_streams: HashMap<u32, WritableStreamClonePayload>,
@@ -1174,6 +1270,25 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                 None
             }
         }
+    }
+
+    fn get_shared_array_buffer_from_id<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        clone_id: u32,
+    ) -> Option<v8::Local<'s, v8::SharedArrayBuffer>> {
+        let Some(backing_store) = self
+            .shared_memory
+            .as_ref()
+            .and_then(|memory| memory.backing_stores.get(clone_id as usize))
+        else {
+            throw_data_clone_exception(scope, "Missing SharedArrayBuffer clone attachment.");
+            return None;
+        };
+        Some(v8::SharedArrayBuffer::with_backing_store(
+            scope,
+            backing_store,
+        ))
     }
 
     fn get_wasm_module_from_id<'s>(
@@ -1959,19 +2074,28 @@ fn serialize_for_wire_with_policy<'s>(
     transfers: &WireTransfers<'_, 's>,
     policy: StructuredClonePolicy,
 ) -> Option<V8StructuredClonePayload> {
-    prepare_for_wire_with_policy(scope, value, transfers, policy)?.commit_message_ports(scope)
+    prepare_for_wire_with_policy(
+        scope,
+        value,
+        transfers,
+        policy,
+        SharedMemorySource::CurrentRealm,
+    )?
+    .commit_message_ports(scope)
 }
 
 pub(crate) fn prepare_for_window_post_message<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     transfers: &WireTransfers<'_, 's>,
+    sender_agent_cluster: Option<SharedMemoryAgentCluster>,
 ) -> Option<PreparedStructuredClone<'s>> {
     prepare_for_wire_with_policy(
         scope,
         value,
         transfers,
         StructuredClonePolicy::RuntimeMessage,
+        SharedMemorySource::Captured(sender_agent_cluster),
     )
 }
 
@@ -1980,6 +2104,7 @@ fn prepare_for_wire_with_policy<'s>(
     value: v8::Local<'s, v8::Value>,
     transfers: &WireTransfers<'_, 's>,
     policy: StructuredClonePolicy,
+    shared_memory_source: SharedMemorySource,
 ) -> Option<PreparedStructuredClone<'s>> {
     let mut array_buffer_transfers = Vec::new();
     let mut message_port_transfers = Vec::new();
@@ -2008,6 +2133,7 @@ fn prepare_for_wire_with_policy<'s>(
         }
     }
     let context = scope.get_current_context();
+    let shared_memory = Rc::new(RefCell::new(None));
     let wasm_modules = Rc::new(RefCell::new(ClonedWasmModuleStore::default()));
     let blobs = Rc::new(RefCell::new(ClonedBlobStore::default()));
     let file_system_handles = Rc::new(RefCell::new(ClonedFileSystemHandleStore::default()));
@@ -2040,6 +2166,8 @@ fn prepare_for_wire_with_policy<'s>(
                 .map(|canvas| v8::Global::new(scope, *canvas))
                 .collect(),
             policy,
+            shared_memory_source,
+            shared_memory: Rc::clone(&shared_memory),
             wasm_modules: Rc::clone(&wasm_modules),
             blobs: Rc::clone(&blobs),
             file_system_handles: Rc::clone(&file_system_handles),
@@ -2078,6 +2206,7 @@ fn prepare_for_wire_with_policy<'s>(
     let metadata = policy.metadata_for_wasm_modules(!wasm_modules.is_empty());
     let mut prepared = PreparedStructuredClone {
         payload: V8StructuredClonePayload {
+            shared_memory: shared_memory.borrow_mut().take().map(Arc::new),
             base: StructuredCloneWireBytes {
                 wire_bytes: serializer.release(),
                 transferred_array_buffers: Vec::with_capacity(array_buffer_transfers.len()),
@@ -2176,6 +2305,14 @@ fn deserialize_from_wire_impl<'s>(
     payload: &V8StructuredClonePayload,
     closed_message_ports: Option<ClosedMessagePortObjects>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    if payload.shared_memory.is_some() {
+        let target = crate::context_bootstrap::current_shared_memory_agent_cluster(scope);
+        if !payload.shared_memory_allowed_for_agent_cluster(target.as_ref()) {
+            throw_data_clone_exception(scope, "SharedArrayBuffer cannot cross agent clusters.");
+            discard_all_transferred_stream_channels(scope, payload);
+            return None;
+        }
+    }
     let context = scope.get_current_context();
     let wasm_modules = payload
         .wasm_modules
@@ -2218,6 +2355,7 @@ fn deserialize_from_wire_impl<'s>(
         Box::new(WireDeserializer {
             transferred_message_ports: payload.base.transferred_message_ports.clone(),
             closed_message_ports,
+            shared_memory: payload.shared_memory.clone(),
             wasm_modules,
             readable_streams,
             writable_streams,

@@ -850,6 +850,147 @@ fn encoding_stream_wrappers_do_not_inherit_transform_transferability() {
 }
 
 #[test]
+fn shared_array_buffer_clones_share_backing_stores_and_preserve_graphs() {
+    let url = "https://shared-buffer-clone.test/";
+    let mut vm = new_storage_test_vm(url);
+    enable_shared_memory_for_test(&mut vm, url);
+    assert_eq!(vm.eval("crossOriginIsolated").unwrap(), "true");
+    let result = vm
+        .eval(&format!(
+            "JSON.stringify({})",
+            include_str!("../../../../tests/fixtures/shared-memory-clone.js")
+        ))
+        .unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/shared-memory-clone-chromium.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        expected
+    );
+}
+
+fn enable_shared_memory_for_test(vm: &mut ScriptVm, url: &str) {
+    vm.set_main_navigation_policy_container(
+        crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+            &[
+                ("Cross-Origin-Opener-Policy".into(), b"same-origin".to_vec()),
+                (
+                    "Cross-Origin-Embedder-Policy".into(),
+                    b"require-corp".to_vec(),
+                ),
+            ],
+            &Url::parse(url).unwrap(),
+        ),
+    );
+}
+
+#[test]
+fn shared_array_buffer_payloads_require_the_same_native_agent_cluster() {
+    let source_url = "https://shared-buffer-clone.test/";
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let browser_context = crate::runtime::RendererBrowserContextRuntime::new();
+    let mut source =
+        crate::runtime::PageVmTaskExecutorTestHarness::new_with_browser_context_runtime(
+            Url::parse(source_url).unwrap(),
+            &loader,
+            browser_context.handle(),
+        );
+    enable_shared_memory_for_test(&mut source, source_url);
+    source.eval("globalThis.sharedSource = new Int32Array(new SharedArrayBuffer(8)); sharedSource[0] = 73").unwrap();
+    let group = source
+        ._context_host
+        .borrow()
+        .browsing_context_name()
+        .group();
+    let context = &source.page_default_runtime.context as *const _;
+    let payload = source
+        .with_context_scope_by_ptr_and_checkpoint_for_test(context, |scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let value = global
+                .get(scope, crate::util::v8str(scope, "sharedSource").into())
+                .unwrap();
+            Ok(crate::structured_clone::serialize_for_wire_for_runtime(scope, value).unwrap())
+        })
+        .unwrap();
+    // The wire attachment must own the memory independently of its producer's isolate.
+    drop(source);
+    for (url, same_context, isolated, allowed) in [
+        (source_url, false, true, false),
+        ("https://different-origin.test/", true, true, false),
+        (source_url, true, false, false),
+        (source_url, true, true, true),
+    ] {
+        let private_context = crate::runtime::RendererBrowserContextRuntime::new();
+        let mut target =
+            crate::runtime::PageVmTaskExecutorTestHarness::new_with_browser_context_runtime(
+                Url::parse(url).unwrap(),
+                &loader,
+                if same_context {
+                    browser_context.handle()
+                } else {
+                    private_context.handle()
+                },
+            );
+        // Chromium permits compatible isolated agents in unrelated Windows to
+        // share memory. A browsing-context group alone is not a cluster identity.
+        target
+            ._context_host
+            .borrow()
+            .browsing_context_name()
+            .set_group(Default::default());
+        assert_ne!(
+            target
+                ._context_host
+                .borrow()
+                .browsing_context_name()
+                .group(),
+            group
+        );
+        if isolated {
+            enable_shared_memory_for_test(&mut target, url);
+        }
+        // Author-visible settings cannot grant native access to shared memory.
+        target.eval("Object.defineProperty(globalThis, 'crossOriginIsolated', {configurable: true, value: true}); Object.defineProperty(globalThis, 'origin', {configurable: true, value: 'https://shared-buffer-clone.test'})").unwrap();
+        let context = &target.page_default_runtime.context as *const _;
+        target
+            .with_context_scope_by_ptr_and_checkpoint_for_test(context, |scope, _| {
+                let scope = std::pin::pin!(v8::TryCatch::new(scope));
+                let scope = &mut scope.init();
+                let value = crate::structured_clone::deserialize_from_wire(scope, &payload);
+                assert_eq!(
+                    value.is_some(),
+                    allowed,
+                    "{url}, same_context={same_context}, isolated={isolated}"
+                );
+                if let Some(value) = value {
+                    let global = scope.get_current_context().global(scope);
+                    assert_eq!(
+                        global.create_data_property(
+                            scope,
+                            crate::util::v8str(scope, "receivedShared").into(),
+                            value
+                        ),
+                        Some(true)
+                    );
+                } else {
+                    let exception = scope.exception().unwrap().to_object(scope).unwrap();
+                    let name = exception
+                        .get(scope, crate::util::v8str(scope, "name").into())
+                        .unwrap();
+                    assert_eq!(name.to_rust_string_lossy(scope), "DataCloneError");
+                }
+                Ok(())
+            })
+            .unwrap();
+        if allowed {
+            assert_eq!(target.eval("[receivedShared instanceof Int32Array, receivedShared.buffer instanceof SharedArrayBuffer, receivedShared[0], receivedShared.length].join('|')").unwrap(), "true|true|73|2");
+        }
+    }
+}
+
+#[test]
 fn shared_array_buffers_fail_consistently_at_root_and_inside_message_graphs() {
     let mut vm = new_storage_test_vm("https://shared-buffer-clone.test/");
     let result = vm.eval(r#"

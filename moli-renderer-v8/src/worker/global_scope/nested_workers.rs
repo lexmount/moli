@@ -29,6 +29,7 @@ pub(crate) struct NestedWorkerContext {
     pub(crate) require_trusted_types_for_script: bool,
     pub(crate) network_policy: crate::worker::handle::WorkerNetworkPolicy,
     pub(crate) policy_context: crate::types::SubresourcePolicyContext,
+    pub(crate) shared_memory_agent_cluster: crate::structured_clone::SharedMemoryAgentCluster,
     pub(crate) wake_tx: mpsc::UnboundedSender<crate::worker::handle::WorkerMessage>,
 }
 
@@ -81,6 +82,7 @@ pub(crate) fn reserve_nested_worker_context(
                 .fetch_subresource_interception_resource_type,
         },
         policy_context: state.policy_context,
+        shared_memory_agent_cluster: state.shared_memory_agent_cluster.clone(),
         wake_tx: state.worker_wake_tx.clone(),
     })
 }

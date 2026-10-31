@@ -204,6 +204,8 @@ impl JsContextHost {
         outside_settings_load: ResourceLoadLease,
         owner: super::super::WindowExecutionContextBinding,
     ) -> DedicatedWorkerId {
+        let shared_memory_agent_cluster =
+            self.window_shared_memory_agent_cluster(owner.dispatch_scope());
         let worker_id = DedicatedWorkerId::new(self.next_worker_id);
         self.next_worker_id += 1;
         let renderer_instance_id = self
@@ -229,6 +231,7 @@ impl JsContextHost {
                     module_static_import_policy: None,
                     storage_key_top_level_site,
                     creator_storage_key,
+                    shared_memory_agent_cluster,
                     reserved_service_worker_client_id,
                 },
             },
@@ -442,6 +445,7 @@ impl JsContextHost {
             name: String,
             storage_key_top_level_site: String,
             creator_storage_key: MoliStorageKey,
+            shared_memory_agent_cluster: Option<crate::structured_clone::SharedMemoryAgentCluster>,
             reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
             module_credentials_mode: moli_fetch::RequestCredentialsMode,
             module_static_import_policy: Option<Box<WorkerModuleStaticImportPolicySnapshot>>,
@@ -466,6 +470,7 @@ impl JsContextHost {
                     module_static_import_policy,
                     storage_key_top_level_site,
                     creator_storage_key,
+                    shared_memory_agent_cluster,
                     reserved_service_worker_client_id,
                     outside_settings_load,
                 } => {
@@ -478,6 +483,7 @@ impl JsContextHost {
                             name: name.clone(),
                             storage_key_top_level_site: storage_key_top_level_site.clone(),
                             creator_storage_key: creator_storage_key.clone(),
+                            shared_memory_agent_cluster: shared_memory_agent_cluster.clone(),
                             reserved_service_worker_client_id: reserved_service_worker_client_id
                                 .take(),
                             module_credentials_mode: *module_credentials_mode,
@@ -496,6 +502,7 @@ impl JsContextHost {
             name,
             storage_key_top_level_site,
             creator_storage_key,
+            shared_memory_agent_cluster,
             reserved_service_worker_client_id,
             module_credentials_mode,
             module_static_import_policy,
@@ -534,6 +541,7 @@ impl JsContextHost {
         .with_content_security_reporting_endpoints(content_security_reporting_endpoints)
         .with_network_policy(network_policy)
         .with_policy_context(policy_context)
+        .with_shared_memory_agent_cluster(shared_memory_agent_cluster)
         .with_worker_context_runtime(self.browser_context_runtime().worker_context_runtime())
         .with_service_worker_runtime(self.browser_context_runtime().service_worker_runtime())
         .with_global_kind(WorkerGlobalKind::Dedicated { name })

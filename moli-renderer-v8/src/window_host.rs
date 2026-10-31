@@ -1938,7 +1938,12 @@ fn window_message_endpoint_security(
     } else {
         None
     };
-    Some(crate::context_bootstrap::RuntimeMessageSourceSecurity::window(origin, opaque_origin))
+    Some(
+        crate::context_bootstrap::RuntimeMessageSourceSecurity::window(origin, opaque_origin)
+            .with_shared_memory_agent_cluster(
+                host.window_shared_memory_agent_cluster(endpoint.dispatch_scope()),
+            ),
+    )
 }
 
 fn window_message_requires_messageerror(
@@ -1948,7 +1953,7 @@ fn window_message_requires_messageerror(
     let Some(target) = target else {
         return false;
     };
-    !crate::context_bootstrap::wasm_module_message_allowed_for_target(&message.data, target)
+    !crate::context_bootstrap::runtime_message_allowed_for_target(&message.data, target)
 }
 
 fn window_message_wasm_eval_csp_violation(

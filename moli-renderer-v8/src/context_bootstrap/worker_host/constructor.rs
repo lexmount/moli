@@ -212,6 +212,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         };
         let creator_policy_context =
             crate::network_host::effective_subresource_policy_context(scope, host, dispatch_scope);
+        let creator_agent_cluster = host.window_shared_memory_agent_cluster(dispatch_scope);
         let resolved_url =
             match resolve_worker_script_url(&base_url, &script_url_input, query_encoding) {
                 Ok(url) => url,
@@ -348,6 +349,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             .with_module_static_import_content_security_policies(document_content_security_policies)
             .with_network_policy(network_policy)
             .with_policy_context(worker_policy_context)
+            .with_shared_memory_agent_cluster(creator_agent_cluster)
             .with_worker_context_runtime(host.browser_context_runtime().worker_context_runtime())
             .with_service_worker_runtime(host.browser_context_runtime().service_worker_runtime())
             .with_global_kind(WorkerGlobalKind::Dedicated {
@@ -567,6 +569,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         )
         .with_network_policy(network_policy)
         .with_policy_context(worker_policy_context)
+        .with_shared_memory_agent_cluster(Some(nested_context.shared_memory_agent_cluster.clone()))
         .with_worker_context_runtime(nested_context.worker_context_runtime.clone())
         .with_global_kind(WorkerGlobalKind::Dedicated {
             name: worker_options.name.clone(),
