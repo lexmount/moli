@@ -148,6 +148,7 @@ impl TargetNavigationStorageHandles {
 #[derive(Clone)]
 pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) window_identity: moli_core::page::RendererPageWindowIdentity,
+    pub(crate) blob_resource: Option<moli_core::page::RendererBlobUrlResource>,
     pub(crate) auxiliary_document_response:
         Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     pub(crate) redirect_chain: Vec<moli_fetch::RedirectInfo>,
@@ -333,6 +334,7 @@ impl TargetNavigationLoadInputs {
             .expect("resolved Page target retains document activity");
 
         Self {
+            blob_resource: None,
             auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,
@@ -444,6 +446,7 @@ impl TargetNavigationLoadInputs {
         renderer_runtime: RendererBrowserContextRuntimeOwnerAccess,
     ) -> Self {
         Self {
+            blob_resource: None,
             auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,

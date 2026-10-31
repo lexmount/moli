@@ -168,6 +168,7 @@ pub(crate) fn prepare_popup_target(
         initial_document_environment,
         pending_auxiliary_page,
         url,
+        blob_resource,
         target_name,
         session_storage_store,
         initial_empty_document_storage_key,
@@ -266,7 +267,8 @@ pub(crate) fn prepare_popup_target(
                     navigation
                         .with_document_response(document_response)
                         .with_initial_document_environment(initial_document_environment)
-                        .with_navigation_initiator(navigation_initiator),
+                        .with_navigation_initiator(navigation_initiator)
+                        .with_blob_resource(blob_resource),
                 );
             } else if !has_loaded_page {
                 // Keep the latest accepted request while the same Host joins
@@ -280,6 +282,7 @@ pub(crate) fn prepare_popup_target(
                     response: document_response,
                     environment: initial_document_environment,
                     initiator: navigation_initiator,
+                    blob_resource,
                 });
             }
             if let Some(activation) = activation {
@@ -398,6 +401,7 @@ pub(crate) fn prepare_popup_target(
             response: document_response,
             environment: initial_document_environment,
             initiator: navigation_initiator,
+            blob_resource,
         });
     }
 
@@ -628,6 +632,7 @@ impl PreparedPopupNavigation {
             mut document_response,
             mut initial_document_environment,
             mut navigation_initiator,
+            mut blob_resource,
         ) = action.into_parts();
         let target_is_current = conn
             .target_owner_identity_for_owner(&owner_scope)
@@ -681,6 +686,7 @@ impl PreparedPopupNavigation {
             document_response = pending.response;
             initial_document_environment = pending.environment;
             navigation_initiator = pending.initiator;
+            blob_resource = pending.blob_resource;
         }
         let auxiliary_navigation = match kind {
             PopupTargetNavigationKind::WindowReference(kind) => Some(kind),
@@ -727,6 +733,7 @@ impl PreparedPopupNavigation {
             document_response,
             initial_document_environment,
             navigation_initiator,
+            blob_resource,
         );
         Some(Self {
             navigation,
