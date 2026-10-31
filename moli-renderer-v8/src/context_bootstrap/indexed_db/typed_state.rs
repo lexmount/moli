@@ -322,6 +322,8 @@ struct IndexedDbRequestLifecycleState {
 
 struct IndexedDbTransactionLifecycleState {
     mode: TransactionMode,
+    durability: IdbTransactionDurability,
+    sql_durability: moli_indexeddb::TransactionDurability,
     store_names: BTreeSet<IndexedDbName>,
     database: Option<RealmValueHandle>,
     upgrade_open_request: Option<RealmValueHandle>,
@@ -355,6 +357,12 @@ impl IndexedDbTransactionLifecycleState {
     ) -> Self {
         Self {
             mode,
+            durability: IdbTransactionDurability::Default,
+            sql_durability: if mode == TransactionMode::VersionChange {
+                moli_indexeddb::TransactionDurability::Strict
+            } else {
+                moli_indexeddb::TransactionDurability::Relaxed
+            },
             store_names: store_names.iter().cloned().collect(),
             database: Some(database),
             upgrade_open_request: None,
@@ -885,6 +893,50 @@ pub(super) fn indexed_db_transaction_mode<'s>(
     let id = indexed_db_typed_state_id(scope, transaction)?;
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     table.borrow().transactions.get(&id).map(|state| state.mode)
+}
+
+pub(super) fn set_indexed_db_transaction_durability(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+    hint: IdbTransactionDurability,
+    policy: moli_indexeddb::TransactionDurability,
+) {
+    let id =
+        indexed_db_typed_state_id(scope, transaction).expect("new transaction native identity");
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let mut table = table.borrow_mut();
+    let state = table
+        .transactions
+        .get_mut(&id)
+        .expect("new transaction lifecycle");
+    state.durability = hint;
+    state.sql_durability = policy;
+}
+
+pub(super) fn indexed_db_transaction_durability(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> Option<IdbTransactionDurability> {
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table
+        .borrow()
+        .transactions
+        .get(&id)
+        .map(|state| state.durability)
+}
+
+pub(super) fn indexed_db_transaction_sql_durability(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> Option<moli_indexeddb::TransactionDurability> {
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table
+        .borrow()
+        .transactions
+        .get(&id)
+        .map(|state| state.sql_durability)
 }
 
 pub(super) fn indexed_db_transaction_is_committing<'s>(

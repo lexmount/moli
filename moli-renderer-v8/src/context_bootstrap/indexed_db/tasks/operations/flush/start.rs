@@ -1,6 +1,6 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    indexed_db_transaction_mode,
+    indexed_db_transaction_mode, indexed_db_transaction_sql_durability,
     typed_state::sql::{
         ensure_sql_transaction_rollback, indexed_db_request_sql_client, submit_indexed_db_sql_task,
     },
@@ -56,10 +56,12 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
         let Some(mode) = indexed_db_transaction_mode(scope, transaction) else {
             return;
         };
+        let durability = indexed_db_transaction_sql_durability(scope, transaction)
+            .expect("transaction has its resolved native durability");
         let command = Command::Begin {
             transaction: handle,
             mode,
-            durability: moli_indexeddb::TransactionDurability::Relaxed,
+            durability,
             stores: request.store_names().into_iter().collect(),
             version: None,
             admission: Some(request),

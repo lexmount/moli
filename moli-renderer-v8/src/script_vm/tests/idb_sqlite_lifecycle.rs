@@ -9,6 +9,7 @@ use std::{cell::RefCell, collections::BTreeSet, sync::mpsc, time::Duration};
 mod admission_tests;
 mod blob_tests;
 mod cursor_tests;
+mod durability_tests;
 mod fatal_tests;
 mod index_tests;
 mod metadata_tests;

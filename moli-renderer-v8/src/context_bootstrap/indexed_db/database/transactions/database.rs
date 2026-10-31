@@ -5,7 +5,8 @@ use crate::context_bootstrap::indexed_db::{
     object_store_info_from_database_metadata,
 };
 use crate::context_bootstrap::indexed_db::{
-    indexed_db_database_sql_client, set_indexed_db_transaction_start_request,
+    IdbTransactionDurability, indexed_db_database_sql_client, resolve_transaction_durability,
+    set_indexed_db_transaction_durability, set_indexed_db_transaction_start_request,
 };
 use crate::webidl;
 use moli_indexeddb::{DatabaseHandle, IndexedDbError};
@@ -25,6 +26,15 @@ struct IdbDatabaseTransactionArgs {
     store_names: names::TransactionStoreNames,
     #[webidl(converter = "enum", default = TransactionModeWebIdl::Readonly)]
     mode: TransactionModeWebIdl,
+    #[webidl(index = 2, dictionary)]
+    options: IdbTransactionOptions,
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "IDBTransactionOptions")]
+struct IdbTransactionOptions {
+    #[webidl(converter = "enum", default = IdbTransactionDurability::Default)]
+    durability: IdbTransactionDurability,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_database_transaction_callback<'s>(
@@ -35,7 +45,8 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_transaction_callbac
     let Some(parsed) = webidl::parse_args::<IdbDatabaseTransactionArgs>(scope, &args) else {
         return;
     };
-    let database = args.this();
+    let database = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("database receiver was validated");
     let Some(handle) = database_handle_from_value(scope, database.into()) else {
         rv.set_undefined();
         return;
@@ -103,12 +114,29 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_transaction_callbac
             return;
         }
     };
+    let durability =
+        match resolve_transaction_durability(scope, database, parsed.options.durability) {
+            Ok(durability) => durability,
+            Err(error) => {
+                let error = request_error_object(scope, &error);
+                scope.throw_exception(error);
+                return;
+            }
+        };
     let Some(context) = database.get_creation_context(scope) else {
         return;
     };
     let result = {
         let scope = &mut v8::ContextScope::new(scope, context);
-        create_regular_transaction(scope, database, handle, &store_names, mode)
+        create_regular_transaction(
+            scope,
+            database,
+            handle,
+            &store_names,
+            mode,
+            parsed.options.durability,
+            durability,
+        )
     };
     match result {
         Ok(Some(transaction)) => rv.set(transaction.into()),
@@ -126,6 +154,8 @@ fn create_regular_transaction<'s>(
     handle: DatabaseHandle,
     store_names: &[moli_indexeddb::IndexedDbName],
     mode: TransactionMode,
+    durability_hint: IdbTransactionDurability,
+    durability: moli_indexeddb::TransactionDurability,
 ) -> Result<Option<v8::Local<'s, v8::Object>>, IndexedDbError> {
     // Objects and task queues belong to the connection's realm even when the
     // operation was borrowed from another Window. Conversion and exceptions
@@ -150,6 +180,7 @@ fn create_regular_transaction<'s>(
     else {
         return Ok(None);
     };
+    set_indexed_db_transaction_durability(scope, transaction, durability_hint, durability);
     crate::context_bootstrap::indexed_db::typed_state::sql::configure_sql_transaction(
         scope,
         transaction,
