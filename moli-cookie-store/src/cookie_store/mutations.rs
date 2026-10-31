@@ -23,14 +23,8 @@ impl CookieStoreKey {
 }
 #[derive(Debug, Clone)]
 pub enum CookieStoreMutation {
-    Upsert {
-        cookie: Cookie<'static>,
-    },
+    Upsert { cookie: Cookie<'static> },
     Delete(CookieStoreKey),
-    Touch {
-        key: CookieStoreKey,
-        last_access_index: u64,
-    },
     Clear,
 }
 /// Native nonblocking sink. It must not enter JS, run SQL, or call back into

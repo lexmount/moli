@@ -35,14 +35,8 @@ impl From<CookieStoreKey> for StoredCookieIdentity {
 }
 #[derive(Debug, Clone)]
 pub enum StoredCookieMutation {
-    Upsert {
-        cookie: StoredCookie,
-    },
+    Upsert { cookie: StoredCookie },
     Delete(StoredCookieIdentity),
-    Touch {
-        key: StoredCookieIdentity,
-        last_access_index: u64,
-    },
     Clear,
 }
 pub trait BrowserCookieObserver: std::fmt::Debug + Send + Sync {
@@ -57,13 +51,6 @@ impl CookieStoreObserver for Observer {
                 cookie: crate::model::stored_cookie_from_core(&cookie),
             },
             CookieStoreMutation::Delete(key) => StoredCookieMutation::Delete(key.into()),
-            CookieStoreMutation::Touch {
-                key,
-                last_access_index,
-            } => StoredCookieMutation::Touch {
-                key: key.into(),
-                last_access_index,
-            },
             CookieStoreMutation::Clear => StoredCookieMutation::Clear,
         });
     }

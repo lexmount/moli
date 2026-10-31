@@ -37,7 +37,6 @@ impl From<&StoredCookie> for Key {
 enum Change {
     Put(StoredCookie),
     Delete,
-    Touch(u64),
 }
 #[derive(Default)]
 struct Batch {
@@ -55,13 +54,6 @@ impl Batch {
                 clear: false,
                 changes: BTreeMap::from([(key.into(), Change::Delete)]),
             },
-            StoredCookieMutation::Touch {
-                key,
-                last_access_index,
-            } => Self {
-                clear: false,
-                changes: BTreeMap::from([(key.into(), Change::Touch(last_access_index))]),
-            },
             StoredCookieMutation::Clear => Self {
                 clear: true,
                 changes: BTreeMap::new(),
@@ -78,9 +70,6 @@ impl Batch {
                 Change::Delete => {
                     connection.execute("DELETE FROM cookies WHERE partition_key=?1 AND domain=?2 AND path=?3 AND name=?4",params![key.partition,key.domain,key.path,key.name])?;
                 }
-                Change::Touch(index) => {
-                    connection.execute("UPDATE cookies SET last_access_index=?5 WHERE partition_key=?1 AND domain=?2 AND path=?3 AND name=?4",params![key.partition,key.domain,key.path,key.name,index.to_be_bytes().as_slice()])?;
-                }
             }
         }
         Ok(())
@@ -95,31 +84,9 @@ impl WriteBatch for Batch {
             *self = newer;
             return;
         }
-        for (key, change) in newer.changes {
-            let previous = self.changes.remove(&key);
-            match change {
-                Change::Put(cookie) => {
-                    self.changes.insert(key, Change::Put(cookie));
-                }
-                Change::Delete => {
-                    self.changes.insert(key, Change::Delete);
-                }
-                Change::Touch(index) => match previous {
-                    Some(Change::Put(mut cookie)) => {
-                        cookie.last_access_index = index;
-                        self.changes.insert(key, Change::Put(cookie));
-                    }
-                    Some(Change::Delete) => {
-                        self.changes.insert(key, Change::Delete);
-                    }
-                    _ if !self.clear => {
-                        self.changes.insert(key, Change::Touch(index));
-                    }
-                    _ => {}
-                },
-            }
-        }
+        self.changes.extend(newer.changes);
     }
+
     fn write(&self, connection: &mut Connection) -> Result<(), WritebackError> {
         let result: Result<(), WritebackError> = (|| {
             let tx = connection.transaction()?;

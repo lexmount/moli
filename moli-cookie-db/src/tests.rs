@@ -208,7 +208,7 @@ fn complete_partition_keys_and_paths_have_distinct_rows() {
     owner.close().unwrap();
 }
 #[test]
-fn access_metadata_is_incremental_and_a_data_clone_has_no_writer() {
+fn reads_update_memory_ordering_without_persisting_touches_and_clones_have_no_writer() {
     let root = tempfile::tempdir().unwrap();
     let runtime = Runtime::new().unwrap();
     let (store, owner) = open(root.path(), &runtime);
@@ -225,7 +225,8 @@ fn access_metadata_is_incremental_and_a_data_clone_has_no_writer() {
     let rows = owner.owner.client().query(codec::read).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].name, "live");
-    assert!(rows[0].last_access_index > before);
+    assert!(store.lock().unwrap().cookies()[0].last_access_index > before);
+    assert_eq!(rows[0].last_access_index, before);
     owner.close().unwrap();
 }
 #[test]

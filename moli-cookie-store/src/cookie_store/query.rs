@@ -199,21 +199,12 @@ impl CookieStore {
         partition_key: Option<&crate::CookiePartitionKey>,
     ) -> bool {
         let access_index = self.bump_access_index();
-        let observed = self.observer.is_some();
-        let changed = self
-            .get_mut_with_partition_key(domain, path, name, partition_key)
-            .map(|cookie| {
-                cookie.touch_with_access_index(access_index);
-                observed.then(|| CookieStoreKey::for_cookie(cookie))
-            });
-        let touched = changed.is_some();
-        if let Some(Some(key)) = changed {
-            self.notify(CookieStoreMutation::Touch {
-                key,
-                last_access_index: access_index,
-            });
-        }
-        touched
+        let Some(cookie) = self.get_mut_with_partition_key(domain, path, name, partition_key)
+        else {
+            return false;
+        };
+        cookie.touch_with_access_index(access_index);
+        true
     }
 
     /// Specify a public suffix lookup for the `CookieStore` to allow [public suffix
