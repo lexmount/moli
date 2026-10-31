@@ -96,6 +96,12 @@ impl LoadedResponse {
 }
 
 impl ControlledResourceLoad {
+    fn effective_credentials_mode(&self) -> moli_fetch::RequestCredentialsMode {
+        match self.response_policy {
+            ResourceResponsePolicy::Xhr => self.request.credentials_mode,
+            ResourceResponsePolicy::Fetch(policy) => policy.network_credentials_mode(self.request.request_mode, self.request.credentials_mode),
+        }
+    }
     pub(crate) fn with_redirect_owner(mut self, owner: Option<super::RedirectOwner>) -> Self {
         self.redirect_owner = owner;
         self
@@ -552,7 +558,7 @@ impl ControlledResourceLoad {
                     }
                     let observed = super::async_fetch::fetch_subresource_hop(
                         &loader,
-                        self.request.clone(),
+                        self.request.clone().with_credentials_mode(self.effective_credentials_mode()),
                         hop_cancel.clone(),
                         self.preflight_headers.clone(),
                         Some(&preflight_observer),

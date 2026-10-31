@@ -44,6 +44,7 @@ impl ControlledResourceLoad {
             return Ok(None);
         };
         let dispatch = ServiceWorkerFetchDispatch {
+            redirect_check: None,
             internal_id: self.info.internal_id,
             request: ServiceWorkerFetchRequest {
                 client_id: source.client_id,
