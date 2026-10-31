@@ -47,7 +47,7 @@ pub(super) fn install_lazy_trusted_types_runtime_state<'s>(
             .ok_or_else(|| anyhow!("failed to install lazy `{name}` global"))?;
     }
     // Window owns its mixin attribute; workers inherit it from WorkerGlobalScope.
-    let is_worker = get_private_value(scope, global, crate::worker::WORKER_STATE_SLOT).is_some();
+    let is_worker = crate::worker::get_worker_state(scope).is_some();
     let target = if is_worker {
         crate::util::global_constructor_prototype(scope, "WorkerGlobalScope").ok_or_else(|| {
             anyhow!("WorkerGlobalScope.prototype missing during Trusted Types bootstrap")

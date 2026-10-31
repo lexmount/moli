@@ -2,7 +2,7 @@ use crate::{
     context_bootstrap::message_port_id_from_object,
     structured_clone::{
         PreparedStructuredClone, RuntimeMessageAgentCluster, RuntimeMessageOpaqueOrigin,
-        SharedMemoryAgentCluster, StructuredCloneMetadata, V8StructuredClonePayload, WireTransfer, WireTransfers,
+        SharedMemoryAgentCluster, StructuredCloneMetadata, V8StructuredClonePayload, WireTransfer,
         deserialize_from_wire, deserialize_message_event_from_wire,
         prepare_for_window_post_message, serialize_for_wire_for_runtime,
         serialize_for_wire_for_runtime_message, serialize_for_wire_for_runtime_with_transfers,

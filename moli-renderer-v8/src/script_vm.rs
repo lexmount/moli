@@ -2553,6 +2553,8 @@ impl ScriptVmDefaultWorldBootstrap {
                 .as_ref()
                 .map(|state| ScriptVmInitialDocumentEnvironment {
                     security_token: None,
+                    // This bootstrap has no retained creator realm identity.
+                    opaque_origin: None,
                     document_domain_override:
                         crate::native_bridge::DocumentDomainState::from_origin(state.origin()),
                     origin: state.origin().serialized_origin(),

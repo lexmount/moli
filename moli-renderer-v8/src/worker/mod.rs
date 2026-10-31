@@ -47,10 +47,9 @@ pub(crate) use websocket_events::signal_worker_websocket_stream_pull;
 
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::{
-    NestedWorkerContext, WorkerGlobalState, WorkerOpfsCompletion,
-    WorkerWebCryptoCompletion, cancel_worker_opfs_task,
-    check_and_queue_nested_worker_constructor_csp, check_worker_websocket_csp,
-    check_worker_webtransport_csp, close_worker_websocket,
+    NestedWorkerContext, WorkerGlobalState, WorkerOpfsCompletion, WorkerWebCryptoCompletion,
+    cancel_worker_opfs_task, check_and_queue_nested_worker_constructor_csp,
+    check_worker_websocket_csp, check_worker_webtransport_csp, close_worker_websocket,
     dispatch_worker_trusted_types_sink_violation_event,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,
     fetch_native_request, forget_worker_broadcast_channel_wrapper,
@@ -76,8 +75,7 @@ pub(crate) use global_scope::{
     worker_opfs_handle_registry, worker_realm_secure_context_available, worker_referrer_policy,
     worker_service_worker_control_state, worker_shared_memory_agent_cluster, worker_storage_key,
     worker_storage_partition_identity, worker_termination_requested,
-    worker_trusted_types_for_script_requirements,
-    worker_websocket_wrapper,
+    worker_trusted_types_for_script_requirements, worker_websocket_wrapper,
 };
 pub(crate) use handle::WorkerMessage;
 pub(crate) use handle::{

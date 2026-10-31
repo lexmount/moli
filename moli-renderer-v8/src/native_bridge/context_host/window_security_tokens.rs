@@ -282,7 +282,7 @@ impl JsContextHost {
             };
             let opaque_origin = inherited.or_else(|| {
                 Some(crate::structured_clone::RuntimeMessageOpaqueOrigin::window(
-                    self.child_default_context_bootstrap
+                    self.window_default_context_bootstrap
                         .as_ref()?
                         .resource_owner_id,
                     owner,

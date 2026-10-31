@@ -245,9 +245,9 @@ pub(super) use service_worker_results::{
 };
 use state::worker_close_callback;
 pub(crate) use state::{
-    worker_content_security_policy_snapshot, worker_referrer_policy,
-    WorkerGlobalState, get_worker_state, worker_current_script_url,
-    worker_exception_report_target, worker_global_is_closed, worker_realm_secure_context_available,
+    WorkerGlobalState, get_worker_state, worker_content_security_policy_snapshot,
+    worker_current_script_url, worker_exception_report_target, worker_global_is_closed,
+    worker_realm_secure_context_available, worker_referrer_policy,
     worker_service_worker_control_state, worker_shared_memory_agent_cluster, worker_storage_key,
     worker_storage_partition_identity, worker_termination_requested,
 };

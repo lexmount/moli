@@ -50,7 +50,6 @@ use crate::event_listener_args::{
     AddEventListenerArgs, RemoveEventListenerArgs, parse_listener_args,
 };
 use crate::event_type::{EventType, EventTypeKey};
-use crate::native_bridge::OwnerDispatchScope;
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1926,9 +1925,11 @@ fn window_message_endpoint_security(
             OwnerDispatchScope::LightweightPopup(id)
         }
     };
-    host.window_message_source_security(dispatch).map(|security| {
-        security.with_shared_memory_agent_cluster(host.window_shared_memory_agent_cluster(dispatch))
-    })
+    host.window_message_source_security(dispatch)
+        .map(|security| {
+            security
+                .with_shared_memory_agent_cluster(host.window_shared_memory_agent_cluster(dispatch))
+        })
 }
 
 fn window_message_requires_messageerror(
