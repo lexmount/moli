@@ -276,35 +276,6 @@ impl ServiceClient {
         }
         Ok(usage)
     }
-
-    pub fn owners_with_prefix_usage_bytes(&self, prefix: &[u8]) -> Result<u64, IndexedDbError> {
-        let registry = self.registry.lock();
-        if registry.closed {
-            return Err(IndexedDbError::InvalidState(
-                "IndexedDB service is closed".into(),
-            ));
-        }
-        if registry
-            .clearing
-            .keys()
-            .any(|scope| scope.overlaps_prefix(prefix))
-        {
-            return Err(IndexedDbError::InvalidState(
-                "IndexedDB owner is being cleared".into(),
-            ));
-        }
-        let mut total = 0_u64;
-        for ((owner, _), client) in &registry.entries {
-            if owner.starts_with(prefix)
-                && let Some(metadata) = client.catalog_metadata()?
-            {
-                total = total
-                    .checked_add(metadata.usage)
-                    .ok_or_else(|| IndexedDbError::Corruption("IndexedDB usage overflow".into()))?;
-            }
-        }
-        Ok(total)
-    }
 }
 
 impl DatabaseClient {

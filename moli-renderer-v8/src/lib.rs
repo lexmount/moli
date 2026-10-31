@@ -194,8 +194,7 @@ pub use context_bootstrap::{
     DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES, IndexedDbKey, IndexedDbObjectStoreOptions,
     IndexedDbTransactionMode, SharedIndexedDbManager, WeakIndexedDbManager,
     clear_indexed_db_origin, clear_indexed_db_origins_with_prefix, downgrade_indexed_db_manager,
-    indexed_db_origin_usage_bytes, indexed_db_origins_with_prefix_usage_bytes,
-    new_indexed_db_manager, new_sqlite_indexed_db_manager,
+    indexed_db_origin_usage_bytes, new_indexed_db_manager, new_sqlite_indexed_db_manager,
     new_sqlite_indexed_db_manager_with_runtime,
 };
 pub use context_bootstrap::{

@@ -351,13 +351,17 @@ fn old_bucket_metadata_can_open_sql_without_importing_old_indexeddb_json() {
     )
     .unwrap();
     let store = Fixture::open_store(&fixture.root, &fixture.manager);
-    assert_eq!(store.lock().bucket_id(OWNER, "old").unwrap().get(), 17);
+    let identity = store.lock().bucket_identity(OWNER, "old").unwrap();
+    assert_eq!(identity.bucket_id().get(), 17);
     assert_eq!(
         fs::read(fixture.root.join("indexeddb")).unwrap(),
         b"unreadable legacy IndexedDB format"
     );
     assert_eq!(
-        fixture.sql().owners_with_prefix_usage_bytes(b"").unwrap(),
+        fixture
+            .sql()
+            .owner_usage_bytes(identity.indexed_db_storage_key().as_bytes())
+            .unwrap(),
         0
     );
 }

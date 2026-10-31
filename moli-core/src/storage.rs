@@ -1,8 +1,7 @@
 pub use moli_renderer_v8::{
     IndexedDbKey, IndexedDbObjectStoreOptions, IndexedDbTransactionMode, SharedIndexedDbManager,
     WeakIndexedDbManager, clear_indexed_db_origin, clear_indexed_db_origins_with_prefix,
-    downgrade_indexed_db_manager, indexed_db_origin_usage_bytes,
-    indexed_db_origins_with_prefix_usage_bytes, new_indexed_db_manager,
+    downgrade_indexed_db_manager, indexed_db_origin_usage_bytes, new_indexed_db_manager,
 };
 pub use moli_storage_service::{
     DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES, SharedStorageBucketStore, StorageBucketIdentity,

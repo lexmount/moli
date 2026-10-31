@@ -185,7 +185,12 @@ fn owner_clear_fences_old_clients_and_fifo_until_all_database_owners_confirm_cle
     );
     assert!(service.databases(OWNER).is_err());
     assert!(service.owner_usage_bytes(OWNER).is_err());
-    assert!(service.owners_with_prefix_usage_bytes(b"opaque").is_err());
+    assert_eq!(
+        service
+            .owner_usage_bytes(b"opaque\0bucket/one-more")
+            .unwrap(),
+        0
+    );
     assert!(
         service
             .queue_connection_request(OWNER, "new", Arc::new(|| {}))
@@ -498,7 +503,8 @@ fn prefix_clear_fences_new_owners_and_retires_unregistered_factory_requests() {
             .is_err()
     );
     assert!(service.databases(b"origin\0never").is_err());
-    assert!(service.owners_with_prefix_usage_bytes(b"origin").is_err());
+    assert!(service.owner_usage_bytes(b"origin\0never").is_err());
+    assert!(service.owner_usage_bytes(b"origins\0first").unwrap() > 0);
 
     clear.execute().unwrap();
     assert!(first.is_retired() && second.is_retired());
@@ -570,10 +576,9 @@ fn prefix_disk_clear_reopens_without_retired_generations_or_a_foreign_owner_loss
         .unwrap();
     service.shutdown().unwrap();
     let service = Service::on_disk(root, config()).unwrap();
-    assert_eq!(
-        service.owners_with_prefix_usage_bytes(b"origin\0").unwrap(),
-        0
-    );
+    assert_eq!(service.owner_usage_bytes(b"origin\0first").unwrap(), 0);
+    assert_eq!(service.owner_usage_bytes(b"origin\0second").unwrap(), 0);
+    assert!(service.owner_usage_bytes(b"origins\0first").unwrap() > 0);
     assert_eq!(service.databases(b"origins\0first").unwrap().len(), 1);
     service
         .prepare_clear_owners_with_prefix(vec![])

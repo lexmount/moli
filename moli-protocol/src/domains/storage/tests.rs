@@ -2858,7 +2858,7 @@ async fn storage_get_usage_and_quota_reports_default_opfs_without_bucket_registr
             .unwrap()
             .storage_bucket_store_for_test()
             .lock();
-        assert!(store.keys_for_origin_areas(origin).is_empty());
+        assert!(store.keys(&key).is_empty());
         let service = store.storage_service();
         drop(store);
         let locator = moli_core::storage::StorageBucketLocator::default_bucket(key);

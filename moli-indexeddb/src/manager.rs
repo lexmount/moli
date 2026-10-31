@@ -25,9 +25,4 @@ impl IndexedDbManager {
     pub fn origin_usage_bytes(&self, origin: &str) -> Result<u64, IndexedDbError> {
         self.service.owner_usage_bytes(origin.as_bytes())
     }
-
-    pub fn origins_with_prefix_usage_bytes(&self, prefix: &str) -> Result<u64, IndexedDbError> {
-        self.service
-            .owners_with_prefix_usage_bytes(prefix.as_bytes())
-    }
 }

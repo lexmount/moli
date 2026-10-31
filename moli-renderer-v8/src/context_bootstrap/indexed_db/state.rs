@@ -103,16 +103,6 @@ pub fn indexed_db_origin_usage_bytes(
         .map_err(|error| error.to_string())
 }
 
-pub fn indexed_db_origins_with_prefix_usage_bytes(
-    manager: &SharedIndexedDbManager,
-    origin_prefix: &str,
-) -> std::result::Result<u64, String> {
-    manager
-        .lock()
-        .origins_with_prefix_usage_bytes(origin_prefix)
-        .map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

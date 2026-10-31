@@ -880,42 +880,6 @@ impl StorageBucketRegistry {
             .map(|_| identity.locator())
     }
 
-    pub fn keys_for_origin_areas(&self, origin: &str) -> Vec<(String, Vec<String>)> {
-        let prefix = storage_key_prefix_for_origin(origin);
-        self.memory()
-            .origins
-            .iter()
-            .filter(|(storage_key, _)| storage_key.starts_with(&prefix))
-            .map(|(storage_key, buckets)| {
-                (
-                    storage_key.clone(),
-                    buckets
-                        .keys()
-                        .filter(|name| name.as_str() != IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME)
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect()
-    }
-
-    pub fn bucket_identities_for_origin_areas(&self, origin: &str) -> Vec<StorageBucketIdentity> {
-        let prefix = storage_key_prefix_for_origin(origin);
-        self.memory()
-            .origins
-            .iter()
-            .filter(|(storage_key, _)| storage_key.starts_with(&prefix))
-            .flat_map(|(storage_key, buckets)| {
-                buckets.iter().filter_map(|(name, metadata)| {
-                    (name.as_str() != IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME)
-                        .then_some(metadata.bucket_id)
-                        .flatten()
-                        .map(|bucket_id| StorageBucketIdentity::new(storage_key, name, bucket_id))
-                })
-            })
-            .collect()
-    }
-
     pub fn bucket_identities(&self, storage_key: &str) -> Vec<StorageBucketIdentity> {
         self.memory()
             .origins
@@ -1713,17 +1677,6 @@ impl StorageBucketRegistry {
                     .fold(0u64, |total, usage| total.saturating_add(usage))
             })
             .unwrap_or(0)
-    }
-
-    pub fn cache_usage_for_origin_areas(&self, origin: &str) -> u64 {
-        let prefix = storage_key_prefix_for_origin(origin);
-        self.memory()
-            .origins
-            .iter()
-            .filter(|(storage_key, _)| storage_key.starts_with(&prefix))
-            .flat_map(|(_, buckets)| buckets.values())
-            .map(bucket_cache_storage_usage)
-            .fold(0u64, |total, usage| total.saturating_add(usage))
     }
 
     pub fn bucket_persisted_for_identity(&self, identity: &StorageBucketIdentity) -> Option<bool> {
