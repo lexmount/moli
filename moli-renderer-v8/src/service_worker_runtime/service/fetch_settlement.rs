@@ -130,19 +130,22 @@ fn service_worker_fetch_can_forward_stream(
         final_url,
         &response_head.headers,
     )?;
-    Ok(job.direct_completion_tx.is_none()
-        && !matches!(
-            job.network_context.resource_type,
-            crate::types::SubresourceResourceType::Audio
-                | crate::types::SubresourceResourceType::Font
-                | crate::types::SubresourceResourceType::Image
-                | crate::types::SubresourceResourceType::Media
-                | crate::types::SubresourceResourceType::TextTrack
-                | crate::types::SubresourceResourceType::Video
-        )
-        && !is_redirect_status(response_head.status)
-        && matches!(response_head.response_type.as_str(), "default" | "basic")
-        && !service_worker_fetch_response_requires_body_security_policy(job))
+    Ok(
+        !crate::network_host::fetch_integrity_requires_full_body(&job.metadata.integrity)
+            && job.direct_completion_tx.is_none()
+            && !matches!(
+                job.network_context.resource_type,
+                crate::types::SubresourceResourceType::Audio
+                    | crate::types::SubresourceResourceType::Font
+                    | crate::types::SubresourceResourceType::Image
+                    | crate::types::SubresourceResourceType::Media
+                    | crate::types::SubresourceResourceType::TextTrack
+                    | crate::types::SubresourceResourceType::Video
+            )
+            && !is_redirect_status(response_head.status)
+            && matches!(response_head.response_type.as_str(), "default" | "basic")
+            && !service_worker_fetch_response_requires_body_security_policy(job),
+    )
 }
 
 fn apply_service_worker_synthetic_redirect(
