@@ -212,6 +212,10 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
                     .and_then(std::rc::Weak::upgrade)
             {
                 index.borrow_mut().deleted = created_in_upgrade;
+                if created_in_upgrade {
+                    let name = index.borrow().info.name.clone();
+                    super::super::core::invalidate_index_handle_cache(scope, store, &name);
+                }
             }
         }
     }
@@ -291,6 +295,7 @@ pub(in crate::context_bootstrap::indexed_db) fn mark_indexed_db_index_handles_de
                     .and_then(std::rc::Weak::upgrade)
             {
                 index.borrow_mut().deleted = true;
+                super::super::core::invalidate_index_handle_cache(scope, store, index_name);
             }
         }
     }
