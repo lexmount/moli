@@ -2393,6 +2393,8 @@ mod dom_xhr;
 mod svg_length_list_native_receivers;
 
 mod audio_value_owner_interface_exposure_interfaces;
+mod domrect_receiver_consolidation;
+mod dynamic_inline_scripts;
 #[cfg(feature = "devtools")]
 mod element_click;
 mod eme_owner_interface_exposure_interfaces;
@@ -2406,6 +2408,11 @@ mod fetch_request_guard;
 mod fetch_resource_timing;
 mod frame_element_security;
 mod geometry_matrix_constructor_union;
+mod video_frame;
+
+mod cross_origin_named_children;
+mod declarative_receivers;
+mod frame_owner_origin_access;
 mod geometry_matrix_dictionary_order;
 mod geometry_point_conversion_order;
 mod geometry_point_transform;
@@ -2415,7 +2422,6 @@ mod history_referrer;
 mod history_replace_forward;
 mod http_fixture;
 mod iframe_load_delivery;
-mod video_frame;
 
 mod svg_point_list_native_receivers;
 
@@ -2645,7 +2651,6 @@ mod websocket_close_dictionary;
 mod document_range_factory_realm;
 
 mod dom_rect_structured_clone;
-mod domrect_receiver_consolidation;
 mod resize_observer_entries;
 
 mod file_value_receivers;
@@ -2665,7 +2670,6 @@ mod xml_serializer_receivers;
 mod hyperlink_audit_owner;
 mod sqlite_web_storage;
 
-mod dynamic_inline_scripts;
 mod native_request_url_provenance;
 mod window_promise_method_receivers;
 mod window_restricted_accessors;
