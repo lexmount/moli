@@ -11,7 +11,6 @@ use super::*;
 use crate::native_bridge::throw_dom_exception;
 use crate::util::get_private_value;
 use crate::web_api_interfaces;
-use crate::worker::WORKER_STATE_SLOT;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 // Generated guards validate the interface. Resolve native aliases before XHR
@@ -108,10 +107,7 @@ pub(crate) fn xhr_throw_invalid_access(scope: &mut v8::PinScope<'_, '_>, message
 }
 
 pub(crate) fn xhr_current_context_is_worker_global(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    let global = scope.get_current_context().global(scope);
-    get_private_value(scope, global, WORKER_STATE_SLOT)
-        .and_then(|value| v8::Local::<v8::External>::try_from(value).ok())
-        .is_some()
+    crate::worker::get_worker_state(scope).is_some()
 }
 
 pub(crate) fn xhr_is_synchronous_document_request(

@@ -4,8 +4,6 @@ use crate::content_security_policy::ContentSecurityPolicy;
 
 use super::*;
 
-pub(crate) const WORKER_STATE_SLOT: &str = "__workerState";
-
 impl WorkerGlobalState {
     pub(crate) fn callback_invocation_allowed(&self) -> bool {
         !self.termination_requested.load(Ordering::Acquire)
@@ -272,23 +270,12 @@ pub(crate) fn worker_realm_secure_context_available(scope: &mut v8::PinScope<'_,
 pub(crate) fn get_worker_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<Rc<RefCell<WorkerGlobalState>>> {
-    let context = scope.get_current_context();
-    if let Some(binding) = context.get_slot::<crate::common_runtime::CommonRuntimeBinding>() {
-        // Native cleanup may run with an exception pending. Resolve the owner
-        // without entering V8's property APIs, which can consume that exception.
-        return binding.worker_state();
-    }
-    // Bootstrap installs the private carrier before the common binding.
-    let global = context.global(scope);
-    let val = get_private_value(scope, global, WORKER_STATE_SLOT)?;
-    let external = v8::Local::<v8::External>::try_from(val).ok()?;
-    let ptr = external.value() as *const RefCell<WorkerGlobalState>;
-    // Safety: the Rc is kept alive by the worker thread for the lifetime of
-    // the context.  We increment the ref-count here so we get our own Rc.
-    unsafe {
-        Rc::increment_strong_count(ptr);
-        Some(Rc::from_raw(ptr))
-    }
+    // Cleanup may run with an exception pending. Native lookup must not enter
+    // V8 property APIs, including when this Context has no Worker owner.
+    scope
+        .get_current_context()
+        .get_slot::<crate::common_runtime::CommonRuntimeBinding>()?
+        .worker_state()
 }
 
 pub(crate) fn worker_global_is_closed(scope: &mut v8::PinScope<'_, '_>) -> bool {
