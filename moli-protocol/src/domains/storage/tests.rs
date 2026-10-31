@@ -2586,7 +2586,7 @@ async fn storage_get_usage_and_quota_excludes_web_storage_for_origin() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn storage_get_usage_and_quota_reports_indexed_db_usage_for_origin() {
+async fn storage_get_usage_and_quota_reports_only_first_party_indexed_db_usage() {
     let mut ctx = TestContext::new();
     let mut browser_context = BrowserContext::new("BID-usage-indexeddb".into());
     browser_context.set_active_target_id("TID-usage-indexeddb");
@@ -2641,6 +2641,25 @@ async fn storage_get_usage_and_quota_reports_indexed_db_usage_for_origin() {
     }
     assert_eq!(wait_for_storage_test_completion(&mut ctx).await, "stored");
 
+    let expected_usage = ctx.with_fixture(|conn| {
+        let manager = conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .indexed_db_manager_for_test();
+        let origin = url.origin().ascii_serialization();
+        let partitioned = moli_storage_key::partitioned_storage_key(&origin, "https://top.example");
+        seed_indexed_db_usage(manager, &partitioned);
+        assert!(
+            moli_core::storage::indexed_db_origin_usage_bytes(manager, &partitioned).unwrap() > 0
+        );
+        moli_core::storage::indexed_db_origin_usage_bytes(
+            manager,
+            &first_party_storage_key_for_origin(&origin),
+        )
+        .unwrap()
+    });
+
     ctx.process_async(json!({
         "id": 12_529,
         "method": "Storage.getUsageAndQuota",
@@ -2652,6 +2671,7 @@ async fn storage_get_usage_and_quota_reports_indexed_db_usage_for_origin() {
 
     let result = take_result_by_id(&mut ctx, 12_529);
     let indexed_db_usage = usage_breakdown_value(&result, "indexeddb");
+    assert_eq!(indexed_db_usage, expected_usage);
     assert!(
         indexed_db_usage > 0,
         "IndexedDB metadata and record bytes should be reported"
@@ -2662,7 +2682,7 @@ async fn storage_get_usage_and_quota_reports_indexed_db_usage_for_origin() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn storage_get_usage_and_quota_reports_storage_bucket_usage_for_origin() {
+async fn storage_get_usage_and_quota_reports_only_first_party_storage_bucket_usage() {
     let mut ctx = TestContext::new();
     {
         let fixture_value = Some(BrowserContext::new("BID-usage-storage-buckets".into()));
@@ -2682,17 +2702,14 @@ async fn storage_get_usage_and_quota_reports_storage_bucket_usage_for_origin() {
         .unwrap()
         .origin()
         .ascii_serialization();
-    let sibling_origin = Url::parse("https://bucket-usage-sibling.example/app")
-        .unwrap()
-        .origin()
-        .ascii_serialization();
     let storage_key = first_party_storage_key_for_origin(&origin);
-    let sibling_storage_key = first_party_storage_key_for_origin(&sibling_origin);
+    let partitioned_storage_key =
+        moli_storage_key::partitioned_storage_key(&origin, "https://top.example");
     let cache_root = HttpCacheTestRoot::new("storage-bucket-cache-usage");
     let storage_buckets_path = cache_root.path.join("storage-buckets.json");
     let cache_storage_root = cache_root.path.join("cache-storage");
     let cache_usage = 83u64;
-    let sibling_cache_usage = 997u64;
+    let partitioned_cache_usage = 997u64;
 
     let storage_bucket_store = {
         let store = moli_core::storage::new_shared_json_storage_bucket_store_with_cache_root_and_indexed_db_manager(
@@ -2701,7 +2718,7 @@ async fn storage_get_usage_and_quota_reports_storage_bucket_usage_for_origin() {
             &indexed_db_manager,
         )
         .expect("profile-backed StorageBucket store should open");
-        let (bucket_cache_id, sibling_cache_id) = {
+        let (bucket_cache_id, partitioned_cache_id) = {
             let mut store = store.lock();
             store
                 .open_bucket(&storage_key, "bucket-a")
@@ -2713,18 +2730,18 @@ async fn storage_get_usage_and_quota_reports_storage_bucket_usage_for_origin() {
                 .open_bucket(&storage_key, "bucket-cache")
                 .expect("bucket-cache should open");
             store
-                .open_bucket(&sibling_storage_key, "bucket-c")
-                .expect("sibling bucket should open");
+                .open_bucket(&partitioned_storage_key, "bucket-c")
+                .expect("partitioned bucket should open");
             store
-                .open_bucket(&sibling_storage_key, "bucket-cache")
-                .expect("sibling cache bucket should open");
+                .open_bucket(&partitioned_storage_key, "bucket-cache")
+                .expect("partitioned cache bucket should open");
             (
                 store
                     .bucket_id(&storage_key, "bucket-cache")
                     .expect("cache bucket should have identity"),
                 store
-                    .bucket_id(&sibling_storage_key, "bucket-cache")
-                    .expect("sibling cache bucket should have identity"),
+                    .bucket_id(&partitioned_storage_key, "bucket-cache")
+                    .expect("partitioned cache bucket should have identity"),
             )
         };
         write_storage_bucket_cache_file(
@@ -2738,12 +2755,12 @@ async fn storage_get_usage_and_quota_reports_storage_bucket_usage_for_origin() {
         );
         write_storage_bucket_cache_file(
             &cache_storage_root,
-            &sibling_storage_key,
-            sibling_cache_id,
+            &partitioned_storage_key,
+            partitioned_cache_id,
             "receipts",
             "/receipt.txt",
-            b"sibling cache",
-            sibling_cache_usage,
+            b"partitioned cache",
+            partitioned_cache_usage,
         );
         moli_core::storage::new_shared_json_storage_bucket_store_with_cache_root_and_indexed_db_manager(
             &storage_buckets_path,
@@ -2752,7 +2769,7 @@ async fn storage_get_usage_and_quota_reports_storage_bucket_usage_for_origin() {
         )
         .expect("profile-backed StorageBucket store should reopen with cache entries")
     };
-    let (bucket_a_identity, bucket_a_key, bucket_b_key, sibling_bucket_key) = {
+    let (bucket_a_identity, bucket_a_key, bucket_b_key, partitioned_bucket_key) = {
         let store = storage_bucket_store.lock();
         let bucket_a_identity = store
             .bucket_identity(&storage_key, "bucket-a")
@@ -2765,8 +2782,8 @@ async fn storage_get_usage_and_quota_reports_storage_bucket_usage_for_origin() {
                 .expect("bucket-b should have identity")
                 .indexed_db_storage_key(),
             store
-                .bucket_identity(&sibling_storage_key, "bucket-c")
-                .expect("sibling bucket should have identity")
+                .bucket_identity(&partitioned_storage_key, "bucket-c")
+                .expect("partitioned bucket should have identity")
                 .indexed_db_storage_key(),
         )
     };
@@ -2797,12 +2814,47 @@ async fn storage_get_usage_and_quota_reports_storage_bucket_usage_for_origin() {
     };
 
     {
+        let store = storage_bucket_store.lock();
+        let storage_service = store.storage_service();
+        let identity = store
+            .bucket_identity(&partitioned_storage_key, "bucket-c")
+            .unwrap();
+        assert_eq!(
+            store.cache_usage_for_origin(&partitioned_storage_key),
+            partitioned_cache_usage
+        );
+        drop(store);
+        for locator in [
+            identity.locator(),
+            moli_storage_service::StorageBucketLocator::default_bucket(&partitioned_storage_key),
+        ] {
+            let bucket_key =
+                moli_storage_service::StorageService::opfs_bucket_key(&locator).unwrap();
+            let root = storage_service.ensure_opfs_root(&locator).unwrap();
+            let file = storage_service
+                .with_opfs(|opfs| opfs.get_file(&bucket_key, &root, "third-party.txt", true))
+                .unwrap();
+            storage_service
+                .with_opfs(|opfs| {
+                    opfs.write_file(
+                        &bucket_key,
+                        &file,
+                        b"third-party bytes must be excluded",
+                        None,
+                    )
+                })
+                .unwrap();
+            assert!(storage_service.opfs_usage(&locator).unwrap() > 0);
+        }
+    }
+
+    {
         ctx.with_fixture(|conn| {
             let bc = conn.browser_context.as_mut().unwrap();
             bc.replace_storage_bucket_store_for_test(storage_bucket_store);
             seed_indexed_db_usage(bc.indexed_db_manager_for_test(), &bucket_a_key);
             seed_indexed_db_usage(bc.indexed_db_manager_for_test(), &bucket_b_key);
-            seed_indexed_db_usage(bc.indexed_db_manager_for_test(), &sibling_bucket_key);
+            seed_indexed_db_usage(bc.indexed_db_manager_for_test(), &partitioned_bucket_key);
         });
     }
 
@@ -2850,6 +2902,7 @@ async fn storage_get_usage_and_quota_reports_default_opfs_without_bucket_registr
     let mut ctx = TestContext::new();
     let origin = "https://opfs-only-usage.test";
     let key = first_party_storage_key_for_origin(origin);
+    let partitioned_key = moli_storage_key::partitioned_storage_key(origin, "https://top.example");
     let expected = ctx.with_fixture(|conn| {
         conn.browser_context = Some(BrowserContext::new("BID-usage-opfs-only".into()));
         let store = conn
@@ -2859,31 +2912,52 @@ async fn storage_get_usage_and_quota_reports_default_opfs_without_bucket_registr
             .storage_bucket_store_for_test()
             .lock();
         assert!(store.keys(&key).is_empty());
+        assert!(store.keys(&partitioned_key).is_empty());
         let service = store.storage_service();
         drop(store);
-        let locator = moli_core::storage::StorageBucketLocator::default_bucket(key);
-        let bucket_key = moli_storage_service::StorageService::opfs_bucket_key(&locator).unwrap();
-        let root = service.ensure_opfs_root(&locator).unwrap();
-        let file = service
-            .with_opfs(|opfs| opfs.get_file(&bucket_key, &root, "only-opfs.txt", true))
-            .unwrap();
-        service
-            .with_opfs(|opfs| opfs.write_file(&bucket_key, &file, b"quota-managed bytes", None))
-            .unwrap();
+        let locator = moli_core::storage::StorageBucketLocator::default_bucket(&key);
+        for locator in [
+            locator.clone(),
+            moli_core::storage::StorageBucketLocator::default_bucket(&partitioned_key),
+        ] {
+            let bucket_key =
+                moli_storage_service::StorageService::opfs_bucket_key(&locator).unwrap();
+            let root = service.ensure_opfs_root(&locator).unwrap();
+            let file = service
+                .with_opfs(|opfs| opfs.get_file(&bucket_key, &root, "only-opfs.txt", true))
+                .unwrap();
+            service
+                .with_opfs(|opfs| opfs.write_file(&bucket_key, &file, b"quota-managed bytes", None))
+                .unwrap();
+            assert!(service.opfs_usage(&locator).unwrap() > 0);
+        }
         service.opfs_usage(&locator).unwrap()
     });
     assert!(expected > 0);
-    ctx.process_async(json!({
-        "id": 12_534,
-        "method": "Storage.getUsageAndQuota",
-        "params": {"origin": origin}
-    }))
-    .await;
-    let result = take_result_by_id(&mut ctx, 12_534);
-    assert_eq!(usage_breakdown_value(&result, "file_systems"), expected);
-    assert_eq!(usage_breakdown_value(&result, "cache_storage"), 0);
-    assert_eq!(usage_breakdown_value(&result, "indexeddb"), 0);
-    assert_eq!(json_number_as_u64(&result["usage"]), expected);
+    for (id, register_partitioned_bucket) in [(12_534, false), (12_535, true)] {
+        if register_partitioned_bucket {
+            ctx.with_fixture(|conn| {
+                conn.browser_context
+                    .as_ref()
+                    .unwrap()
+                    .storage_bucket_store_for_test()
+                    .lock()
+                    .open_bucket(&partitioned_key, "unrelated")
+                    .unwrap();
+            });
+        }
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Storage.getUsageAndQuota",
+            "params": {"origin": origin}
+        }))
+        .await;
+        let result = take_result_by_id(&mut ctx, id);
+        assert_eq!(usage_breakdown_value(&result, "file_systems"), expected);
+        assert_eq!(usage_breakdown_value(&result, "cache_storage"), 0);
+        assert_eq!(usage_breakdown_value(&result, "indexeddb"), 0);
+        assert_eq!(json_number_as_u64(&result["usage"]), expected);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
