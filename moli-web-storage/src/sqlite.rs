@@ -35,6 +35,20 @@ pub(super) struct SqliteBackend {
     cache: Mutex<Cache>,
     pub(super) namespace: parking_lot::RwLock<()>,
 }
+struct AreaMetadata {
+    usage: usize,
+}
+const ORIGIN_METADATA_SQL: &str = "SELECT storage_key,usage_bytes FROM areas
+    WHERE storage_key=?1 OR (storage_key>=?2 AND storage_key<?3)";
+
+fn origin_prefix_range(origin: &str) -> (String, String) {
+    let prefix = web_storage_area_key_prefix_for_origin(origin);
+    let mut upper = prefix.clone();
+    // The serialization prefix ends in '='; its successor bounds all suffixes.
+    upper.pop();
+    upper.push('>');
+    (prefix, upper)
+}
 #[derive(Default)]
 pub(super) struct Batch(BTreeMap<String, AreaDelta>);
 struct AreaDelta {
@@ -304,6 +318,82 @@ fn decode(bytes: Vec<u8>) -> std::result::Result<WebStorageString, WritebackErro
     ))
 }
 impl SqliteBackend {
+    pub(super) fn usage_bytes(
+        &self,
+        origin: &str,
+    ) -> std::result::Result<usize, WebStorageMutationError> {
+        let _namespace = self.namespace.read();
+        self.client.ensure_open()?;
+        let area = self.area(origin);
+        let state = area.state.lock();
+        if let Some(state) = &*state {
+            return Ok(state.size);
+        }
+        let origin = origin.to_owned();
+        Ok(self.client.query(move |connection| {
+            let usage = connection
+                .query_row(
+                    "SELECT usage_bytes FROM areas WHERE storage_key=?1",
+                    [origin],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?
+                .unwrap_or(0);
+            usize::try_from(usage).map_err(WritebackError::new)
+        })?)
+    }
+    fn live_areas_for_origin(&self, origin: &str) -> BTreeMap<String, Arc<Area>> {
+        let prefix = web_storage_area_key_prefix_for_origin(origin);
+        self.cache
+            .lock()
+            .areas
+            .iter()
+            .filter(|(key, _)| key.as_str() == origin || key.starts_with(&prefix))
+            .filter_map(|(key, area)| area.upgrade().map(|area| (key.clone(), area)))
+            .collect()
+    }
+    fn area_metadata_for_origin(
+        &self,
+        origin: &str,
+    ) -> std::result::Result<BTreeMap<String, AreaMetadata>, WebStorageMutationError> {
+        let (prefix, upper) = origin_prefix_range(origin);
+        let origin = origin.to_owned();
+        Ok(self.client.query(move |connection| {
+            let mut statement = connection.prepare_cached(ORIGIN_METADATA_SQL)?;
+            statement
+                .query_map(params![origin, prefix, upper], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })?
+                .map(|row| {
+                    let (key, usage) = row?;
+                    Ok((
+                        key,
+                        AreaMetadata {
+                            usage: usize::try_from(usage).map_err(WritebackError::new)?,
+                        },
+                    ))
+                })
+                .collect()
+        })?)
+    }
+    pub(super) fn usage_bytes_for_origin_areas(
+        &self,
+        origin: &str,
+    ) -> std::result::Result<usize, WebStorageMutationError> {
+        let _namespace = self.namespace.write();
+        // Pin live areas before querying SQL: a concurrent acknowledgement can
+        // otherwise release the last copy of a newer logical value.
+        let live = self.live_areas_for_origin(origin);
+        let mut metadata = self.area_metadata_for_origin(origin)?;
+        for (key, area) in live {
+            if let Some(state) = &*area.state.lock() {
+                metadata.insert(key, AreaMetadata { usage: state.size });
+            }
+        }
+        Ok(metadata
+            .values()
+            .fold(0usize, |sum, area| sum.saturating_add(area.usage)))
+    }
     fn area(&self, origin: &str) -> Arc<Area> {
         let mut cache = self.cache.lock();
         if let Some(area) = cache.areas.get(origin).and_then(Weak::upgrade) {
@@ -469,12 +559,10 @@ impl SqliteBackend {
         origin: &str,
     ) -> std::result::Result<Vec<String>, WebStorageMutationError> {
         let prefix = web_storage_area_key_prefix_for_origin(origin);
-        let query_origin = origin.to_owned();
-        let query_prefix = prefix.clone();
-        let mut keys = self.client.query(move |connection| {
-            let mut statement=connection.prepare("SELECT storage_key FROM areas WHERE storage_key=?1 OR substr(storage_key,1,length(?2))=?2")?;
-            Ok(statement.query_map(params![query_origin,query_prefix],|r|r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?)
-        })?;
+        let mut keys = self
+            .area_metadata_for_origin(origin)?
+            .into_keys()
+            .collect::<Vec<_>>();
         keys.extend(
             self.cache
                 .lock()

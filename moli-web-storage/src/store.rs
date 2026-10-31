@@ -406,6 +406,9 @@ impl WebStorageStore {
         &self,
         origin: &str,
     ) -> std::result::Result<usize, WebStorageMutationError> {
+        if let WebStorageBackend::Sqlite(sqlite) = &self.backend {
+            return sqlite.usage_bytes(origin);
+        }
         self.read(origin, |area| area.map_or(0, |a| a.size))
     }
     pub fn usage_bytes(&self, origin: &str) -> usize {
@@ -425,6 +428,9 @@ impl WebStorageStore {
         &self,
         origin: &str,
     ) -> std::result::Result<usize, WebStorageMutationError> {
+        if let WebStorageBackend::Sqlite(sqlite) = &self.backend {
+            return sqlite.usage_bytes_for_origin_areas(origin);
+        }
         self.area_keys_for_origin(origin)?
             .iter()
             .try_fold(0usize, |sum, key| {
