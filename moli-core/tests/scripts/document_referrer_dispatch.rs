@@ -44,7 +44,10 @@ pub(super) fn fixture_response(
 async fn check_document_referrer_dispatch(owner: &str) -> Result<()> {
     let servers = IntegrityServers::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
-    let document_url = format!("{}/delivered-meta-policy.html?owner={owner}", servers.origin);
+    let document_url = format!(
+        "{}/delivered-meta-policy.html?owner={owner}",
+        servers.origin
+    );
     let parent_url = format!(
         "{}/delivered-document-referrer.html?response=unsafe-url",
         servers.origin
@@ -143,7 +146,11 @@ async fn check_document_referrer_dispatch(owner: &str) -> Result<()> {
     let requests = servers.requests.lock();
     let requests: Vec<_> = requests
         .iter()
-        .filter(|request| request.path.starts_with("/delivered-meta-policy-fetch?dispatch-"))
+        .filter(|request| {
+            request
+                .path
+                .starts_with("/delivered-meta-policy-fetch?dispatch-")
+        })
         .collect();
     assert_eq!(requests.len(), 72, "{owner}: {requests:?}");
     for request in requests {
