@@ -88,16 +88,10 @@ impl WriteBatch for Batch {
     }
 
     fn write(&self, connection: &mut Connection) -> Result<(), WritebackError> {
-        let result: Result<(), WritebackError> = (|| {
-            let tx = connection.transaction()?;
-            self.apply(&tx)?;
-            tx.commit()?;
-            Ok(())
-        })();
-        if let Err(error) = &result {
-            tracing::warn!(%error, "Cookie persistence batch failed; the batch will not be retried");
-        }
-        result
+        let tx = connection.transaction()?;
+        self.apply(&tx)?;
+        tx.commit()?;
+        Ok(())
     }
 }
 struct Writer(WritebackClient<Batch>);

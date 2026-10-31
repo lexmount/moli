@@ -289,6 +289,47 @@ fn discarded_failure_does_not_retry_or_block_new_changes() {
 }
 
 #[test]
+fn a_failed_in_flight_batch_does_not_discard_changes_accepted_during_the_commit() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let owner = owner(&runtime, root.path().join("failure-race.sqlite"));
+    let client = owner.client();
+    let control = Arc::new(Control::default());
+    control.fail.store(true, Ordering::Release);
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    *control.gate.lock() = Some((started_tx, release_rx));
+    client.record(Batch::put(1, 10, &control)).unwrap();
+    let (reply, receipt) = mpsc::channel();
+    client.sender.send(Message::Flush { reply }).unwrap();
+    started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    client.record(Batch::put(2, 20, &control)).unwrap();
+    release_tx.send(()).unwrap();
+    assert!(
+        receipt
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .is_err()
+    );
+    assert_eq!(control.attempts.load(Ordering::Acquire), 1);
+    client.flush().unwrap();
+    assert_eq!(value(&client, 2), 20);
+    assert_eq!(
+        client
+            .query(|connection| Ok(connection.query_row(
+                "SELECT count(*) FROM data WHERE key=1",
+                [],
+                |row| row.get::<_, i64>(0)
+            )?))
+            .unwrap(),
+        0
+    );
+    assert_eq!(control.attempts.load(Ordering::Acquire), 2);
+    assert_eq!(control.commits.load(Ordering::Acquire), 1);
+    owner.close().unwrap();
+}
+
+#[test]
 fn queued_flush_commits_pending_edits_before_the_following_query() {
     let root = tempfile::tempdir().unwrap();
     let runtime = Runtime::new().unwrap();
@@ -442,8 +483,8 @@ async fn a_discarded_failure_does_not_rearm_idle_timers_or_shorten_new_dirty_del
     let (client, task) = virtual_client(
         &runtime,
         WritebackPolicy {
-            delay: Duration::from_secs(30),
-            early_commit_operations: Some(512),
+            delay: Duration::from_secs(5),
+            early_commit_operations: None,
         },
     );
     let control = Arc::new(Control::default());
@@ -451,7 +492,7 @@ async fn a_discarded_failure_does_not_rearm_idle_timers_or_shorten_new_dirty_del
     let attempted = next_attempt(&control);
     client.record(Batch::put(1, 10, &control)).unwrap();
     tokio::task::yield_now().await;
-    tokio::time::advance(Duration::from_secs(30)).await;
+    tokio::time::advance(Duration::from_secs(5)).await;
     attempted.await.unwrap();
     barrier(&client).await;
     assert!(client.shared.pending.lock().failure.is_some());
@@ -461,7 +502,7 @@ async fn a_discarded_failure_does_not_rearm_idle_timers_or_shorten_new_dirty_del
     client.record(Batch::put(2, 20, &control)).unwrap();
     barrier(&client).await;
     let attempted = next_attempt(&control);
-    tokio::time::advance(Duration::from_millis(29999)).await;
+    tokio::time::advance(Duration::from_millis(4999)).await;
     barrier(&client).await;
     assert_eq!(control.attempts.load(Ordering::Acquire), 1);
     tokio::time::advance(Duration::from_millis(1)).await;

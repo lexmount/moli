@@ -33,13 +33,10 @@ impl From<rusqlite::Error> for WritebackError {
 type Result<T> = std::result::Result<T, WritebackError>;
 
 pub trait WriteBatch: Default + Send + 'static {
-    /// Retain accepted localStorage edits for explicit flush after failure,
-    /// rejecting new edits until recovery. Cookie batches can be discarded.
-    const RETAIN_FAILED_BATCH: bool = false;
     fn is_empty(&self) -> bool;
     /// Compose chronological deltas: self happened before newer.
     fn merge(&mut self, newer: Self);
-    /// Must be atomic and idempotent, including explicit flush after failure.
+    /// Commit atomically. A failed batch is discarded without replay.
     fn write(&self, connection: &mut Connection) -> Result<()>;
 }
 #[derive(Clone, Copy)]
@@ -268,11 +265,6 @@ impl<B: WriteBatch> WritebackClient<B> {
         if pending.closed {
             return Err(WritebackError::new("database is closed").into());
         }
-        if B::RETAIN_FAILED_BATCH
-            && let Some(error) = &pending.failure
-        {
-            return Err(error.clone().into());
-        }
         let (result, batch) = mutation()?;
         if !batch.is_empty() {
             pending.batch.merge(batch);
@@ -344,43 +336,29 @@ async fn commit<B: WriteBatch>(
     shared: &Shared<B>,
     runtime: &RuntimeHandle,
 ) -> Result<LazyConnection> {
-    let taken = {
+    let batch = {
         let mut pending = shared.pending.lock();
         if pending.batch.is_empty() {
             return Ok(connection);
         }
-        let batch = std::mem::take(&mut pending.batch);
-        let operations = std::mem::take(&mut pending.operations);
-        let since = pending.first_dirty.take();
-        (batch, operations, since)
+        pending.operations = 0;
+        pending.first_dirty = None;
+        std::mem::take(&mut pending.batch)
     };
-    let (batch, operations, since) = taken;
-    let (connection, batch, result) = runtime
+    let (connection, result) = runtime
         .blocking(move || {
             let mut connection = connection;
             let result = connection
                 .get()
                 .and_then(|connection| batch.write(connection));
-            (connection, batch, result)
+            (connection, result)
         })
         .await
         .map_err(WritebackError::new)?;
-    let mut pending = shared.pending.lock();
-    match result {
-        Ok(()) => {
-            pending.failure = None;
-        }
-        Err(error) => {
-            if B::RETAIN_FAILED_BATCH {
-                let mut batch = batch;
-                batch.merge(std::mem::take(&mut pending.batch));
-                pending.batch = batch;
-                pending.operations = pending.operations.saturating_add(operations);
-                pending.first_dirty = since.or(pending.first_dirty);
-            }
-            pending.failure = Some(error);
-        }
+    if let Err(error) = &result {
+        tracing::warn!(%error, batch = std::any::type_name::<B>(), "SQLite persistence batch failed; the batch will not be retried");
     }
+    shared.pending.lock().failure = result.err();
     Ok(connection)
 }
 async fn run<B: WriteBatch>(
@@ -393,9 +371,7 @@ async fn run<B: WriteBatch>(
     loop {
         let deadline = {
             let pending = shared.pending.lock();
-            if B::RETAIN_FAILED_BATCH && pending.failure.is_some() {
-                None
-            } else if policy
+            if policy
                 .early_commit_operations
                 .is_some_and(|limit| pending.operations >= limit)
             {

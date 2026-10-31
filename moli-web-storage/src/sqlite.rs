@@ -55,7 +55,6 @@ enum KeyChange {
     Delete,
 }
 impl WriteBatch for Batch {
-    const RETAIN_FAILED_BATCH: bool = true;
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -412,8 +411,8 @@ impl SqliteBackend {
                 if !nonempty {
                     continue;
                 }
-                // An empty logical map fences reads until this deletion is
-                // durable. Cold entries never need to be materialized, and a
+                // An empty logical map fences reads while deletion is pending.
+                // Cold entries never need to be materialized, and a
                 // later put composes after clear in the same writeback FIFO.
                 *state = Some(MemoryWebStorageArea::default());
                 batch.0.insert(

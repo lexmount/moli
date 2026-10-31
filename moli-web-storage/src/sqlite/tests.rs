@@ -318,7 +318,7 @@ fn warmed_reads_and_writes_do_not_wait_for_the_database() {
     owner.flush().unwrap();
 }
 #[test]
-fn asynchronous_failure_keeps_accepted_values_and_rejects_later_mutations_until_explicit_flush() {
+fn persistence_failure_discards_the_batch_but_keeps_live_values_and_accepts_new_changes() {
     let root = tempfile::tempdir().unwrap();
     let runtime = Runtime::new().unwrap();
     let (store, owner) = open(root.path(), &runtime);
@@ -327,15 +327,25 @@ fn asynchronous_failure_keeps_accepted_values_and_rejects_later_mutations_until_
     let events = store.subscribe_mutations(WebStorageAreaKind::Local);
     backend(&store).client.query(|connection| {connection.execute_batch("CREATE TRIGGER fail_entries BEFORE INSERT ON entries BEGIN SELECT RAISE(FAIL,'injected persistence failure'); END;")?;Ok(())}).unwrap();
     store.try_set_item(key, "key", "accepted").unwrap();
+    store.try_set_item(key, "lost", "memory only").unwrap();
     assert!(owner.flush().is_err());
     assert_eq!(store.get_item(key, "key").as_deref(), Some("accepted"));
+    assert_eq!(store.get_item(key, "lost").as_deref(), Some("memory only"));
+    assert_eq!(events.drain().len(), 2);
+    assert!(owner.flush().is_err(), "flush cannot replay a failed batch");
+    assert!(
+        backend(&store)
+            .client
+            .query(move |connection| read_area(connection, key))
+            .unwrap()
+            .values
+            .is_empty()
+    );
+    // A previous commit error cannot reject logical writes, even while the
+    // fault is still present. Only this new change enters the next batch.
+    store.try_set_item(key, "key", "recovered").unwrap();
+    assert_eq!(store.get_item(key, "key").as_deref(), Some("recovered"));
     assert_eq!(events.drain().len(), 1);
-    assert!(matches!(
-        store.try_set_item(key, "key", "rejected"),
-        Err(WebStorageMutationError::Persistence(_))
-    ));
-    assert_eq!(store.get_item(key, "key").as_deref(), Some("accepted"));
-    assert!(events.is_empty());
     backend(&store)
         .client
         .query(|connection| {
@@ -344,10 +354,11 @@ fn asynchronous_failure_keeps_accepted_values_and_rejects_later_mutations_until_
         })
         .unwrap();
     owner.flush().unwrap();
-    store.try_set_item(key, "key", "recovered").unwrap();
+    assert_eq!(store.get_item(key, "lost").as_deref(), Some("memory only"));
     owner.close().unwrap();
     let (store, owner) = open(root.path(), &runtime);
     assert_eq!(store.get_item(key, "key").as_deref(), Some("recovered"));
+    assert_eq!(store.get_item(key, "lost"), None);
     owner.close().unwrap();
 }
 #[test]
@@ -492,7 +503,7 @@ fn retrying_committed_then_deleted_or_cleared_keys_is_idempotent() {
 }
 
 #[test]
-fn sqlite_full_retains_dirty_data_for_explicit_flush_after_capacity_is_restored() {
+fn sqlite_full_discards_failed_edits_and_allows_new_edits_to_persist_after_space_is_restored() {
     let root = tempfile::tempdir().unwrap();
     let runtime = Runtime::new().unwrap();
     let (store, owner) = open(root.path(), &runtime);
@@ -507,12 +518,17 @@ fn sqlite_full_retains_dirty_data_for_explicit_flush_after_capacity_is_restored(
         .unwrap();
     let value = "x".repeat(1024 * 1024);
     store.try_set_item("area", "accepted", &value).unwrap();
-    assert!(owner.flush().is_err());
+    let error = owner.flush().unwrap_err();
+    assert!(
+        error.to_string().contains("database or disk is full"),
+        "{error}"
+    );
     assert_eq!(store.get_item("area", "accepted"), Some(value.clone()));
-    assert!(matches!(
-        store.try_set_item("area", "later", "blocked"),
-        Err(WebStorageMutationError::Persistence(_))
-    ));
+    store.try_set_item("area", "later", "recovered").unwrap();
+    assert_eq!(
+        store.get_item("area", "later").as_deref(),
+        Some("recovered")
+    );
     backend(&store)
         .client
         .query(|connection| {
@@ -520,28 +536,22 @@ fn sqlite_full_retains_dirty_data_for_explicit_flush_after_capacity_is_restored(
             Ok(())
         })
         .unwrap();
-    assert!(matches!(
-        store.try_set_item("area", "later", "still blocked until flush"),
-        Err(WebStorageMutationError::Persistence(_))
-    ));
     owner.flush().unwrap();
     assert_eq!(
         backend(&store)
             .client
-            .query(|connection| {
-                Ok(
-                    connection.query_row("SELECT length(value) FROM entries", [], |row| {
-                        row.get::<_, i64>(0)
-                    })?,
-                )
-            })
-            .unwrap(),
-        i64::try_from(value.len() * 2).unwrap()
+            .query(|connection| read_area(connection, "area"))
+            .unwrap()
+            .values,
+        HashMap::from([(
+            WebStorageString::from_utf8("later"),
+            WebStorageString::from_utf8("recovered"),
+        )])
     );
-    store.try_set_item("area", "later", "recovered").unwrap();
+    assert_eq!(store.get_item("area", "accepted"), Some(value));
     owner.close().unwrap();
     let (store, owner) = open(root.path(), &runtime);
-    assert_eq!(store.get_item("area", "accepted"), Some(value));
+    assert_eq!(store.get_item("area", "accepted"), None);
     assert_eq!(
         store.get_item("area", "later").as_deref(),
         Some("recovered")
