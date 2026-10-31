@@ -95,6 +95,7 @@
         });
       }
       for (const [ownerIndex, owner] of realms.entries()) {
+        const SharedBuffer = new owner.WebAssembly.Memory({shared:true,initial:1,maximum:1}).buffer.constructor;
         check(tag + ':cross realm getter ' + ownerIndex, () => assert(getter().call(new owner[kind]('test')) === null));
         if (member === 'data') {
           check(tag + ':payload identity ' + ownerIndex, () => {
@@ -118,10 +119,10 @@
             ['resizable fixed view', () => new owner.Uint8Array(new owner.ArrayBuffer(2, {maxByteLength: 4}), 0, 2)],
             ['resizable tracking view', () => new owner.Uint8Array(new owner.ArrayBuffer(2, {maxByteLength: 4}))],
             ['resizable detached', () => {const buffer = new owner.ArrayBuffer(2, {maxByteLength: 4}); const data = new owner.Uint8Array(buffer); buffer.transfer(); return data;}],
-            ['shared', () => new owner.Uint8Array(new owner.SharedArrayBuffer(2))],
-            ['shared empty', () => new owner.Uint8Array(new owner.SharedArrayBuffer(0))],
-            ['growable shared', () => new owner.Uint8Array(new owner.SharedArrayBuffer(2, {maxByteLength: 4}))],
-            ['growable empty', () => new owner.Uint8Array(new owner.SharedArrayBuffer(0, {maxByteLength: 4}))],
+            ['shared', () => new owner.Uint8Array(new SharedBuffer(2))],
+            ['shared empty', () => new owner.Uint8Array(new SharedBuffer(0))],
+            ['growable shared', () => new owner.Uint8Array(new SharedBuffer(2, {maxByteLength: 4}))],
+            ['growable empty', () => new owner.Uint8Array(new SharedBuffer(0, {maxByteLength: 4}))],
           ]) {
             check(tag + ':buffer policy ' + ownerIndex + ':' + label, () => throws(() => new Ctor('test', {data: make()}), realm.TypeError.prototype));
           }
@@ -142,10 +143,11 @@
     }
     const encoder = new realm.TextEncoder();
     for (const [ownerIndex, owner] of realms.entries()) {
+      const SharedBuffer = new owner.WebAssembly.Memory({shared:true,initial:1,maximum:1}).buffer.constructor;
       for (const shared of [false, true]) {
         for (const [input, length, expectedRead, bytes] of [['', 0, 0, []], ['A', 0, 0, []], ['A', 1, 1, [65]], ['\u{1D306}', 3, 0, []], ['\u{1D306}', 4, 2, [240, 157, 140, 134]], ['\u{1D306}A', 5, 3, [240, 157, 140, 134, 65]], ['\ud800', 3, 1, [239, 191, 189]]]) {
           check(`${realmIndex}:encodeInto:${ownerIndex}:${shared}:${input}:${length}`, () => {
-            const buffer = new owner[shared ? 'SharedArrayBuffer' : 'ArrayBuffer'](length + 4);
+            const buffer = new (shared ? SharedBuffer : owner.ArrayBuffer)(length + 4);
             const whole = new owner.Uint8Array(buffer); whole.fill(0x80);
             const dest = new owner.Uint8Array(buffer, 2, length);
             const result = encoder.encodeInto(input, dest);
@@ -154,11 +156,11 @@
           });
         }
         check(`${realmIndex}:encodeInto:empty:${ownerIndex}:${shared}`, () => {
-          const dest = new owner.Uint8Array(new owner[shared ? 'SharedArrayBuffer' : 'ArrayBuffer'](0));
+          const dest = new owner.Uint8Array(new (shared ? SharedBuffer : owner.ArrayBuffer)(0));
           const result = encoder.encodeInto('A', dest); assert(result.read === 0 && result.written === 0);
         });
         check(`${realmIndex}:encodeInto:resizable:${ownerIndex}:${shared}`, () => {
-          const dest = new owner.Uint8Array(new owner[shared ? 'SharedArrayBuffer' : 'ArrayBuffer'](0, {maxByteLength: 4}));
+          const dest = new owner.Uint8Array(new (shared ? SharedBuffer : owner.ArrayBuffer)(0, {maxByteLength: 4}));
           throws(() => encoder.encodeInto('A', dest), realm.TypeError.prototype);
         });
       }
