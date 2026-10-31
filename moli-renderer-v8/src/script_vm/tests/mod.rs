@@ -2212,6 +2212,7 @@ mod event_receivers;
 
 mod svg_number_list_native_receivers;
 
+mod geometry_matrix_constructor_union;
 mod geometry_point_conversion_order;
 mod headers_list;
 mod http_fixture;

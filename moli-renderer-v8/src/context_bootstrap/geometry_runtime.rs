@@ -615,48 +615,44 @@ fn dom_point_constructor_init<'s>(
     })
 }
 
+#[derive(Clone, Copy)]
+enum DomMatrixConstructor {
+    Mutable,
+    ReadOnly,
+}
+
+#[derive(Clone, Copy)]
+enum DomMatrixConstructorRealm {
+    Window,
+    Worker,
+}
+
 pub(super) fn dom_matrix_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
+    rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !args.is_construct_call() {
-        throw_type_error(
-            scope,
-            "Failed to construct 'DOMMatrix': Please use the 'new' operator.",
-        );
-        return;
-    }
-    initialize_dom_matrix_identity_object(scope, args.this());
-    if args.length() > 0
-        && !args.get(0).is_undefined()
-        && !apply_dom_matrix_init(scope, args.this(), args.get(0))
-    {
-        return;
-    }
-    rv.set(args.this().into());
+    construct_dom_matrix(
+        scope,
+        args,
+        rv,
+        DomMatrixConstructor::Mutable,
+        DomMatrixConstructorRealm::Window,
+    );
 }
 
 pub(super) fn dom_matrix_readonly_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
+    rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !args.is_construct_call() {
-        throw_type_error(
-            scope,
-            "Failed to construct 'DOMMatrixReadOnly': Please use the 'new' operator.",
-        );
-        return;
-    }
-    initialize_dom_matrix_readonly_identity_object(scope, args.this());
-    if args.length() > 0
-        && !args.get(0).is_undefined()
-        && !apply_dom_matrix_init(scope, args.this(), args.get(0))
-    {
-        return;
-    }
-    rv.set(args.this().into());
+    construct_dom_matrix(
+        scope,
+        args,
+        rv,
+        DomMatrixConstructor::ReadOnly,
+        DomMatrixConstructorRealm::Window,
+    );
 }
 
 pub(super) fn dom_matrix_worker_constructor_callback<'s>(
@@ -664,14 +660,13 @@ pub(super) fn dom_matrix_worker_constructor_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if args.is_construct_call() && dom_matrix_worker_string_argument(&args) {
-        throw_type_error(
-            scope,
-            "DOMMatrix string construction is not available in workers.",
-        );
-        return;
-    }
-    dom_matrix_constructor_callback(scope, args, rv);
+    construct_dom_matrix(
+        scope,
+        args,
+        rv,
+        DomMatrixConstructor::Mutable,
+        DomMatrixConstructorRealm::Worker,
+    );
 }
 
 pub(super) fn dom_matrix_readonly_worker_constructor_callback<'s>(
@@ -679,22 +674,46 @@ pub(super) fn dom_matrix_readonly_worker_constructor_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if args.is_construct_call() && dom_matrix_worker_string_argument(&args) {
+    construct_dom_matrix(
+        scope,
+        args,
+        rv,
+        DomMatrixConstructor::ReadOnly,
+        DomMatrixConstructorRealm::Worker,
+    );
+}
+
+fn construct_dom_matrix<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+    constructor: DomMatrixConstructor,
+    realm: DomMatrixConstructorRealm,
+) {
+    let name = match constructor {
+        DomMatrixConstructor::Mutable => "DOMMatrix",
+        DomMatrixConstructor::ReadOnly => "DOMMatrixReadOnly",
+    };
+    if !args.is_construct_call() {
         throw_type_error(
             scope,
-            "DOMMatrixReadOnly string construction is not available in workers.",
+            &format!("Failed to construct '{name}': Please use the 'new' operator."),
         );
         return;
     }
-    dom_matrix_readonly_constructor_callback(scope, args, rv);
-}
-
-fn dom_matrix_worker_string_argument(args: &v8::FunctionCallbackArguments<'_>) -> bool {
-    if args.length() == 0 {
-        return false;
+    match constructor {
+        DomMatrixConstructor::Mutable => initialize_dom_matrix_identity_object(scope, args.this()),
+        DomMatrixConstructor::ReadOnly => {
+            initialize_dom_matrix_readonly_identity_object(scope, args.this())
+        }
     }
-    let init = args.get(0);
-    init.is_string() || init.is_string_object()
+    if args.length() > 0
+        && !args.get(0).is_undefined()
+        && !apply_dom_matrix_constructor_init(scope, args.this(), args.get(0), name, realm)
+    {
+        return;
+    }
+    rv.set(args.this().into());
 }
 
 pub(in crate::context_bootstrap) fn initialize_dom_point_object<'s>(
@@ -2279,27 +2298,30 @@ fn dom_matrix_value_from_typed_array<'s>(
 fn dom_matrix_value_from_sequence_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     array: v8::Local<'s, v8::Array>,
+    context: webidl::Context,
 ) -> Option<DomMatrixValue> {
-    let length = array.length();
-    if length != 6 && length != DOM_MATRIX_TYPED_ARRAY_LENGTH as u32 {
+    // Preserve Blink's indexed Array conversion. Other objects use @@iterator.
+    let mut values = Vec::with_capacity(array.length() as usize);
+    let mut index = 0;
+    while index < array.length() {
+        let value = array.get_index(scope, index)?;
+        values.push(geometry_number_value(scope, value, context)?);
+        index += 1;
+    }
+    dom_matrix_value_from_sequence(scope, &values)
+}
+
+fn dom_matrix_value_from_sequence(
+    scope: &mut v8::PinScope<'_, '_>,
+    values: &[f64],
+) -> Option<DomMatrixValue> {
+    let Some(components) = dom_matrix_components_from_values(values) else {
         throw_type_error(scope, "DOMMatrix sequence length must be 6 or 16.");
         return None;
-    }
-
-    let mut values = Vec::with_capacity(length as usize);
-    for index in 0..length {
-        let value = array
-            .get_index(scope, index)
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        let value =
-            geometry_number_value(scope, value, webidl::Context::member("DOMMatrix", "init"))?;
-        values.push(value);
-    }
-
-    let components = dom_matrix_components_from_values(&values)?;
+    };
     Some(DomMatrixValue {
         components,
-        is_2d: length == 6,
+        is_2d: values.len() == 6,
     })
 }
 
@@ -2472,68 +2494,58 @@ fn build_dom_matrix_float64_array<'s>(
         .into()
 }
 
-fn apply_dom_matrix_init<'s>(
+fn apply_dom_matrix_constructor_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     matrix: v8::Local<'s, v8::Object>,
     init: v8::Local<'s, v8::Value>,
+    name: &'static str,
+    realm: DomMatrixConstructorRealm,
 ) -> bool {
-    if init.is_string() {
-        let Some(text) = init.to_string(scope) else {
-            return false;
-        };
-        return apply_dom_matrix_transform_list_string(
-            scope,
-            matrix,
-            &text.to_rust_string_lossy(scope),
-        );
-    }
-    if v8::Local::<v8::Float32Array>::try_from(init).is_ok() {
-        if let Some(value) =
-            dom_matrix_value_from_typed_array(scope, init, DomMatrixTypedArrayKind::Float32)
-        {
-            set_dom_matrix_value(scope, matrix, value);
-            return true;
-        }
-        return false;
-    }
-    if v8::Local::<v8::Float64Array>::try_from(init).is_ok() {
-        if let Some(value) =
-            dom_matrix_value_from_typed_array(scope, init, DomMatrixTypedArrayKind::Float64)
-        {
-            set_dom_matrix_value(scope, matrix, value);
-            return true;
-        }
-        return false;
-    }
+    let context = webidl::Context::argument(name, 1);
     if let Ok(array) = v8::Local::<v8::Array>::try_from(init) {
-        let Some(value) = dom_matrix_value_from_sequence_array(scope, array) else {
+        let Some(value) = dom_matrix_value_from_sequence_array(scope, array, context) else {
             return false;
         };
         set_dom_matrix_value(scope, matrix, value);
         return true;
     }
-    if init.is_object() {
-        let Some(value) = dom_matrix_init_value(scope, init, "DOMMatrix", 1) else {
-            return false;
-        };
-        set_dom_matrix_value(scope, matrix, value);
-        return true;
-    }
-
-    match webidl::convert::<webidl::DomString>(
+    let sequence = match webidl::convert_optional_sequence::<webidl::UnrestrictedDouble>(
         scope,
         init,
-        webidl::Context::argument("DOMMatrix", 1),
+        context,
+        &(),
     ) {
-        Ok(text) => {
-            let text = String::from(text);
-            apply_dom_matrix_transform_list_string(scope, matrix, &text)
-        }
+        Ok(sequence) => sequence,
         Err(error) => {
             webidl::throw_error(scope, &error);
-            false
+            return false;
         }
+    };
+    if let Some(sequence) = sequence {
+        let values: Vec<_> = sequence.0.into_iter().map(|value| value.0).collect();
+        let Some(value) = dom_matrix_value_from_sequence(scope, &values) else {
+            return false;
+        };
+        set_dom_matrix_value(scope, matrix, value);
+        return true;
     }
+    let text = match webidl::convert::<webidl::DomString>(scope, init, context) {
+        Ok(text) => text,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return false;
+        }
+    };
+    // The worker restriction applies to the converted union member, after any
+    // author-defined string conversion and its exceptions have run.
+    if matches!(realm, DomMatrixConstructorRealm::Worker) {
+        throw_type_error(
+            scope,
+            &format!("{name} string construction is not available in workers."),
+        );
+        return false;
+    }
+    apply_dom_matrix_transform_list_string(scope, matrix, &text.0)
 }
 
 fn apply_dom_matrix_transform_list_string<'s>(
