@@ -410,10 +410,4 @@ impl WebStorageStore {
     pub fn clear_origin_areas(&self, origin: &str) {
         let _ = self.try_clear_origin_areas(origin);
     }
-    pub fn flush(&self) -> std::result::Result<(), WebStorageMutationError> {
-        match &self.backend {
-            WebStorageBackend::Sqlite(sqlite) => sqlite.client.flush().map_err(Into::into),
-            _ => Ok(()),
-        }
-    }
 }

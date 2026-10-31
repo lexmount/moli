@@ -520,7 +520,10 @@ fn sqlite_full_retains_dirty_data_for_explicit_flush_after_capacity_is_restored(
             Ok(())
         })
         .unwrap();
-    assert!(backend(&store).client.failure().is_some());
+    assert!(matches!(
+        store.try_set_item("area", "later", "still blocked until flush"),
+        Err(WebStorageMutationError::Persistence(_))
+    ));
     owner.flush().unwrap();
     assert_eq!(
         backend(&store)
@@ -682,7 +685,10 @@ fn origin_clear_orders_after_accepted_writes_without_an_old_batch_resurrecting_t
         })
     });
     started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-    backend(&store).client.request_flush();
+    // Flush can precede or follow clear's metadata query in the worker FIFO.
+    // Neither ordering may resurrect the writes accepted before clear.
+    let flushing = backend(&store).client.clone();
+    let flush = thread::spawn(move || flushing.flush());
     let clearing = store.clone();
     let clear = thread::spawn(move || clearing.try_clear_origin_areas(origin));
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -695,6 +701,7 @@ fn origin_clear_orders_after_accepted_writes_without_an_old_batch_resurrecting_t
     }
     release_tx.send(()).unwrap();
     blocked.join().unwrap().unwrap();
+    flush.join().unwrap().unwrap();
     assert!(clear.join().unwrap().unwrap());
     assert_eq!(store.try_len(&key).unwrap(), 0);
     store.try_set_item(&key, "new", "kept").unwrap();

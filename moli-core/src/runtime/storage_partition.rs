@@ -319,7 +319,8 @@ impl StoragePartitionState {
         self.http_cache_root.as_deref()
     }
 
-    pub fn cookie_database_path(&self) -> PathBuf {
+    #[cfg(test)]
+    fn cookie_database_path(&self) -> PathBuf {
         self.profile
             .as_ref()
             .map(|profile| profile.paths().cookies_path.clone())
@@ -331,7 +332,8 @@ impl StoragePartitionState {
                     .join(COOKIE_DATABASE_RELATIVE_PATH)
             })
     }
-    pub fn local_storage_database_path(&self) -> PathBuf {
+    #[cfg(test)]
+    fn local_storage_database_path(&self) -> PathBuf {
         self.profile
             .as_ref()
             .map(|profile| profile.paths().local_storage_path.clone())

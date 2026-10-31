@@ -311,14 +311,6 @@ impl<B: WriteBatch> WritebackClient<B> {
         rx.recv()
             .map_err(|_| WritebackError::new("database stopped before its query reply"))?
     }
-    pub fn request_flush(&self) {
-        let pending = self.shared.pending.lock();
-        if pending.closed {
-            return;
-        }
-        let (reply, _) = mpsc::channel();
-        let _ = self.sender.send(Message::Flush { reply });
-    }
     pub fn flush(&self) -> Result<()> {
         if self.runtime.is_current() {
             return Err(WritebackError::new(
@@ -344,9 +336,6 @@ impl<B: WriteBatch> WritebackClient<B> {
         } else {
             Ok(())
         }
-    }
-    pub fn failure(&self) -> Option<WritebackError> {
-        self.shared.pending.lock().failure.clone()
     }
 }
 

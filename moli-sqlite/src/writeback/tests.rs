@@ -106,7 +106,6 @@ fn an_unused_deferred_store_never_opens_even_when_flushed_or_closed() {
     .unwrap();
     let client = owner.client();
     client.ensure_open().unwrap();
-    client.request_flush();
     client.flush().unwrap();
     owner.close().unwrap();
     assert!(client.query(|_| Ok(())).is_err());
@@ -229,7 +228,8 @@ fn an_in_flight_acknowledgement_cannot_clear_a_newer_batch_and_another_file_can_
     *control.gate.lock() = Some((started_tx, release_rx));
     let client = first.client();
     client.record(Batch::put(1, 10, &control)).unwrap();
-    client.request_flush();
+    let (reply, receipt) = mpsc::channel();
+    client.sender.send(Message::Flush { reply }).unwrap();
     started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
     client.record(Batch::put(1, 20, &control)).unwrap();
     let other = Arc::new(Control::default());
@@ -237,6 +237,10 @@ fn an_in_flight_acknowledgement_cannot_clear_a_newer_batch_and_another_file_can_
     second.client().flush().unwrap();
     assert_eq!(value(&second.client(), 2), 42);
     release_tx.send(()).unwrap();
+    receipt
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
     assert_eq!(value(&client, 1), 10);
     client.flush().unwrap();
     assert_eq!(value(&client, 1), 20);
@@ -265,7 +269,7 @@ fn discarded_failure_does_not_retry_or_block_new_changes() {
     );
     client.record(Batch::put(2, 30, &control)).unwrap();
     client.flush().unwrap();
-    assert!(client.failure().is_none());
+    assert!(client.shared.pending.lock().failure.is_none());
     assert_eq!(value(&client, 2), 30);
     assert_eq!(
         client
@@ -450,7 +454,7 @@ async fn a_discarded_failure_does_not_rearm_idle_timers_or_shorten_new_dirty_del
     tokio::time::advance(Duration::from_secs(30)).await;
     attempted.await.unwrap();
     barrier(&client).await;
-    assert!(client.failure().is_some());
+    assert!(client.shared.pending.lock().failure.is_some());
     tokio::time::advance(Duration::from_secs(3600)).await;
     barrier(&client).await;
     assert_eq!(control.attempts.load(Ordering::Acquire), 1);
@@ -464,7 +468,7 @@ async fn a_discarded_failure_does_not_rearm_idle_timers_or_shorten_new_dirty_del
     attempted.await.unwrap();
     barrier(&client).await;
     assert_eq!(control.commits.load(Ordering::Acquire), 1);
-    assert!(client.failure().is_none());
+    assert!(client.shared.pending.lock().failure.is_none());
     client.shared.pending.lock().closed = true;
     client.sender.send(Message::Close).unwrap();
     task.await.unwrap().unwrap();
@@ -490,7 +494,7 @@ async fn a_failed_early_commit_resets_its_operation_count_and_allows_the_next_ba
     }
     attempted.await.unwrap();
     barrier(&client).await;
-    assert!(client.failure().is_some());
+    assert!(client.shared.pending.lock().failure.is_some());
     for value in 0..511 {
         client.record(Batch::put(2, value, &control)).unwrap();
     }
@@ -503,7 +507,7 @@ async fn a_failed_early_commit_resets_its_operation_count_and_allows_the_next_ba
     barrier(&client).await;
     assert_eq!(tokio::time::Instant::now(), now);
     assert_eq!(control.attempts.load(Ordering::Acquire), 2);
-    assert!(client.failure().is_none());
+    assert!(client.shared.pending.lock().failure.is_none());
     client.shared.pending.lock().closed = true;
     client.sender.send(Message::Close).unwrap();
     task.await.unwrap().unwrap();
