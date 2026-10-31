@@ -4851,6 +4851,33 @@ pub(crate) enum RendererInspectorPageCommand {
     },
 }
 
+/// Target network settings that can change before commit output is projected.
+/// This capability does not expose queries or script execution on an unadopted Page.
+pub enum RendererPageNetworkPolicyUpdate {
+    BlockedUrlPatterns(Vec<String>),
+    FetchSubresourceInterception {
+        enabled: bool,
+        resource_type: Option<crate::SubresourceResourceType>,
+    },
+}
+
+impl From<RendererPageNetworkPolicyUpdate> for RendererPageCommand {
+    fn from(update: RendererPageNetworkPolicyUpdate) -> Self {
+        match update {
+            RendererPageNetworkPolicyUpdate::BlockedUrlPatterns(patterns) => {
+                Self::SetBlockedUrlPatterns(patterns)
+            }
+            RendererPageNetworkPolicyUpdate::FetchSubresourceInterception {
+                enabled,
+                resource_type,
+            } => Self::SetFetchSubresourceInterception {
+                enabled,
+                resource_type,
+            },
+        }
+    }
+}
+
 #[non_exhaustive]
 pub enum RendererPageCommand {
     WebMcp {
@@ -4864,6 +4891,12 @@ pub enum RendererPageCommand {
     ForDocument {
         source_document: RendererDocumentLifecycleIdentity,
         command: Box<RendererPageCommand>,
+    },
+    /// A prepared navigation has an agent identity before its Document token
+    /// reaches protocol. The native owner resolves and checks that identity.
+    ForPendingDocumentPolicy {
+        expected_agent: RendererDevToolsAgentToken,
+        update: RendererPageNetworkPolicyUpdate,
     },
     Inspector(RendererInspectorCommandEnvelope),
     EvaluateExpression {

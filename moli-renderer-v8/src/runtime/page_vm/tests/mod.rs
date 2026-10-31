@@ -3,6 +3,7 @@ mod bitmap_renderer;
 mod canvas_loaded_images;
 mod offscreen_canvas_blob;
 mod offscreen_canvas_transfer;
+mod pending_document_policy;
 use std::{
     sync::Arc,
     time::{Duration, Instant},

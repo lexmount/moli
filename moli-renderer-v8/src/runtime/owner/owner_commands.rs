@@ -183,21 +183,50 @@ impl RendererOwnerHandle {
         owner_local_host_id: RendererOwnerLocalHostId,
         source_document: super::RendererDocumentLifecycleIdentity,
     ) -> Result<super::RendererDocumentCommandTarget> {
-        use crate::runtime::page_commands::DocumentCommandError;
-        if owner_local_host_id != self.state.owner_local_host_id {
-            return Err(DocumentCommandError::WrongOwner.into());
-        }
-        let token = RendererPageToken {
-            local_host_id: owner_local_host_id,
-            #[cfg(debug_assertions)]
-            local_thread_id: (*self.state.owner_local_thread_id.lock())
-                .ok_or(DocumentCommandError::OwnerUnavailable)?,
-            page_id: source_document.frame.page_id,
-        };
+        let token =
+            self.command_token_for_page(owner_local_host_id, source_document.frame.page_id)?;
         Ok(super::RendererDocumentCommandTarget {
             render_runtime: self.render_runtime.clone(),
             token,
             document: source_document,
+        })
+    }
+
+    pub fn start_pending_document_policy_update(
+        &self,
+        owner_local_host_id: RendererOwnerLocalHostId,
+        page_id: PageId,
+        expected_agent: RendererDevToolsAgentToken,
+        update: RendererPageNetworkPolicyUpdate,
+    ) -> Result<super::RendererPageCommandPending> {
+        let token = self.command_token_for_page(owner_local_host_id, page_id)?;
+        let reply = self
+            .render_runtime
+            .enqueue(RendererOwnerCommand::RunProtocolPageCommand {
+                token,
+                command: RendererPageCommand::ForPendingDocumentPolicy {
+                    expected_agent,
+                    update,
+                },
+            })?;
+        Ok(super::RendererPageCommandPending::from_owner_reply(reply))
+    }
+
+    fn command_token_for_page(
+        &self,
+        owner_local_host_id: RendererOwnerLocalHostId,
+        page_id: PageId,
+    ) -> Result<RendererPageToken> {
+        use crate::runtime::page_commands::DocumentCommandError;
+        if owner_local_host_id != self.state.owner_local_host_id {
+            return Err(DocumentCommandError::WrongOwner.into());
+        }
+        Ok(RendererPageToken {
+            local_host_id: owner_local_host_id,
+            #[cfg(debug_assertions)]
+            local_thread_id: (*self.state.owner_local_thread_id.lock())
+                .ok_or(DocumentCommandError::OwnerUnavailable)?,
+            page_id,
         })
     }
 
