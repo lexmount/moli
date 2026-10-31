@@ -1,3 +1,6 @@
+#[path = "transferable_streams/split30_stream_port_chunk_serialization.rs"]
+mod split30_stream_port_chunk_serialization;
+
 use super::*;
 
 #[tokio::test]
