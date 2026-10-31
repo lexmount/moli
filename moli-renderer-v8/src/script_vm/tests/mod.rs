@@ -2213,6 +2213,7 @@ mod event_receivers;
 mod svg_number_list_native_receivers;
 
 mod geometry_point_conversion_order;
+mod geometry_point_transform;
 mod headers_list;
 mod http_fixture;
 mod iframe_load_delivery;

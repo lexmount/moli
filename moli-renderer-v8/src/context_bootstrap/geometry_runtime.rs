@@ -1059,30 +1059,45 @@ fn dom_point_matrix_transform_callback<'s>(
     else {
         return;
     };
-    let matrix = matrix.components;
     let point = dom_point_init_from_object(scope, args.this());
-    rv.set(
-        build_dom_point_object(
+    rv.set(build_transformed_dom_point(scope, matrix, point).into());
+}
+
+fn build_transformed_dom_point<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    matrix: DomMatrixValue,
+    point: DomPointInit,
+) -> v8::Local<'s, v8::Object> {
+    let components = matrix.components;
+    // Unused 3D terms must not turn z/w into NaN for non-finite 2D points.
+    if matrix.is_2d && point.z == 0.0 && point.w == 1.0 {
+        return build_dom_point_object(
             scope,
-            matrix.m11 * point.x
-                + matrix.m21 * point.y
-                + matrix.m31 * point.z
-                + matrix.m41 * point.w,
-            matrix.m12 * point.x
-                + matrix.m22 * point.y
-                + matrix.m32 * point.z
-                + matrix.m42 * point.w,
-            matrix.m13 * point.x
-                + matrix.m23 * point.y
-                + matrix.m33 * point.z
-                + matrix.m43 * point.w,
-            matrix.m14 * point.x
-                + matrix.m24 * point.y
-                + matrix.m34 * point.z
-                + matrix.m44 * point.w,
-        )
-        .into(),
-    );
+            point.x * components.m11 + point.y * components.m21 + components.m41,
+            point.x * components.m12 + point.y * components.m22 + components.m42,
+            0.0,
+            1.0,
+        );
+    }
+    build_dom_point_object(
+        scope,
+        point.x * components.m11
+            + point.y * components.m21
+            + point.z * components.m31
+            + point.w * components.m41,
+        point.x * components.m12
+            + point.y * components.m22
+            + point.z * components.m32
+            + point.w * components.m42,
+        point.x * components.m13
+            + point.y * components.m23
+            + point.z * components.m33
+            + point.w * components.m43,
+        point.x * components.m14
+            + point.y * components.m24
+            + point.z * components.m34
+            + point.w * components.m44,
+    )
 }
 
 fn dom_matrix_init_arg<'s>(
@@ -1974,27 +1989,8 @@ fn dom_matrix_transform_point_callback<'s>(
     else {
         return;
     };
-    let components = dom_matrix_components(scope, args.this());
-    let point = build_dom_point_object(
-        scope,
-        components.m11 * init.x
-            + components.m21 * init.y
-            + components.m31 * init.z
-            + components.m41 * init.w,
-        components.m12 * init.x
-            + components.m22 * init.y
-            + components.m32 * init.z
-            + components.m42 * init.w,
-        components.m13 * init.x
-            + components.m23 * init.y
-            + components.m33 * init.z
-            + components.m43 * init.w,
-        components.m14 * init.x
-            + components.m24 * init.y
-            + components.m34 * init.z
-            + components.m44 * init.w,
-    );
-    rv.set(point.into());
+    let matrix = dom_matrix_value(scope, args.this());
+    rv.set(build_transformed_dom_point(scope, matrix, init).into());
 }
 
 fn copied_dom_matrix<'s>(

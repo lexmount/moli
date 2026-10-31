@@ -1547,6 +1547,7 @@ mod network;
 mod postmessage;
 
 mod canvas_transform_snapshots;
+mod geometry_point_transform;
 
 mod tls;
 
