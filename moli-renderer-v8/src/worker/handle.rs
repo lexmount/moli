@@ -877,6 +877,7 @@ impl WorkerHandle {
     }
 
     /// Send a message to the worker (`postMessage`).
+    #[cfg(test)]
     pub(crate) fn post_message(&self, payload: V8StructuredClonePayload) {
         self.queue_task(WorkerMessage::Post(payload));
     }
