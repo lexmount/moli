@@ -14,8 +14,21 @@ pub(crate) fn import_cookies(profile: &Path) -> Result<Vec<StoredCookie>> {
         return Ok(Vec::new());
     }
     let snapshot = SqliteSnapshot::open(&source, "Firefox cookies")?;
-    let mut statement = snapshot.connection
-        .prepare("SELECT name,value,host,path,expiry,isSecure,isHttpOnly,sameSite,schemeMap,originAttributes FROM moz_cookies")
+    let creation_column =
+        if snapshot
+            .connection
+            .column_exists(None, "moz_cookies", "creationTime")?
+        {
+            "creationTime"
+        } else {
+            "NULL"
+        };
+    let sql = format!(
+        "SELECT name,value,host,path,expiry,isSecure,isHttpOnly,sameSite,schemeMap,originAttributes,{creation_column} FROM moz_cookies"
+    );
+    let mut statement = snapshot
+        .connection
+        .prepare(&sql)
         .context("Firefox cookies database has an unsupported schema")?;
     let rows = statement.query_map([], |row| {
         Ok(FirefoxCookieRow {
@@ -29,6 +42,10 @@ pub(crate) fn import_cookies(profile: &Path) -> Result<Vec<StoredCookie>> {
             same_site: row.get(7)?,
             scheme_map: row.get(8)?,
             origin_attributes: row.get(9)?,
+            creation_time: crate::creation_time::from_browser_micros(
+                row.get_ref(10)?.as_i64().ok(),
+                0,
+            ),
         })
     })?;
     let mut cookies = Vec::new();
@@ -73,7 +90,7 @@ pub(crate) fn import_cookies(profile: &Path) -> Result<Vec<StoredCookie>> {
             },
             source_port: -1,
             creation_index: cookies.len() as u64,
-            creation_time: None,
+            creation_time: row.creation_time,
             last_access_index: 0,
         });
     }
@@ -127,6 +144,7 @@ struct FirefoxCookieRow {
     same_site: i64,
     scheme_map: i64,
     origin_attributes: String,
+    creation_time: Option<OffsetDateTime>,
 }
 
 fn collect_local_storage_databases(
@@ -277,6 +295,7 @@ mod tests {
         assert_eq!(cookies[0].name, "session");
         assert_eq!(cookies[0].value, "value");
         assert_eq!(cookies[0].same_site, StoredCookieSameSite::Lax);
+        assert_eq!(cookies[0].creation_time, None);
         let mut origins = read_local_storage(&profile)?;
         assert_eq!(origins["https://example.com"].len(), 1);
         assert_eq!(
