@@ -277,13 +277,19 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         // revocation cannot leave a loaded script without its policy.
         let blob_policy = (resolved_url.scheme() == "blob")
             .then(|| crate::blob::object_url_policy(resolved_url.as_str()));
-        let materialized = match materialize_worker_script_source(&resolved_url) {
-            Ok(source) => source,
-            Err(message) => {
-                throw_type_error(scope, &message);
-                return;
-            }
-        };
+        let blob_access_key = crate::blob::ObjectUrlAccessKey::new(
+            host.browser_context_runtime().storage_partition_identity(),
+            creator_storage_key.clone(),
+        );
+        let (materialized, blob_load_failed) =
+            match materialize_worker_script_source(&resolved_url, Some(&blob_access_key)) {
+                Ok(source) => (source, false),
+                Err(_) if resolved_url.scheme() == "blob" => (None, true),
+                Err(message) => {
+                    throw_type_error(scope, &message);
+                    return;
+                }
+            };
         let creator_secure_context = moli_url::is_potentially_trustworthy_url(&base_url);
         let worker_id = if let Some(script_source) = materialized {
             let (inherited_policy, inherited_referrer_policy) = if let Some(policy) = blob_policy {
@@ -384,22 +390,23 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         } else {
             let cross_origin_http_worker_script =
                 is_cross_origin_http_worker_script(&base_url, &resolved_url);
-            let reserved_service_worker_client_id = if cross_origin_http_worker_script {
-                None
-            } else {
-                Some(
-                    host.browser_context_runtime()
-                        .register_reserved_service_worker_worker_client(
-                            resolved_url.clone(),
-                            creator_storage_key.serialized_storage_key(),
-                            ServiceWorkerClientType::DedicatedWorker,
-                            worker_secure_context_for_script_url(
-                                &resolved_url,
-                                creator_secure_context,
+            let reserved_service_worker_client_id =
+                if cross_origin_http_worker_script || blob_load_failed {
+                    None
+                } else {
+                    Some(
+                        host.browser_context_runtime()
+                            .register_reserved_service_worker_worker_client(
+                                resolved_url.clone(),
+                                creator_storage_key.serialized_storage_key(),
+                                ServiceWorkerClientType::DedicatedWorker,
+                                worker_secure_context_for_script_url(
+                                    &resolved_url,
+                                    creator_secure_context,
+                                ),
                             ),
-                        ),
-                )
-            };
+                    )
+                };
             let Some(outside_settings_load) =
                 host.register_dedicated_worker_outside_settings_load(dispatch_scope)
             else {
@@ -428,9 +435,15 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             );
             debug_assert!(
                 recorded,
-                "newly registered external DedicatedWorker must publish its target before loading"
+                "newly registered loading DedicatedWorker must publish its target before loading"
             );
-            let started = if cross_origin_http_worker_script {
+            let started = if blob_load_failed {
+                host.start_failed_worker_script_load(
+                    worker_id,
+                    resolved_url,
+                    "Failed to load worker script: blob URL is unavailable.",
+                )
+            } else if cross_origin_http_worker_script {
                 host.start_failed_worker_script_load(
                     worker_id,
                     resolved_url,
@@ -635,7 +648,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             };
             let script_source = match Url::parse(&script_url_input)
                 .ok()
-                .map(|url| materialize_worker_script_source(&url))
+                .map(|url| materialize_worker_script_source(&url, None))
             {
                 Some(Ok(Some(source))) => source,
                 Some(Ok(None)) | None => script_url_input.clone(),
@@ -865,7 +878,11 @@ fn materialize_nested_worker_script_source(
 ) -> Result<LoadedNestedWorkerScript, String> {
     let blob_policy = (script_url.scheme() == "blob")
         .then(|| crate::blob::object_url_policy(script_url.as_str()));
-    if let Some(source) = materialize_worker_script_source(script_url)? {
+    let blob_access_key = crate::blob::ObjectUrlAccessKey::new(
+        context.worker_context_runtime.storage_partition_identity(),
+        context.creator_storage_key.clone(),
+    );
+    if let Some(source) = materialize_worker_script_source(script_url, Some(&blob_access_key))? {
         let (content_security_policy, referrer_policy) = if let Some(policy) = blob_policy {
             let policy = policy.unwrap_or_default();
             (policy.content_security_policy, policy.referrer_policy)
@@ -1007,6 +1024,7 @@ pub(in crate::context_bootstrap) fn throw_worker_dom_exception(
 
 pub(in crate::context_bootstrap) fn materialize_worker_script_source(
     script_url: &Url,
+    blob_access_key: Option<&crate::blob::ObjectUrlAccessKey>,
 ) -> Result<Option<String>, String> {
     match script_url.scheme() {
         "data" => {
@@ -1017,16 +1035,20 @@ pub(in crate::context_bootstrap) fn materialize_worker_script_source(
             )
             .map(Some)
         }
-        "blob" => {
-            crate::blob::object_url_body_and_type(worker_script_resource_url(script_url).as_str())
-                .map(|(body, _)| Some(body))
-                .ok_or_else(|| {
-                    format!(
-                        "Failed to construct 'Worker': blob URL `{}` is unavailable.",
-                        script_url
-                    )
-                })
-        }
+        "blob" => blob_access_key
+            .and_then(|access_key| {
+                crate::blob::object_url_body_and_type_with_access_key(
+                    worker_script_resource_url(script_url).as_str(),
+                    access_key,
+                )
+            })
+            .map(|(body, _)| Some(body))
+            .ok_or_else(|| {
+                format!(
+                    "Failed to construct 'Worker': blob URL `{}` is unavailable.",
+                    script_url
+                )
+            }),
         "http" | "https" => Ok(None),
         _ => Err(format!(
             "Failed to construct 'Worker': URL scheme `{}` is not allowed.",

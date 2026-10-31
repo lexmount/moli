@@ -614,11 +614,12 @@ pub(super) fn shared_worker_script_credentials_mode(
 
 pub(super) fn load_shared_worker_blob_script_source(
     script_url: &Url,
+    access_key: &crate::blob::ObjectUrlAccessKey,
 ) -> Result<SharedWorkerLoadedScript, String> {
     let mut resource_url = script_url.clone();
     resource_url.set_fragment(None);
     let policy = crate::blob::object_url_policy(resource_url.as_str()).unwrap_or_default();
-    crate::blob::object_url_body_and_type(resource_url.as_str())
+    crate::blob::object_url_body_and_type_with_access_key(resource_url.as_str(), access_key)
         .map(|(body, _)| {
             let mut script = SharedWorkerLoadedScript::new(script_url.to_string(), body);
             script.content_security_policy_snapshot =

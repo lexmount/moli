@@ -143,10 +143,18 @@ impl SharedWorkerRuntimeService {
             SharedWorkerScriptLoadKind::Ready(script) => {
                 host.enqueue_loading_completion(params, Ok(script))
             }
-            SharedWorkerScriptLoadKind::Blob { script_url } => host.enqueue_loading_completion(
-                params,
-                load_shared_worker_blob_script_source(&script_url),
-            ),
+            SharedWorkerScriptLoadKind::Blob { script_url } => {
+                let access_key = crate::blob::ObjectUrlAccessKey::new(
+                    params
+                        .launch_context
+                        .execution_policy
+                        .worker_context_runtime
+                        .storage_partition_identity(),
+                    params.key.storage_key().clone(),
+                );
+                let result = load_shared_worker_blob_script_source(&script_url, &access_key);
+                host.enqueue_loading_completion(params, result);
+            }
             SharedWorkerScriptLoadKind::Failure { message } => {
                 host.enqueue_loading_completion(params, Err(message))
             }
