@@ -1,5 +1,7 @@
 use super::*;
 
+mod credentialless;
+
 #[tokio::test]
 async fn worker_fetch_referrer_inputs_reach_the_network() {
     ensure_v8();

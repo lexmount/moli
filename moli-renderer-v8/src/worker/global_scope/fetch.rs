@@ -614,7 +614,7 @@ fn spawn_worker_fetch_service_worker(
                     body,
                     headers,
                     request_mode,
-                    credentials_mode,
+                    policy_context.network_credentials_mode(request_mode, credentials_mode),
                     redirect_mode,
                     priority,
                     request_metadata,
@@ -2454,6 +2454,8 @@ pub(super) fn start_worker_resource_fetch<'s>(
     let blob_environment = BlobUrlFetchEnvironment::for_worker(scope);
     let blob_url_entry =
         blob_url_entry.map(|entry| entry.for_environment(blob_environment.as_ref()));
+    let network_credentials_mode =
+        policy_context.network_credentials_mode(request_mode, credentials_mode);
     // Use the same normalized header list as Request before policy checks and
     // context overrides can otherwise discard a repeated Range field.
     let request_headers = normalized_headers_entries(&request_headers);
@@ -2481,7 +2483,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
         WorkerTimingRequest::Fetch {
             method: method.clone(),
             mode: request_mode,
-            credentials: credentials_mode,
+            credentials: network_credentials_mode,
             redirect: redirect_mode,
             policy: policy_context,
             font: kind == WorkerFetchKind::Font,
@@ -2638,7 +2640,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
                         &connect_policy,
                     ),
                     connect_policy,
-                    credentials_mode,
+                    credentials_mode: network_credentials_mode,
                     request_mode,
                     redirect_mode,
                     request_priority: priority,
@@ -2681,7 +2683,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
                 WorkerPendingSubresourceFetch {
                     fetch_id,
                     load,
-                    credentials_mode,
+                    credentials_mode: network_credentials_mode,
                     request_mode,
                     network_partition_key: state.borrow().network_partition_key.clone(),
                     info,
@@ -2744,7 +2746,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
                         &connect_policy,
                     ),
                     connect_policy,
-                    credentials_mode,
+                    credentials_mode: network_credentials_mode,
                     request_mode,
                     redirect_mode,
                     request_priority: priority,
@@ -2820,7 +2822,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
                 body,
                 headers,
                 request_mode,
-                credentials_mode,
+                network_credentials_mode,
                 redirect_mode,
                 priority,
                 request_metadata,
