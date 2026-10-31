@@ -8,7 +8,7 @@ fn idb_index_open_cursor_impl<'s>(
     key_only: bool,
 ) {
     let index = args.this();
-    let Some((transaction, store_name, index_info)) = index_operation_state(scope, index) else {
+    if index_active_transaction(scope, index).is_none() {
         return;
     };
     let operation_name = if key_only {
@@ -17,6 +17,11 @@ fn idb_index_open_cursor_impl<'s>(
         "IDBIndex.openCursor"
     };
     let Some(parsed) = parse_open_cursor_args(scope, args, operation_name) else {
+        return;
+    };
+    // Key getters and direction conversion can rename or delete this handle,
+    // or abort its transaction. Capture SQL labels only after that reentry.
+    let Some((transaction, store_name, index_info)) = index_operation_state(scope, index) else {
         return;
     };
     let Some(request) = create_operation_request(scope, index, transaction) else {
