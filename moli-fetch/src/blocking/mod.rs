@@ -412,17 +412,13 @@ fn append_browser_subresource_headers(
                     .accept_language()
                     .to_owned(),
             );
-            append_encoded_header_if_missing(
+            append_fetch_metadata_headers(
                 outgoing,
-                "Sec-Fetch-Site",
-                request_sec_fetch_site(request, request_url),
+                request,
+                request_url,
+                request.request_mode.as_ref(),
+                "script",
             );
-            append_encoded_header_if_missing(
-                outgoing,
-                "Sec-Fetch-Mode",
-                request.request_mode.as_ref().to_owned(),
-            );
-            append_encoded_header_if_missing(outgoing, "Sec-Fetch-Dest", "script".to_owned());
             if let Some(origin) = request_origin_header_value(request, request_url) {
                 append_encoded_header_if_missing(outgoing, "Origin", origin);
             }

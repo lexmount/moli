@@ -5,6 +5,7 @@ enum RequestKind {
     Navigation,
     Iframe,
     Fetch,
+    Script(crate::RequestResourceType),
 }
 
 impl RequestKind {
@@ -21,6 +22,12 @@ impl RequestKind {
                 .with_request_origin(moli_url::WebOrigin::from_url(target))
                 .with_request_mode(RequestMode::NoCors)
                 .with_browser_request_metadata(BrowserRequestMetadata::Fetch),
+            Self::Script(resource_type) => request
+                .with_initiator_url(&target.join("/creator")?)
+                .with_request_origin(moli_url::WebOrigin::from_url(target))
+                .with_request_mode(RequestMode::Cors)
+                .with_credentials_mode(crate::RequestCredentialsMode::SameOrigin)
+                .with_resource_type(resource_type),
         })
     }
 
@@ -28,6 +35,7 @@ impl RequestKind {
         match self {
             Self::Navigation | Self::Iframe => "navigate",
             Self::Fetch => "no-cors",
+            Self::Script(_) => "cors",
         }
     }
 
@@ -36,6 +44,7 @@ impl RequestKind {
             Self::Navigation => "document",
             Self::Iframe => "iframe",
             Self::Fetch => "empty",
+            Self::Script(_) => "script",
         }
     }
 }
@@ -67,6 +76,10 @@ fn browser_metadata_requires_a_potentially_trustworthy_current_destination() -> 
             RequestKind::Navigation,
             RequestKind::Iframe,
             RequestKind::Fetch,
+            RequestKind::Script(crate::RequestResourceType::Script),
+            RequestKind::Script(crate::RequestResourceType::ParserBlockingScript),
+            RequestKind::Script(crate::RequestResourceType::ClassicAsyncOrDeferScript),
+            RequestKind::Script(crate::RequestResourceType::LatePreloadScript),
         ] {
             let request = kind.request(&Url::parse(target)?)?;
             let headers = crate::outgoing_request_headers(&config, &request, None);
@@ -201,6 +214,10 @@ async fn check_redirects(transport: Transport) -> Result<()> {
         RequestKind::Navigation,
         RequestKind::Iframe,
         RequestKind::Fetch,
+        RequestKind::Script(crate::RequestResourceType::Script),
+        RequestKind::Script(crate::RequestResourceType::ParserBlockingScript),
+        RequestKind::Script(crate::RequestResourceType::ClassicAsyncOrDeferScript),
+        RequestKind::Script(crate::RequestResourceType::LatePreloadScript),
     ] {
         for (trustworthy, expected_sites) in [
             (
@@ -210,14 +227,20 @@ async fn check_redirects(transport: Transport) -> Result<()> {
             ([false, true, false], [None, Some("cross-site"), None]),
             ([false, false, false], [None, None, None]),
         ] {
-            let last = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("done")]);
+            let last = ScriptedHttpServer::spawn(vec![
+                ScriptedResponse::ok("done").with_header("Access-Control-Allow-Origin", "*"),
+            ]);
             let last_url = destination_url(&last, trustworthy[2])?;
             let middle = ScriptedHttpServer::spawn(vec![
-                ScriptedResponse::status(302, "Found").with_header("Location", last_url.as_str()),
+                ScriptedResponse::status(302, "Found")
+                    .with_header("Location", last_url.as_str())
+                    .with_header("Access-Control-Allow-Origin", "*"),
             ]);
             let middle_url = destination_url(&middle, trustworthy[1])?;
             let first = ScriptedHttpServer::spawn(vec![
-                ScriptedResponse::status(302, "Found").with_header("Location", middle_url.as_str()),
+                ScriptedResponse::status(302, "Found")
+                    .with_header("Location", middle_url.as_str())
+                    .with_header("Access-Control-Allow-Origin", "*"),
             ]);
             let first_url = destination_url(&first, trustworthy[0])?;
             let mut config = FetchConfig::default();
