@@ -1,6 +1,77 @@
 use super::*;
 
 #[tokio::test]
+async fn webdriver_classic_only_advertises_requested_bidi_capability() {
+    for (capabilities, requested) in [
+        (json!({}), false),
+        (json!({"alwaysMatch": {"webSocketUrl": null}}), false),
+        (json!({"alwaysMatch": {"webSocketUrl": false}}), false),
+        (
+            json!({"alwaysMatch": {"wdio:enforceWebDriverClassic": true}}),
+            false,
+        ),
+        (json!({"alwaysMatch": {"webSocketUrl": true}}), true),
+        (
+            json!({"firstMatch": [
+                {"browserName": "other", "webSocketUrl": true},
+                {"browserName": "moli", "webSocketUrl": false}
+            ]}),
+            false,
+        ),
+        (
+            json!({"firstMatch": [
+                {"browserName": "other", "webSocketUrl": false},
+                {"browserName": "moli", "webSocketUrl": true}
+            ]}),
+            true,
+        ),
+    ] {
+        let app = build_router(test_state());
+        let (status, response) = classic_request_status_and_json_with_body(
+            app.clone(),
+            Method::POST,
+            "/session",
+            json!({"capabilities": capabilities}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        let session_id = response["value"]["sessionId"].as_str().unwrap();
+        let returned = response["value"]["capabilities"].get("webSocketUrl");
+        if requested {
+            assert_eq!(
+                returned,
+                Some(&json!(format!("ws://127.0.0.1:9222/session/{session_id}")))
+            );
+        } else {
+            assert_eq!(returned, None, "unsolicited BiDi capability: {response}");
+        }
+        let deleted =
+            classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+        assert_eq!(deleted, json!({"value": null}));
+    }
+}
+
+#[tokio::test]
+async fn webdriver_classic_rejects_non_boolean_bidi_capability_before_allocation() {
+    let app = build_router(test_state());
+    for value in [json!("true"), json!(42), json!([]), json!({})] {
+        let (status, response) = classic_request_status_and_json_with_body(
+            app.clone(),
+            Method::POST,
+            "/session",
+            json!({"capabilities": {"alwaysMatch": {"webSocketUrl": value}}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(response["value"]["error"], "invalid argument");
+        assert_eq!(
+            classic_request_json(app.clone(), Method::GET, "/status").await["value"]["ready"],
+            true
+        );
+    }
+}
+
+#[tokio::test]
 async fn webdriver_classic_status_session_and_delete_routes_use_value_envelope() {
     let app = build_router(test_state());
 
@@ -35,9 +106,10 @@ async fn webdriver_classic_status_session_and_delete_routes_use_value_envelope()
         session["value"]["capabilities"]["pageLoadStrategy"],
         json!("normal")
     );
-    assert_eq!(
-        session["value"]["capabilities"]["webSocketUrl"],
-        json!(format!("ws://127.0.0.1:9222/session/{session_id}"))
+    assert!(
+        session["value"]["capabilities"]
+            .get("webSocketUrl")
+            .is_none()
     );
 
     let running_status = classic_request_json(app.clone(), Method::GET, "/status").await;

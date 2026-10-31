@@ -197,6 +197,15 @@ lifecycle, error, and teardown coverage is still pending.
 
 ## Usage
 
+WebdriverIO v9 has a separate pinned client smoke, also run by CI. It checks
+capability opt-in and the same navigation, form input, click, and link workflow
+in Classic opt-out, default BiDi, and explicit BiDi sessions:
+
+```bash
+npm ci --prefix moli-webdriver-smoke
+MOLI_BIN="$PWD/target/debug/moli" npm run smoke:webdriverio --prefix moli-webdriver-smoke
+```
+
 Build moli first when no binary exists:
 
 ```bash

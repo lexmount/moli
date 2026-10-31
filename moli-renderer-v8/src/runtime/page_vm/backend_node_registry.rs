@@ -1,8 +1,18 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use crate::document_runtime::DomHandle;
 use crate::frame_owner_model::DocumentId;
 use moli_page_types::DocumentNodeInspectorIdentity;
+
+// Backend ids also identify BiDi shared nodes. New Page registries must not
+// reuse ids exported by a previous Page or another browsing context.
+static NEXT_BACKEND_NODE_ID: AtomicU32 =
+    AtomicU32::new(moli_page_types::RENDERER_BACKEND_NODE_ID_START);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct RendererBackendNodeKey {
@@ -17,26 +27,16 @@ struct RendererBackendNodeRecord {
     resolves_while_detached: bool,
 }
 
+#[derive(Default)]
 pub(crate) struct RendererBackendNodeRegistry {
     node_ids: HashMap<RendererBackendNodeKey, u32>,
     nodes: HashMap<u32, RendererBackendNodeRecord>,
-    next_id: u32,
 }
 
 pub(crate) type SharedRendererBackendNodeRegistry = Rc<RefCell<RendererBackendNodeRegistry>>;
 
 pub(crate) fn new_shared_renderer_backend_node_registry() -> SharedRendererBackendNodeRegistry {
     Rc::new(RefCell::new(RendererBackendNodeRegistry::default()))
-}
-
-impl Default for RendererBackendNodeRegistry {
-    fn default() -> Self {
-        Self {
-            node_ids: HashMap::new(),
-            nodes: HashMap::new(),
-            next_id: moli_page_types::RENDERER_BACKEND_NODE_ID_START,
-        }
-    }
 }
 
 impl RendererBackendNodeRegistry {
@@ -67,10 +67,8 @@ impl RendererBackendNodeRegistry {
             return backend_node_id;
         }
 
-        let backend_node_id = self.next_id;
-        self.next_id = self
-            .next_id
-            .checked_add(1)
+        let backend_node_id = NEXT_BACKEND_NODE_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .expect("renderer backend node id namespace exhausted");
         self.node_ids.insert(key, backend_node_id);
         self.nodes.insert(
@@ -135,7 +133,7 @@ mod tests {
         let first = registry.id_for_node(document_id(1), dom_handle(7));
         let second = registry.id_for_node(document_id(1), dom_handle(7));
 
-        assert_eq!(first, moli_page_types::RENDERER_BACKEND_NODE_ID_START);
+        assert!(moli_page_types::is_renderer_backend_node_id(first));
         assert_eq!(first, second);
         assert_eq!(
             registry.key_for_id(first),
@@ -214,7 +212,17 @@ mod tests {
         let second = registry.id_for_node(document_id(2), dom_handle(7));
 
         assert_ne!(first, second);
-        assert_eq!(second, first + 1);
+    }
+
+    #[test]
+    fn registries_do_not_reuse_exported_backend_node_ids() {
+        let mut first_page = RendererBackendNodeRegistry::default();
+        let mut second_page = RendererBackendNodeRegistry::default();
+        let first = first_page.id_for_node(document_id(1), dom_handle(7));
+        let second = second_page.id_for_node(document_id(1), dom_handle(7));
+        assert_ne!(first, second);
+        assert!(first_page.key_for_id(second).is_none());
+        assert!(second_page.key_for_id(first).is_none());
     }
 
     #[test]
