@@ -321,12 +321,32 @@ impl ClassicSessionManager {
             .clone())
     }
 
+    pub(super) fn register_bidi_element_reference(
+        &mut self,
+        binding: &ClassicSessionBinding,
+        element_id: &str,
+        node_id: u32,
+        reference: ClassicPageBoundDomReference,
+    ) {
+        self.element_owners.insert(
+            (binding.session_id.clone(), element_id.to_owned()),
+            ClassicElementOwner {
+                node_id,
+                reference,
+                target_id: binding.target_id.clone(),
+                browsing_context_target_id: binding.browsing_context_target_id().to_owned(),
+            },
+        );
+    }
+
     fn resolve_element_owner(
         &self,
         binding: &ClassicSessionBinding,
         element_id: &str,
     ) -> Result<&ClassicElementOwner, ClassicError> {
-        cdp_node_id_from_classic_element_id(element_id)?;
+        if !moli_protocol::automation::is_webdriver_bidi_node_shared_id(element_id) {
+            cdp_node_id_from_classic_element_id(element_id)?;
+        }
         let Some(owner) = self
             .element_owners
             .get(&(binding.session_id.clone(), element_id.to_owned()))

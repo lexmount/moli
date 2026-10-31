@@ -1,6 +1,217 @@
 use super::*;
 
 #[tokio::test]
+async fn websocket_bidi_node_references_work_in_classic_element_commands() {
+    let (addr, protocol_server) = spawn_test_protocol_server().await;
+    let session_id = classic_new_session_on_server(addr).await;
+    let mut socket = connect_classic_session_bidi_socket(addr, &session_id).await;
+    let tree = send_bidi_command(&mut socket, 1, "browsingContext.getTree", json!({})).await;
+    let context = tree["result"]["contexts"][0]["context"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let url = classic_data_url_for_bidi_test("<!doctype html><h1>Ready</h1>");
+    let navigation = send_bidi_command(
+        &mut socket,
+        2,
+        "browsingContext.navigate",
+        json!({"context": &context, "url": url, "wait": "complete"}),
+    )
+    .await;
+    assert_eq!(navigation["type"], "success");
+    let located = send_bidi_command(
+        &mut socket,
+        3,
+        "browsingContext.locateNodes",
+        json!({"context": &context, "locator": {"type": "css", "value": "h1"}}),
+    )
+    .await;
+    let shared_id = located["result"]["nodes"][0]["sharedId"].as_str().unwrap();
+    let (status, text) = classic_request_status_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{session_id}/element/{shared_id}/text"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    assert_eq!(text["value"], "Ready");
+    let echoed = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "return arguments[0].textContent;",
+            "args": [{"element-6066-11e4-a52e-4f735466cecf": shared_id}]
+        }),
+    )
+    .await;
+    assert_eq!(echoed["value"], "Ready");
+    let other_session = classic_new_session_on_server(addr).await;
+    let (_, foreign) = classic_request_status_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{other_session}/element/{shared_id}/text"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(foreign["value"]["error"], "no such element", "{foreign}");
+    let replacement = classic_data_url_for_bidi_test("<!doctype html><h1>Replacement</h1>");
+    let replaced = send_bidi_command(
+        &mut socket,
+        4,
+        "browsingContext.navigate",
+        json!({"context": &context, "url": replacement, "wait": "complete"}),
+    )
+    .await;
+    assert_eq!(replaced["type"], "success");
+    let (_, stale) = classic_request_status_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{session_id}/element/{shared_id}/text"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        stale["value"]["error"], "stale element reference",
+        "{stale}"
+    );
+    let located_again = send_bidi_command(
+        &mut socket,
+        5,
+        "browsingContext.locateNodes",
+        json!({"context": &context, "locator": {"type": "css", "value": "h1"}}),
+    )
+    .await;
+    let fresh_id = located_again["result"]["nodes"][0]["sharedId"]
+        .as_str()
+        .unwrap();
+    assert_ne!(shared_id, fresh_id);
+    let (status, fresh) = classic_request_status_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{session_id}/element/{fresh_id}/text"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200, "{fresh}");
+    assert_eq!(fresh["value"], "Replacement");
+    let old_bidi_node = send_bidi_command(&mut socket, 6, "script.callFunction", json!({
+        "functionDeclaration": "function(node) { return node.textContent; }",
+        "target": {"context": &context}, "arguments": [{"sharedId": shared_id}], "awaitPromise": false
+    })).await;
+    assert_eq!(old_bidi_node["type"], "error", "{old_bidi_node}");
+    assert_eq!(old_bidi_node["error"], "no such node", "{old_bidi_node}");
+    socket.close(None).await.unwrap();
+    for id in [&session_id, &other_session] {
+        let deleted = classic_request_on_server_with_body(
+            addr,
+            "DELETE",
+            &format!("/session/{id}"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(deleted, json!({"value": null}));
+    }
+    protocol_server.abort();
+}
+
+#[tokio::test]
+async fn websocket_bidi_navigation_started_matches_network_and_result() {
+    let fixture_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let fixture_addr = fixture_listener.local_addr().unwrap();
+    let fixture_server = tokio::spawn(async move {
+        axum::serve(
+            fixture_listener,
+            Router::new().route(
+                "/",
+                get(|| async {
+                    (
+                        [("content-type", "text/html")],
+                        "<!doctype html><title>Navigation</title>",
+                    )
+                }),
+            ),
+        )
+        .await
+    });
+    for attached in [false, true] {
+        let (addr, protocol_server) = spawn_test_protocol_server().await;
+        let (mut socket, context) = if attached {
+            let session_id = classic_new_session_on_server(addr).await;
+            let mut socket = connect_classic_session_bidi_socket(addr, &session_id).await;
+            let tree =
+                send_bidi_command(&mut socket, 1, "browsingContext.getTree", json!({})).await;
+            let context = tree["result"]["contexts"][0]["context"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            (socket, context)
+        } else {
+            bidi_session_with_context(addr).await
+        };
+        let subscribed = send_bidi_command(&mut socket, 3, "session.subscribe", json!({
+            "events": ["browsingContext.navigationStarted", "network.beforeRequestSent", "network.responseCompleted", "browsingContext.load"],
+            "contexts": [&context]
+        })).await;
+        assert_eq!(subscribed["type"], "success");
+        for id in [4_u64, 5] {
+            let url = format!("http://{fixture_addr}/?navigation={id}");
+            socket
+                .send(WsMessage::Text(
+                    json!({
+                        "id": id, "method": "browsingContext.navigate",
+                        "params": {"context": &context, "url": &url, "wait": "complete"}
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            let messages = recv_until_id(&mut socket, id).await;
+            let response = bidi_message_by_id(&messages, id);
+            assert_eq!(response["type"], "success", "{messages:?}");
+            let navigation = &response["result"]["navigation"];
+            assert!(navigation.is_string());
+            let mut positions = Vec::new();
+            for method in [
+                "browsingContext.navigationStarted",
+                "network.beforeRequestSent",
+                "network.responseCompleted",
+                "browsingContext.load",
+            ] {
+                let matching = messages
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| m["method"] == method && m["params"]["context"] == context)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    matching.len(),
+                    1,
+                    "attached={attached}, missing/duplicate {method}: {messages:?}"
+                );
+                let (position, event) = matching[0];
+                assert_eq!(&event["params"]["navigation"], navigation, "{event}");
+                assert_eq!(
+                    event["params"]["url"]
+                        .as_str()
+                        .or_else(|| event["params"]["request"]["url"].as_str()),
+                    Some(url.as_str())
+                );
+                positions.push(position);
+            }
+            assert!(
+                positions.windows(2).all(|p| p[0] < p[1]),
+                "navigation event order: {messages:?}"
+            );
+        }
+        socket.close(None).await.unwrap();
+        protocol_server.abort();
+    }
+    fixture_server.abort();
+}
+
+#[tokio::test]
 async fn websocket_bidi_file_navigation_returns_unknown_error_without_lifecycle_or_replacement() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _) = connect_async(format!("ws://{cdp_addr}/session"))

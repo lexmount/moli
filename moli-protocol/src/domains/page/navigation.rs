@@ -2755,7 +2755,10 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
             url,
             initiator,
         );
-    } else if allow_background_navigation && conn.background_event_sender().is_some() {
+    } else if conn.background_event_sender().is_some() {
+        // Publish the start while the load is pending, including wait=complete
+        // commands. Keeping it in prefix_events until completion lets commit
+        // facts overtake it and suppress BiDi's navigationStarted event.
         send_background_navigation_started(
             conn,
             document_navigation_token.clone(),
