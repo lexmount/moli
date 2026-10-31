@@ -7,10 +7,7 @@ use moli_cookie_jar::{
 };
 use moli_sqlite::{
     OpenMode, RuntimeHandle,
-    writeback::{
-        FailureAdmission, WriteBatch, WritebackClient, WritebackError, WritebackOwner,
-        WritebackPolicy,
-    },
+    writeback::{WriteBatch, WritebackClient, WritebackError, WritebackOwner, WritebackPolicy},
 };
 use rusqlite::{Connection, params};
 use std::{collections::BTreeMap, fmt, path::PathBuf, sync::Arc, time::Duration};
@@ -124,10 +121,16 @@ impl WriteBatch for Batch {
         }
     }
     fn write(&self, connection: &mut Connection) -> Result<(), WritebackError> {
-        let tx = connection.transaction()?;
-        self.apply(&tx)?;
-        tx.commit()?;
-        Ok(())
+        let result: Result<(), WritebackError> = (|| {
+            let tx = connection.transaction()?;
+            self.apply(&tx)?;
+            tx.commit()?;
+            Ok(())
+        })();
+        if let Err(error) = &result {
+            tracing::warn!(%error, "Cookie persistence batch failed; the batch will not be retried");
+        }
+        result
     }
 }
 struct Writer(WritebackClient<Batch>);
@@ -138,10 +141,7 @@ impl fmt::Debug for Writer {
 }
 impl BrowserCookieObserver for Writer {
     fn changed(&self, change: StoredCookieMutation) {
-        if let Err(error) = self
-            .0
-            .record(Batch::change(change), FailureAdmission::Retain)
-        {
+        if let Err(error) = self.0.record(Batch::change(change)) {
             tracing::warn!(error=%error,"Cookie persistence rejected a mutation");
         }
     }
@@ -206,7 +206,7 @@ fn restore(client: WritebackClient<Batch>) -> Result<BrowserCookieStore, Writeba
     for cookie in obsolete {
         cleanup.changes.insert(Key::from(&cookie), Change::Delete);
     }
-    client.record(cleanup, FailureAdmission::Retain)?;
+    client.record(cleanup)?;
     Ok(jar)
 }
 

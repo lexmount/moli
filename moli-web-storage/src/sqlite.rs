@@ -1,6 +1,6 @@
 use super::{store::Edit, *};
 use moli_sqlite::writeback::{
-    FailureAdmission, WriteBatch, WritebackClient, WritebackError, WritebackOwner, WritebackPolicy,
+    WriteBatch, WritebackClient, WritebackError, WritebackOwner, WritebackPolicy,
 };
 use moli_sqlite::{OpenMode, RuntimeHandle};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -66,6 +66,7 @@ enum KeyChange {
     Delete,
 }
 impl WriteBatch for Batch {
+    const RETAIN_FAILED_BATCH: bool = true;
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -407,7 +408,7 @@ impl SqliteBackend {
         let mut state = area.state.lock();
         self.load(origin, &mut state)?;
         let data = state.as_mut().expect("loaded area");
-        let result = self.client.accept(FailureAdmission::Reject, || {
+        let result = self.client.accept(|| {
             let result = edit(data)?;
             let mut batch = Batch::default();
             if let Some(mutation) = &result.mutation {
@@ -451,7 +452,7 @@ impl SqliteBackend {
         for key in metadata.keys() {
             areas.entry(key.clone()).or_insert_with(|| self.area(key));
         }
-        let mutations = self.client.accept(FailureAdmission::Reject, || {
+        let mutations = self.client.accept(|| {
             let mut batch = Batch::default();
             let mut mutations = Vec::new();
             for (key, area) in &areas {

@@ -259,13 +259,20 @@ fn document_expiry_and_quota_eviction_remove_persisted_rows() {
     owner.close().unwrap();
 }
 #[test]
-fn persistence_failure_keeps_new_cookie_changes_for_explicit_retry() {
+fn persistence_failure_discards_the_batch_but_keeps_the_jar_and_accepts_new_changes() {
     let root = tempfile::tempdir().unwrap();
     let runtime = Runtime::new().unwrap();
     let (store, owner) = open(root.path(), &runtime);
     owner.owner.client().query(|connection| {connection.execute_batch("CREATE TRIGGER fail_cookie BEFORE INSERT ON cookies BEGIN SELECT RAISE(FAIL,'injected Cookie write failure'); END;")?;Ok(())}).unwrap();
     put(&store, cookie("changed"));
+    put(&store, cookie("lost"));
     assert!(owner.flush().is_err());
+    assert_eq!(store.lock().unwrap().cookies().len(), 2);
+    assert!(
+        owner.flush().is_err(),
+        "flush does not replay a discarded batch"
+    );
+    assert!(owner.owner.client().query(codec::read).unwrap().is_empty());
     let mut changed = cookie("changed");
     changed.value = "newer".into();
     put(&store, changed);
@@ -281,6 +288,8 @@ fn persistence_failure_keeps_new_cookie_changes_for_explicit_retry() {
     owner.flush().unwrap();
     let rows = owner.owner.client().query(codec::read).unwrap();
     assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|cookie| cookie.name != "lost"));
+    assert_eq!(store.lock().unwrap().cookies().len(), 3);
     assert_eq!(
         rows.iter().find(|c| c.name == "changed").unwrap().value,
         "newer"

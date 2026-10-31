@@ -13,56 +13,34 @@ use std::{
 use tokio::sync::{Notify, mpsc as async_mpsc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WritebackError {
-    message: Arc<str>,
-    sqlite: Option<rusqlite::ffi::Error>,
-}
+pub struct WritebackError(Arc<str>);
 impl WritebackError {
     pub fn new(message: impl fmt::Display) -> Self {
-        Self {
-            message: message.to_string().into(),
-            sqlite: None,
-        }
-    }
-    fn is_retryable(&self) -> bool {
-        use rusqlite::{ErrorCode, ffi};
-        self.sqlite.is_some_and(|error| {
-            matches!(
-                error.code,
-                ErrorCode::DiskFull
-                    | ErrorCode::DatabaseBusy
-                    | ErrorCode::DatabaseLocked
-                    | ErrorCode::SystemIoFailure
-                    | ErrorCode::OutOfMemory
-                    | ErrorCode::OperationInterrupted
-            ) && !matches!(
-                error.extended_code,
-                ffi::SQLITE_IOERR_CORRUPTFS | ffi::SQLITE_IOERR_DATA
-            )
-        })
+        Self(message.to_string().into())
     }
 }
 impl fmt::Display for WritebackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
+        f.write_str(&self.0)
     }
 }
 impl std::error::Error for WritebackError {}
 impl From<rusqlite::Error> for WritebackError {
     fn from(error: rusqlite::Error) -> Self {
-        Self {
-            message: error.to_string().into(),
-            sqlite: error.sqlite_error().copied(),
-        }
+        Self::new(error)
     }
 }
 type Result<T> = std::result::Result<T, WritebackError>;
 
 pub trait WriteBatch: Default + Send + 'static {
+    /// localStorage deltas include absolute area metadata, so a failed batch
+    /// must remain paired with the cache and reject new edits until flush.
+    /// Cookie deltas can be discarded without changing the canonical jar.
+    const RETAIN_FAILED_BATCH: bool = false;
     fn is_empty(&self) -> bool;
     /// Compose chronological deltas: self happened before newer.
     fn merge(&mut self, newer: Self);
-    /// Must be atomic and idempotent; recoverable failures are retried with backoff.
+    /// Must be atomic and idempotent, including explicit flush after failure.
     fn write(&self, connection: &mut Connection) -> Result<()>;
 }
 #[derive(Clone, Copy)]
@@ -70,36 +48,13 @@ pub struct WritebackPolicy {
     pub delay: Duration,
     pub early_commit_operations: Option<usize>,
 }
-#[derive(Clone, Copy)]
-pub enum FailureAdmission {
-    Retain,
-    Reject,
-}
-#[derive(Default)]
-struct Retry {
-    delay: Duration,
-    deadline: Option<tokio::time::Instant>,
-}
-impl Retry {
-    fn schedule(&mut self) {
-        // Cap the interval, not the number of attempts: a long-lived service
-        // must still recover when space becomes available much later.
-        self.delay = if self.delay.is_zero() {
-            Duration::from_secs(1)
-        } else {
-            self.delay.saturating_mul(2).min(Duration::from_secs(60))
-        };
-        self.deadline = Some(tokio::time::Instant::now() + self.delay);
-    }
-}
 struct Pending<B> {
     batch: B,
     accepted: u64,
-    committed: u64,
+    settled: u64,
     operations: usize,
     first_dirty: Option<tokio::time::Instant>,
     failure: Option<WritebackError>,
-    retry: Retry,
     closed: bool,
 }
 struct Shared<B> {
@@ -227,11 +182,10 @@ impl<B: WriteBatch> WritebackOwner<B> {
             pending: Mutex::new(Pending {
                 batch: B::default(),
                 accepted: 0,
-                committed: 0,
+                settled: 0,
                 operations: 0,
                 first_dirty: None,
                 failure: None,
-                retry: Retry::default(),
                 closed: false,
             }),
             changed: Notify::new(),
@@ -316,14 +270,13 @@ impl<B: WriteBatch> WritebackClient<B> {
     /// gate. The closure never enters V8 or performs SQL.
     pub fn accept<T, E: From<WritebackError>>(
         &self,
-        admission: FailureAdmission,
         mutation: impl FnOnce() -> std::result::Result<(T, B), E>,
     ) -> std::result::Result<T, E> {
         let mut pending = self.shared.pending.lock();
         if pending.closed {
             return Err(WritebackError::new("database is closed").into());
         }
-        if let FailureAdmission::Reject = admission
+        if B::RETAIN_FAILED_BATCH
             && let Some(error) = &pending.failure
         {
             return Err(error.clone().into());
@@ -344,8 +297,8 @@ impl<B: WriteBatch> WritebackClient<B> {
         }
         Ok(result)
     }
-    pub fn record(&self, batch: B, admission: FailureAdmission) -> Result<()> {
-        self.accept(admission, || Ok(((), batch)))
+    pub fn record(&self, batch: B) -> Result<()> {
+        self.accept(|| Ok(((), batch)))
     }
     /// Only the cold-load native bridge uses this on a V8 owner. Completion
     /// comes directly from the SQL worker; it cannot depend on a JS task.
@@ -424,11 +377,6 @@ async fn commit<B: WriteBatch>(
     let taken = {
         let mut pending = shared.pending.lock();
         if pending.batch.is_empty() {
-            pending.committed = pending.accepted;
-            pending.operations = 0;
-            pending.first_dirty = None;
-            pending.failure = connection.failure();
-            pending.retry = Retry::default();
             return Ok(connection);
         }
         let batch = std::mem::take(&mut pending.batch);
@@ -450,23 +398,21 @@ async fn commit<B: WriteBatch>(
     let mut pending = shared.pending.lock();
     match result {
         Ok(()) => {
-            pending.committed = through;
+            pending.settled = through;
             pending.failure = None;
-            pending.retry = Retry::default();
         }
         Err(error) => {
-            // Failed initialization is sticky; retry only commits on a live
-            // connection. Schema/constraint/corruption errors need explicit repair.
-            if matches!(connection, LazyConnection::Open(_)) && error.is_retryable() {
-                pending.retry.schedule();
+            if B::RETAIN_FAILED_BATCH {
+                let mut batch = batch;
+                batch.merge(std::mem::take(&mut pending.batch));
+                pending.batch = batch;
+                pending.operations = pending.operations.saturating_add(operations);
+                pending.first_dirty = since.or(pending.first_dirty);
             } else {
-                pending.retry = Retry::default();
+                // This batch is finished even though persistence failed. Only
+                // newly accepted changes can schedule another normal commit.
+                pending.settled = through;
             }
-            let mut batch = batch;
-            batch.merge(std::mem::take(&mut pending.batch));
-            pending.batch = batch;
-            pending.operations = pending.operations.saturating_add(operations);
-            pending.first_dirty = since.or(pending.first_dirty);
             pending.failure = Some(error);
         }
     }
@@ -482,8 +428,8 @@ async fn run<B: WriteBatch>(
     loop {
         let deadline = {
             let pending = shared.pending.lock();
-            if pending.failure.is_some() {
-                pending.retry.deadline
+            if B::RETAIN_FAILED_BATCH && pending.failure.is_some() {
+                None
             } else if policy
                 .early_commit_operations
                 .is_some_and(|limit| pending.operations >= limit)
@@ -502,13 +448,13 @@ async fn run<B: WriteBatch>(
                     }
                 }
                 Some(Message::Flush {through, reply}) => {
-                    if shared.pending.lock().committed < through {
+                    if shared.pending.lock().settled < through {
                         connection = commit(connection, &shared, &runtime).await?;
                     }
                     let result = {
                         let pending=shared.pending.lock();
                         if let Some(error) = &pending.failure {Err(error.clone())}
-                        else if pending.committed>=through {Ok(())}
+                        else if pending.settled>=through {Ok(())}
                         else {Err(WritebackError::new("flush did not cover its accepted sequence"))}
                     };
                     let _ = reply.send(result);

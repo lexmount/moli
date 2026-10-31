@@ -381,7 +381,7 @@ fn retrying_committed_then_deleted_or_cleared_keys_is_idempotent() {
 }
 
 #[test]
-fn sqlite_full_automatically_recovers_dirty_data_and_write_admission_after_capacity_is_restored() {
+fn sqlite_full_retains_dirty_data_for_explicit_flush_after_capacity_is_restored() {
     let root = tempfile::tempdir().unwrap();
     let runtime = Runtime::new().unwrap();
     let (store, owner) = open(root.path(), &runtime);
@@ -409,16 +409,8 @@ fn sqlite_full_automatically_recovers_dirty_data_and_write_admission_after_capac
             Ok(())
         })
         .unwrap();
-    // No flush or new accepted write drives recovery. The background retry
-    // must persist the original batch and lift localStorage's failure barrier.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while backend(&store).client.failure().is_some() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "automatic recovery timed out"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(backend(&store).client.failure().is_some());
+    owner.flush().unwrap();
     assert_eq!(
         backend(&store)
             .client

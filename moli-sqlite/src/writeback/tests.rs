@@ -11,7 +11,6 @@ use tokio::sync::oneshot;
 struct Control {
     gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     fail: AtomicBool,
-    failure: Mutex<Option<WritebackError>>,
     attempts: AtomicUsize,
     attempted: Mutex<Option<oneshot::Sender<()>>>,
     commits: AtomicUsize,
@@ -51,9 +50,6 @@ impl WriteBatch for Batch {
         }
         if control.fail.swap(false, Ordering::AcqRel) {
             return Err(WritebackError::new("injected failure"));
-        }
-        if let Some(error) = control.failure.lock().clone() {
-            return Err(error);
         }
         let tx = connection.transaction()?;
         for (key, value) in &self.values {
@@ -208,10 +204,7 @@ fn a_first_write_opens_and_close_commits_without_a_query() {
     )
     .unwrap();
     let control = Arc::new(Control::default());
-    owner
-        .client()
-        .record(Batch::put(1, 42, &control), FailureAdmission::Retain)
-        .unwrap();
+    owner.client().record(Batch::put(1, 42, &control)).unwrap();
     assert!(!path.exists());
     owner.close().unwrap();
     let connection = Connection::open(path).unwrap();
@@ -235,19 +228,12 @@ fn an_in_flight_acknowledgement_cannot_clear_a_newer_batch_and_another_file_can_
     let (release_tx, release_rx) = mpsc::channel();
     *control.gate.lock() = Some((started_tx, release_rx));
     let client = first.client();
-    client
-        .record(Batch::put(1, 10, &control), FailureAdmission::Retain)
-        .unwrap();
+    client.record(Batch::put(1, 10, &control)).unwrap();
     client.request_flush();
     started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-    client
-        .record(Batch::put(1, 20, &control), FailureAdmission::Retain)
-        .unwrap();
+    client.record(Batch::put(1, 20, &control)).unwrap();
     let other = Arc::new(Control::default());
-    second
-        .client()
-        .record(Batch::put(2, 42, &other), FailureAdmission::Retain)
-        .unwrap();
+    second.client().record(Batch::put(2, 42, &other)).unwrap();
     second.client().flush().unwrap();
     assert_eq!(value(&second.client(), 2), 42);
     release_tx.send(()).unwrap();
@@ -256,50 +242,41 @@ fn an_in_flight_acknowledgement_cannot_clear_a_newer_batch_and_another_file_can_
     assert_eq!(value(&client, 1), 20);
     assert_eq!(control.commits.load(Ordering::Acquire), 2);
     first.close().unwrap();
-    assert!(
-        client
-            .record(Batch::put(1, 99, &control), FailureAdmission::Retain)
-            .is_err()
-    );
-    second
-        .client()
-        .record(Batch::put(2, 43, &other), FailureAdmission::Retain)
-        .unwrap();
+    assert!(client.record(Batch::put(1, 99, &control)).is_err());
+    second.client().record(Batch::put(2, 43, &other)).unwrap();
     second.close().unwrap();
 }
 #[test]
-fn failed_batch_merges_before_newer_changes_and_retry_is_explicit() {
+fn discarded_failure_does_not_retry_or_block_new_changes() {
     let root = tempfile::tempdir().unwrap();
     let runtime = Runtime::new().unwrap();
     let owner = owner(&runtime, root.path().join("failure.sqlite"));
     let client = owner.client();
     let control = Arc::new(Control::default());
     control.fail.store(true, Ordering::Release);
-    client
-        .record(Batch::put(1, 10, &control), FailureAdmission::Retain)
-        .unwrap();
+    client.record(Batch::put(1, 10, &control)).unwrap();
     assert!(client.flush().is_err());
-    let called = AtomicBool::new(false);
-    assert!(
-        client
-            .accept(FailureAdmission::Reject, || {
-                called.store(true, Ordering::Release);
-                Ok::<_, WritebackError>(((), Batch::put(1, 999, &control)))
-            })
-            .is_err()
+    assert_eq!(control.attempts.load(Ordering::Acquire), 1);
+    assert!(client.flush().is_err());
+    assert_eq!(
+        control.attempts.load(Ordering::Acquire),
+        1,
+        "flush reports the discarded batch error without replaying it"
     );
-    assert!(!called.load(Ordering::Acquire));
-    client
-        .record(Batch::put(1, 20, &control), FailureAdmission::Retain)
-        .unwrap();
-    client
-        .record(Batch::put(2, 30, &control), FailureAdmission::Retain)
-        .unwrap();
-    assert!(client.failure().is_some());
+    client.record(Batch::put(2, 30, &control)).unwrap();
     client.flush().unwrap();
     assert!(client.failure().is_none());
-    assert_eq!(value(&client, 1), 20);
     assert_eq!(value(&client, 2), 30);
+    assert_eq!(
+        client
+            .query(|connection| Ok(connection.query_row(
+                "SELECT count(*) FROM data WHERE key=1",
+                [],
+                |row| row.get::<_, i64>(0)
+            )?))
+            .unwrap(),
+        0
+    );
     let retained = client.clone();
     thread::spawn(move || owner.close().unwrap())
         .join()
@@ -316,11 +293,10 @@ fn virtual_client(
         pending: Mutex::new(Pending {
             batch: Batch::default(),
             accepted: 0,
-            committed: 0,
+            settled: 0,
             operations: 0,
             first_dirty: None,
             failure: None,
-            retry: Retry::default(),
             closed: false,
         }),
         changed: Notify::new(),
@@ -353,14 +329,10 @@ async fn the_first_dirty_deadline_is_not_extended_by_later_writes() {
     let control = Arc::new(Control::default());
     let (done_tx, done_rx) = oneshot::channel();
     *control.committed.lock() = Some(done_tx);
-    client
-        .record(Batch::put(1, 10, &control), FailureAdmission::Retain)
-        .unwrap();
+    client.record(Batch::put(1, 10, &control)).unwrap();
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_millis(2500)).await;
-    client
-        .record(Batch::put(1, 20, &control), FailureAdmission::Retain)
-        .unwrap();
+    client.record(Batch::put(1, 20, &control)).unwrap();
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_millis(2499)).await;
     tokio::task::yield_now().await;
@@ -387,9 +359,7 @@ async fn early_commit_counts_accepted_operations_even_when_the_same_key_is_coale
     *control.committed.lock() = Some(done_tx);
     let start = tokio::time::Instant::now();
     for value in 0..512 {
-        client
-            .record(Batch::put(1, value, &control), FailureAdmission::Retain)
-            .unwrap();
+        client.record(Batch::put(1, value, &control)).unwrap();
     }
     assert_eq!(client.shared.pending.lock().batch.values.len(), 1);
     done_rx.await.unwrap();
@@ -397,41 +367,6 @@ async fn early_commit_counts_accepted_operations_even_when_the_same_key_is_coale
     client.shared.pending.lock().closed = true;
     client.sender.send(Message::Close).unwrap();
     task.await.unwrap().unwrap();
-}
-
-fn sqlite_error(code: i32) -> WritebackError {
-    rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None).into()
-}
-
-#[test]
-fn retry_classification_preserves_sqlite_codes_and_excludes_permanent_failures() {
-    use rusqlite::ffi;
-    for code in [
-        ffi::SQLITE_FULL,
-        ffi::SQLITE_BUSY,
-        ffi::SQLITE_BUSY_SNAPSHOT,
-        ffi::SQLITE_LOCKED,
-        ffi::SQLITE_IOERR_WRITE,
-        ffi::SQLITE_IOERR_FSYNC,
-        ffi::SQLITE_NOMEM,
-        ffi::SQLITE_INTERRUPT,
-    ] {
-        assert!(sqlite_error(code).is_retryable(), "code {code}");
-    }
-    for code in [
-        ffi::SQLITE_CONSTRAINT,
-        ffi::SQLITE_CONSTRAINT_TRIGGER,
-        ffi::SQLITE_CORRUPT,
-        ffi::SQLITE_NOTADB,
-        ffi::SQLITE_READONLY,
-        ffi::SQLITE_TOOBIG,
-        ffi::SQLITE_IOERR_CORRUPTFS,
-        ffi::SQLITE_IOERR_DATA,
-    ] {
-        assert!(!sqlite_error(code).is_retryable(), "code {code}");
-    }
-    // Error text is not a classification API.
-    assert!(!WritebackError::new("database or disk is full").is_retryable());
 }
 
 struct Barrier(oneshot::Sender<()>);
@@ -455,7 +390,7 @@ fn next_attempt(control: &Control) -> oneshot::Receiver<()> {
 }
 fn prevent_time_auto_advance() -> tokio::task::JoinHandle<()> {
     // Blocking SQL runs on another runtime. Keep virtual time under the test's
-    // control while awaiting those workers, instead of auto-jumping to a retry.
+    // control while awaiting those workers, instead of skipping normal deadlines.
     tokio::spawn(async {
         loop {
             tokio::task::yield_now().await;
@@ -464,7 +399,7 @@ fn prevent_time_auto_advance() -> tokio::task::JoinHandle<()> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn recoverable_failures_back_off_despite_new_writes_then_restore_admission_and_batching() {
+async fn a_discarded_failure_does_not_rearm_idle_timers_or_shorten_new_dirty_delay() {
     let awake = prevent_time_auto_advance();
     let runtime = Runtime::new().unwrap();
     let (client, task) = virtual_client(
@@ -475,73 +410,28 @@ async fn recoverable_failures_back_off_despite_new_writes_then_restore_admission
         },
     );
     let control = Arc::new(Control::default());
-    *control.failure.lock() = Some(sqlite_error(rusqlite::ffi::SQLITE_FULL));
+    control.fail.store(true, Ordering::Release);
     let attempted = next_attempt(&control);
-    for i in 0..512 {
-        client
-            .record(Batch::put(1, i, &control), FailureAdmission::Retain)
-            .unwrap();
-    }
+    client.record(Batch::put(1, 10, &control)).unwrap();
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(30)).await;
     attempted.await.unwrap();
     barrier(&client).await;
     assert!(client.failure().is_some());
-    assert!(
-        client
-            .record(Batch::put(2, 99, &control), FailureAdmission::Reject)
-            .is_err()
-    );
-
-    for (i, seconds) in [1, 2, 4, 8, 16, 32, 60, 60].into_iter().enumerate() {
-        let attempted = next_attempt(&control);
-        client
-            .record(
-                Batch::put(1, 1000 + i as i64, &control),
-                FailureAdmission::Retain,
-            )
-            .unwrap();
-        tokio::time::advance(Duration::from_secs(seconds) - Duration::from_millis(1)).await;
-        barrier(&client).await;
-        assert_eq!(control.attempts.load(Ordering::Acquire), i + 1);
-        tokio::time::advance(Duration::from_millis(1)).await;
-        attempted.await.unwrap();
-        barrier(&client).await;
-        assert_eq!(control.attempts.load(Ordering::Acquire), i + 2);
-    }
-
-    *control.failure.lock() = None;
-    let attempted = next_attempt(&control);
-    tokio::time::advance(Duration::from_secs(60)).await;
-    attempted.await.unwrap();
-    barrier(&client).await;
-    assert!(client.failure().is_none());
-    let read_client = client.clone();
-    assert_eq!(
-        tokio::task::spawn_blocking(move || value(&read_client, 1))
-            .await
-            .unwrap(),
-        1007
-    );
-
-    // Successful recovery resets the failure and early-commit operation count.
-    for i in 0..511 {
-        client
-            .record(Batch::put(2, i, &control), FailureAdmission::Reject)
-            .unwrap();
-    }
-    barrier(&client).await;
-    assert_eq!(control.commits.load(Ordering::Acquire), 1);
-    let attempted = next_attempt(&control);
-    let now = tokio::time::Instant::now();
-    client
-        .record(Batch::put(2, 511, &control), FailureAdmission::Reject)
-        .unwrap();
-    attempted.await.unwrap();
-    barrier(&client).await;
-    assert_eq!(tokio::time::Instant::now(), now);
-    assert_eq!(control.commits.load(Ordering::Acquire), 2);
     tokio::time::advance(Duration::from_secs(3600)).await;
     barrier(&client).await;
-    assert_eq!(control.attempts.load(Ordering::Acquire), 11);
+    assert_eq!(control.attempts.load(Ordering::Acquire), 1);
+    client.record(Batch::put(2, 20, &control)).unwrap();
+    barrier(&client).await;
+    let attempted = next_attempt(&control);
+    tokio::time::advance(Duration::from_millis(29999)).await;
+    barrier(&client).await;
+    assert_eq!(control.attempts.load(Ordering::Acquire), 1);
+    tokio::time::advance(Duration::from_millis(1)).await;
+    attempted.await.unwrap();
+    barrier(&client).await;
+    assert_eq!(control.commits.load(Ordering::Acquire), 1);
+    assert!(client.failure().is_none());
     client.shared.pending.lock().closed = true;
     client.sender.send(Message::Close).unwrap();
     task.await.unwrap().unwrap();
@@ -549,39 +439,64 @@ async fn recoverable_failures_back_off_despite_new_writes_then_restore_admission
 }
 
 #[tokio::test(start_paused = true)]
-async fn permanent_failures_stay_explicit_and_close_never_waits_for_a_retry() {
+async fn a_failed_early_commit_resets_its_operation_count_and_allows_the_next_batch() {
     let awake = prevent_time_auto_advance();
     let runtime = Runtime::new().unwrap();
-    for code in [rusqlite::ffi::SQLITE_CONSTRAINT, rusqlite::ffi::SQLITE_FULL] {
-        let (client, task) = virtual_client(
-            &runtime,
-            WritebackPolicy {
-                delay: Duration::from_secs(5),
-                early_commit_operations: Some(1),
-            },
-        );
-        let control = Arc::new(Control::default());
-        *control.failure.lock() = Some(sqlite_error(code));
-        let attempted = next_attempt(&control);
-        client
-            .record(Batch::put(1, 10, &control), FailureAdmission::Retain)
-            .unwrap();
-        attempted.await.unwrap();
-        barrier(&client).await;
-        if code == rusqlite::ffi::SQLITE_CONSTRAINT {
-            client
-                .record(Batch::put(1, 20, &control), FailureAdmission::Retain)
-                .unwrap();
-            tokio::time::advance(Duration::from_secs(3600)).await;
-            barrier(&client).await;
-            assert_eq!(control.attempts.load(Ordering::Acquire), 1);
-        }
-        let now = tokio::time::Instant::now();
-        client.shared.pending.lock().closed = true;
-        client.sender.send(Message::Close).unwrap();
-        assert!(task.await.unwrap().is_err());
-        assert_eq!(tokio::time::Instant::now(), now);
-        assert_eq!(control.attempts.load(Ordering::Acquire), 2);
+    let (client, task) = virtual_client(
+        &runtime,
+        WritebackPolicy {
+            delay: Duration::from_secs(30),
+            early_commit_operations: Some(512),
+        },
+    );
+    let control = Arc::new(Control::default());
+    control.fail.store(true, Ordering::Release);
+    let attempted = next_attempt(&control);
+    for value in 0..512 {
+        client.record(Batch::put(1, value, &control)).unwrap();
     }
+    attempted.await.unwrap();
+    barrier(&client).await;
+    assert!(client.failure().is_some());
+    for value in 0..511 {
+        client.record(Batch::put(2, value, &control)).unwrap();
+    }
+    barrier(&client).await;
+    assert_eq!(control.attempts.load(Ordering::Acquire), 1);
+    let attempted = next_attempt(&control);
+    let now = tokio::time::Instant::now();
+    client.record(Batch::put(2, 511, &control)).unwrap();
+    attempted.await.unwrap();
+    barrier(&client).await;
+    assert_eq!(tokio::time::Instant::now(), now);
+    assert_eq!(control.attempts.load(Ordering::Acquire), 2);
+    assert!(client.failure().is_none());
+    client.shared.pending.lock().closed = true;
+    client.sender.send(Message::Close).unwrap();
+    task.await.unwrap().unwrap();
+    awake.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn closing_after_a_discarded_failure_reports_it_without_replaying_the_batch() {
+    let awake = prevent_time_auto_advance();
+    let runtime = Runtime::new().unwrap();
+    let (client, task) = virtual_client(
+        &runtime,
+        WritebackPolicy {
+            delay: Duration::from_secs(30),
+            early_commit_operations: Some(1),
+        },
+    );
+    let control = Arc::new(Control::default());
+    control.fail.store(true, Ordering::Release);
+    let attempted = next_attempt(&control);
+    client.record(Batch::put(1, 10, &control)).unwrap();
+    attempted.await.unwrap();
+    barrier(&client).await;
+    client.shared.pending.lock().closed = true;
+    client.sender.send(Message::Close).unwrap();
+    assert!(task.await.unwrap().is_err());
+    assert_eq!(control.attempts.load(Ordering::Acquire), 1);
     awake.abort();
 }
