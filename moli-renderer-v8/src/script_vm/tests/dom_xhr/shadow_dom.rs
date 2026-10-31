@@ -1,5 +1,7 @@
 #[path = "shadow_dom/split30_gethtml_derived_options.rs"]
 mod split30_gethtml_derived_options;
+#[path = "shadow_dom/split30_shadow_related_target.rs"]
+mod split30_shadow_related_target;
 
 use super::*;
 
