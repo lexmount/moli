@@ -151,7 +151,7 @@ fn dispatch_resolved_event<'s>(
             registry,
             event_type,
             event,
-            None,
+            ListenerDispatchOptions::default(),
             callback_errors,
         )
     } else {
@@ -161,13 +161,19 @@ fn dispatch_resolved_event<'s>(
     result
 }
 
+#[derive(Default)]
+struct ListenerDispatchOptions<'s> {
+    capture: Option<bool>,
+    callback_checkpoint: Option<fn(&mut v8::PinScope<'s, '_>)>,
+}
+
 fn invoke_simple_event_listeners<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
     registry: SimpleEventListenerRegistry<'s>,
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
-    capture: Option<bool>,
+    options: ListenerDispatchOptions<'s>,
     mut callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
 ) -> SimpleEventDispatchResult {
     let mut dispatched = false;
@@ -184,7 +190,10 @@ fn invoke_simple_event_listeners<'s>(
     // listener, so another phase cannot consume it prematurely.
     let listeners = simple_object_event_listeners_snapshot_in_registry(scope, registry, event_type);
     for listener in &listeners {
-        if capture.is_some_and(|capture| listener.capture != capture) {
+        if options
+            .capture
+            .is_some_and(|capture| listener.capture != capture)
+        {
             continue;
         }
         let Some(listener) = listener.prepare_in_registry(scope, registry, event_type) else {
@@ -236,6 +245,9 @@ fn invoke_simple_event_listeners<'s>(
             );
         }
         set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
+        if let Some(checkpoint) = options.callback_checkpoint {
+            checkpoint(scope);
+        }
         if event_stop_immediate_propagation(scope, event) {
             break;
         }
@@ -348,14 +360,33 @@ fn invoke_simple_event_callback_with_invocation<'s>(
             if let Some(errors) = callback_errors {
                 errors.push(*report);
             } else if let Some(host_ptr) = host_ptr {
-                report_event_callback_exception(
-                    scope,
-                    host_ptr,
-                    event_type,
-                    relevant_identity,
-                    None,
-                    &report,
-                );
+                let is_global_error = event_type == "error"
+                    && v8::Local::<v8::Object>::try_from(callback_target)
+                        .ok()
+                        .is_some_and(|target| {
+                            crate::web_api_interfaces::Window::is_instance(scope, target)
+                                || crate::web_api_interfaces::WorkerGlobalScope::is_instance(
+                                    scope, target,
+                                )
+                        });
+                if is_global_error {
+                    report_event_callback_exception(
+                        scope,
+                        host_ptr,
+                        event_type,
+                        relevant_identity,
+                        None,
+                        &report,
+                    );
+                } else {
+                    crate::host::report_callback_exception(
+                        scope,
+                        host_ptr,
+                        relevant_identity,
+                        None,
+                        &report,
+                    );
+                }
             } else {
                 let _ = crate::worker::dispatch_current_worker_callback_exception(scope, *report);
             }

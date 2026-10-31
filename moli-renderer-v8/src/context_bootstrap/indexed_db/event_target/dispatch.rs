@@ -86,6 +86,7 @@ pub(super) fn dispatch_idb_event_object_with_result<'s>(
         &event_type,
         event,
         &parents,
+        Some(idb_event_callback_checkpoint),
     );
     owner_scope.defer_restore(scope, previous_owner);
     IdbEventDispatchResult {
@@ -100,4 +101,19 @@ fn idb_event_target_owner_scope<'s>(
 ) -> crate::native_bridge::OwnerDispatchScope {
     indexed_db_typed_owner_scope(scope, target)
         .expect("IDB event target should have typed owner state")
+}
+
+// Native IndexedDB callbacks finish their microtasks before the next listener
+// and before request default actions. Script dispatch keeps its outer boundary.
+fn idb_event_callback_checkpoint(scope: &mut v8::PinScope<'_, '_>) {
+    if !scope.is_execution_terminating()
+        && scope
+            .get_current_context()
+            .get_microtask_queue()
+            .is_some_and(|queue| {
+                queue.get_microtasks_scope_depth() == 0 && !queue.is_running_microtasks()
+            })
+    {
+        crate::script_vm::perform_callback_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+    }
 }

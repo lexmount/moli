@@ -2585,6 +2585,14 @@ pub(super) fn indexed_db_transaction_database<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    // The native dispatch reference is released on completion, but the
+    // transaction's traced connection remains observable as its event parent.
+    if let Some(database) =
+        crate::util::get_private_value(scope, transaction, super::TRANSACTION_DB_SLOT)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        return Some(database);
+    }
     let id = indexed_db_typed_state_id(scope, transaction)?;
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     let value = table
