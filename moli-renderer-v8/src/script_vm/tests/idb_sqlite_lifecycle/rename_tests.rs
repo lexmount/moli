@@ -116,7 +116,7 @@ async fn idb_sqlite_rename_abort_restores_existing_identity_and_keeps_created_na
     assert_eq!(vm.eval("String(saved)").unwrap(), "0");
 }
 
-fn registered_proxy<'s>(
+pub(super) fn registered_proxy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
