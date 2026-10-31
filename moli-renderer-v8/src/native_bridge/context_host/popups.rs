@@ -589,6 +589,7 @@ impl LightweightPopupDocumentState {
         self.policy_container.cross_origin_embedder_policy = response.cross_origin_embedder_policy;
         self.policy_container.document_isolation_policy = response.document_isolation_policy;
         self.policy_container.cross_origin_isolated = response.cross_origin_isolated;
+        self.policy_container.coop_coep_isolation = response.coop_coep_isolation;
         self.policy_container.document_content_security_policies =
             response.document_content_security_policies;
         self.policy_container.response_content_security_policies =
@@ -1805,8 +1806,7 @@ impl PageScriptHost {
     }
 
     pub(crate) fn lightweight_popup_cross_origin_isolated(&self, popup_id: u64) -> bool {
-        self.lightweight_popup_document_record(popup_id)
-            .is_some_and(|document| document.state.policy_container.cross_origin_isolated)
+        self.window_cross_origin_isolated(super::OwnerDispatchScope::LightweightPopup(popup_id))
     }
 
     fn lightweight_popup_base_url(
