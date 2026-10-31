@@ -17,7 +17,7 @@ pub const TRUSTED_TYPES_CREATE_SCRIPT_SLOT: &str = "__moliTrustedTypesCreateScri
 pub const TRUSTED_TYPES_CREATE_SCRIPT_URL_SLOT: &str = "__moliTrustedTypesCreateScriptURL";
 #[derive(WebApiObject)]
 #[webapi(plain)]
-struct TrustedTypeObjectDeclaration<'scope> {
+pub struct TrustedTypeObjectDeclaration<'scope> {
     #[webapi(slot = TRUSTED_TYPE_VALUE_SLOT)]
     value: v8::Local<'scope, v8::String>,
 }
