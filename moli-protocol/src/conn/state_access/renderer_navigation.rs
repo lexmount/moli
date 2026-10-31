@@ -3,10 +3,17 @@ use crate::conn::{
     CommandOwnerScope, CommandWorkflowContext, DocumentNavigationToken, NavigationDispatchState,
     NavigationLoadOutcome, TargetRootDocumentProtocolAttachmentIdentity,
 };
-use crate::domains::page::PreparedRendererNavigationResult;
+use crate::domains::page::{PreparedRendererNavigation, PreparedRendererNavigationResult};
 use anyhow::{Context as _, Result};
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn prepare_renderer_navigation_owner_action(
+        self,
+        action: crate::conn::TopLevelNavigationOwnerAction,
+    ) -> Option<PreparedRendererNavigation> {
+        PreparedRendererNavigation::prepare_owner_action(self.connection, action)
+    }
+
     pub(crate) fn prepare_superseded_fetch_navigation(
         self,
         token: DocumentNavigationToken,
