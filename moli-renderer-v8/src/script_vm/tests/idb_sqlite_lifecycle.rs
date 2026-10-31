@@ -36,6 +36,7 @@ impl SqlBackend {
         self.execute(Command::Begin {
             transaction: handle,
             mode: TransactionMode::VersionChange,
+            durability: moli_indexeddb::TransactionDurability::Strict,
             stores: BTreeSet::new(),
             version: Some(version),
             admission: None,
@@ -108,6 +109,7 @@ impl SqlBackend {
         backend.execute(Command::Begin {
             transaction,
             mode: TransactionMode::VersionChange,
+            durability: moli_indexeddb::TransactionDurability::Strict,
             stores: BTreeSet::new(),
             version: Some(1),
             admission: None,
@@ -703,6 +705,7 @@ async fn idb_sqlite_schema_corrupt_wire_aborts_backfill_instead_of_skipping_a_ro
     backend.execute(Command::Begin {
         transaction: handle,
         mode: TransactionMode::ReadWrite,
+        durability: moli_indexeddb::TransactionDurability::Relaxed,
         stores: BTreeSet::from(["records".into()]),
         version: None,
         admission: Some(admission.handle().clone()),

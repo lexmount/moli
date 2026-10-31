@@ -56,6 +56,7 @@ fn failed_schema_read_before_commit_rolls_back_and_allows_a_later_upgrade() {
             Command::Begin {
                 transaction: TX,
                 mode: TransactionMode::VersionChange,
+                durability: crate::TransactionDurability::Strict,
                 stores: BTreeSet::new(),
                 version: Some(2),
                 admission: None,

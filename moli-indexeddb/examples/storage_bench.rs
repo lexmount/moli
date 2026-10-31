@@ -49,6 +49,7 @@ fn begin(
         Command::Begin {
             transaction,
             mode,
+            durability: moli_indexeddb::TransactionDurability::Relaxed,
             stores: BTreeSet::from(["store".into()]),
             version: None,
             admission,

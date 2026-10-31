@@ -14,6 +14,7 @@ async fn idb_sqlite_small_write_shares_large_schema() {
     backend.execute(Command::Begin {
         transaction,
         mode: TransactionMode::VersionChange,
+        durability: moli_indexeddb::TransactionDurability::Strict,
         stores: BTreeSet::new(),
         version: Some(2),
         admission: None,

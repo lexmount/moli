@@ -162,6 +162,7 @@ impl Backend {
         self.execute(Command::Begin {
             transaction,
             mode: TransactionMode::ReadWrite,
+            durability: moli_indexeddb::TransactionDurability::Relaxed,
             stores: stores.into_iter().collect(),
             version: None,
             admission: Some(admission.handle().clone()),

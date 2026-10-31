@@ -77,6 +77,15 @@ pub enum TransactionMode {
     VersionChange,
 }
 
+/// Resolved durability policy for a native transaction. The frontend retains
+/// the Web API hint and resolves its bucket default before admitting the work.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TransactionDurability {
+    #[default]
+    Relaxed,
+    Strict,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectStoreInfo {
     pub name: crate::IndexedDbName,
