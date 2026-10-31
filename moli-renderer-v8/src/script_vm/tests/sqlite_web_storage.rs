@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn storage_quota_rejects_oversized_keys_with_empty_values() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = moli_sqlite::Runtime::new().unwrap();
+    let (local, owner) = moli_web_storage::new_sqlite_web_storage_store(
+        directory.path().join("localstorage.sqlite"),
+        moli_sqlite::OpenMode::Create,
+        runtime.handle(),
+    )
+    .unwrap();
+    let handles =
+        crate::RendererWebStorageHandles::new(local, crate::new_shared_web_storage_store());
+    let mut vm = new_storage_test_vm("https://key-quota.test/");
+    vm.set_web_storage_handles(&handles);
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([localStorage, sessionStorage].map(storage => {
+            try {
+                storage.setItem('x'.repeat(6_000_000), '');
+                return ['accepted', storage.length];
+            } catch (error) {
+                return [error.name, error instanceof DOMException, storage.length];
+            }
+        }))"#
+        )
+        .unwrap(),
+        "[[\"QuotaExceededError\",true,0],[\"QuotaExceededError\",true,0]]"
+    );
+    drop(vm);
+    owner.close().unwrap();
+}
+
+#[test]
 fn storage_estimate_does_not_open_local_storage_or_depend_on_its_connection() {
     for closed in [false, true] {
         let directory = tempfile::tempdir().unwrap();

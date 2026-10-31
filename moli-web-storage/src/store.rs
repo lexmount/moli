@@ -158,8 +158,8 @@ impl WebStorageStore {
             if previous == Some(&value) {
                 return Ok(Edit::unchanged(None));
             }
-            let size = updated_storage_size(area.size, previous, value.usage_bytes());
-            if size > WEB_STORAGE_QUOTA_BYTES {
+            let size = updated_storage_size(area.size, &key, previous, &value);
+            if size > area.size && size > WEB_STORAGE_QUOTA_BYTES {
                 return Err(WebStorageMutationError::QuotaExceeded);
             }
             let previous = area.values.insert(key.clone(), value.clone());
@@ -215,7 +215,7 @@ impl WebStorageStore {
             let Some(old_value) = area.values.remove(&key) else {
                 return Ok(Edit::unchanged(None));
             };
-            area.size -= old_value.usage_bytes();
+            area.size -= storage_item_size(&key, &old_value);
             let mutation = WebStorageMutation::ItemRemoved {
                 area_key: origin.to_owned(),
                 key,

@@ -63,6 +63,131 @@ fn resident(store: &WebStorageStore) -> usize {
 }
 
 #[test]
+fn sqlite_quota_counts_keys_and_values_for_insert_replace_remove_and_clear() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    let _view = store.lease_area("https://key-quota.test").unwrap();
+    crate::tests::assert_key_and_value_quota(&store);
+    owner.close().unwrap();
+}
+
+#[test]
+fn imported_usage_includes_keys_and_survives_reopen_and_edits() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("localstorage.sqlite");
+    let runtime = Runtime::new()?;
+    let area = "https://import-quota.test";
+    let unicode_key = vec![0xd800, 0, 0x0100];
+    import_sqlite_web_storage(
+        path.clone(),
+        runtime.handle(),
+        BTreeMap::from([(
+            area.to_owned(),
+            vec![
+                (utf16_units("ascii"), vec![]),
+                (unicode_key.clone(), vec![0xdc00, 0xd83d, 0xde00]),
+                (utf16_units("ascii"), utf16_units("old")),
+                (utf16_units("ascii"), vec![]),
+            ],
+        )]),
+    )?;
+    {
+        let connection = Connection::open(&path)?;
+        let metadata: (i64, i64, i64) = connection.query_row(
+            "SELECT usage_bytes,entry_count,(SELECT SUM(length(key)+length(value)) FROM entries WHERE entries.area_id=areas.area_id) FROM areas WHERE storage_key=?1",
+            [area],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(metadata, (22, 2, 22));
+    }
+    let (store, owner) = open(root.path(), &runtime);
+    let view = store.lease_area(area)?.unwrap();
+    assert_eq!(store.try_usage_bytes(area)?, 22);
+    assert!(
+        view.area.state.lock().is_none(),
+        "usage remains metadata-only"
+    );
+    assert_eq!(store.try_len(area)?, 2);
+    store.try_set_item(area, "ascii", "x")?;
+    assert_eq!(store.try_usage_bytes(area)?, 24);
+    store.try_remove_item_utf16(area, &unicode_key)?;
+    assert_eq!(store.try_usage_bytes(area)?, 12);
+    owner.close()?;
+    let (store, owner) = open(root.path(), &runtime);
+    assert_eq!(store.try_usage_bytes(area)?, 12);
+    assert_eq!(store.try_len(area)?, 1);
+    assert_eq!(store.get_item(area, "ascii").as_deref(), Some("x"));
+    store.try_remove_item(area, "ascii")?;
+    assert_eq!(store.try_usage_bytes(area)?, 0);
+    owner.close()?;
+    Ok(())
+}
+
+#[test]
+fn restored_overquota_import_allows_shrinking_but_rejects_growth() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("localstorage.sqlite");
+    let runtime = Runtime::new()?;
+    let area = "https://overquota-import.test";
+    // Explicit imports preserve existing data, even above the Web API quota.
+    let value = vec![u16::from(b'x'); WEB_STORAGE_QUOTA_BYTES / 2 + 8];
+    import_sqlite_web_storage(
+        path,
+        runtime.handle(),
+        BTreeMap::from([(area.to_owned(), vec![(utf16_units("key"), value.clone())])]),
+    )?;
+    let (store, owner) = open(root.path(), &runtime);
+    let view = store.lease_area(area)?.unwrap();
+    assert_eq!(store.try_usage_bytes(area)?, WEB_STORAGE_QUOTA_BYTES + 22);
+    assert!(view.area.state.lock().is_none());
+    let key = utf16_units("key");
+    store.try_set_item_utf16(area, &key, &value[..value.len() - 1])?;
+    assert_eq!(store.try_usage_bytes(area)?, WEB_STORAGE_QUOTA_BYTES + 20);
+    let events = store.subscribe_mutations(WebStorageAreaKind::Local);
+    assert_eq!(
+        store.try_set_item_utf16(area, &key, &value),
+        Err(WebStorageMutationError::QuotaExceeded)
+    );
+    assert_eq!(
+        store.try_set_item(area, "new-key", ""),
+        Err(WebStorageMutationError::QuotaExceeded)
+    );
+    assert!(events.is_empty());
+    store.try_remove_item(area, "key")?;
+    assert_eq!(store.try_usage_bytes(area)?, 0);
+    owner.close()?;
+    Ok(())
+}
+
+#[test]
+fn value_only_metadata_version_is_rejected_without_modifying_data() -> Result<()> {
+    let mut connection = Connection::open_in_memory()?;
+    initialize(&mut connection)?;
+    connection.execute(
+        "INSERT INTO areas(storage_key,usage_bytes,entry_count) VALUES ('old',0,1)",
+        [],
+    )?;
+    connection.execute(
+        "INSERT INTO entries(area_id,key,value) VALUES (last_insert_rowid(),?1,?2)",
+        params![encode(&utf16_units("key")), encode(&[])],
+    )?;
+    connection.pragma_update(None, "user_version", 1)?;
+    assert!(initialize(&mut connection).is_err());
+    let row: (i64, i64, i64) = connection.query_row(
+        "SELECT usage_bytes,entry_count,length(key) FROM areas JOIN entries USING(area_id)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!(row, (0, 1, 6));
+    assert_eq!(
+        connection.pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))?,
+        1
+    );
+    Ok(())
+}
+
+#[test]
 fn acquiring_an_unused_store_and_area_lease_does_not_open_the_database() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("localstorage.sqlite");
@@ -350,7 +475,7 @@ fn retrying_committed_then_deleted_or_cleared_keys_is_idempotent() {
             (key("keep"), KeyChange::Put(key("v"))),
             (key("remove"), KeyChange::Put(key("old"))),
         ]),
-        4,
+        28,
         2,
     );
     // SQL committed, but publication was lost: replay must still apply the
@@ -359,7 +484,7 @@ fn retrying_committed_then_deleted_or_cleared_keys_is_idempotent() {
     batch.merge(delta(
         false,
         BTreeMap::from([(key("remove"), KeyChange::Delete)]),
-        1,
+        10,
         1,
     ));
     batch.write(&mut connection).unwrap();
@@ -371,7 +496,7 @@ fn retrying_committed_then_deleted_or_cleared_keys_is_idempotent() {
     batch.merge(delta(
         false,
         BTreeMap::from([(key("new"), KeyChange::Put(key("latest")))]),
-        6,
+        18,
         1,
     ));
     batch.write(&mut connection).unwrap();
@@ -470,13 +595,13 @@ fn single_area_usage_reads_cold_metadata_and_current_dirty_size() {
     owner.flush().unwrap();
     assert_eq!(resident(&store), 0);
     let cold = store.lease_area(&key).unwrap().unwrap();
-    assert_eq!(store.try_usage_bytes(&key).unwrap(), 3);
+    assert_eq!(store.try_usage_bytes(&key).unwrap(), 12);
     assert!(
         cold.area.state.lock().is_none(),
         "usage must not load entries"
     );
     store.try_set_item(&key, "key", "changed").unwrap();
-    assert_eq!(store.try_usage_bytes(&key).unwrap(), 7);
+    assert_eq!(store.try_usage_bytes(&key).unwrap(), 20);
     store.try_clear(&key).unwrap();
     assert_eq!(store.try_usage_bytes(&key).unwrap(), 0);
     drop(cold);
@@ -527,7 +652,7 @@ fn origin_clear_deletes_cold_entries_without_loading_and_preserves_later_puts() 
     let first = web_storage_partitioned_area_key(origin, origin);
     let other = web_storage_partitioned_area_key(origin, "https://other.test");
     let unrelated = web_storage_partitioned_area_key("https://clear-cold.test.sibling", origin);
-    store.try_set_item(origin, "empty-value", "").unwrap();
+    store.try_set_item(origin, "", "").unwrap();
     for key in [&first, &other, &unrelated] {
         store
             .try_set_item(key, "old", &"x".repeat(128 * 1024))

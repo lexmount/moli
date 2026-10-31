@@ -178,14 +178,7 @@ impl WebStorageString {
     }
 
     fn usage_bytes(&self) -> usize {
-        let mut bytes = 0usize;
-        for decoded in char::decode_utf16(self.units.iter().copied()) {
-            let Ok(character) = decoded else {
-                return self.units.len().saturating_mul(2);
-            };
-            bytes = bytes.saturating_add(character.len_utf8());
-        }
-        bytes
+        self.units.len().saturating_mul(size_of::<u16>())
     }
 }
 
@@ -231,12 +224,23 @@ impl MemoryWebStorageArea {
 
 fn updated_storage_size(
     current_size: usize,
+    key: &WebStorageString,
     previous_value: Option<&WebStorageString>,
-    new_value_size: usize,
+    new_value: &WebStorageString,
 ) -> usize {
     current_size
-        .saturating_sub(previous_value.map_or(0, WebStorageString::usage_bytes))
-        .saturating_add(new_value_size)
+        .saturating_sub(previous_value.map_or(0, |value| storage_item_size(key, value)))
+        .saturating_add(storage_item_size(key, new_value))
+}
+
+fn storage_item_size(key: &WebStorageString, value: &WebStorageString) -> usize {
+    key.usage_bytes().saturating_add(value.usage_bytes())
+}
+
+fn storage_area_size(values: &HashMap<WebStorageString, WebStorageString>) -> usize {
+    values.iter().fold(0, |size, (key, value)| {
+        size.saturating_add(storage_item_size(key, value))
+    })
 }
 
 impl MemoryWebStorageBackend {
@@ -267,6 +271,99 @@ mod tests {
 
     fn first_party_area_key(origin: &str) -> String {
         web_storage_partitioned_area_key(origin, origin)
+    }
+
+    pub(super) fn assert_key_and_value_quota(store: &WebStorageStore) {
+        let area = "https://key-quota.test";
+        let events = store.subscribe_mutations(WebStorageAreaKind::Local);
+        let oversized_key = vec![u16::from(b'x'); WEB_STORAGE_QUOTA_BYTES / 2 + 1];
+        assert_eq!(
+            store.try_set_item_utf16(area, &oversized_key, &[]),
+            Err(WebStorageMutationError::QuotaExceeded)
+        );
+        assert_eq!(store.try_len(area).unwrap(), 0);
+        assert_eq!(store.try_usage_bytes(area).unwrap(), 0);
+        assert!(events.is_empty());
+
+        let key = &oversized_key[..WEB_STORAGE_QUOTA_BYTES / 2 - 1];
+        store.try_set_item_utf16(area, key, &[1]).unwrap();
+        assert_eq!(
+            store.try_usage_bytes(area).unwrap(),
+            WEB_STORAGE_QUOTA_BYTES
+        );
+        assert_eq!(events.drain().len(), 1);
+        store.try_set_item_utf16(area, key, &[1]).unwrap();
+        assert!(events.is_empty(), "identical values must remain a no-op");
+        store.try_set_item_utf16(area, key, &[2]).unwrap();
+        assert_eq!(
+            store.try_usage_bytes(area).unwrap(),
+            WEB_STORAGE_QUOTA_BYTES
+        );
+        assert_eq!(events.drain().len(), 1);
+        for (key, value) in [(key, &[2, 3][..]), (&[][..], &[1][..])] {
+            assert_eq!(
+                store.try_set_item_utf16(area, key, value),
+                Err(WebStorageMutationError::QuotaExceeded)
+            );
+        }
+        assert_eq!(store.try_get_item_utf16(area, key).unwrap(), Some(vec![2]));
+        assert_eq!(store.try_len(area).unwrap(), 1);
+        assert_eq!(
+            store.try_usage_bytes(area).unwrap(),
+            WEB_STORAGE_QUOTA_BYTES
+        );
+        assert!(
+            events.is_empty(),
+            "rejected writes must not publish mutations"
+        );
+
+        store.try_set_item_utf16(area, key, &[]).unwrap();
+        assert_eq!(
+            store.try_usage_bytes(area).unwrap(),
+            WEB_STORAGE_QUOTA_BYTES - 2
+        );
+        store.try_set_item_utf16(area, &[], &[0xd800]).unwrap();
+        assert_eq!(
+            store.try_usage_bytes(area).unwrap(),
+            WEB_STORAGE_QUOTA_BYTES
+        );
+        assert!(store.try_remove_item_utf16(area, key).unwrap());
+        assert_eq!(store.try_usage_bytes(area).unwrap(), 2);
+        assert!(store.try_remove_item_utf16(area, &[]).unwrap());
+        assert_eq!(store.try_usage_bytes(area).unwrap(), 0);
+
+        store.try_set_item_utf16(area, key, &[1]).unwrap();
+        assert_eq!(
+            store.try_usage_bytes(area).unwrap(),
+            WEB_STORAGE_QUOTA_BYTES
+        );
+        store.try_clear(area).unwrap();
+        assert_eq!(store.try_usage_bytes(area).unwrap(), 0);
+    }
+
+    #[test]
+    fn memory_quota_counts_keys_and_values_for_insert_replace_remove_and_clear() {
+        assert_key_and_value_quota(&WebStorageStore::default());
+    }
+
+    #[test]
+    fn usage_counts_utf16_code_units_for_keys_and_values() {
+        let store = WebStorageStore::default();
+        let area = "https://utf16-quota.test";
+        // ASCII, non-ASCII BMP, a surrogate pair, NUL and lone surrogates all
+        // consume two bytes per UTF-16 code unit, in either a key or a value.
+        let units = [u16::from(b'a'), 0x0100, 0xd83d, 0xde00, 0, 0xd800];
+        store.try_set_item_utf16(area, &units, &units).unwrap();
+        assert_eq!(store.try_usage_bytes(area).unwrap(), 24);
+        store.try_set_item_utf16(area, &units, &[0xdc00]).unwrap();
+        assert_eq!(store.try_usage_bytes(area).unwrap(), 14);
+        store.try_remove_item_utf16(area, &units).unwrap();
+        assert_eq!(store.try_usage_bytes(area).unwrap(), 0);
+        store.try_set_item(area, "", "").unwrap();
+        assert_eq!(store.try_len(area).unwrap(), 1);
+        assert_eq!(store.try_usage_bytes(area).unwrap(), 0);
+        store.try_remove_item(area, "").unwrap();
+        assert_eq!(store.try_usage_bytes(area).unwrap(), 0);
     }
 
     #[test]
@@ -461,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    fn web_storage_usage_tracks_value_bytes_by_storage_key() {
+    fn web_storage_usage_tracks_key_and_value_bytes_by_storage_key() {
         let store = WebStorageStore::default();
         let a_area_key = first_party_area_key("https://a.test");
         let b_area_key = first_party_area_key("https://b.test");
@@ -470,18 +567,18 @@ mod tests {
         assert!(store.set_item(&a_area_key, "first", "abc"));
         assert!(store.set_item(&a_area_key, "second", "defg"));
         assert!(store.set_item(&b_area_key, "other", "xxxx"));
-        assert_eq!(store.usage_bytes(&a_area_key), 7);
-        assert_eq!(store.usage_bytes(&b_area_key), 4);
+        assert_eq!(store.usage_bytes(&a_area_key), 36);
+        assert_eq!(store.usage_bytes(&b_area_key), 18);
 
         assert!(store.set_item(&a_area_key, "first", "z"));
-        assert_eq!(store.usage_bytes(&a_area_key), 5);
+        assert_eq!(store.usage_bytes(&a_area_key), 32);
 
         assert!(store.remove_item(&a_area_key, "second"));
-        assert_eq!(store.usage_bytes(&a_area_key), 1);
+        assert_eq!(store.usage_bytes(&a_area_key), 12);
 
         store.clear_origin(&a_area_key);
         assert_eq!(store.usage_bytes(&a_area_key), 0);
-        assert_eq!(store.usage_bytes(&b_area_key), 4);
+        assert_eq!(store.usage_bytes(&b_area_key), 18);
     }
 
     #[test]
@@ -500,7 +597,7 @@ mod tests {
         assert!(store.set_item(&top_b, "b", "ccc"));
         assert!(store.set_item(&sibling, "s", "dddd"));
 
-        assert_eq!(store.usage_bytes(&first_party), 1);
+        assert_eq!(store.usage_bytes(&first_party), 6);
 
         store.clear_origin(&first_party);
         assert_eq!(store.get_item(&top_a, "a"), Some("bb".to_owned()));

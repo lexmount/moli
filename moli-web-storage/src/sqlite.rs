@@ -13,6 +13,8 @@ use std::{
 };
 
 pub(super) const APPLICATION_ID: i32 = 0x4d4c4c53; // MLLS
+// Version 2 accounts for both key and value UTF-16 bytes in area metadata.
+const SCHEMA_VERSION: i32 = 2;
 pub struct SqliteWebStorageOwner {
     owner: WritebackOwner<Batch>,
 }
@@ -182,7 +184,7 @@ pub fn import_sqlite_web_storage(
             if changes.is_empty() {
                 continue;
             }
-            let usage = area.values.values().map(WebStorageString::usage_bytes).sum();
+            let usage = storage_area_size(&area.values);
             let id = write_area_metadata(&tx, &key, usage, area.values.len())?;
             let mut statement = tx.prepare_cached(
                 "INSERT INTO entries(area_id,key,value) VALUES (?1,?2,?3) ON CONFLICT(area_id,key) DO UPDATE SET value=excluded.value",
@@ -233,7 +235,7 @@ fn read_area(
         let (key, value) = row?;
         values.insert(decode(key)?, decode(value)?);
     }
-    let size = values.values().map(WebStorageString::usage_bytes).sum();
+    let size = storage_area_size(&values);
     if usize::try_from(usage).ok() != Some(size)
         || usize::try_from(count).ok() != Some(values.len())
     {
@@ -261,9 +263,9 @@ pub(super) fn initialize(connection: &mut Connection) -> std::result::Result<(),
         tx.execute_batch("CREATE TABLE areas(area_id INTEGER PRIMARY KEY,storage_key TEXT NOT NULL UNIQUE,usage_bytes INTEGER NOT NULL CHECK(usage_bytes>=0),entry_count INTEGER NOT NULL CHECK(entry_count>=0));
             CREATE TABLE entries(area_id INTEGER NOT NULL REFERENCES areas(area_id) ON DELETE CASCADE,key BLOB NOT NULL CHECK(length(key)%2=0),value BLOB NOT NULL CHECK(length(value)%2=0),PRIMARY KEY(area_id,key)) WITHOUT ROWID;")?;
         tx.pragma_update(None, "application_id", APPLICATION_ID)?;
-        tx.pragma_update(None, "user_version", 1)?;
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
-    } else if application != APPLICATION_ID || version != 1 {
+    } else if application != APPLICATION_ID || version != SCHEMA_VERSION {
         return Err(WritebackError::new(format!(
             "unsupported localStorage database identity/version {application}/{version}"
         )));
