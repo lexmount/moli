@@ -371,8 +371,9 @@ fn buffer_source_extended_attributes_reject_resizable_backing_stores() {
     }
   };
   const encoder = new TextEncoder();
-  const fixedShared = new SharedArrayBuffer(16);
-  const growableShared = new SharedArrayBuffer(16, { maxByteLength: 32 });
+  const SharedBuffer = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer.constructor;
+  const fixedShared = new SharedBuffer(16);
+  const growableShared = new SharedBuffer(16, { maxByteLength: 32 });
   const fixedResult = encoder.encodeInto('abc', new Uint8Array(fixedShared));
   return JSON.stringify({
     fixedResponse: probe(() => new Response(new Uint8Array(4)).constructor.name),
@@ -481,7 +482,8 @@ fn text_encoder_encode_into_counts_utf16_and_writes_only_the_native_view() {
     assert_eq!(vm.eval(r#"(() => {
       const assert = ok => {if (!ok) throw Error('encodeInto view semantics');};
       const encoder = new TextEncoder();
-      for (const Buffer of [ArrayBuffer, SharedArrayBuffer]) {
+      const SharedBuffer = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer.constructor;
+      for (const Buffer of [ArrayBuffer, SharedBuffer]) {
         for (const [input, capacity, read, bytes] of [
           ['\u{1D306}', 3, 0, []], ['\u{1D306}', 4, 2, [240,157,140,134]],
           ['\u{1D306}A', 5, 3, [240,157,140,134,65]], ['\ud800', 3, 1, [239,191,189]]

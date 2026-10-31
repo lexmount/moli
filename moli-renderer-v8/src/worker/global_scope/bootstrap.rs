@@ -119,6 +119,8 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
         scope.get_current_context(),
         &state,
     );
+    let context = scope.get_current_context();
+    scope.install_conditional_features(context);
     let global_kind = state.borrow().global_kind.clone();
 
     let (secure_context, cross_origin_isolated) = {

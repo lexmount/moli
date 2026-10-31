@@ -33,6 +33,9 @@ impl WorkerIsolateState {
         debugger_enabled: bool,
     ) -> Self {
         let mut isolate = v8::Isolate::new(Default::default());
+        isolate.set_shared_array_buffer_constructor_enabled_callback(
+            crate::context_bootstrap::shared_array_buffer_constructor_enabled_callback,
+        );
         crate::context_bootstrap::install_dom_exception_error_classifier(&mut isolate);
         crate::context_bootstrap::install_agent_microtask_checkpoint_tasks(&mut isolate);
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);

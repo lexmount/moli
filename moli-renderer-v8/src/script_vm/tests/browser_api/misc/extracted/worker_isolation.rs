@@ -55,7 +55,7 @@ async fn service_worker_isolation_uses_own_coep_for_shared_memory() {
                     const {{data}} = await reply;
                     channel.port1.close();
                     globalThis.workerIsolationResult = JSON.stringify([
-                        data.secure, data.isolated, data.clone
+                        data.secure, data.isolated, data.constructor, data.clone
                     ]);
                 }})().catch(error => globalThis.workerIsolationResult = "error:" + error);
                 "#
@@ -70,9 +70,9 @@ async fn service_worker_isolation_uses_own_coep_for_shared_memory() {
             )
             .await;
             let expected = if isolated {
-                r#"[true,true,{"distinct":true,"shared":true}]"#
+                r#"[true,true,"function",{"distinct":true,"shared":true}]"#
             } else {
-                r#"[true,false,{"error":"DataCloneError"}]"#
+                r#"[true,false,"undefined",{"error":"DataCloneError"}]"#
             };
             assert_eq!(
                 vm.eval("globalThis.workerIsolationResult").unwrap(),
@@ -156,7 +156,7 @@ async fn shared_worker_isolation_does_not_inherit_document_capability() {
                     const worker = new SharedWorker(workerURL, {{type: "{script_kind}"}});
                     worker.port.onmessage = ({{data}}) => {{
                         globalThis.workerIsolationResult = JSON.stringify([
-                            data.secure, data.isolated, data.clone
+                            data.secure, data.isolated, data.constructor, data.clone
                         ]);
                         worker.port.close();
                         URL.revokeObjectURL(workerURL);
@@ -181,7 +181,7 @@ async fn shared_worker_isolation_does_not_inherit_document_capability() {
                 .expect("SharedWorker isolation probe should reply");
                 assert_eq!(
                     vm.eval("globalThis.workerIsolationResult").unwrap(),
-                    r#"[true,false,{"error":"DataCloneError"}]"#,
+                    r#"[true,false,"undefined",{"error":"DataCloneError"}]"#,
                     "document DIP={document_dip}, {script_kind}, {response_headers:?}"
                 );
                 if let Some(server) = server {

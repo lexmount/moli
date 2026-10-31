@@ -1,4 +1,5 @@
 (() => {
+  const SharedBuffer = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer.constructor;
   const assert = (value, name) => { if (!value) throw Error(name); };
   const other = document.querySelector('iframe').contentWindow;
   const base = ['captureTime', 'contributingSources', 'mimeType', 'payloadType', 'receiveTime', 'rtpTimestamp', 'senderCaptureTimeOffset', 'synchronizationSource'];
@@ -36,8 +37,8 @@
       try { d.set.call(original, invalid); } catch (caught) { error = caught; }
       assert(error instanceof TypeError && d.get.call(original) === replacement, name + ' invalid data leaves previous value');
     }
-    if (typeof SharedArrayBuffer === 'function') {
-      let error; try { d.set.call(original, new SharedArrayBuffer(1)); } catch (caught) { error = caught; }
+    {
+      let error; try { d.set.call(original, new SharedBuffer(1)); } catch (caught) { error = caught; }
       assert(error instanceof TypeError, name + ' nonshared data');
     }
     const detached = new ArrayBuffer(1); structuredClone(detached, {transfer: [detached]});

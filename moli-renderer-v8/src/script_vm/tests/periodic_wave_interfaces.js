@@ -10,6 +10,7 @@
   const realms = [['main', window], ['child', document.getElementById('child').contentWindow], ['popup', popup]];
   try {
     for (const [label, w] of realms) {
+      const SharedBuffer = new w.WebAssembly.Memory({shared:true,initial:1,maximum:1}).buffer.constructor;
       const context = new w.OfflineAudioContext(1, 16, 48000);
       const wave = () => new w.PeriodicWave(context);
       const oscillator = () => new w.OscillatorNode(context);
@@ -70,8 +71,8 @@
         assert(new w.PeriodicWave(context, {real: source}) instanceof w.PeriodicWave && order.includes('override'), 'sequence conversion observes overridden typed-array iterator');
       });
       await check(label + '/PeriodicWave/sequences backed by shared or resizable buffers', () => {
-        if (typeof w.SharedArrayBuffer === 'function') {
-          const values = new w.Float32Array(new w.SharedArrayBuffer(8)); values[1] = 1;
+        {
+          const values = new w.Float32Array(new SharedBuffer(8)); values[1] = 1;
           assert(context.createPeriodicWave(values, values) instanceof w.PeriodicWave, 'shared backing is allowed for iterable sequences');
         }
         if (typeof w.ArrayBuffer.prototype.resize === 'function') {

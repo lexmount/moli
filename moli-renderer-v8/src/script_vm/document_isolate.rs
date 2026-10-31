@@ -972,6 +972,9 @@ impl RendererDocumentIsolateHolder {
         // Blink configures its main-thread isolates the same way; dedicated
         // workers keep V8's default and may use the blocking operation.
         let mut isolate = v8::Isolate::new(v8::CreateParams::default().allow_atomics_wait(false));
+        isolate.set_shared_array_buffer_constructor_enabled_callback(
+            crate::context_bootstrap::shared_array_buffer_constructor_enabled_callback,
+        );
         crate::context_bootstrap::install_dom_exception_error_classifier(&mut isolate);
         if timing_enabled {
             tracing::info!(

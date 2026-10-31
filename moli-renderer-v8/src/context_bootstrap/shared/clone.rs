@@ -296,6 +296,20 @@ pub(crate) fn current_shared_memory_agent_cluster(
     crate::worker::worker_shared_memory_agent_cluster(scope)
 }
 
+/// V8 asks during Context creation, before a native owner may be installed,
+/// and again when bootstrap installs conditional features. Like Blink, deny
+/// unbound contexts and consult native capability rather than public globals.
+pub(crate) unsafe extern "C" fn shared_array_buffer_constructor_enabled_callback(
+    context: v8::Local<'_, v8::Context>,
+) -> bool {
+    if crate::common_runtime::CommonRuntimeBinding::from_context(context).is_none() {
+        return false;
+    }
+    v8::callback_scope!(unsafe scope, context);
+    let scope = &mut v8::ContextScope::new(scope, context);
+    current_shared_memory_agent_cluster(scope).is_some()
+}
+
 pub(crate) fn runtime_message_allowed_for_target(
     payload: &V8StructuredClonePayload,
     target: &RuntimeMessageSourceSecurity,

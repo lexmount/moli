@@ -3843,7 +3843,7 @@ fn indexed_db_rejects_shared_buffers_at_any_depth() {
       const open = indexedDB.open('shared-buffers', 1);
       open.onupgradeneeded = () => {
         const store = open.result.createObjectStore('values');
-        const shared = new SharedArrayBuffer(8);
+        const shared = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer.slice(0,8);
         sharedStored = [shared, {nested: shared}].map((value, key) => {
           try { store.put(value, key); return 'accepted'; }
           catch (error) { return error.name; }

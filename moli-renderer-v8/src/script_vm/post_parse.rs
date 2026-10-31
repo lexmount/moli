@@ -465,6 +465,9 @@ impl ScriptVmContextBootstrap {
         if let Some(registration) = realm_registration.as_mut() {
             registration.commit();
         }
+        // Context creation precedes owner registration. V8 can expose native
+        // conditional intrinsics only after this Realm has its actual policy.
+        scope.install_conditional_features(local_context);
         // Child Window exposure can reach bootstrap while the caller holds
         // the host's RefCell borrow. Follow the bootstrap's raw host access
         // discipline and end each native read before touching V8 again.

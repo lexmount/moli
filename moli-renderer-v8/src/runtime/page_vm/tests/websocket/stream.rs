@@ -593,7 +593,7 @@ fn websocket_stream_writer_write_rejects_unsupported_payloads() {
             assert_eq!(
                 run_case(
                     "shared-array-buffer-view",
-                    "new Uint8Array(new SharedArrayBuffer(8))",
+                    "new Uint8Array(new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer, 0, 8)",
                 )
                 .await,
                 r#"["shared-array-buffer-view:write-error:true:TypeError"]"#

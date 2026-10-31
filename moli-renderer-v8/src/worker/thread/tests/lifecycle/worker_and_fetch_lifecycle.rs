@@ -43,7 +43,8 @@ async fn dedicated_worker_agent_allows_blocking_atomics_wait() {
     ensure_v8();
     let mut handle = spawn_worker(
         r#"
-        const values = new Int32Array(new SharedArrayBuffer(4));
+        const shared = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer;
+        const values = new Int32Array(shared);
         postMessage(Atomics.wait(values, 0, 0, 1));
         "#
         .into(),

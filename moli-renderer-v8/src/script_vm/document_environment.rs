@@ -161,7 +161,9 @@ impl ScriptVm {
                 let scope = &mut v8::ContextScope::new(scope, context);
                 crate::context_bootstrap::refresh_global_location_security_origin(scope);
                 let window = context.global(scope);
-                crate::context_bootstrap::set_window_origin_runtime_state(scope, window, &origin)
+                crate::context_bootstrap::set_window_origin_runtime_state(scope, window, &origin)?;
+                scope.install_conditional_features(context);
+                Ok(())
             })
     }
 

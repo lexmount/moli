@@ -277,6 +277,7 @@ fn web_audio_analyser_checks_receiver_and_typed_array_without_duck_typing() {
 (() => {
   const errors = [];
   const analyser = new AudioContext().createAnalyser();
+  const SharedBuffer = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer.constructor;
   for (const [method, ArrayType, WrongArrayType] of [
     ['getFloatFrequencyData', Float32Array, Uint8Array],
     ['getFloatTimeDomainData', Float32Array, Uint8Array],
@@ -292,7 +293,7 @@ fn web_audio_analyser_checks_receiver_and_typed_array_without_duck_typing() {
       expectTypeError(() => analyser[method](value), 'wrong array');
     }
     expectTypeError(() => analyser[method](), 'missing argument');
-    expectTypeError(() => analyser[method](new ArrayType(new SharedArrayBuffer(16))), 'shared buffer');
+    expectTypeError(() => analyser[method](new ArrayType(new SharedBuffer(16))), 'shared buffer');
     expectTypeError(() => analyser[method](new ArrayType(new ArrayBuffer(16, { maxByteLength: 32 }))), 'resizable buffer');
     const output = new ArrayType(4).fill(57);
     for (const receiver of [{}, AnalyserNode.prototype, Object.create(analyser), new Proxy(analyser, {})]) {

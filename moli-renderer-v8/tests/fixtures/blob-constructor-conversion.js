@@ -2,6 +2,7 @@
   const checks = [];
   globalThis.__blobConstructorProgress = {stage: 'setup', checks};
   async function runMatrix(owner, callee, prefix, checks) {
+    const SharedBuffer = new owner.WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer.constructor;
     const capture = action => {
       try {return {value: action()};} catch (error) {return {error};}
     };
@@ -70,14 +71,12 @@
         outcome = capture(() => create([value]));
         check(name + ' is rejected', outcome.error instanceof callee.TypeError, outcome.error?.name);
       }
-      if (typeof owner.SharedArrayBuffer === 'function') {
-        for (const [name, value] of [
-          ['shared buffer', new owner.SharedArrayBuffer(4)],
-          ['shared view', new owner.Uint8Array(new owner.SharedArrayBuffer(4))]
-        ]) {
-          outcome = capture(() => create([value]));
-          check(name + ' is rejected', outcome.error instanceof callee.TypeError, outcome.error?.name);
-        }
+      for (const [name, value] of [
+        ['shared buffer', new SharedBuffer(4)],
+        ['shared view', new owner.Uint8Array(new SharedBuffer(4))]
+      ]) {
+        outcome = capture(() => create([value]));
+        check(name + ' is rejected', outcome.error instanceof callee.TypeError, outcome.error?.name);
       }
 
       const item = new owner.Blob(['blob']);
