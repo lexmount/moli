@@ -62,10 +62,7 @@ struct AreaDelta {
     _pin: Arc<Area>,
 }
 enum KeyChange {
-    Put {
-        value: WebStorageString,
-        existed: bool,
-    },
+    Put(WebStorageString),
     Delete,
 }
 impl WriteBatch for Batch {
@@ -77,42 +74,11 @@ impl WriteBatch for Batch {
             if let Some(mut previous) = self.0.remove(&key)
                 && !next.clear
             {
-                for (key, change) in next.changes {
-                    match change {
-                        KeyChange::Put { value, existed } => {
-                            let existed = match previous.changes.remove(&key) {
-                                Some(KeyChange::Put { existed, .. }) => existed,
-                                Some(KeyChange::Delete) => true,
-                                None => existed && !previous.clear,
-                            };
-                            previous
-                                .changes
-                                .insert(key, KeyChange::Put { value, existed });
-                        }
-                        KeyChange::Delete => {
-                            if !matches!(
-                                previous.changes.remove(&key),
-                                Some(KeyChange::Put { existed: false, .. })
-                            ) && !previous.clear
-                            {
-                                previous.changes.insert(key, KeyChange::Delete);
-                            }
-                        }
-                    }
-                }
+                previous.changes.extend(next.changes);
                 next.changes = previous.changes;
                 next.clear = previous.clear;
             }
             self.0.insert(key, next);
-        }
-    }
-    fn mark_commit_uncertain(&mut self) {
-        for delta in self.0.values_mut() {
-            for change in delta.changes.values_mut() {
-                if let KeyChange::Put { existed, .. } = change {
-                    *existed = true;
-                }
-            }
         }
     }
     fn write(&self, connection: &mut Connection) -> std::result::Result<(), WritebackError> {
@@ -128,7 +94,7 @@ impl WriteBatch for Batch {
             }
             for (key, value) in &delta.changes {
                 match value {
-                    KeyChange::Put { value, .. } => {
+                    KeyChange::Put(value) => {
                         tx.execute("INSERT INTO entries(area_id,key,value) VALUES (?1,?2,?3) ON CONFLICT(area_id,key) DO UPDATE SET value=excluded.value", params![area, encode(key.as_units()), encode(value.as_units())])?;
                     }
                     KeyChange::Delete => {
@@ -454,22 +420,14 @@ impl SqliteBackend {
                 };
                 match mutation {
                     WebStorageMutation::ItemAdded { key, value, .. } => {
-                        delta.changes.insert(
-                            key.clone(),
-                            KeyChange::Put {
-                                value: value.clone(),
-                                existed: false,
-                            },
-                        );
+                        delta
+                            .changes
+                            .insert(key.clone(), KeyChange::Put(value.clone()));
                     }
                     WebStorageMutation::ItemUpdated { key, new_value, .. } => {
-                        delta.changes.insert(
-                            key.clone(),
-                            KeyChange::Put {
-                                value: new_value.clone(),
-                                existed: true,
-                            },
-                        );
+                        delta
+                            .changes
+                            .insert(key.clone(), KeyChange::Put(new_value.clone()));
                     }
                     WebStorageMutation::ItemRemoved { key, .. } => {
                         delta.changes.insert(key.clone(), KeyChange::Delete);

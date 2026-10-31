@@ -336,17 +336,24 @@ fn unknown_database_is_not_recreated_or_overwritten() {
     );
 }
 #[test]
-fn transient_cookie_names_are_coalesced_without_retaining_a_delete_log() {
-    let mut batch = Batch::default();
-    for i in 0..10_000 {
-        let row = cookie(&format!("transient{i}"));
-        batch.merge(Batch::change(StoredCookieMutation::Upsert {
-            cookie: row.clone(),
-            existed: false,
-        }));
-        batch.merge(Batch::change(StoredCookieMutation::Delete(
-            StoredCookieIdentity::from(&row),
-        )));
-    }
-    assert!(batch.is_empty());
+fn retrying_a_published_put_with_a_later_delete_does_not_resurrect_the_cookie() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    codec::initialize(&mut connection).unwrap();
+    let row = cookie("transient");
+    let mut batch = Batch::change(StoredCookieMutation::Upsert {
+        cookie: row.clone(),
+    });
+    batch.write(&mut connection).unwrap();
+    batch.merge(Batch::change(StoredCookieMutation::Delete(
+        StoredCookieIdentity::from(&row),
+    )));
+    batch.write(&mut connection).unwrap();
+    batch.write(&mut connection).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM cookies", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
 }

@@ -324,32 +324,60 @@ fn quota_rejection_and_same_value_writes_do_not_publish_mutations() {
     owner.close().unwrap();
 }
 #[test]
-fn transient_keys_do_not_accumulate_delete_history_in_a_batch() {
+fn retrying_committed_then_deleted_or_cleared_keys_is_idempotent() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    initialize(&mut connection).unwrap();
     let pin = Arc::new(Area {
         state: Mutex::new(None),
         views: AtomicUsize::new(0),
     });
-    let mut batch = Batch::default();
-    for i in 0..10_000 {
-        let key = WebStorageString::from_utf8(&i.to_string());
-        for change in [
-            KeyChange::Put {
-                value: WebStorageString::from_utf8("v"),
-                existed: false,
-            },
-            KeyChange::Delete,
-        ] {
-            let delta = AreaDelta {
-                clear: false,
-                changes: BTreeMap::from([(key.clone(), change)]),
-                usage: 0,
-                count: 0,
+    let delta = |clear, changes, usage, count| {
+        Batch(BTreeMap::from([(
+            "area".to_owned(),
+            AreaDelta {
+                clear,
+                changes,
+                usage,
+                count,
                 _pin: pin.clone(),
-            };
-            batch.merge(Batch(BTreeMap::from([("area".into(), delta)])));
-        }
-    }
-    assert!(batch.0["area"].changes.is_empty());
+            },
+        )]))
+    };
+    let key = WebStorageString::from_utf8;
+    let mut batch = delta(
+        false,
+        BTreeMap::from([
+            (key("keep"), KeyChange::Put(key("v"))),
+            (key("remove"), KeyChange::Put(key("old"))),
+        ]),
+        4,
+        2,
+    );
+    // SQL committed, but publication was lost: replay must still apply the
+    // later delete even though its original put created a previously new row.
+    batch.write(&mut connection).unwrap();
+    batch.merge(delta(
+        false,
+        BTreeMap::from([(key("remove"), KeyChange::Delete)]),
+        1,
+        1,
+    ));
+    batch.write(&mut connection).unwrap();
+    batch.write(&mut connection).unwrap();
+    let area = read_area(&connection, "area").unwrap();
+    assert_eq!(area.values, HashMap::from([(key("keep"), key("v"))]));
+
+    batch.merge(delta(true, BTreeMap::new(), 0, 0));
+    batch.merge(delta(
+        false,
+        BTreeMap::from([(key("new"), KeyChange::Put(key("latest")))]),
+        6,
+        1,
+    ));
+    batch.write(&mut connection).unwrap();
+    batch.write(&mut connection).unwrap();
+    let area = read_area(&connection, "area").unwrap();
+    assert_eq!(area.values, HashMap::from([(key("new"), key("latest"))]));
 }
 
 #[test]

@@ -38,7 +38,7 @@ impl From<&StoredCookie> for Key {
     }
 }
 enum Change {
-    Put { cookie: StoredCookie, existed: bool },
+    Put(StoredCookie),
     Delete,
     Touch(u64),
 }
@@ -50,9 +50,9 @@ struct Batch {
 impl Batch {
     fn change(change: StoredCookieMutation) -> Self {
         match change {
-            StoredCookieMutation::Upsert { cookie, existed } => Self {
+            StoredCookieMutation::Upsert { cookie } => Self {
                 clear: false,
-                changes: BTreeMap::from([(Key::from(&cookie), Change::Put { cookie, existed })]),
+                changes: BTreeMap::from([(Key::from(&cookie), Change::Put(cookie))]),
             },
             StoredCookieMutation::Delete(key) => Self {
                 clear: false,
@@ -77,7 +77,7 @@ impl Batch {
         }
         for (key, change) in &self.changes {
             match change {
-                Change::Put { cookie, .. } => codec::upsert(connection, key, cookie)?,
+                Change::Put(cookie) => codec::upsert(connection, key, cookie)?,
                 Change::Delete => {
                     connection.execute("DELETE FROM cookies WHERE partition_key=?1 AND domain=?2 AND path=?3 AND name=?4",params![key.partition,key.domain,key.path,key.name])?;
                 }
@@ -101,27 +101,16 @@ impl WriteBatch for Batch {
         for (key, change) in newer.changes {
             let previous = self.changes.remove(&key);
             match change {
-                Change::Put { cookie, existed } => {
-                    let existed = match previous {
-                        Some(Change::Put { existed, .. }) => existed,
-                        Some(Change::Delete | Change::Touch(_)) => true,
-                        None => existed && !self.clear,
-                    };
-                    self.changes.insert(key, Change::Put { cookie, existed });
+                Change::Put(cookie) => {
+                    self.changes.insert(key, Change::Put(cookie));
                 }
                 Change::Delete => {
-                    if !matches!(previous, Some(Change::Put { existed: false, .. })) && !self.clear
-                    {
-                        self.changes.insert(key, Change::Delete);
-                    }
+                    self.changes.insert(key, Change::Delete);
                 }
                 Change::Touch(index) => match previous {
-                    Some(Change::Put {
-                        mut cookie,
-                        existed,
-                    }) => {
+                    Some(Change::Put(mut cookie)) => {
                         cookie.last_access_index = index;
-                        self.changes.insert(key, Change::Put { cookie, existed });
+                        self.changes.insert(key, Change::Put(cookie));
                     }
                     Some(Change::Delete) => {
                         self.changes.insert(key, Change::Delete);
@@ -131,13 +120,6 @@ impl WriteBatch for Batch {
                     }
                     _ => {}
                 },
-            }
-        }
-    }
-    fn mark_commit_uncertain(&mut self) {
-        for change in self.changes.values_mut() {
-            if let Change::Put { existed, .. } = change {
-                *existed = true;
             }
         }
     }

@@ -62,9 +62,6 @@ pub trait WriteBatch: Default + Send + 'static {
     fn is_empty(&self) -> bool;
     /// Compose chronological deltas: self happened before newer.
     fn merge(&mut self, newer: Self);
-    /// An error can leave commit publication uncertain. Do not elide a later
-    /// delete merely because an older put was originally a new row.
-    fn mark_commit_uncertain(&mut self) {}
     /// Must be atomic and idempotent; recoverable failures are retried with backoff.
     fn write(&self, connection: &mut Connection) -> Result<()>;
 }
@@ -466,7 +463,6 @@ async fn commit<B: WriteBatch>(
                 pending.retry = Retry::default();
             }
             let mut batch = batch;
-            batch.mark_commit_uncertain();
             batch.merge(std::mem::take(&mut pending.batch));
             pending.batch = batch;
             pending.operations = pending.operations.saturating_add(operations);

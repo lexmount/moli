@@ -25,7 +25,6 @@ impl CookieStoreKey {
 pub enum CookieStoreMutation {
     Upsert {
         cookie: Cookie<'static>,
-        existed: bool,
     },
     Delete(CookieStoreKey),
     Touch {

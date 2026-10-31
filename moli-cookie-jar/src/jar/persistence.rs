@@ -37,7 +37,6 @@ impl From<CookieStoreKey> for StoredCookieIdentity {
 pub enum StoredCookieMutation {
     Upsert {
         cookie: StoredCookie,
-        existed: bool,
     },
     Delete(StoredCookieIdentity),
     Touch {
@@ -54,9 +53,8 @@ struct Observer(Arc<dyn BrowserCookieObserver>);
 impl CookieStoreObserver for Observer {
     fn changed(&self, change: CookieStoreMutation) {
         self.0.changed(match change {
-            CookieStoreMutation::Upsert { cookie, existed } => StoredCookieMutation::Upsert {
+            CookieStoreMutation::Upsert { cookie } => StoredCookieMutation::Upsert {
                 cookie: crate::model::stored_cookie_from_core(&cookie),
-                existed,
             },
             CookieStoreMutation::Delete(key) => StoredCookieMutation::Delete(key.into()),
             CookieStoreMutation::Touch {

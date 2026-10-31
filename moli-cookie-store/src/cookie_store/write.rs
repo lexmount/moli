@@ -328,10 +328,7 @@ impl CookieStore {
                 .insert(cookie_key, cookie)
                 .is_some();
             if let Some(cookie) = observed {
-                self.notify(CookieStoreMutation::Upsert {
-                    cookie,
-                    existed: replacing_existing,
-                });
+                self.notify(CookieStoreMutation::Upsert { cookie });
             }
             Ok(if replaced {
                 StoreAction::UpdatedExisting
