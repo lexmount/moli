@@ -37,8 +37,9 @@ pub(super) struct SqliteBackend {
 }
 struct AreaMetadata {
     usage: usize,
+    entries: usize,
 }
-const ORIGIN_METADATA_SQL: &str = "SELECT storage_key,usage_bytes FROM areas
+const ORIGIN_METADATA_SQL: &str = "SELECT storage_key,usage_bytes,entry_count FROM areas
     WHERE storage_key=?1 OR (storage_key>=?2 AND storage_key<?3)";
 
 fn origin_prefix_range(origin: &str) -> (String, String) {
@@ -362,14 +363,19 @@ impl SqliteBackend {
             let mut statement = connection.prepare_cached(ORIGIN_METADATA_SQL)?;
             statement
                 .query_map(params![origin, prefix, upper], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
                 })?
                 .map(|row| {
-                    let (key, usage) = row?;
+                    let (key, usage, entries) = row?;
                     Ok((
                         key,
                         AreaMetadata {
                             usage: usize::try_from(usage).map_err(WritebackError::new)?,
+                            entries: usize::try_from(entries).map_err(WritebackError::new)?,
                         },
                     ))
                 })
@@ -387,7 +393,13 @@ impl SqliteBackend {
         let mut metadata = self.area_metadata_for_origin(origin)?;
         for (key, area) in live {
             if let Some(state) = &*area.state.lock() {
-                metadata.insert(key, AreaMetadata { usage: state.size });
+                metadata.insert(
+                    key,
+                    AreaMetadata {
+                        usage: state.size,
+                        entries: state.values.len(),
+                    },
+                );
             }
         }
         Ok(metadata
@@ -508,30 +520,27 @@ impl SqliteBackend {
         publish: impl Fn(WebStorageMutation),
     ) -> std::result::Result<bool, WebStorageMutationError> {
         let _namespace = self.namespace.write();
-        let areas = self
-            .area_keys_for_origin(origin)?
-            .into_iter()
-            .map(|key| {
-                let area = self.area(&key);
-                (key, area)
-            })
-            .collect::<Vec<_>>();
-        // Finish all cold reads before changing any map. The namespace fence
-        // prevents a concurrent cold load or new area from restoring old data.
-        for (key, area) in &areas {
-            self.load(key, &mut area.state.lock())?;
+        let mut areas = self.live_areas_for_origin(origin);
+        let metadata = self.area_metadata_for_origin(origin)?;
+        for key in metadata.keys() {
+            areas.entry(key.clone()).or_insert_with(|| self.area(key));
         }
         let mutations = self.client.accept(FailureAdmission::Reject, || {
             let mut batch = Batch::default();
             let mut mutations = Vec::new();
             for (key, area) in &areas {
                 let mut state = area.state.lock();
-                let data = state.as_mut().expect("loaded area");
-                if data.values.is_empty() {
+                let nonempty = state
+                    .as_ref()
+                    .map(|data| !data.values.is_empty())
+                    .unwrap_or_else(|| metadata.get(key).is_some_and(|area| area.entries > 0));
+                if !nonempty {
                     continue;
                 }
-                data.values.clear();
-                data.size = 0;
+                // An empty logical map fences reads until this deletion is
+                // durable. Cold entries never need to be materialized, and a
+                // later put composes after clear in the same writeback FIFO.
+                *state = Some(MemoryWebStorageArea::default());
                 batch.0.insert(
                     key.clone(),
                     AreaDelta {

@@ -518,3 +518,101 @@ fn origin_metadata_query_uses_bounded_index_searches() {
     );
     owner.close().unwrap();
 }
+
+#[test]
+fn origin_clear_deletes_cold_entries_without_loading_and_preserves_later_puts() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    let origin = "https://clear-cold.test";
+    let first = web_storage_partitioned_area_key(origin, origin);
+    let other = web_storage_partitioned_area_key(origin, "https://other.test");
+    let unrelated = web_storage_partitioned_area_key("https://clear-cold.test.sibling", origin);
+    store.try_set_item(origin, "empty-value", "").unwrap();
+    for key in [&first, &other, &unrelated] {
+        store
+            .try_set_item(key, "old", &"x".repeat(128 * 1024))
+            .unwrap();
+    }
+    owner.flush().unwrap();
+    assert_eq!(resident(&store), 0);
+    let cold = store.lease_area(&first).unwrap().unwrap();
+    assert!(cold.area.state.lock().is_none());
+    let key = first.clone();
+    backend(&store).client.query(move |connection| {
+        // Reading entries would now fail metadata validation. Deletion must
+        // depend only on map metadata, even for a damaged cold value.
+        connection.execute("UPDATE entries SET value=X'0000' WHERE area_id=(SELECT area_id FROM areas WHERE storage_key=?1)", [key])?;
+        Ok(())
+    }).unwrap();
+    let events = store.subscribe_mutations(WebStorageAreaKind::Local);
+    assert!(store.try_clear_origin_areas(origin).unwrap());
+    assert_eq!(
+        events.drain().len(),
+        3,
+        "zero-byte nonempty maps also clear"
+    );
+    for key in [origin, &first, &other] {
+        assert_eq!(
+            store.try_len(key).unwrap(),
+            0,
+            "reads cannot restore old SQL data"
+        );
+    }
+    assert!(!store.try_clear_origin_areas(origin).unwrap());
+    assert!(events.is_empty());
+    store.try_set_item(&first, "new", "kept").unwrap();
+    drop(cold);
+    owner.close().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    assert_eq!(store.sorted_keys(&first), ["new"]);
+    assert_eq!(store.get_item(&first, "new").as_deref(), Some("kept"));
+    assert_eq!(store.try_len(&other).unwrap(), 0);
+    assert_eq!(store.try_len(origin).unwrap(), 0);
+    assert_eq!(store.try_len(&unrelated).unwrap(), 1);
+    owner.close().unwrap();
+}
+
+#[test]
+fn origin_clear_orders_after_accepted_writes_without_an_old_batch_resurrecting_them() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    let origin = "https://clear-race.test";
+    let key = web_storage_partitioned_area_key(origin, origin);
+    store.try_set_item(&key, "old", "disk").unwrap();
+    owner.flush().unwrap();
+    store.try_set_item(&key, "old", "pending").unwrap();
+    let client = backend(&store).client.clone();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let blocked = thread::spawn(move || {
+        client.query(move |_| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(())
+        })
+    });
+    started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    backend(&store).client.request_flush();
+    let clearing = store.clone();
+    let clear = thread::spawn(move || clearing.try_clear_origin_areas(origin));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while backend(&store).namespace.try_read().is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "clear never acquired namespace fence"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+    release_tx.send(()).unwrap();
+    blocked.join().unwrap().unwrap();
+    assert!(clear.join().unwrap().unwrap());
+    assert_eq!(store.try_len(&key).unwrap(), 0);
+    store.try_set_item(&key, "new", "kept").unwrap();
+    owner.close().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    assert_eq!(store.sorted_keys(&key), ["new"]);
+    assert_eq!(store.get_item(&key, "new").as_deref(), Some("kept"));
+    owner.close().unwrap();
+}
