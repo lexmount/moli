@@ -3987,3 +3987,49 @@ async fn storage_delete_cookies_respects_optional_path_filter() {
         None,
     );
 }
+
+#[test]
+fn cdp_cookie_overwrite_report_matches_the_canonical_creation_time() {
+    use super::normalize::{NormalizedCdpCookieParam, normalize_cookie_param};
+    use moli_cookie_jar::{CookieSource, StoredCookieEffectiveSameSite};
+
+    for created in [
+        None,
+        Some(time::OffsetDateTime::now_utc() - time::Duration::minutes(3)),
+    ] {
+        let param = serde_json::from_value(json!({
+            "name": "sid", "value": "new", "url": "https://example.com/", "secure": true
+        }))
+        .unwrap();
+        let NormalizedCdpCookieParam::Ready(cookie, url) = normalize_cookie_param(param, None)
+        else {
+            panic!("valid cookie rejected");
+        };
+        assert!(cookie.creation_time.is_some());
+        let mut old = (*cookie).clone();
+        old.value = "old".to_owned();
+        old.creation_time = created;
+        let mut store = BrowserCookieStore::default();
+        assert!(
+            store
+                .upsert_with_request_url_report(old, url.as_ref(), CookieSource::Cdp)
+                .is_accepted()
+        );
+        let report = store.upsert_with_request_url_report(*cookie, url.as_ref(), CookieSource::Cdp);
+        assert!(report.is_accepted());
+        assert_eq!(
+            report.effective_same_site,
+            Some(StoredCookieEffectiveSameSite::Lax)
+        );
+        assert_eq!(
+            super::cookie_set_report_to_json(&report)["effectiveSameSite"],
+            "Lax"
+        );
+        let stored = store.cookies().pop().unwrap();
+        assert_eq!(stored.creation_time, created);
+        assert_eq!(
+            stored.effective_same_site(),
+            StoredCookieEffectiveSameSite::Lax
+        );
+    }
+}

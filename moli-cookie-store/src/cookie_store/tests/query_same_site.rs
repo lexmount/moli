@@ -921,3 +921,76 @@ fn query_result_projects_from_access_query_result() {
         CookieExclusionReason::SameSiteStrict
     );
 }
+
+#[test]
+fn overwrite_reports_use_the_stored_age_for_http_and_chained_cdp_writes() {
+    let request_url = test_utils::url("https://example.com/");
+    let now = OffsetDateTime::now_utc();
+    for (created, expected) in [
+        (
+            Some(now - Duration::minutes(3)),
+            CookieEffectiveSameSite::Lax,
+        ),
+        (
+            Some(now - Duration::seconds(30)),
+            CookieEffectiveSameSite::LaxAllowUnsafe,
+        ),
+        (None, CookieEffectiveSameSite::Lax),
+    ] {
+        for http in [true, false] {
+            let mut store = CookieStore::default();
+            let mut old = Cookie::parse("sid=old; Secure; Path=/", &request_url)
+                .unwrap()
+                .into_owned();
+            old.set_creation_time(created);
+            inserted!(store.insert_with_context(old, &InsertContext::http(&request_url)));
+            let report = if http {
+                store.set_response_cookie_str_with_access_result(
+                    "sid=new; Secure; Path=/",
+                    &InsertContext::http(&request_url),
+                )
+            } else {
+                let replacement = Cookie::parse("sid=new; Secure; Path=/", &request_url)
+                    .unwrap()
+                    .into_owned();
+                store.set_with_access_result_chain(
+                    replacement,
+                    &InsertContext::cdp(&request_url),
+                    CookieSetAccessResult {
+                        status: CookieSetResult::Accepted(StoreAction::Inserted),
+                        rejection_reasons: Vec::new(),
+                        warning_reasons: vec![CookieSetWarningReason::PathAttributeIgnored],
+                        effective_same_site: Some(CookieEffectiveSameSite::LaxAllowUnsafe),
+                    },
+                )
+            };
+            assert_eq!(
+                report.status,
+                CookieSetResult::Accepted(StoreAction::UpdatedExisting)
+            );
+            assert_eq!(report.effective_same_site, Some(expected));
+            if !http {
+                assert_eq!(
+                    report.warning_reasons,
+                    vec![CookieSetWarningReason::PathAttributeIgnored]
+                );
+            }
+            let stored = store.get("example.com", "/", "sid").unwrap();
+            assert_eq!(stored.creation_time(), created);
+            assert_eq!(stored.value(), "new");
+            let result = store.get_cookie_access_query_result(
+                &QueryContext::http_cross_site_top_level_unsafe(&request_url),
+            );
+            assert_eq!(
+                result.included_cookies.len(),
+                usize::from(expected == CookieEffectiveSameSite::LaxAllowUnsafe)
+            );
+            let entry = result
+                .included_cookies
+                .first()
+                .or_else(|| result.excluded_cookies.first())
+                .unwrap();
+            assert_eq!(entry.access_result.effective_same_site, expected);
+        }
+    }
+}
