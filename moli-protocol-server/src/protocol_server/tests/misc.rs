@@ -186,7 +186,7 @@ fn shared_cookie_profile_partition_backing_ignores_stale_snapshots() -> anyhow::
         "stale close must not resurrect a cookie"
     );
     assert!(
-        !paths.cookies_path.exists(),
+        !paths.partition_root.join("cookies.json").exists(),
         "active writes never create JSON"
     );
     drop(profile);

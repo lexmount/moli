@@ -9,9 +9,12 @@ anyhow = "1.0.100"
 base64 = "0.22.1"
 moli-browser-profile = { path = "../moli-browser-profile" }
 moli-cookie-cache = { path = "../moli-cookie-cache" }
+moli-cookie-db = { path = "../moli-cookie-db" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-crypto = { path = "../moli-crypto" }
 moli-leveldb-parser = { path = "../moli-leveldb-parser" }
+moli-sqlite = { path = "../moli-sqlite" }
+moli-web-storage = { path = "../moli-web-storage" }
 # Keep imports self-contained; .cargo/config.toml trims unused SQLite C extensions.
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }

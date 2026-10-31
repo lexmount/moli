@@ -349,15 +349,18 @@ mod tests {
             cookie_jars: &[],
         };
         assert_eq!(crate::import_session_state(&request)?.storage, 2);
-        let storage_path = destination.join("partitions/default/localstorage.json");
+        let storage_path =
+            moli_browser_profile::BrowserProfilePaths::new(&destination).local_storage_path;
         let bytes = fs::read(&storage_path)?;
-        let json: serde_json::Value = serde_json::from_slice(&bytes)?;
         assert_eq!(
-            json["origins"]["https://example.com"]["entries"],
-            serde_json::json!([
-                { "key": "token", "value": "vÿ" },
-                { "key": { "utf16": [0xd800] }, "value": { "utf16": [0xdc00] } },
-            ])
+            crate::tests::read_local_items(&destination, "https://example.com")?,
+            vec![
+                (
+                    "token".encode_utf16().collect::<Vec<_>>(),
+                    "vÿ".encode_utf16().collect::<Vec<_>>()
+                ),
+                (vec![0xd800], vec![0xdc00])
+            ],
         );
 
         // An unreadable live SST must fail the import before replacing a

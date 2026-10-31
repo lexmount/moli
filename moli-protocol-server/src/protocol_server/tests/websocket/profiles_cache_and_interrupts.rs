@@ -130,9 +130,9 @@ async fn websocket_cdp_localstorage_profile_persists_across_server_restart() {
     abort_test_cdp_server(cdp_server).await;
     wait_for_profile_lock_release(&paths).await;
 
-    assert!(paths.local_storage_sqlite_path.is_file());
+    assert!(paths.local_storage_path.is_file());
     assert!(
-        !paths.local_storage_path.exists(),
+        !paths.partition_root.join("localstorage.json").exists(),
         "active localStorage never writes JSON"
     );
     {
@@ -505,9 +505,13 @@ async fn websocket_cdp_cookie_profile_delete_commands_persist_across_server_rest
 async fn websocket_cdp_ephemeral_context_cookie_changes_do_not_clear_cookie_profile() {
     let profile = TempDir::new("ephemeral-cookie-profile");
     let paths = BrowserProfilePaths::new(&profile.path);
-    cookie_cache::save_cookie_cache(&paths.cookies_path, vec![stored_cookie("sid", "profile")])
-        .expect("seed legacy cookie profile");
-    let backup = std::fs::read(&paths.cookies_path).unwrap();
+    {
+        let partition = StoragePartitionState::open(Some(&profile.path)).unwrap();
+        partition
+            .import_cookies([stored_cookie("sid", "profile")])
+            .unwrap();
+        partition.flush().unwrap();
+    }
 
     let (cdp_addr, cdp_server) =
         spawn_profiled_test_protocol_server_with_cookie_profile(profile.path.clone(), Vec::new())
@@ -539,11 +543,7 @@ async fn websocket_cdp_ephemeral_context_cookie_changes_do_not_clear_cookie_prof
     abort_test_cdp_server(cdp_server).await;
     wait_for_profile_lock_release(&paths).await;
 
-    assert_eq!(
-        std::fs::read(&paths.cookies_path).unwrap(),
-        backup,
-        "migration backup is unchanged"
-    );
+    assert!(!paths.partition_root.join("cookies.json").exists());
     let persisted = StoragePartitionState::open(Some(&profile.path))
         .expect("profile SQLite should survive ephemeral-only connection")
         .cookies()

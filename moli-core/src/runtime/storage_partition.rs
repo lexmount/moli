@@ -1,6 +1,3 @@
-mod migration;
-pub use migration::migrate_profile_storage;
-
 use std::{
     fmt,
     path::{Path, PathBuf},
@@ -8,7 +5,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use moli_browser_profile::BrowserProfile;
+use moli_browser_profile::{
+    BrowserProfile, COOKIE_DATABASE_RELATIVE_PATH, LOCAL_STORAGE_DATABASE_RELATIVE_PATH,
+};
 use moli_cookie_jar::{CookieSource, SharedBrowserCookieStore, StoredCookie};
 use moli_renderer_v8::{
     SharedIndexedDbManager, SharedServiceWorkerResourceStore, downgrade_indexed_db_manager,
@@ -110,10 +109,7 @@ impl fmt::Debug for StoragePartitionState {
 impl StoragePartitionState {
     pub fn open(profile_dir: Option<&Path>) -> Result<Self> {
         let runtime = moli_sqlite::Runtime::new()?;
-        let mut profile = profile_dir.map(BrowserProfile::open).transpose()?;
-        if let Some(profile) = profile.as_mut() {
-            migrate_profile_storage(profile, runtime.handle())?;
-        }
+        let profile = profile_dir.map(BrowserProfile::open).transpose()?;
         Self::from_profile(profile.map(Arc::new), runtime)
     }
 
@@ -140,20 +136,16 @@ impl StoragePartitionState {
                     .expect("temporary partition directory")
                     .path()
             });
-        let mode = if profile.is_some() {
-            moli_sqlite::OpenMode::Existing
-        } else {
-            moli_sqlite::OpenMode::Create
-        };
+        let mode = moli_sqlite::OpenMode::Create;
         let (cookie_store, cookie_database) = moli_cookie_db::CookieDatabase::open(
-            root.join("cookies.sqlite"),
+            root.join(COOKIE_DATABASE_RELATIVE_PATH),
             mode,
             sqlite_runtime.handle(),
         )
         .context("failed to initialize partition Cookie database")?;
         let (web_storage_store, local_storage_database) =
             moli_web_storage::new_sqlite_web_storage_store(
-                root.join("localstorage.sqlite"),
+                root.join(LOCAL_STORAGE_DATABASE_RELATIVE_PATH),
                 mode,
                 sqlite_runtime.handle(),
             )
@@ -330,25 +322,25 @@ impl StoragePartitionState {
     pub fn cookie_database_path(&self) -> PathBuf {
         self.profile
             .as_ref()
-            .map(|profile| profile.paths().cookies_sqlite_path.clone())
+            .map(|profile| profile.paths().cookies_path.clone())
             .unwrap_or_else(|| {
                 self.temporary_directory
                     .as_ref()
                     .expect("temporary partition directory")
                     .path()
-                    .join("cookies.sqlite")
+                    .join(COOKIE_DATABASE_RELATIVE_PATH)
             })
     }
     pub fn local_storage_database_path(&self) -> PathBuf {
         self.profile
             .as_ref()
-            .map(|profile| profile.paths().local_storage_sqlite_path.clone())
+            .map(|profile| profile.paths().local_storage_path.clone())
             .unwrap_or_else(|| {
                 self.temporary_directory
                     .as_ref()
                     .expect("temporary partition directory")
                     .path()
-                    .join("localstorage.sqlite")
+                    .join(LOCAL_STORAGE_DATABASE_RELATIVE_PATH)
             })
     }
 
@@ -459,6 +451,7 @@ pub(crate) fn import_cookies_into_store(
 
 #[cfg(test)]
 mod tests {
+    mod directory_tests;
     mod shutdown_tests;
     use std::{
         fs,
@@ -632,10 +625,7 @@ mod tests {
             partition.http_cache_root(),
             Some(paths.http_cache_root.as_path())
         );
-        assert_eq!(
-            partition.cookie_database_path(),
-            paths.cookies_sqlite_path.clone()
-        );
+        assert_eq!(partition.cookie_database_path(), paths.cookies_path.clone());
         assert!(paths.lock_path.exists());
         assert!(paths.manifest_path.exists());
         assert!(

@@ -398,8 +398,16 @@ async fn browser_version_five_profile_starts_sql_and_reopens_new_data_without_re
     let profile = TempProfileDir::new("v5-sql-default");
     let paths = BrowserProfilePaths::new(&profile.path);
     fs::create_dir_all(&paths.partition_root)?;
-    let mut previous = moli_browser_profile::BrowserProfileManifest::legacy_json_for_paths(&paths);
+    let mut previous = moli_browser_profile::BrowserProfileManifest::default_for_paths(&paths);
     previous.version = 5;
+    previous.partitions[0].cookies = moli_browser_profile::ProfileBackendManifest {
+        backend: moli_browser_profile::ProfileBackendKind::Json,
+        path: Some("partitions/default/cookies.json".into()),
+    };
+    previous.partitions[0].local_storage = moli_browser_profile::ProfileBackendManifest {
+        backend: moli_browser_profile::ProfileBackendKind::Json,
+        path: Some("partitions/default/localstorage.json".into()),
+    };
     previous.partitions[0].indexed_db = moli_browser_profile::ProfileBackendManifest {
         backend: moli_browser_profile::ProfileBackendKind::Disk,
         path: Some("partitions/default/indexeddb".into()),
@@ -1096,8 +1104,13 @@ async fn browser_profile_dir_persists_local_storage_but_not_session_storage() ->
     }
 
     let profile_paths = BrowserProfilePaths::new(&profile.path);
-    assert!(fs::read(&profile_paths.local_storage_sqlite_path)?.starts_with(b"SQLite format 3\0"));
-    assert!(!profile_paths.local_storage_path.exists());
+    assert!(fs::read(&profile_paths.local_storage_path)?.starts_with(b"SQLite format 3\0"));
+    assert!(
+        !profile_paths
+            .partition_root
+            .join("localstorage.json")
+            .exists()
+    );
 
     let browser = Browser::new(config)?;
     let mut page = browser.fetch(&server.url("/static")).await?;
@@ -1481,11 +1494,11 @@ async fn browser_profile_dir_initializes_profile_manifest() -> Result<()> {
     assert_eq!(partition.root, "partitions/default");
     assert_eq!(
         partition.cookies.path.as_deref(),
-        Some("partitions/default/cookies.sqlite")
+        Some("partitions/default/ck-lite/cookies.sqlite")
     );
     assert_eq!(
         partition.local_storage.path.as_deref(),
-        Some("partitions/default/localstorage.sqlite")
+        Some("partitions/default/ls-lite/localstorage.sqlite")
     );
     assert_eq!(partition.session_storage.path, None);
     assert_eq!(

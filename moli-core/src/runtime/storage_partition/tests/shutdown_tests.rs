@@ -309,7 +309,10 @@ fn temporary_cookie_and_local_storage_clients_do_not_retain_or_recreate_files() 
             .get_item("https://temporary-storage.test", "key"),
         None
     );
-    for name in ["cookies.sqlite", "localstorage.sqlite"] {
+    for name in [
+        moli_browser_profile::COOKIE_DATABASE_RELATIVE_PATH,
+        moli_browser_profile::LOCAL_STORAGE_DATABASE_RELATIVE_PATH,
+    ] {
         assert!(
             fs::read(root.join(name))
                 .unwrap()

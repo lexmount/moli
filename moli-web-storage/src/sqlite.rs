@@ -105,9 +105,7 @@ impl WriteBatch for Batch {
                 tx.execute("DELETE FROM areas WHERE storage_key=?1", [key])?;
                 continue;
             }
-            let area: i64 = tx.query_row(
-                "INSERT INTO areas(storage_key,usage_bytes,entry_count) VALUES (?1,?2,?3) ON CONFLICT(storage_key) DO UPDATE SET usage_bytes=excluded.usage_bytes,entry_count=excluded.entry_count RETURNING area_id",
-                params![key, i64::try_from(delta.usage).map_err(WritebackError::new)?, i64::try_from(delta.count).map_err(WritebackError::new)?], |r| r.get(0))?;
+            let area = write_area_metadata(&tx, key, delta.usage, delta.count)?;
             if delta.clear {
                 tx.execute("DELETE FROM entries WHERE area_id=?1", [area])?;
             }
@@ -160,6 +158,96 @@ pub fn new_sqlite_web_storage_store(
     });
     Ok((store, SqliteWebStorageOwner { owner }))
 }
+
+/// Offline, explicit browser-data import under the destination profile lock.
+/// Merge affected areas in one transaction; no live Storage view is exposed.
+pub fn import_sqlite_web_storage(
+    path: PathBuf,
+    runtime: RuntimeHandle,
+    areas: BTreeMap<String, Vec<(Vec<u16>, Vec<u16>)>>,
+) -> Result<()> {
+    let (_store, owner) = new_sqlite_web_storage_store(path, OpenMode::Create, runtime)?;
+    let result = owner.owner.client().query(move |connection| {
+        let tx = connection.transaction()?;
+        for (key, entries) in areas {
+            if entries.is_empty() {
+                continue;
+            }
+            let mut area = read_area(&tx, &key)?;
+            let mut changes = Vec::new();
+            for (key, value) in entries {
+                let key = WebStorageString::from_utf16_units(key);
+                let value = WebStorageString::from_utf16_units(value);
+                if area.values.get(&key) != Some(&value) {
+                    area.values.insert(key.clone(), value.clone());
+                    changes.push((key, value));
+                }
+            }
+            if changes.is_empty() {
+                continue;
+            }
+            let usage = area.values.values().map(WebStorageString::usage_bytes).sum();
+            let id = write_area_metadata(&tx, &key, usage, area.values.len())?;
+            let mut statement = tx.prepare_cached(
+                "INSERT INTO entries(area_id,key,value) VALUES (?1,?2,?3) ON CONFLICT(area_id,key) DO UPDATE SET value=excluded.value",
+            )?;
+            for (key, value) in changes {
+                statement.execute(params![id, encode(key.as_units()), encode(value.as_units())])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    });
+    let close = owner.close();
+    result?;
+    close
+}
+
+fn write_area_metadata(
+    connection: &Connection,
+    key: &str,
+    usage: usize,
+    count: usize,
+) -> std::result::Result<i64, WritebackError> {
+    Ok(connection.query_row(
+        "INSERT INTO areas(storage_key,usage_bytes,entry_count) VALUES (?1,?2,?3) ON CONFLICT(storage_key) DO UPDATE SET usage_bytes=excluded.usage_bytes,entry_count=excluded.entry_count RETURNING area_id",
+        params![key, i64::try_from(usage).map_err(WritebackError::new)?, i64::try_from(count).map_err(WritebackError::new)?], |r| r.get(0))?)
+}
+
+fn read_area(
+    connection: &Connection,
+    key: &str,
+) -> std::result::Result<MemoryWebStorageArea, WritebackError> {
+    let metadata: Option<(i64, i64, i64)> = connection
+        .query_row(
+            "SELECT area_id,usage_bytes,entry_count FROM areas WHERE storage_key=?1",
+            [key],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    let Some((id, usage, count)) = metadata else {
+        return Ok(MemoryWebStorageArea::default());
+    };
+    let mut statement = connection.prepare("SELECT key,value FROM entries WHERE area_id=?1")?;
+    let rows = statement.query_map([id], |r| {
+        Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
+    })?;
+    let mut values = HashMap::new();
+    for row in rows {
+        let (key, value) = row?;
+        values.insert(decode(key)?, decode(value)?);
+    }
+    let size = values.values().map(WebStorageString::usage_bytes).sum();
+    if usize::try_from(usage).ok() != Some(size)
+        || usize::try_from(count).ok() != Some(values.len())
+    {
+        return Err(WritebackError::new(
+            "localStorage area metadata disagrees with its entries",
+        ));
+    }
+    Ok(MemoryWebStorageArea { values, size })
+}
+
 pub(super) fn initialize(connection: &mut Connection) -> std::result::Result<(), WritebackError> {
     connection.pragma_update(None, "foreign_keys", true)?;
     let application: i32 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
@@ -175,8 +263,7 @@ pub(super) fn initialize(connection: &mut Connection) -> std::result::Result<(),
         }
         let tx = connection.transaction()?;
         tx.execute_batch("CREATE TABLE areas(area_id INTEGER PRIMARY KEY,storage_key TEXT NOT NULL UNIQUE,usage_bytes INTEGER NOT NULL CHECK(usage_bytes>=0),entry_count INTEGER NOT NULL CHECK(entry_count>=0));
-            CREATE TABLE entries(area_id INTEGER NOT NULL REFERENCES areas(area_id) ON DELETE CASCADE,key BLOB NOT NULL CHECK(length(key)%2=0),value BLOB NOT NULL CHECK(length(value)%2=0),PRIMARY KEY(area_id,key)) WITHOUT ROWID;
-            CREATE TABLE migration(source_fingerprint TEXT NOT NULL,migration_id TEXT NOT NULL,complete INTEGER NOT NULL CHECK(complete=1));")?;
+            CREATE TABLE entries(area_id INTEGER NOT NULL REFERENCES areas(area_id) ON DELETE CASCADE,key BLOB NOT NULL CHECK(length(key)%2=0),value BLOB NOT NULL CHECK(length(value)%2=0),PRIMARY KEY(area_id,key)) WITHOUT ROWID;")?;
         tx.pragma_update(None, "application_id", APPLICATION_ID)?;
         tx.pragma_update(None, "user_version", 1)?;
         tx.commit()?;
@@ -232,37 +319,10 @@ impl SqliteBackend {
             return Ok(());
         }
         let origin = origin.to_owned();
-        *state = Some(self.client.query(move |connection| {
-            let metadata: Option<(i64, i64, i64)> = connection
-                .query_row(
-                    "SELECT area_id,usage_bytes,entry_count FROM areas WHERE storage_key=?1",
-                    [&origin],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                )
-                .optional()?;
-            let Some((id, usage, count)) = metadata else {
-                return Ok(MemoryWebStorageArea::default());
-            };
-            let mut statement =
-                connection.prepare("SELECT key,value FROM entries WHERE area_id=?1")?;
-            let rows = statement.query_map([id], |r| {
-                Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
-            })?;
-            let mut values = HashMap::new();
-            for row in rows {
-                let (key, value) = row?;
-                values.insert(decode(key)?, decode(value)?);
-            }
-            let size = values.values().map(WebStorageString::usage_bytes).sum();
-            if usize::try_from(usage).ok() != Some(size)
-                || usize::try_from(count).ok() != Some(values.len())
-            {
-                return Err(WritebackError::new(
-                    "localStorage area metadata disagrees with its entries",
-                ));
-            }
-            Ok(MemoryWebStorageArea { values, size })
-        })?);
+        *state = Some(
+            self.client
+                .query(move |connection| read_area(connection, &origin))?,
+        );
         Ok(())
     }
     pub(super) fn read<R>(
@@ -442,29 +502,6 @@ impl SqliteWebStorageOwner {
     pub fn close(&self) -> Result<()> {
         self.owner.close()?;
         Ok(())
-    }
-    pub fn checkpoint(&self) -> Result<()> {
-        self.flush()?;
-        self.owner.client().query(|connection| {
-            let busy: i32 =
-                connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
-            if busy != 0 {
-                return Err(WritebackError::new("localStorage checkpoint is busy"));
-            }
-            Ok(())
-        })?;
-        Ok(())
-    }
-    pub fn migration_fingerprint(&self) -> Result<Option<String>> {
-        Ok(self.owner.client().query(|connection| {
-            Ok(connection
-                .query_row(
-                    "SELECT source_fingerprint FROM migration WHERE complete=1",
-                    [],
-                    |r| r.get(0),
-                )
-                .optional()?)
-        })?)
     }
 }
 

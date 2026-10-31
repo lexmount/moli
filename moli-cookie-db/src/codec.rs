@@ -1,5 +1,5 @@
 use super::*;
-use rusqlite::{Connection, OptionalExtension, params, types::Type};
+use rusqlite::{Connection, params, types::Type};
 use time::{Duration, OffsetDateTime};
 
 pub(super) const APPLICATION_ID: i32 = 0x4d4c434b; // MLCK
@@ -23,8 +23,7 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<(), WritebackErr
             same_site INTEGER NOT NULL CHECK(same_site BETWEEN 0 AND 3),priority INTEGER CHECK(priority BETWEEN 0 AND 2),
             source_scheme INTEGER NOT NULL CHECK(source_scheme BETWEEN 0 AND 2),source_port INTEGER NOT NULL,
             creation_index BLOB NOT NULL CHECK(length(creation_index)=8),last_access_index BLOB NOT NULL CHECK(length(last_access_index)=8),
-            CHECK((expires_seconds IS NULL)=(expires_nanos IS NULL)),PRIMARY KEY(partition_key,domain,path,name)) WITHOUT ROWID;
-            CREATE TABLE migration(source_fingerprint TEXT NOT NULL,migration_id TEXT NOT NULL,complete INTEGER NOT NULL CHECK(complete=1));")?;
+            CHECK((expires_seconds IS NULL)=(expires_nanos IS NULL)),PRIMARY KEY(partition_key,domain,path,name)) WITHOUT ROWID;")?;
         tx.pragma_update(None, "application_id", APPLICATION_ID)?;
         tx.pragma_update(None, "user_version", 1)?;
         tx.commit()?;
@@ -174,15 +173,4 @@ pub(super) fn upsert(
         ON CONFLICT(partition_key,domain,path,name) DO UPDATE SET value=excluded.value,host_only=excluded.host_only,secure=excluded.secure,http_only=excluded.http_only,expires_seconds=excluded.expires_seconds,expires_nanos=excluded.expires_nanos,same_site=excluded.same_site,priority=excluded.priority,source_scheme=excluded.source_scheme,source_port=excluded.source_port,creation_index=excluded.creation_index,last_access_index=excluded.last_access_index",
         params![key.partition,key.domain,key.path,key.name,cookie.value,cookie.host_only,cookie.secure,cookie.http_only,cookie.expires.map(|e|e.unix_timestamp()),cookie.expires.map(|e|i64::from(e.nanosecond())),same_site,priority,source,cookie.source_port,cookie.creation_index.to_be_bytes().as_slice(),cookie.last_access_index.to_be_bytes().as_slice()])?;
     Ok(())
-}
-pub(super) fn migration_fingerprint(
-    connection: &mut Connection,
-) -> Result<Option<String>, WritebackError> {
-    Ok(connection
-        .query_row(
-            "SELECT source_fingerprint FROM migration WHERE complete=1",
-            [],
-            |r| r.get(0),
-        )
-        .optional()?)
 }

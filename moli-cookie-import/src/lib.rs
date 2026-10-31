@@ -150,26 +150,39 @@ pub fn import_session_state(request: &ImportRequest<'_>) -> Result<ImportSummary
         cookies: imported_cookies.len(),
         storage: imported_storage.values().map(|entries| entries.len()).sum(),
     };
-    // Read and merge every source and existing destination before writing.
-    // Each file is replaced atomically; the two files are not a transaction.
+    // Read all sources and validate the destination before accepting changes.
+    // Each database commits independently; this is not a cross-file transaction.
+    let mut runtime = moli_sqlite::Runtime::new()?;
     let cookies = if imported_cookies.is_empty() {
         None
     } else {
-        let mut cookies = moli_cookie_cache::load_cookie_cache(partition.cookies_path())?;
-        cookies.extend(imported_cookies);
-        Some(cookies)
+        Some(moli_cookie_db::CookieDatabase::open(
+            partition.cookies_path().to_owned(),
+            moli_sqlite::OpenMode::Create,
+            runtime.handle(),
+        )?)
     };
-    let storage = storage::prepare(partition.local_storage_path(), imported_storage)?;
-    if let Some(bytes) = storage {
-        moli_browser_profile::write_profile_file(
-            partition.local_storage_path(),
-            &bytes,
-            "localStorage import",
+    if imported_storage.values().any(|entries| !entries.is_empty()) {
+        moli_web_storage::import_sqlite_web_storage(
+            partition.local_storage_path().to_owned(),
+            runtime.handle(),
+            storage::into_sqlite_areas(imported_storage),
         )?;
     }
-    if let Some(cookies) = cookies {
-        moli_cookie_cache::save_cookie_cache(partition.cookies_path(), cookies)?;
+    if let Some((store, owner)) = cookies {
+        {
+            let mut store = store.lock();
+            for cookie in imported_cookies {
+                store.upsert_with_request_url_report(
+                    cookie,
+                    None,
+                    moli_cookie_jar::CookieSource::Cdp,
+                );
+            }
+        }
+        owner.close()?;
     }
+    runtime.shutdown()?;
 
     Ok(summary)
 }

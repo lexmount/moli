@@ -1833,8 +1833,8 @@ fn cli_cookie_file_with_profile_dir_imports_then_persists_to_profile() -> Result
     let profile_cookies =
         moli_core::runtime::storage_partition::StoragePartitionState::open(Some(&profile_dir))?
             .cookies()?;
-    assert!(profile_paths.cookies_sqlite_path.is_file());
-    assert!(!profile_paths.cookies_path.exists());
+    assert!(profile_paths.cookies_path.is_file());
+    assert!(!profile_paths.partition_root.join("cookies.json").exists());
     assert!(
         profile_cookies
             .iter()

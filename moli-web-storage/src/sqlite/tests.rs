@@ -2,6 +2,42 @@ use super::*;
 use moli_sqlite::Runtime;
 use std::{sync::mpsc, thread, time::Duration};
 
+#[test]
+fn explicit_import_rolls_back_if_a_later_destination_area_is_corrupt() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("localstorage.sqlite");
+    let runtime = Runtime::new()?;
+    let (store, owner) = open(root.path(), &runtime);
+    for area in ["a", "z"] {
+        store.try_set_item(area, "key", "old")?;
+    }
+    owner.close()?;
+    {
+        let connection = Connection::open(&path)?;
+        connection.execute("UPDATE areas SET usage_bytes=999 WHERE storage_key='z'", [])?;
+    }
+    let areas = ["a", "z"]
+        .into_iter()
+        .map(|area| {
+            (
+                area.to_owned(),
+                vec![(
+                    "key".encode_utf16().collect(),
+                    "new".encode_utf16().collect(),
+                )],
+            )
+        })
+        .collect();
+    assert!(import_sqlite_web_storage(path, runtime.handle(), areas).is_err());
+    let (store, owner) = open(root.path(), &runtime);
+    assert_eq!(
+        store.try_get_item_utf16("a", &"key".encode_utf16().collect::<Vec<_>>())?,
+        Some("old".encode_utf16().collect())
+    );
+    owner.close()?;
+    Ok(())
+}
+
 fn open(root: &Path, runtime: &Runtime) -> (SharedWebStorageStore, SqliteWebStorageOwner) {
     new_sqlite_web_storage_store(
         root.join("localstorage.sqlite"),

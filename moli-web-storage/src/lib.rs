@@ -29,11 +29,12 @@ fn utf16_units_contain_unpaired_surrogate(units: &[u16]) -> bool {
     char::decode_utf16(units.iter().copied()).any(|decoded| decoded.is_err())
 }
 
-mod legacy_import;
 mod sqlite;
-pub use legacy_import::{create_sqlite_from_legacy_json, inspect_sqlite_migration};
 mod store;
-pub use sqlite::{SqliteWebStorageOwner, WebStorageAreaLease, new_sqlite_web_storage_store};
+pub use sqlite::{
+    SqliteWebStorageOwner, WebStorageAreaLease, import_sqlite_web_storage,
+    new_sqlite_web_storage_store,
+};
 pub use store::{
     deep_clone_shared_web_storage_store, new_shared_json_web_storage_store,
     new_shared_web_storage_store,

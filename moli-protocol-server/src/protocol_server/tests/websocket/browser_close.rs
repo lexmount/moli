@@ -46,8 +46,8 @@ async fn websocket_cdp_browser_close_releases_lock_and_persists_profile() {
 
     close_profiled_server(&mut socket, server).await;
     wait_for_profile_lock_release(&paths).await;
-    assert!(paths.local_storage_sqlite_path.is_file());
-    assert!(!paths.local_storage_path.exists());
+    assert!(paths.local_storage_path.is_file());
+    assert!(!paths.partition_root.join("localstorage.json").exists());
     {
         let partition = StoragePartitionState::open(Some(&profile.path)).unwrap();
         assert_eq!(
