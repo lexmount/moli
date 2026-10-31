@@ -7,11 +7,15 @@ use crate::{
         throw_range_error, throw_type_error,
     },
     worker::{
-        WorkerGlobalKind, WorkerHandle, WorkerNetworkPolicy, WorkerSecureContextPolicy,
-        WorkerSpawnOptions, spawn_worker_with_options,
+        WorkerGlobalKind, WorkerNetworkPolicy, WorkerSecureContextPolicy, WorkerSpawnOptions,
+        spawn_worker_with_options,
     },
 };
 
+#[cfg(test)]
+use crate::worker::WorkerHandle;
+
+#[cfg(test)]
 const WORKER_HANDLE_SLOT: &str = "__moliWorkerHandle";
 const WORKER_ID_SLOT: &str = "__moliWorkerId";
 const WORKER_ONMESSAGE_SLOT: &str = "__moliWorkerOnMessage";
@@ -34,7 +38,6 @@ pub(crate) use dispatch::{
     dispatch_worker_error_event_with_kind, dispatch_worker_event,
     flush_pending_worker_messages_for_listener, worker_has_message_delivery_listener,
 };
-pub(crate) use methods::terminate_worker_handle;
 pub(super) use methods::{worker_post_message_callback, worker_terminate_callback};
 pub(super) use moli_webapi::events::fallback::new_worker_host_error_event;
 
@@ -52,12 +55,17 @@ pub(in crate::context_bootstrap) fn queue_worker_task<'s>(
         return;
     };
     let scope = &mut v8::ContextScope::new(scope, context);
-    if let Some(worker_id) = constructor::worker_id(scope, worker)
-        && let Some(host) = context_host_ptr_from_global_bridge(scope)
-    {
+    let Some(worker_id) = constructor::worker_id(scope, worker) else {
+        #[cfg(test)]
+        if let Some(handle) = constructor::get_worker_handle(scope, worker) {
+            unsafe { &*handle }.queue_task(task);
+        }
+        return;
+    };
+    if let Some(host) = context_host_ptr_from_global_bridge(scope) {
         unsafe { &mut *host }.queue_worker_task(worker_id, task);
-    } else if let Some(handle) = constructor::get_worker_handle(scope, worker) {
-        unsafe { &*handle }.queue_task(task);
+    } else {
+        let _ = crate::worker::queue_nested_worker_task(scope, worker_id, task);
     }
 }
 

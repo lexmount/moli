@@ -4,6 +4,8 @@ mod child_script_text;
 mod font_loading;
 #[path = "scripts/integrity.rs"]
 mod integrity;
+#[path = "scripts/nested_worker_retirement.rs"]
+mod nested_worker_retirement;
 #[path = "scripts/worker_fetch_metadata.rs"]
 mod worker_fetch_metadata;
 

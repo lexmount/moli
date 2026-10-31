@@ -677,7 +677,7 @@ use self::window_runtime::global_caches_getter_callback;
 pub(crate) use self::window_template::install_window_own_template_bindings;
 pub(crate) use self::worker_host::{
     dispatch_worker_error_event_with_kind, dispatch_worker_event,
-    flush_pending_worker_messages_for_listener, terminate_worker_handle,
+    flush_pending_worker_messages_for_listener,
     worker_has_message_delivery_listener,
 };
 pub(crate) use self::worker_location_runtime::install_worker_location_runtime_state;

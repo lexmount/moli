@@ -8,6 +8,11 @@ use crate::worker::handle::{
 
 use super::*;
 
+pub(in crate::worker) struct NestedWorker {
+    wrapper: v8::Global<v8::Object>,
+    handle: Option<crate::worker::WorkerHandle>,
+}
+
 pub(crate) struct NestedWorkerContext {
     pub(crate) interception_context:
         Option<crate::network::interception_output::ResourceInterceptionContext>,
@@ -47,9 +52,13 @@ pub(crate) fn reserve_nested_worker_context(
         .next_nested_worker_id
         .checked_add(1)
         .expect("nested worker id space exhausted");
-    state
-        .nested_worker_wrappers
-        .insert(worker_id, v8::Global::new(scope, worker));
+    state.nested_workers.insert(
+        worker_id,
+        NestedWorker {
+            wrapper: v8::Global::new(scope, worker),
+            handle: None,
+        },
+    );
     Some(NestedWorkerContext {
         interception_context: state.interception_context.clone(),
         worker_id,
@@ -91,26 +100,61 @@ pub(in crate::worker) struct NestedWorkerDispatchResult {
     pub(in crate::worker) unhandled_error: Option<WorkerErrorReport>,
 }
 
-pub(crate) fn forget_nested_worker_context(
+pub(crate) fn register_nested_worker_handle(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker_id: DedicatedWorkerId,
+    handle: crate::worker::WorkerHandle,
+) -> bool {
+    let Some(state) = get_worker_state(scope) else {
+        return false;
+    };
+    let mut state = state.borrow_mut();
+    let Some(worker) = state.nested_workers.get_mut(&worker_id) else {
+        return false;
+    };
+    if worker.handle.is_some() {
+        return false;
+    }
+    worker.handle = Some(handle);
+    true
+}
+
+pub(crate) fn queue_nested_worker_task(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker_id: DedicatedWorkerId,
+    task: crate::worker::WorkerMessage,
+) -> bool {
+    let Some(state) = get_worker_state(scope) else {
+        return false;
+    };
+    let state = state.borrow();
+    let Some(handle) = state
+        .nested_workers
+        .get(&worker_id)
+        .and_then(|worker| worker.handle.as_ref())
+    else {
+        return false;
+    };
+    handle.queue_task(task);
+    true
+}
+
+pub(crate) fn terminate_nested_worker(
     scope: &mut v8::PinScope<'_, '_>,
     worker_id: DedicatedWorkerId,
 ) -> bool {
     let Some(state) = get_worker_state(scope) else {
         return false;
     };
-    let mut state = state.borrow_mut();
-    state.nested_worker_wrappers.remove(&worker_id).is_some()
+    let worker = state.borrow_mut().nested_workers.remove(&worker_id);
+    worker.is_some()
 }
 
-pub(in crate::worker) fn close_worker_owned_nested_workers(
-    scope: &mut v8::PinScope<'_, '_>,
-    state: &Rc<RefCell<WorkerGlobalState>>,
-) {
-    let wrappers = std::mem::take(&mut state.borrow_mut().nested_worker_wrappers);
-    for wrapper in wrappers.into_values() {
-        let worker = v8::Local::new(scope, wrapper);
-        crate::context_bootstrap::terminate_worker_handle(scope, worker);
-    }
+pub(in crate::worker) fn retire_nested_workers(state: &Rc<RefCell<WorkerGlobalState>>) {
+    // Drop native handles after releasing the state borrow. Their existing
+    // termination path wakes each child without synchronously joining it.
+    let workers = std::mem::take(&mut state.borrow_mut().nested_workers);
+    drop(workers);
 }
 
 /// A stopped DedicatedWorker has no callbacks to cancel a descendant's
@@ -140,9 +184,9 @@ pub(in crate::worker) fn dispatch_nested_worker_event(
 ) -> NestedWorkerDispatchResult {
     let worker = state
         .borrow()
-        .nested_worker_wrappers
+        .nested_workers
         .get(&worker_id)
-        .map(|worker| v8::Local::new(scope, worker));
+        .map(|worker| v8::Local::new(scope, &worker.wrapper));
 
     match (worker, message) {
         (Some(worker), message @ WorkerToParentMessage::Post(_)) => {
