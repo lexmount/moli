@@ -26,7 +26,7 @@ mod typed_state;
 pub(crate) use typed_state::{
     IndexedDbMetadataSharingProbe, IndexedDbTaskKind, indexed_db_has_in_flight_sql_tasks_for_test,
     indexed_db_has_queued_task_kind_for_test, indexed_db_metadata_sharing_probe_for_test,
-    indexed_db_native_cursor_count_for_test,
+    indexed_db_native_cursor_count_for_test, indexed_db_transaction_resources_for_test,
 };
 #[cfg(test)]
 pub(crate) fn serialize_indexed_db_value_for_test(

@@ -339,6 +339,13 @@ struct IndexedDbTransactionLifecycleState {
 }
 
 impl IndexedDbTransactionLifecycleState {
+    fn release_sql_resources(&mut self) {
+        // An armed guard must enqueue rollback before the final client is
+        // released. Finished wrappers only need their Web-visible state.
+        self.sql_rollback = None;
+        self.sql_client = None;
+    }
+
     fn new(
         database: RealmValueHandle,
         handle: Option<TransactionHandle>,
@@ -656,7 +663,7 @@ pub(crate) fn retain_indexed_db_state_in_retired_realm(scope: &mut v8::PinScope<
             }
             transaction.operations.clear();
             transaction.operation_in_flight = false;
-            transaction.sql_rollback = None;
+            transaction.release_sql_resources();
         }
         for database in state.databases.values_mut() {
             database.closed = true;
@@ -773,6 +780,27 @@ pub(crate) fn indexed_db_request_state_entries_for_test(
             .count()
 }
 
+#[cfg(test)]
+pub(crate) fn indexed_db_transaction_resources_for_test(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> [usize; 3] {
+    let table = ensure_indexed_db_runtime_state_table(scope);
+    let table = table.borrow();
+    [
+        table.transactions.len(),
+        table
+            .transactions
+            .values()
+            .filter(|state| state.sql_client.is_some())
+            .count(),
+        table
+            .transactions
+            .values()
+            .filter(|state| state.sql_rollback.is_some())
+            .count(),
+    ]
+}
+
 pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
@@ -792,6 +820,7 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     );
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     table.borrow_mut().transactions.insert(id, state);
+    track_collectible_wrapper(scope, transaction, id, &table, ());
     track_indexed_db_handle_table(scope, database, &table);
 }
 
@@ -1015,7 +1044,7 @@ pub(super) fn release_indexed_db_transaction_dispatch_refs<'s>(
     transaction.upgrade_open_request = None;
     transaction.operations.clear();
     transaction.operation_in_flight = false;
-    transaction.sql_rollback = None;
+    transaction.release_sql_resources();
     drop(table);
     if let Some(database) = database.and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
@@ -2512,7 +2541,7 @@ impl IndexedDbRuntimeStateTable {
         // Dropping each emergency guard schedules native rollback before its
         // admission is released. Wakes only publish owner task tickets.
         for transaction in self.transactions.values_mut() {
-            drop(transaction.sql_rollback.take());
+            transaction.release_sql_resources();
             drop(transaction.start_request.take());
         }
         for database in self.databases.values_mut() {
