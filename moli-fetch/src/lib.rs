@@ -22,6 +22,7 @@ mod referrer_policy;
 mod request;
 mod request_policy;
 mod response;
+mod response_timing;
 mod runtime;
 mod streaming_response;
 #[cfg(test)]
@@ -86,6 +87,7 @@ pub use response::{
     NegotiatedHttpVersion, NetworkRequestExtraInfo, NetworkResponseExtraInfo, RawResponse,
     RedirectInfo, RedirectSource, Response, ResponseBody, ResponseCacheState, ResponseHead,
 };
+pub use response_timing::{ResponseSource, ResponseTimingInfo};
 pub use runtime::PendingStreamingRawResponse;
 pub use runtime::{
     FetchRuntimeIdentity, FetchRuntimeJoinReport, FetchRuntimeJoinStatus, FetchRuntimePanicReport,

@@ -1849,6 +1849,9 @@ impl RuntimeOwner {
         };
         let negotiated_http_version = negotiated_http_version.or(collector_http_version);
         let transfer_metrics = transfer_metrics_from_easy(&easy, &headers);
+        if let Some(progress) = easy.get_ref().response_progress() {
+            progress.set_encoded_body_size(transfer_metrics.encoded_body_size);
+        }
         log_request_completion(
             &job.request.method,
             &job.current_url,
@@ -1889,6 +1892,7 @@ impl RuntimeOwner {
                     status_text.as_deref(),
                     &headers,
                     false,
+                    transfer_metrics.encoded_body_size,
                     cache_body_writer,
                 )
             {
@@ -1955,6 +1959,7 @@ impl RuntimeOwner {
                 status_text.as_deref(),
                 &headers,
                 false,
+                transfer_metrics.encoded_body_size,
                 cache_body_writer,
             )
         {
@@ -2174,6 +2179,9 @@ impl RuntimeOwner {
         };
         let negotiated_http_version = negotiated_http_version.or(collector_http_version);
         let transfer_metrics = transfer_metrics_from_easy(&easy, &headers);
+        if let Some(progress) = easy.get_ref().response_progress() {
+            progress.set_encoded_body_size(transfer_metrics.encoded_body_size);
+        }
         log_request_completion(
             &job.request.method,
             &job.current_url,
@@ -2285,6 +2293,7 @@ impl RuntimeOwner {
                         status_text.as_deref(),
                         &headers,
                         false,
+                        transfer_metrics.encoded_body_size,
                         cache_body_writer,
                     )
                 {
@@ -2351,6 +2360,7 @@ impl RuntimeOwner {
                     status_text.as_deref(),
                     &headers,
                     false,
+                    transfer_metrics.encoded_body_size,
                     cache_body_writer,
                 )
             {
@@ -2368,6 +2378,7 @@ impl RuntimeOwner {
                     redirect_chain: job.request.redirect_chain,
                     from_cache: false,
                     cache_state: Default::default(),
+                    timing_info: job.response_progress.timing_info(),
                     negotiated_http_version,
                     network_request_extra_info: request_extra_info,
                 }));
@@ -2397,6 +2408,7 @@ impl RuntimeOwner {
                 status_text.as_deref(),
                 &headers,
                 false,
+                transfer_metrics.encoded_body_size,
                 cache_body_writer,
             )
         {
@@ -2983,6 +2995,7 @@ fn complete_streaming_html_job(job: StreamingRuntimeJob, response: Response) {
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
             cache_state: head.cache_state,
+            timing_info: head.timing_info.clone(),
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info,
         }));
@@ -3036,6 +3049,8 @@ fn complete_cached_streaming_html_job(
         }
     };
 
+    job.response_progress
+        .set_encoded_body_size(metadata.encoded_body_size);
     let response_timing = job.response_progress.mark_cached_response_available();
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
@@ -3049,6 +3064,7 @@ fn complete_cached_streaming_html_job(
             redirect_chain,
             from_cache: true,
             cache_state,
+            timing_info: job.response_progress.timing_info(),
             negotiated_http_version: None,
             network_request_extra_info: None,
         }));
@@ -3162,6 +3178,8 @@ fn complete_cached_streaming_raw_job(
         }
     };
 
+    job.response_progress
+        .set_encoded_body_size(metadata.encoded_body_size);
     let response_timing = job.response_progress.mark_cached_response_available();
 
     if let Some(started_tx) = job.started_tx {
@@ -3176,6 +3194,7 @@ fn complete_cached_streaming_raw_job(
             redirect_chain,
             from_cache: true,
             cache_state,
+            timing_info: job.response_progress.timing_info(),
             negotiated_http_version: None,
             network_request_extra_info: None,
         }));
@@ -3621,6 +3640,7 @@ fn proxy_connect_response_start(
         redirect_chain: redirect_chain.to_vec(),
         from_cache: false,
         cache_state: Default::default(),
+        timing_info: Default::default(),
         negotiated_http_version: None,
         network_request_extra_info: None,
     }
@@ -3711,6 +3731,9 @@ fn collect_buffered_response(
     let headers = collector.headers().to_vec();
     let body = collector.body().to_vec();
     let transfer_metrics = transfer_metrics_from_easy(easy, &headers);
+    if let Some(progress) = collector.response_progress() {
+        progress.set_encoded_body_size(transfer_metrics.encoded_body_size);
+    }
 
     Ok((
         RawResponse::from_head_and_body(
@@ -3725,6 +3748,10 @@ fn collect_buffered_response(
                 redirect_chain: Vec::new(),
                 from_cache: false,
                 cache_state: Default::default(),
+                timing_info: collector
+                    .response_progress()
+                    .map(|progress| progress.timing_info())
+                    .unwrap_or_default(),
                 negotiated_http_version,
             },
             body,
@@ -4410,6 +4437,7 @@ mod tests {
                     redirect_chain: Vec::new(),
                     from_cache: false,
                     cache_state: Default::default(),
+                    timing_info: Default::default(),
                     negotiated_http_version: None,
                 },
                 "<!doctype html><html><body>cached</body></html>".to_owned(),

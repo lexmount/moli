@@ -43,6 +43,7 @@ pub(crate) struct RequestTransferMetrics {
     content_encoding: Option<String>,
     content_length: Option<u64>,
     transfer_size: Option<u64>,
+    pub(crate) encoded_body_size: Option<u64>,
     namelookup_ms: Option<u64>,
     connect_ms: Option<u64>,
     appconnect_ms: Option<u64>,
@@ -60,6 +61,7 @@ pub(crate) fn transfer_metrics_from_easy<H: Handler>(
     let content_length = response_header_value(headers, "content-length")
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value > 0);
+    let encoded_body_size = easy.download_size().ok().map(|size| size.max(0.0) as u64);
     let transfer_size = easy
         .download_size()
         .ok()
@@ -77,6 +79,7 @@ pub(crate) fn transfer_metrics_from_easy<H: Handler>(
         content_encoding,
         content_length,
         transfer_size,
+        encoded_body_size,
         namelookup_ms,
         connect_ms,
         appconnect_ms,
@@ -569,6 +572,7 @@ impl StreamingResponseCollector {
                 redirect_chain: self.redirect_chain.clone(),
                 from_cache: false,
                 cache_state: Default::default(),
+                timing_info: self.response_progress.timing_info(),
                 negotiated_http_version: self.negotiated_http_version,
                 network_request_extra_info: self.network_request_extra_info.clone(),
             }));
@@ -978,6 +982,7 @@ impl RawStreamingResponseCollector {
                 redirect_chain: self.redirect_chain.clone(),
                 from_cache: false,
                 cache_state: Default::default(),
+                timing_info: self.response_progress.timing_info(),
                 negotiated_http_version: self.negotiated_http_version,
                 network_request_extra_info: self.network_request_extra_info.clone(),
             }));

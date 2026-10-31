@@ -28,6 +28,8 @@ pub struct HttpCacheEntryMetadata {
     pub final_url: String,
     pub status: u16,
     pub status_text: Option<String>,
+    #[serde(default)]
+    pub encoded_body_size: Option<u64>,
     pub headers: Vec<(String, Vec<u8>)>,
     pub stored_at_unix_ms: u64,
     pub last_used_at_unix_ms: u64,
@@ -53,6 +55,7 @@ impl HttpCacheEntryMetadata {
             final_url,
             status,
             status_text: None,
+            encoded_body_size: None,
             headers,
             stored_at_unix_ms,
             last_used_at_unix_ms: stored_at_unix_ms,

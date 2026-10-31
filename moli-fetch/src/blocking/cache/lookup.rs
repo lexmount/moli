@@ -126,13 +126,14 @@ pub(crate) fn finish_streaming_cached_response(
     status_text: Option<&str>,
     headers: &[(String, Vec<u8>)],
     redirected: bool,
+    encoded_body_size: Option<u64>,
     writer: HttpCacheBodyWriter,
 ) -> Result<()> {
     let Some((_, _)) = cache_store_and_key_for_request(config, request, request_url, cookie_header)
     else {
         return Ok(());
     };
-    let Some(metadata) = cache_metadata_for_response_parts(
+    let Some(mut metadata) = cache_metadata_for_response_parts(
         config,
         request,
         request_url,
@@ -145,6 +146,7 @@ pub(crate) fn finish_streaming_cached_response(
         return Ok(());
     };
 
+    metadata.encoded_body_size = encoded_body_size;
     writer.finish(metadata)?;
     tracing::debug!(url = %request_url, "stored streaming response in disk cache");
     Ok(())

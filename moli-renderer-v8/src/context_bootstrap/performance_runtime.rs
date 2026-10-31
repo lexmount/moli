@@ -234,6 +234,22 @@ pub(crate) struct ResourcePerformanceEntry {
     content_type: String,
 }
 
+struct ResourceBodySizes {
+    encoded: f64,
+    decoded: f64,
+}
+
+impl ResourceBodySizes {
+    fn from_response(timing: &moli_fetch::ResponseTimingInfo, decoded: usize) -> Self {
+        Self {
+            encoded: timing
+                .encoded_body_size()
+                .map_or(decoded as f64, |size| size as f64),
+            decoded: decoded as f64,
+        }
+    }
+}
+
 impl ResourcePerformanceEntry {
     pub(crate) fn from_network_result(
         name: impl Into<String>,
@@ -277,7 +293,7 @@ impl ResourcePerformanceEntry {
             start_unix_millis,
             response.status,
             &response.headers,
-            body_size as f64,
+            ResourceBodySizes::from_response(&response.timing_info, body_size),
             response.cache_state,
         )
     }
@@ -295,7 +311,7 @@ impl ResourcePerformanceEntry {
             start_unix_millis,
             response.status,
             &response.headers,
-            body_size as f64,
+            ResourceBodySizes::from_response(&response.timing_info, body_size),
             response.cache_state,
         )
     }
@@ -312,7 +328,7 @@ impl ResourcePerformanceEntry {
             start_unix_millis,
             response.status,
             &response.headers,
-            response.body_bytes().len() as f64,
+            ResourceBodySizes::from_response(&response.timing_info, response.body_bytes().len()),
             response.cache_state,
         )
     }
@@ -323,13 +339,13 @@ impl ResourcePerformanceEntry {
         start_unix_millis: Option<f64>,
         response_status: u16,
         response_headers: &[(String, Vec<u8>)],
-        body_size: f64,
+        body_size: ResourceBodySizes,
         cache_state: moli_fetch::ResponseCacheState,
     ) -> Self {
         // Resource Timing deliberately uses a fixed overhead rather than
         // exposing response-header sizes, which could reveal cookies.
         let transfer_size = match cache_state {
-            moli_fetch::ResponseCacheState::None => body_size + 300.0,
+            moli_fetch::ResponseCacheState::None => body_size.encoded + 300.0,
             moli_fetch::ResponseCacheState::Local => 0.0,
             moli_fetch::ResponseCacheState::Validated => 300.0,
         };
@@ -341,8 +357,8 @@ impl ResourcePerformanceEntry {
             initiator_type: initiator_type.to_owned(),
             start_unix_millis,
             transfer_size,
-            encoded_body_size: body_size,
-            decoded_body_size: body_size,
+            encoded_body_size: body_size.encoded,
+            decoded_body_size: body_size.decoded,
             // The fetch lifecycle does not yet retain render-blocking metadata.
             // Avoid claiming that a resource blocked rendering until it does.
             render_blocking_status: "non-blocking".to_owned(),
@@ -363,7 +379,7 @@ impl ResourcePerformanceEntry {
             start_unix_millis,
             network.status,
             &network.response_headers,
-            network.encoded_data_length as f64,
+            ResourceBodySizes::from_response(&network.timing_info, network.encoded_data_length),
             network.cache_state,
         )
     }
