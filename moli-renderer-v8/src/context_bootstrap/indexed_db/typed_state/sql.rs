@@ -165,6 +165,7 @@ pub(super) fn cancel_sql_transaction(
     id: IndexedDbObjectId,
 ) {
     if let Some(transaction) = table.transactions.get_mut(&id) {
+        transaction.release_sql_resources();
         if transaction.finished && !transaction.aborted {
             return;
         }
@@ -173,7 +174,6 @@ pub(super) fn cancel_sql_transaction(
         transaction.active = false;
         transaction.operations.clear();
         transaction.operation_in_flight = false;
-        transaction.sql_rollback = None;
     }
 }
 

@@ -26,6 +26,131 @@ fn collect(vm: &mut crate::runtime::PageVmTaskExecutorTestHarness) {
         .unwrap();
 }
 
+fn transaction_resources(vm: &mut ScriptVm) -> [usize; 3] {
+    vm.with_default_context_scope(|scope, _| {
+        Ok(crate::context_bootstrap::indexed_db_transaction_resources_for_test(scope))
+    })
+    .unwrap()
+}
+
+#[tokio::test]
+async fn idb_sqlite_finished_transactions_release_clients_but_keep_retained_web_state() {
+    let (mut vm, loader, backend) = fixture();
+    backend.upgrade(&mut vm);
+    vm.eval(r#"(() => {
+        globalThis.transactionHandles = [];
+        globalThis.transactionEvents = [];
+        globalThis.keepTransaction = (tx, outcome) => {
+            const store = tx.objectStore('records');
+            transactionHandles.push({tx, store, index:store.index('unique'), outcome, mode:tx.mode});
+            tx.oncomplete = () => transactionEvents.push('complete');
+            tx.onabort = () => transactionEvents.push('abort');
+            return store;
+        };
+        keepTransaction(upgrade, 'complete');
+        return 'queued';
+    })()"#).unwrap();
+    backend.drain(&mut vm, &loader).await;
+    for action in ["readonly", "commit", "abort", "running-abort", "failure"] {
+        vm.eval(&format!("globalThis.transactionAction = {action:?}"))
+            .unwrap();
+        vm.eval(r#"(() => {
+            const action = transactionAction;
+            for (let i = 0; i < 8; i++) {
+                const tx = db.transaction('records', action === 'readonly' ? 'readonly' : 'readwrite');
+                const outcome = action === 'readonly' || action === 'commit' ? 'complete' : 'abort';
+                const store = keepTransaction(tx, outcome);
+                if (action === 'readonly') store.count();
+                else if (action === 'abort') tx.abort();
+                else if (action === 'running-abort') {
+                    store.put({id:1000+i,group:'abort-'+i}).onsuccess = () => tx.abort();
+                } else if (action === 'failure') store.add({id:i+1,group:'duplicate-'+i});
+                else {
+                    store.add({id:i+1,group:'committed-'+i});
+                    tx.commit();
+                }
+            }
+        return 'queued';
+    })()"#).unwrap();
+        backend.drain(&mut vm, &loader).await;
+    }
+    assert_eq!(vm.eval(r#"(() => {
+        const throws = (callback, name) => {
+            try { callback(); } catch (error) {
+                if (error.name === name) return;
+                throw error;
+            }
+            throw Error('finished transaction accepted an operation');
+        };
+        if (transactionEvents.length !== transactionHandles.length ||
+            transactionEvents.filter(event => event === 'abort').length !== 24) throw Error('terminal events');
+        for (const {tx,store,index,outcome,mode} of transactionHandles) {
+            if (tx.db !== db || tx.mode !== mode || Array.from(tx.objectStoreNames).join(',') !== 'records' ||
+                store.transaction !== tx || store.name !== 'records' || store.keyPath !== 'id' ||
+                index.objectStore !== store || index.name !== 'unique' || index.keyPath !== 'group')
+                throw Error('retained Web state');
+            if (outcome === 'complete' && tx.error !== null) throw Error('commit error');
+            throws(() => store.get(1), 'TransactionInactiveError');
+            throws(() => index.get('x'), 'TransactionInactiveError');
+            throws(() => tx.abort(), 'InvalidStateError');
+            throws(() => tx.commit(), 'InvalidStateError');
+        }
+        return true;
+    })()"#).unwrap(), "true");
+    // The wrappers deliberately remain reachable. Native clients must be
+    // released by the terminal path without waiting for GC or realm teardown.
+    assert_eq!(transaction_resources(&mut vm), [41, 0, 0]);
+}
+
+#[tokio::test]
+async fn idb_sqlite_finished_transactions_collect_and_release_old_metadata_in_a_live_realm() {
+    let (mut vm, loader, backend) = fixture();
+    let metadata = std::sync::Arc::downgrade(&backend.client.committed().unwrap());
+    for _ in 0..4 {
+        vm.eval(
+            r#"(() => {
+            for (let i = 0; i < 32; i++) db.transaction('records').objectStore('records').count();
+            return 'queued';
+        })()"#,
+        )
+        .unwrap();
+        backend.drain(&mut vm, &loader).await;
+        collect(&mut vm);
+        assert_eq!(transaction_resources(&mut vm), [0, 0, 0]);
+    }
+    vm.eval("db.close(); delete globalThis.db").unwrap();
+    backend.drain(&mut vm, &loader).await;
+    collect(&mut vm);
+    // Sweep the database's small registry entry after GC, then delete and
+    // replace this SQL generation while keeping the realm alive.
+    assert_eq!(transaction_resources(&mut vm), [0, 0, 0]);
+    backend.execute(Command::DeleteDatabase);
+    let (sender, receiver) = mpsc::channel();
+    let replacement = backend
+        ._service
+        .resolve(
+            backend.client.identity().owner_key.clone(),
+            "sql-web-lifecycle".into(),
+            move |reply| {
+                let _ = sender.send(reply);
+            },
+        )
+        .unwrap();
+    receiver
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .result
+        .unwrap();
+    assert_ne!(replacement.id(), backend.client.id());
+    drop(replacement);
+    drop(backend);
+    assert!(
+        metadata.upgrade().is_none(),
+        "finished transactions pinned old SQL metadata"
+    );
+    assert_eq!(vm.eval("String(1 + 1)").unwrap(), "2");
+}
+
 #[tokio::test]
 async fn idb_sqlite_metadata_is_shared_across_aliases_realms_and_readonly_commit() {
     let (mut vm, loader, backend) = fixture();

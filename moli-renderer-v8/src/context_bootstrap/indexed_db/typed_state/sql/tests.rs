@@ -1523,6 +1523,7 @@ fn discarded_inline_prepare_aborts_native_transaction() {
     let id = indexed_db_typed_state_id(scope, transaction).unwrap();
     assert!(table.borrow().transactions[&id].aborted);
     assert!(table.borrow().transactions[&id].sql_rollback.is_none());
+    assert!(table.borrow().transactions[&id].sql_client.is_none());
     assert!(table.borrow().sql_tasks.is_empty());
 
     let next = TransactionHandle::from_raw(20);
@@ -1550,6 +1551,40 @@ fn discarded_inline_prepare_aborts_native_transaction() {
         panic!("generated key after rollback")
     };
     assert_eq!(key, Key::from(1_i64));
+}
+
+#[test]
+fn retiring_sql_context_releases_transaction_clients_and_rolls_back() {
+    crate::ensure_v8_for_test();
+    let backend = Backend::new();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    runtime(scope, &backend);
+    let (_, transaction) = transaction(scope, &backend, true);
+    ensure_sql_transaction_rollback(scope, transaction).unwrap();
+    let table = ensure_indexed_db_runtime_state_table(scope);
+    let id = indexed_db_typed_state_id(scope, transaction).unwrap();
+    assert!(table.borrow().transactions[&id].sql_client.is_some());
+    assert!(table.borrow().transactions[&id].sql_rollback.is_some());
+    retire_indexed_db_context(context);
+    assert!(table.borrow().transactions[&id].sql_client.is_none());
+    assert!(table.borrow().transactions[&id].sql_rollback.is_none());
+    // The rollback was enqueued before connection retirement, even though the
+    // wrapper and its realm are both still alive.
+    let (sender, receiver) = mpsc::channel();
+    backend
+        .client
+        .submit(backend.count(), move |reply| {
+            let _ = sender.send(reply);
+        })
+        .unwrap();
+    assert!(matches!(
+        receive(&receiver).result,
+        Err(IndexedDbError::TransactionInactive(_))
+    ));
 }
 
 #[test]

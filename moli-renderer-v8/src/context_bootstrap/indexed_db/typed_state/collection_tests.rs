@@ -1,6 +1,99 @@
 use super::*;
 
 #[test]
+fn transaction_collection_defers_registry_mutation_and_keeps_retained_state() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    let context;
+    let table;
+    let mut transactions = Vec::new();
+    {
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let local = v8::Context::new(scope, Default::default());
+        context = v8::Global::new(scope, local);
+        let scope = &mut v8::ContextScope::new(scope, local);
+        table = ensure_indexed_db_runtime_state_table(scope);
+        let database = v8::Object::new(scope);
+        register_indexed_db_wrapper(scope, database, IndexedDbWrapperKind::Database, None);
+        for retained in [false, true] {
+            let transaction = v8::Object::new(scope);
+            register_indexed_db_wrapper(
+                scope,
+                transaction,
+                IndexedDbWrapperKind::Transaction,
+                None,
+            );
+            register_indexed_db_transaction_lifecycle(
+                scope,
+                transaction,
+                database,
+                None,
+                TransactionMode::ReadOnly,
+                false,
+            );
+            let id = indexed_db_typed_state_id(scope, transaction).unwrap();
+            table
+                .borrow_mut()
+                .transactions
+                .get_mut(&id)
+                .unwrap()
+                .finished = true;
+            release_indexed_db_transaction_dispatch_refs(scope, transaction);
+            transactions.push((id, v8::Weak::new(scope, transaction)));
+            if retained {
+                assert_eq!(
+                    local.global(scope).create_data_property(
+                        scope,
+                        v8str(scope, "heldTransaction").into(),
+                        transaction.into(),
+                    ),
+                    Some(true),
+                );
+            }
+        }
+    }
+    // Finalizers can run while a native lookup has the registry borrowed.
+    let guard = table.borrow();
+    isolate.clear_kept_objects();
+    isolate.low_memory_notification();
+    assert!(transactions[0].1.is_empty());
+    assert!(!transactions[1].1.is_empty());
+    drop(guard);
+    {
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let local = v8::Local::new(scope, &context);
+        let scope = &mut v8::ContextScope::new(scope, local);
+        ensure_indexed_db_runtime_state_table(scope);
+        assert!(!table.borrow().transactions.contains_key(&transactions[0].0));
+        assert!(!table.borrow().wrappers.contains_key(&transactions[0].0));
+        assert_eq!(table.borrow().transactions.len(), 1);
+        let transaction = transactions[1].1.to_local(scope).unwrap();
+        assert_eq!(
+            indexed_db_transaction_mode(scope, transaction),
+            Some(TransactionMode::ReadOnly)
+        );
+        assert_eq!(
+            local
+                .global(scope)
+                .delete(scope, v8str(scope, "heldTransaction").into()),
+            Some(true)
+        );
+    }
+    isolate.clear_kept_objects();
+    isolate.low_memory_notification();
+    assert!(transactions[1].1.is_empty());
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let local = v8::Local::new(scope, &context);
+    let scope = &mut v8::ContextScope::new(scope, local);
+    ensure_indexed_db_runtime_state_table(scope);
+    assert!(table.borrow().transactions.is_empty());
+    assert!(!table.borrow().wrappers.contains_key(&transactions[1].0));
+}
+
+#[test]
 fn cursor_collection_releases_snapshots_without_borrowing_the_runtime_table() {
     crate::ensure_v8_for_test();
     let mut isolate = v8::Isolate::new(v8::CreateParams::default());
