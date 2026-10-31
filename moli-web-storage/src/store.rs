@@ -365,16 +365,15 @@ impl WebStorageStore {
             .map(|v| String::from_utf16_lossy(&v))
             .collect()
     }
-    pub fn try_usage_bytes(
+    #[cfg(test)]
+    pub(crate) fn try_usage_bytes(
         &self,
         origin: &str,
     ) -> std::result::Result<usize, WebStorageMutationError> {
-        if let WebStorageBackend::Sqlite(sqlite) = &self.backend {
-            return sqlite.usage_bytes(origin);
-        }
         self.read(origin, |area| area.map_or(0, |a| a.size))
     }
-    pub fn usage_bytes(&self, origin: &str) -> usize {
+    #[cfg(test)]
+    pub(crate) fn usage_bytes(&self, origin: &str) -> usize {
         self.try_usage_bytes(origin).unwrap_or(0)
     }
     pub fn try_clear_origin_areas(

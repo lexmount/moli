@@ -7,31 +7,20 @@ use rusqlite::{Connection, OptionalExtension, params};
 #[cfg(test)]
 use std::path::Path;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::PathBuf,
-    sync::atomic::{AtomicUsize, Ordering},
 };
 
 pub(super) const APPLICATION_ID: i32 = 0x4d4c4c53; // MLLS
-// Version 2 accounts for both key and value UTF-16 bytes in area metadata.
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 1;
 pub struct SqliteWebStorageOwner {
     owner: WritebackOwner<Batch>,
 }
 struct Area {
     state: Mutex<Option<MemoryWebStorageArea>>,
-    views: AtomicUsize,
 }
 pub struct WebStorageAreaLease {
-    area: Arc<Area>,
-    client: WritebackClient<Batch>,
-}
-impl Drop for WebStorageAreaLease {
-    fn drop(&mut self) {
-        if self.area.views.fetch_sub(1, Ordering::AcqRel) == 1 {
-            self.client.request_flush();
-        }
-    }
+    _area: Arc<Area>,
 }
 #[derive(Default)]
 struct Cache {
@@ -43,7 +32,7 @@ pub(super) struct SqliteBackend {
     cache: Mutex<Cache>,
     pub(super) namespace: parking_lot::RwLock<()>,
 }
-const ORIGIN_METADATA_SQL: &str = "SELECT storage_key,entry_count FROM areas
+const ORIGIN_KEYS_SQL: &str = "SELECT storage_key FROM areas
     WHERE storage_key=?1 OR (storage_key>=?2 AND storage_key<?3)";
 
 fn origin_prefix_range(origin: &str) -> (String, String) {
@@ -59,8 +48,6 @@ pub(super) struct Batch(BTreeMap<String, AreaDelta>);
 struct AreaDelta {
     clear: bool,
     changes: BTreeMap<WebStorageString, KeyChange>,
-    usage: usize,
-    count: usize,
     _pin: Arc<Area>,
 }
 enum KeyChange {
@@ -87,14 +74,13 @@ impl WriteBatch for Batch {
     fn write(&self, connection: &mut Connection) -> std::result::Result<(), WritebackError> {
         let tx = connection.transaction()?;
         for (key, delta) in &self.0 {
-            if delta.count == 0 {
+            if delta.clear {
                 tx.execute("DELETE FROM areas WHERE storage_key=?1", [key])?;
+            }
+            if delta.changes.is_empty() {
                 continue;
             }
-            let area = write_area_metadata(&tx, key, delta.usage, delta.count)?;
-            if delta.clear {
-                tx.execute("DELETE FROM entries WHERE area_id=?1", [area])?;
-            }
+            let area = write_area(&tx, key)?;
             for (key, value) in &delta.changes {
                 match value {
                     KeyChange::Put(value) => {
@@ -108,6 +94,10 @@ impl WriteBatch for Batch {
                     }
                 }
             }
+            tx.execute(
+                "DELETE FROM areas WHERE area_id=?1 AND NOT EXISTS (SELECT 1 FROM entries WHERE area_id=?1)",
+                [area],
+            )?;
         }
         tx.commit()?;
         Ok(())
@@ -184,8 +174,7 @@ pub fn import_sqlite_web_storage(
             if changes.is_empty() {
                 continue;
             }
-            let usage = storage_area_size(&area.values);
-            let id = write_area_metadata(&tx, &key, usage, area.values.len())?;
+            let id = write_area(&tx, &key)?;
             let mut statement = tx.prepare_cached(
                 "INSERT INTO entries(area_id,key,value) VALUES (?1,?2,?3) ON CONFLICT(area_id,key) DO UPDATE SET value=excluded.value",
             )?;
@@ -201,29 +190,24 @@ pub fn import_sqlite_web_storage(
     close
 }
 
-fn write_area_metadata(
-    connection: &Connection,
-    key: &str,
-    usage: usize,
-    count: usize,
-) -> std::result::Result<i64, WritebackError> {
+fn write_area(connection: &Connection, key: &str) -> std::result::Result<i64, WritebackError> {
     Ok(connection.query_row(
-        "INSERT INTO areas(storage_key,usage_bytes,entry_count) VALUES (?1,?2,?3) ON CONFLICT(storage_key) DO UPDATE SET usage_bytes=excluded.usage_bytes,entry_count=excluded.entry_count RETURNING area_id",
-        params![key, i64::try_from(usage).map_err(WritebackError::new)?, i64::try_from(count).map_err(WritebackError::new)?], |r| r.get(0))?)
+        "INSERT INTO areas(storage_key) VALUES (?1) ON CONFLICT(storage_key) DO UPDATE SET storage_key=excluded.storage_key RETURNING area_id",
+        [key], |row| row.get(0))?)
 }
 
 fn read_area(
     connection: &Connection,
     key: &str,
 ) -> std::result::Result<MemoryWebStorageArea, WritebackError> {
-    let metadata: Option<(i64, i64, i64)> = connection
+    let id: Option<i64> = connection
         .query_row(
-            "SELECT area_id,usage_bytes,entry_count FROM areas WHERE storage_key=?1",
+            "SELECT area_id FROM areas WHERE storage_key=?1",
             [key],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| r.get(0),
         )
         .optional()?;
-    let Some((id, usage, count)) = metadata else {
+    let Some(id) = id else {
         return Ok(MemoryWebStorageArea::default());
     };
     let mut statement = connection.prepare("SELECT key,value FROM entries WHERE area_id=?1")?;
@@ -236,13 +220,6 @@ fn read_area(
         values.insert(decode(key)?, decode(value)?);
     }
     let size = storage_area_size(&values);
-    if usize::try_from(usage).ok() != Some(size)
-        || usize::try_from(count).ok() != Some(values.len())
-    {
-        return Err(WritebackError::new(
-            "localStorage area metadata disagrees with its entries",
-        ));
-    }
     Ok(MemoryWebStorageArea { values, size })
 }
 
@@ -260,7 +237,7 @@ pub(super) fn initialize(connection: &mut Connection) -> std::result::Result<(),
             return Err(WritebackError::new("unidentified localStorage database"));
         }
         let tx = connection.transaction()?;
-        tx.execute_batch("CREATE TABLE areas(area_id INTEGER PRIMARY KEY,storage_key TEXT NOT NULL UNIQUE,usage_bytes INTEGER NOT NULL CHECK(usage_bytes>=0),entry_count INTEGER NOT NULL CHECK(entry_count>=0));
+        tx.execute_batch("CREATE TABLE areas(area_id INTEGER PRIMARY KEY,storage_key TEXT NOT NULL UNIQUE);
             CREATE TABLE entries(area_id INTEGER NOT NULL REFERENCES areas(area_id) ON DELETE CASCADE,key BLOB NOT NULL CHECK(length(key)%2=0),value BLOB NOT NULL CHECK(length(value)%2=0),PRIMARY KEY(area_id,key)) WITHOUT ROWID;")?;
         tx.pragma_update(None, "application_id", APPLICATION_ID)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -271,7 +248,7 @@ pub(super) fn initialize(connection: &mut Connection) -> std::result::Result<(),
         )));
     }
     // Verify the actual schema even when a database claims the current version.
-    connection.prepare("SELECT area_id,storage_key,usage_bytes,entry_count FROM areas LIMIT 0")?;
+    connection.prepare("SELECT area_id,storage_key FROM areas LIMIT 0")?;
     connection.prepare("SELECT area_id,key,value FROM entries LIMIT 0")?;
     Ok(())
 }
@@ -290,30 +267,6 @@ fn decode(bytes: Vec<u8>) -> std::result::Result<WebStorageString, WritebackErro
     ))
 }
 impl SqliteBackend {
-    pub(super) fn usage_bytes(
-        &self,
-        origin: &str,
-    ) -> std::result::Result<usize, WebStorageMutationError> {
-        let _namespace = self.namespace.read();
-        self.client.ensure_open()?;
-        let area = self.area(origin);
-        let state = area.state.lock();
-        if let Some(state) = &*state {
-            return Ok(state.size);
-        }
-        let origin = origin.to_owned();
-        Ok(self.client.query(move |connection| {
-            let usage = connection
-                .query_row(
-                    "SELECT usage_bytes FROM areas WHERE storage_key=?1",
-                    [origin],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()?
-                .unwrap_or(0);
-            usize::try_from(usage).map_err(WritebackError::new)
-        })?)
-    }
     fn live_areas_for_origin(&self, origin: &str) -> BTreeMap<String, Arc<Area>> {
         let prefix = web_storage_area_key_prefix_for_origin(origin);
         self.cache
@@ -324,23 +277,19 @@ impl SqliteBackend {
             .filter_map(|(key, area)| area.upgrade().map(|area| (key.clone(), area)))
             .collect()
     }
-    fn area_metadata_for_origin(
+    fn area_keys_for_origin(
         &self,
         origin: &str,
-    ) -> std::result::Result<BTreeMap<String, usize>, WebStorageMutationError> {
+    ) -> std::result::Result<BTreeSet<String>, WebStorageMutationError> {
         let (prefix, upper) = origin_prefix_range(origin);
         let origin = origin.to_owned();
         Ok(self.client.query(move |connection| {
-            let mut statement = connection.prepare_cached(ORIGIN_METADATA_SQL)?;
-            statement
+            let mut statement = connection.prepare_cached(ORIGIN_KEYS_SQL)?;
+            Ok(statement
                 .query_map(params![origin, prefix, upper], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                    row.get::<_, String>(0)
                 })?
-                .map(|row| {
-                    let (key, entries) = row?;
-                    Ok((key, usize::try_from(entries).map_err(WritebackError::new)?))
-                })
-                .collect()
+                .collect::<std::result::Result<BTreeSet<_>, _>>()?)
         })?)
     }
     fn area(&self, origin: &str) -> Arc<Area> {
@@ -355,7 +304,6 @@ impl SqliteBackend {
         }
         let area = Arc::new(Area {
             state: Mutex::new(None),
-            views: AtomicUsize::new(0),
         });
         cache.areas.insert(origin.to_owned(), Arc::downgrade(&area));
         area
@@ -417,8 +365,6 @@ impl SqliteBackend {
                 let mut delta = AreaDelta {
                     clear: false,
                     changes: BTreeMap::new(),
-                    usage: data.size,
-                    count: data.values.len(),
                     _pin: area.clone(),
                 };
                 match mutation {
@@ -450,8 +396,8 @@ impl SqliteBackend {
     ) -> std::result::Result<bool, WebStorageMutationError> {
         let _namespace = self.namespace.write();
         let mut areas = self.live_areas_for_origin(origin);
-        let metadata = self.area_metadata_for_origin(origin)?;
-        for key in metadata.keys() {
+        let stored_keys = self.area_keys_for_origin(origin)?;
+        for key in &stored_keys {
             areas.entry(key.clone()).or_insert_with(|| self.area(key));
         }
         let mutations = self.client.accept(|| {
@@ -462,7 +408,7 @@ impl SqliteBackend {
                 let nonempty = state
                     .as_ref()
                     .map(|data| !data.values.is_empty())
-                    .unwrap_or_else(|| metadata.get(key).is_some_and(|entries| *entries > 0));
+                    .unwrap_or_else(|| stored_keys.contains(key));
                 if !nonempty {
                     continue;
                 }
@@ -475,8 +421,6 @@ impl SqliteBackend {
                     AreaDelta {
                         clear: true,
                         changes: BTreeMap::new(),
-                        usage: 0,
-                        count: 0,
                         _pin: area.clone(),
                     },
                 );
@@ -503,11 +447,7 @@ impl WebStorageStore {
         };
         sqlite.client.ensure_open()?;
         let area = sqlite.area(origin);
-        area.views.fetch_add(1, Ordering::AcqRel);
-        Ok(Some(WebStorageAreaLease {
-            area,
-            client: sqlite.client.clone(),
-        }))
+        Ok(Some(WebStorageAreaLease { _area: area }))
     }
 }
 impl SqliteWebStorageOwner {

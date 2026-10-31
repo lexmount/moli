@@ -14,7 +14,7 @@ fn explicit_import_rolls_back_if_a_later_destination_area_is_corrupt() -> Result
     owner.close()?;
     {
         let connection = Connection::open(&path)?;
-        connection.execute("UPDATE areas SET usage_bytes=999 WHERE storage_key='z'", [])?;
+        connection.execute_batch("PRAGMA ignore_check_constraints=ON; UPDATE entries SET value=X'00' WHERE area_id=(SELECT area_id FROM areas WHERE storage_key='z');")?;
     }
     let areas = ["a", "z"]
         .into_iter()
@@ -73,7 +73,7 @@ fn sqlite_quota_counts_keys_and_values_for_insert_replace_remove_and_clear() {
 }
 
 #[test]
-fn imported_usage_includes_keys_and_survives_reopen_and_edits() -> Result<()> {
+fn imported_keys_and_values_survive_reopen_and_edits() -> Result<()> {
     let root = tempfile::tempdir()?;
     let path = root.path().join("localstorage.sqlite");
     let runtime = Runtime::new()?;
@@ -94,20 +94,16 @@ fn imported_usage_includes_keys_and_survives_reopen_and_edits() -> Result<()> {
     )?;
     {
         let connection = Connection::open(&path)?;
-        let metadata: (i64, i64, i64) = connection.query_row(
-            "SELECT usage_bytes,entry_count,(SELECT SUM(length(key)+length(value)) FROM entries WHERE entries.area_id=areas.area_id) FROM areas WHERE storage_key=?1",
+        let persisted: (i64, i64) = connection.query_row(
+            "SELECT count(*),SUM(length(key)+length(value)) FROM entries WHERE area_id=(SELECT area_id FROM areas WHERE storage_key=?1)",
             [area],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        assert_eq!(metadata, (22, 2, 22));
+        assert_eq!(persisted, (2, 22));
     }
     let (store, owner) = open(root.path(), &runtime);
-    let view = store.lease_area(area)?.unwrap();
+    let _view = store.lease_area(area)?.unwrap();
     assert_eq!(store.try_usage_bytes(area)?, 22);
-    assert!(
-        view.area.state.lock().is_none(),
-        "usage remains metadata-only"
-    );
     assert_eq!(store.try_len(area)?, 2);
     store.try_set_item(area, "ascii", "x")?;
     assert_eq!(store.try_usage_bytes(area)?, 24);
@@ -138,9 +134,8 @@ fn restored_overquota_import_allows_shrinking_but_rejects_growth() -> Result<()>
         BTreeMap::from([(area.to_owned(), vec![(utf16_units("key"), value.clone())])]),
     )?;
     let (store, owner) = open(root.path(), &runtime);
-    let view = store.lease_area(area)?.unwrap();
+    let _view = store.lease_area(area)?.unwrap();
     assert_eq!(store.try_usage_bytes(area)?, WEB_STORAGE_QUOTA_BYTES + 22);
-    assert!(view.area.state.lock().is_none());
     let key = utf16_units("key");
     store.try_set_item_utf16(area, &key, &value[..value.len() - 1])?;
     assert_eq!(store.try_usage_bytes(area)?, WEB_STORAGE_QUOTA_BYTES + 20);
@@ -161,28 +156,24 @@ fn restored_overquota_import_allows_shrinking_but_rejects_growth() -> Result<()>
 }
 
 #[test]
-fn value_only_metadata_version_is_rejected_without_modifying_data() -> Result<()> {
+fn unsupported_version_is_rejected_without_modifying_data() -> Result<()> {
     let mut connection = Connection::open_in_memory()?;
     initialize(&mut connection)?;
-    connection.execute(
-        "INSERT INTO areas(storage_key,usage_bytes,entry_count) VALUES ('old',0,1)",
-        [],
-    )?;
+    connection.execute("INSERT INTO areas(storage_key) VALUES ('saved')", [])?;
     connection.execute(
         "INSERT INTO entries(area_id,key,value) VALUES (last_insert_rowid(),?1,?2)",
         params![encode(&utf16_units("key")), encode(&[])],
     )?;
-    connection.pragma_update(None, "user_version", 1)?;
+    connection.pragma_update(None, "user_version", 999)?;
     assert!(initialize(&mut connection).is_err());
-    let row: (i64, i64, i64) = connection.query_row(
-        "SELECT usage_bytes,entry_count,length(key) FROM areas JOIN entries USING(area_id)",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    )?;
-    assert_eq!(row, (0, 1, 6));
+    assert_eq!(
+        connection.query_row("SELECT key FROM entries", [], |row| row
+            .get::<_, Vec<u8>>(0))?,
+        encode(&utf16_units("key"))
+    );
     assert_eq!(
         connection.pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))?,
-        1
+        999
     );
     Ok(())
 }
@@ -384,7 +375,7 @@ fn clear_then_put_composes_across_areas_and_logical_events_remain_individual() {
     owner.close().unwrap();
 }
 #[test]
-fn last_view_release_flushes_and_clean_areas_can_be_unloaded() {
+fn last_view_release_keeps_dirty_data_without_forcing_a_commit() {
     let root = tempfile::tempdir().unwrap();
     let runtime = Runtime::new().unwrap();
     let (store, owner) = open(root.path(), &runtime);
@@ -392,7 +383,7 @@ fn last_view_release_flushes_and_clean_areas_can_be_unloaded() {
     store.try_set_item("area", "k", "v").unwrap();
     assert_eq!(resident(&store), 1);
     drop(view);
-    // The last-view flush is ahead of this query in the database FIFO.
+    // Query fences the worker without flushing the pending area.
     assert_eq!(
         backend(&store)
             .client
@@ -402,8 +393,10 @@ fn last_view_release_flushes_and_clean_areas_can_be_unloaded() {
                 |r| r.get::<_, i64>(0)
             )?))
             .unwrap(),
-        1
+        0
     );
+    assert_eq!(resident(&store), 1);
+    owner.flush().unwrap();
     assert_eq!(resident(&store), 0);
     let _view = store.lease_area("area").unwrap();
     assert_eq!(store.get_item("area", "k").as_deref(), Some("v"));
@@ -420,7 +413,9 @@ fn malformed_persisted_area_is_reported_instead_of_appearing_empty() {
     backend(&store)
         .client
         .query(|connection| {
-            connection.execute("UPDATE areas SET entry_count=99", [])?;
+            connection.execute_batch(
+                "PRAGMA ignore_check_constraints=ON; UPDATE entries SET value=X'00';",
+            )?;
             Ok(())
         })
         .unwrap();
@@ -454,16 +449,13 @@ fn retrying_committed_then_deleted_or_cleared_keys_is_idempotent() {
     initialize(&mut connection).unwrap();
     let pin = Arc::new(Area {
         state: Mutex::new(None),
-        views: AtomicUsize::new(0),
     });
-    let delta = |clear, changes, usage, count| {
+    let delta = |clear, changes| {
         Batch(BTreeMap::from([(
             "area".to_owned(),
             AreaDelta {
                 clear,
                 changes,
-                usage,
-                count,
                 _pin: pin.clone(),
             },
         )]))
@@ -475,8 +467,6 @@ fn retrying_committed_then_deleted_or_cleared_keys_is_idempotent() {
             (key("keep"), KeyChange::Put(key("v"))),
             (key("remove"), KeyChange::Put(key("old"))),
         ]),
-        28,
-        2,
     );
     // SQL committed, but publication was lost: replay must still apply the
     // later delete even though its original put created a previously new row.
@@ -484,20 +474,16 @@ fn retrying_committed_then_deleted_or_cleared_keys_is_idempotent() {
     batch.merge(delta(
         false,
         BTreeMap::from([(key("remove"), KeyChange::Delete)]),
-        10,
-        1,
     ));
     batch.write(&mut connection).unwrap();
     batch.write(&mut connection).unwrap();
     let area = read_area(&connection, "area").unwrap();
     assert_eq!(area.values, HashMap::from([(key("keep"), key("v"))]));
 
-    batch.merge(delta(true, BTreeMap::new(), 0, 0));
+    batch.merge(delta(true, BTreeMap::new()));
     batch.merge(delta(
         false,
         BTreeMap::from([(key("new"), KeyChange::Put(key("latest")))]),
-        18,
-        1,
     ));
     batch.write(&mut connection).unwrap();
     batch.write(&mut connection).unwrap();
@@ -586,30 +572,7 @@ fn origin_clear_includes_cold_partitioned_areas_and_preserves_other_origins() {
 }
 
 #[test]
-fn single_area_usage_reads_cold_metadata_and_current_dirty_size() {
-    let root = tempfile::tempdir().unwrap();
-    let runtime = Runtime::new().unwrap();
-    let (store, owner) = open(root.path(), &runtime);
-    let key = web_storage_partitioned_area_key("https://usage.test", "https://usage.test");
-    store.try_set_item(&key, "key", "old").unwrap();
-    owner.flush().unwrap();
-    assert_eq!(resident(&store), 0);
-    let cold = store.lease_area(&key).unwrap().unwrap();
-    assert_eq!(store.try_usage_bytes(&key).unwrap(), 12);
-    assert!(
-        cold.area.state.lock().is_none(),
-        "usage must not load entries"
-    );
-    store.try_set_item(&key, "key", "changed").unwrap();
-    assert_eq!(store.try_usage_bytes(&key).unwrap(), 20);
-    store.try_clear(&key).unwrap();
-    assert_eq!(store.try_usage_bytes(&key).unwrap(), 0);
-    drop(cold);
-    owner.close().unwrap();
-}
-
-#[test]
-fn origin_metadata_query_uses_bounded_index_searches() {
+fn origin_key_query_uses_bounded_index_searches() {
     let root = tempfile::tempdir().unwrap();
     let runtime = Runtime::new().unwrap();
     let (store, owner) = open(root.path(), &runtime);
@@ -618,7 +581,7 @@ fn origin_metadata_query_uses_bounded_index_searches() {
     let plan = backend(&store)
         .client
         .query(move |connection| {
-            let sql = format!("EXPLAIN QUERY PLAN {ORIGIN_METADATA_SQL}");
+            let sql = format!("EXPLAIN QUERY PLAN {ORIGIN_KEYS_SQL}");
             let mut statement = connection.prepare(&sql)?;
             Ok(statement
                 .query_map(params![origin, prefix, upper], |row| {
@@ -661,12 +624,13 @@ fn origin_clear_deletes_cold_entries_without_loading_and_preserves_later_puts() 
     owner.flush().unwrap();
     assert_eq!(resident(&store), 0);
     let cold = store.lease_area(&first).unwrap().unwrap();
-    assert!(cold.area.state.lock().is_none());
+    assert!(cold._area.state.lock().is_none());
     let key = first.clone();
     backend(&store).client.query(move |connection| {
-        // Reading entries would now fail metadata validation. Deletion must
-        // depend only on map metadata, even for a damaged cold value.
-        connection.execute("UPDATE entries SET value=X'0000' WHERE area_id=(SELECT area_id FROM areas WHERE storage_key=?1)", [key])?;
+        // Reading entries would fail decoding. Deletion must only enumerate
+        // maps, even for a damaged cold value.
+        connection.execute_batch("PRAGMA ignore_check_constraints=ON")?;
+        connection.execute("UPDATE entries SET value=X'00' WHERE area_id=(SELECT area_id FROM areas WHERE storage_key=?1)", [key])?;
         Ok(())
     }).unwrap();
     let events = store.subscribe_mutations(WebStorageAreaKind::Local);
