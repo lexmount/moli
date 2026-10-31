@@ -15,6 +15,8 @@ pub(super) const EVERY: i32 = 7;
 pub(super) const FIND: i32 = 8;
 pub(super) const MAP: i32 = 9;
 pub(super) const FILTER: i32 = 10;
+pub(super) const TAKE: i32 = 11;
+pub(super) const DROP: i32 = 12;
 pub(super) const SUBSCRIBER: &str = "__moliObservableNativeSubscriber";
 const INDEX: &str = "__moliObservableCallbackIndex";
 
@@ -78,7 +80,9 @@ pub(super) fn notify<'s>(
                 FOR_EACH | REDUCE | SOME | EVERY | FIND => {
                     consume::notify(scope, observer, notification, kind);
                 }
-                MAP | FILTER => transform::notify(scope, observer, notification, kind),
+                MAP | FILTER | TAKE | DROP => {
+                    transform::notify(scope, observer, notification, kind)
+                }
                 _ => unreachable!("unknown native Observable observer"),
             }
             let exception = scope.exception();
