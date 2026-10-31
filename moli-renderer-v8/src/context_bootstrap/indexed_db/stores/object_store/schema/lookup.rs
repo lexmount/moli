@@ -43,6 +43,10 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_index_callback<
         scope.throw_exception(error);
         return;
     };
+    let Some(context) = store.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     if let Some(index) = create_index_object(scope, store, &info) {
         rv.set(index.into());
     } else {

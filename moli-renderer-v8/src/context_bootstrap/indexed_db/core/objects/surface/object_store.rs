@@ -23,6 +23,11 @@ pub(in crate::context_bootstrap::indexed_db) fn create_object_store_object<'s>(
     tx: v8::Local<'s, v8::Object>,
     info: &ObjectStoreInfo,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    if let Some(store) =
+        crate::context_bootstrap::indexed_db::cached_indexed_db_object_store(scope, tx, &info.name)
+    {
+        return Some(store);
+    }
     let metadata = indexed_db_database_store_metadata(scope, db, &info.name)?;
     let store = create_failed_object_store_object(scope, db, tx, info)?;
     let storage_scope = indexed_db_typed_storage_scope(scope, db);
@@ -48,6 +53,8 @@ pub(in crate::context_bootstrap::indexed_db) fn create_failed_object_store_objec
     tx: v8::Local<'s, v8::Object>,
     info: &ObjectStoreInfo,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let context = tx.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let key_path = match &info.key_path {
         Some(path) => key_path_to_js_value(scope, path)?,
         None => v8::null(scope).into(),
