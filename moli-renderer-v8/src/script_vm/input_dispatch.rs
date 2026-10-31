@@ -1698,9 +1698,6 @@ impl ScriptVm {
                     modifiers,
                 )
                 .is_some_and(|outcome| outcome.allows_default());
-                let (items, drag_operations_mask) =
-                    crate::context_bootstrap::read_string_drag_data(scope, &data_store);
-                let source_transfer = v8::Global::new(scope, data_transfer);
                 if allowed
                     && source_document.is_some()
                     && unsafe { &*runtime_ptr }
@@ -1711,6 +1708,17 @@ impl ScriptVm {
                         .owner_document_handle(drag_start_handle)
                         == source_document
                 {
+                    // Snapshot only an accepted intercepted drag, before any
+                    // subsequent pointer callbacks can change its source.
+                    let intercepted = intercept_drags.then(|| {
+                        let (items, drag_operations_mask) =
+                            crate::context_bootstrap::read_string_drag_data(scope, &data_store);
+                        RendererInterceptedDrag {
+                            items,
+                            drag_operations_mask,
+                        }
+                    });
+                    let source_transfer = v8::Global::new(scope, data_transfer);
                     // Chromium keeps the source's original metadata readable
                     // until dragend, while denying its data during target drop.
                     crate::context_bootstrap::protect_native_drag_source_view(scope, data_transfer);
@@ -1766,11 +1774,8 @@ impl ScriptVm {
                     // Preserve ScriptVm's legacy mouse hover cache while
                     // marking this suppressed pointer stream as outside.
                     unsafe { &mut *runtime_ptr }.clear_mouse_input_state();
-                    if intercept_drags {
-                        intercepted_drag.set(Some(RendererInterceptedDrag {
-                            items,
-                            drag_operations_mask,
-                        }));
+                    if let Some(intercepted) = intercepted {
+                        intercepted_drag.set(Some(intercepted));
                     }
                 } else {
                     crate::context_bootstrap::finish_drag_data_transfer_view(scope, data_transfer);

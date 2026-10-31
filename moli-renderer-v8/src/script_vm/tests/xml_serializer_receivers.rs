@@ -1,6 +1,61 @@
 use super::*;
 
 #[test]
+fn xml_serialization_keeps_sibling_namespace_scopes_and_generated_prefix_order() {
+    let mut vm = new_storage_html_test_vm("https://xml-sibling-scopes.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        const fragment = document.createDocumentFragment();
+        for (const [elementNS, attributeNS] of [['urn:first','urn:a'], ['urn:second','urn:b']]) {
+            const element = document.createElementNS(elementNS, 'p:item');
+            element.setAttributeNS(attributeNS, 'value', '<&"\n');
+            element.append(document.createTextNode('<&>'), document.createComment('comment'));
+            fragment.append(element);
+        }
+        const xml = new XMLSerializer().serializeToString(fragment);
+        if (!xml.includes('xmlns:ns1="urn:a"') || !xml.includes('xmlns:ns2="urn:b"'))
+            throw Error('generated prefix order: '+xml);
+        const parsed = new DOMParser().parseFromString('<root>'+xml+'</root>', 'application/xml');
+        if (parsed.getElementsByTagName('parsererror').length) throw Error(xml);
+        const children = parsed.documentElement.children;
+        for (let i=0; i<2; i++) {
+            const ns = i ? 'urn:second' : 'urn:first', attributeNS = i ? 'urn:b' : 'urn:a';
+            if (children[i].namespaceURI !== ns || children[i].getAttributeNS(attributeNS,'value') !== '<&"\n' ||
+                children[i].textContent !== '<&>' || children[i].lastChild.nodeType !== 8)
+                throw Error('scope or character data');
+        }
+        return new XMLSerializer().serializeToString(fragment) === xml;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+#[ignore = "manual XML serialization scaling benchmark"]
+fn xml_runtime_scaling_microbenchmark() {
+    let mut vm = new_storage_html_test_vm("https://xml-scaling-bench.test/");
+    for depth in [16, 64, 256] {
+        vm.eval(&format!(r#"(() => {{
+            const doc = document.implementation.createDocument('urn:bench', 'n');
+            let node = doc.documentElement;
+            for (let i=1; i<{depth}; i++) {{ const child=doc.createElementNS('urn:bench','n');node.append(child);node=child; }}
+            node.append(doc.createTextNode('x'.repeat(64*1024)));
+            globalThis.benchXmlRoot=doc.documentElement;
+            globalThis.benchXmlSerializer=new XMLSerializer();
+            return true;
+        }})()"#)).unwrap();
+        let expression = "benchXmlSerializer.serializeToString(benchXmlRoot).length";
+        let length = vm.eval(expression).unwrap();
+        let mut samples = Vec::new();
+        for _ in 0..7 {
+            let started = std::time::Instant::now();
+            for _ in 0..8 {
+                assert_eq!(vm.eval(expression).unwrap(), length);
+            }
+            samples.push(started.elapsed().as_nanos() / 8);
+        }
+        println!("{{\"benchmark\":\"xml_chain_64k\",\"size\":{depth},\"samples_ns\":{samples:?}}}");
+    }
+}
+
+#[test]
 fn xml_serialization_resolves_namespace_declaration_conflicts() {
     let mut vm = new_storage_html_test_vm("https://xml-namespace-conflicts.test/");
     assert_eq!(vm.eval(r#"(() => {

@@ -3,6 +3,31 @@ use super::*;
 const LIFECYCLE_PROBE: &str = include_str!("message_port_lifecycle.js");
 
 #[test]
+fn message_port_removed_endpoint_retires_an_unstarted_wrapper() {
+    let mut vm = new_storage_html_test_vm("https://removed-unstarted-port.test/");
+    vm.eval("globalThis.channel = new MessageChannel(); globalThis.targetPort = channel.port1;")
+        .unwrap();
+    let registry = vm._context_host.borrow().message_port_registry();
+    vm.with_default_context_scope(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let target = global
+            .get(scope, crate::util::v8str(scope, "targetPort").into())
+            .unwrap();
+        let target = v8::Local::<v8::Object>::try_from(target).unwrap();
+        let id = crate::context_bootstrap::message_port_id_from_object(scope, target).unwrap();
+        registry.discard_message_port_channel(id);
+        assert!(
+            !crate::context_bootstrap::dispatch_message_port_events_for_port_collecting_errors(
+                scope, id, None
+            )
+        );
+        assert!(crate::context_bootstrap::message_port_id_from_object(scope, target).is_none());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn message_channel_retained_constructor_creates_detached_ports_without_endpoints() {
     let mut vm = new_parsed_test_vm(
         "https://retired-message-channel.test/",

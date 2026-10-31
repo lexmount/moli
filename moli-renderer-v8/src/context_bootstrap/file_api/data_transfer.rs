@@ -483,12 +483,33 @@ pub(crate) fn native_set_drag_drop_effect<'s>(
     }
 }
 
+#[cfg(test)]
+struct DragDataReadCount(std::cell::Cell<usize>);
+
+#[cfg(test)]
+pub(crate) fn drag_data_read_count_for_test(scope: &mut v8::PinScope<'_, '_>) -> usize {
+    scope
+        .get_current_context()
+        .get_slot::<DragDataReadCount>()
+        .map_or(0, |count| count.0.get())
+}
+
 /// Reads the string items and `effectAllowed` that `dragstart` listeners left
 /// in the shared store, in the shape CDP reports as `Input.DragData`.
 pub(crate) fn read_string_drag_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: &NativeDragDataStore,
 ) -> (Vec<RendererDragDataItem>, i32) {
+    #[cfg(test)]
+    {
+        let context = scope.get_current_context();
+        let count = context.get_slot::<DragDataReadCount>().unwrap_or_else(|| {
+            let count = std::rc::Rc::new(DragDataReadCount(std::cell::Cell::new(0)));
+            context.set_slot(count.clone());
+            count
+        });
+        count.0.set(count.0.get() + 1);
+    }
     let backing = store.local(scope);
     let mask = drag_operations_mask_from_effect_allowed(
         &private_string_property(scope, backing, DATA_TRANSFER_EFFECT_ALLOWED_SLOT)
@@ -1449,6 +1470,38 @@ fn refresh_data_transfer_item_views<'s>(
     let Some(previous_views) = item_list_array(scope, item_list) else {
         return;
     };
+    let records = if mode.can_read_types() {
+        item_list_records(scope, item_list)
+    } else {
+        None
+    };
+    // With at most one item on either side, scans are already linear and
+    // avoid allocating a map for ordinary single-item drags and cleared lists.
+    // Otherwise V8 Map keys preserve record identity, including hash collisions.
+    let previous_by_record = if previous_views.length() > 1
+        && records.is_some_and(|records| records.length() > 1)
+    {
+        let mut map = v8::Map::new(scope);
+        for index in 0..previous_views.length() {
+            let Some(view) = previous_views
+                .get_index(scope, index)
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            else {
+                continue;
+            };
+            if let Some(record) = get_private_object(scope, view, DATA_TRANSFER_ITEM_RECORD_SLOT) {
+                let Some(updated) = map.set(scope, record.into(), view.into()) else {
+                    return;
+                };
+                map = updated;
+            } else {
+                detach_data_transfer_item_view(scope, view);
+            }
+        }
+        Some(map)
+    } else {
+        None
+    };
     let previous_length = private_number_property(
         scope,
         item_list,
@@ -1460,9 +1513,7 @@ fn refresh_data_transfer_item_views<'s>(
     }
     let mut views = Vec::new();
     let mut files = Vec::new();
-    if mode.can_read_types()
-        && let Some(records) = item_list_records(scope, item_list)
-    {
+    if let Some(records) = records {
         for index in 0..records.length() {
             let Some(record) = records
                 .get_index(scope, index)
@@ -1470,7 +1521,13 @@ fn refresh_data_transfer_item_views<'s>(
             else {
                 continue;
             };
-            let view = find_item_view(scope, previous_views, record).or_else(|| {
+            let view = if let Some(map) = previous_by_record {
+                map.get(scope, record.into())
+                    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            } else {
+                find_item_view(scope, previous_views, record)
+            };
+            let view = view.or_else(|| {
                 DataTransferItemViewDeclaration::new(owner, record)
                     .bind(scope)
                     .ok()
@@ -1478,6 +1535,9 @@ fn refresh_data_transfer_item_views<'s>(
             let Some(view) = view else {
                 continue;
             };
+            if let Some(map) = previous_by_record {
+                let _ = map.delete(scope, record.into());
+            }
             define_index_data_property(scope, item_list, views.len() as u32, view.into());
             views.push(view.into());
             if item_kind(scope, view).as_deref() == Some("file")
@@ -1487,13 +1547,26 @@ fn refresh_data_transfer_item_views<'s>(
             }
         }
     }
-    for index in 0..previous_views.length() {
-        if let Some(previous) = previous_views
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            && !views.iter().any(|view| previous.strict_equals(*view))
-        {
-            detach_data_transfer_item_view(scope, previous);
+    if let Some(map) = previous_by_record {
+        // Reused records were removed, leaving only views to detach.
+        let removed = map.as_array(scope);
+        for index in (1..removed.length()).step_by(2) {
+            if let Some(previous) = removed
+                .get_index(scope, index)
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            {
+                detach_data_transfer_item_view(scope, previous);
+            }
+        }
+    } else {
+        for index in 0..previous_views.length() {
+            if let Some(previous) = previous_views
+                .get_index(scope, index)
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                && !views.iter().any(|view| previous.strict_equals(*view))
+            {
+                detach_data_transfer_item_view(scope, previous);
+            }
         }
     }
     let view_array = v8::Array::new_with_elements(scope, &views);
@@ -2059,6 +2132,99 @@ mod tests {
         let list = get_private_object(scope, view, DATA_TRANSFER_ITEMS_SLOT).unwrap();
         let array = item_list_array(scope, list).unwrap();
         v8::Local::<v8::Object>::try_from(array.get_index(scope, 0).unwrap()).unwrap()
+    }
+
+    #[test]
+    #[ignore = "manual DataTransfer refresh and append scaling benchmark"]
+    fn data_transfer_runtime_scaling_microbenchmark() {
+        fn make_record<'s>(
+            scope: &mut v8::PinScope<'s, '_>,
+            file: v8::Local<'s, v8::Object>,
+            entry: v8::Local<'s, v8::Object>,
+        ) -> v8::Local<'s, v8::Object> {
+            let record = crate::util::new_null_prototype_object(scope);
+            DataTransferFileItemObjectDeclaration::new("text/plain", file, entry)
+                .initialize(scope, record)
+                .unwrap();
+            record
+        }
+        fn refresh_once<'s>(scope: &mut v8::PinScope<'s, '_>, list: v8::Local<'s, v8::Object>) {
+            let scope = std::pin::pin!(v8::HandleScope::new(scope));
+            let scope = &mut scope.init();
+            refresh_data_transfer_item_views(scope, list);
+        }
+        fn append_file<'s>(
+            scope: &mut v8::PinScope<'s, '_>,
+            list: v8::Local<'s, v8::Object>,
+            file: v8::Local<'s, v8::Object>,
+            entry: v8::Local<'s, v8::Object>,
+        ) {
+            let scope = std::pin::pin!(v8::HandleScope::new(scope));
+            let scope = &mut scope.init();
+            let record = make_record(scope, file, entry);
+            DataTransferItemStore::new(list)
+                .append(scope, record)
+                .unwrap();
+        }
+        with_transfer_scope(|scope| {
+            let file = crate::util::new_null_prototype_object(scope);
+            let entry = crate::util::new_null_prototype_object(scope);
+            for size in [1, 8, 64, 256, 1024] {
+                let store = create_native_drag_data_store(scope).unwrap();
+                let backing = store.local(scope);
+                let records =
+                    private_property_as_array(scope, backing, DATA_TRANSFER_STORE_ITEMS_SLOT)
+                        .unwrap();
+                for _ in 0..size {
+                    let record = make_record(scope, file, entry);
+                    append_item(scope, records, record).unwrap();
+                }
+                let view = create_drag_data_transfer_view(
+                    scope,
+                    &store,
+                    DragDataStoreMode::ReadWrite,
+                    "none",
+                )
+                .unwrap();
+                let list = get_private_object(scope, view, DATA_TRANSFER_ITEMS_SLOT).unwrap();
+                refresh_once(scope, list);
+                let mut samples = Vec::new();
+                for _ in 0..7 {
+                    let started = std::time::Instant::now();
+                    for _ in 0..4 {
+                        refresh_once(scope, list);
+                    }
+                    samples.push(started.elapsed().as_nanos() / 4);
+                }
+                println!(
+                    "{{\"benchmark\":\"data_transfer_refresh\",\"size\":{size},\"samples_ns\":{samples:?}}}"
+                );
+            }
+            for size in [16, 64, 128] {
+                let mut samples = Vec::new();
+                for iteration in 0..8 {
+                    let store = create_native_drag_data_store(scope).unwrap();
+                    let view = create_drag_data_transfer_view(
+                        scope,
+                        &store,
+                        DragDataStoreMode::ReadWrite,
+                        "none",
+                    )
+                    .unwrap();
+                    let list = get_private_object(scope, view, DATA_TRANSFER_ITEMS_SLOT).unwrap();
+                    let started = std::time::Instant::now();
+                    for _ in 0..size {
+                        append_file(scope, list, file, entry);
+                    }
+                    if iteration != 0 {
+                        samples.push(started.elapsed().as_nanos());
+                    }
+                }
+                println!(
+                    "{{\"benchmark\":\"data_transfer_append\",\"size\":{size},\"samples_ns\":{samples:?}}}"
+                );
+            }
+        });
     }
 
     #[test]
