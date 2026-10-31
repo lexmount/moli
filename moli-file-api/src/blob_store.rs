@@ -457,10 +457,39 @@ where
         AccessKey: Clone,
         MediaSource: Clone,
     {
+        self.object_url_entry_if(url, |_| true)
+    }
+
+    /// Authorize and capture the entry under the URL-store lock, before reading
+    /// a file or database backing store. Missing creator keys are not public.
+    pub fn object_url_entry_with_access_key(
+        &self,
+        url: &str,
+        access_key: &AccessKey,
+    ) -> Option<ObjectUrlEntry<AccessKey, MediaSource>>
+    where
+        AccessKey: Clone + PartialEq,
+        MediaSource: Clone,
+    {
+        self.object_url_entry_if(url, |key| key == Some(access_key))
+    }
+
+    fn object_url_entry_if(
+        &self,
+        url: &str,
+        allows: impl FnOnce(Option<&AccessKey>) -> bool,
+    ) -> Option<ObjectUrlEntry<AccessKey, MediaSource>>
+    where
+        AccessKey: Clone,
+        MediaSource: Clone,
+    {
         let (data, mime_type, access_key) = {
             let url = url.split_once('#').map_or(url, |(url, _)| url);
             let object_urls = self.object_urls.lock();
             let state = object_urls.get(url)?;
+            if !allows(state.access_key.as_ref()) {
+                return None;
+            }
             match &state.target {
                 ObjectUrlTarget::Blob(id) => {
                     let (data, mime_type) = self.object_url_blob_data(*id)?;
@@ -695,6 +724,58 @@ mod tests {
         assert_eq!(&*captured_bytes, b"private");
         assert_eq!(mime_type, "text/plain");
         assert_eq!(captured.access_key.as_ref(), Some(&first_key));
+    }
+
+    #[test]
+    fn authorized_object_url_snapshots_check_keys_before_reading_backing_data() {
+        use std::sync::atomic::AtomicUsize;
+
+        #[derive(Debug)]
+        struct Source(AtomicUsize);
+
+        impl crate::BlobSource for Source {
+            fn read(&self, range: std::ops::Range<usize>, complete: crate::BlobReadCompletion) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                complete(Ok(b"private"[range].to_vec()));
+            }
+        }
+
+        let store = BlobStore::<u64, u64, String>::default();
+        let source = Arc::new(Source(AtomicUsize::new(0)));
+        let blob = store.create_blob_from_data(
+            Some(1),
+            Some(2),
+            BlobData::from_source(source.clone(), 7),
+            "text/javascript".to_owned(),
+        );
+        let key = "creator partition".to_owned();
+        let url = store
+            .create_object_url_with_access_key(Some(1), blob, "null", Some(key.clone()))
+            .unwrap();
+        let unkeyed = store.create_object_url(Some(1), blob, "null").unwrap();
+        assert!(
+            store
+                .object_url_entry_with_access_key(&url, &"other partition".to_owned())
+                .is_none()
+        );
+        assert!(
+            store
+                .object_url_entry_with_access_key(&unkeyed, &key)
+                .is_none()
+        );
+        assert_eq!(source.0.load(Ordering::Relaxed), 0);
+
+        let captured = store
+            .object_url_entry_with_access_key(&format!("{url}#fragment"), &key)
+            .unwrap();
+        assert_eq!(source.0.load(Ordering::Relaxed), 1);
+        assert!(store.revoke_object_url_with_access_key(&url, &key));
+        assert!(store.object_url_entry_with_access_key(&url, &key).is_none());
+        assert_eq!(source.0.load(Ordering::Relaxed), 1);
+        assert_eq!(captured.access_key, Some(key));
+        let ObjectUrlData::Blob { bytes, mime_type } = captured.data;
+        assert_eq!(&*bytes, b"private");
+        assert_eq!(mime_type, "text/javascript");
     }
 
     #[test]

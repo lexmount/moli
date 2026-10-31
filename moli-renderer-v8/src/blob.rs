@@ -516,6 +516,19 @@ pub(crate) fn object_url_entry(url: &str) -> Option<RendererObjectUrlEntry> {
     blob_store().object_url_entry(url)
 }
 
+pub(crate) fn object_url_body_and_type_with_access_key(
+    url: &str,
+    access_key: &ObjectUrlAccessKey,
+) -> Option<(String, String)> {
+    let moli_file_api::ObjectUrlData::Blob { bytes, mime_type } = blob_store()
+        .object_url_entry_with_access_key(url, access_key)?
+        .data
+    else {
+        return None;
+    };
+    Some((String::from_utf8_lossy(&bytes).into_owned(), mime_type))
+}
+
 pub(crate) fn object_url_policy(url: &str) -> Option<ObjectUrlPolicySnapshot> {
     let source = blob_store().object_url_metadata(url)?;
     Some(ObjectUrlPolicySnapshot {
