@@ -64,3 +64,78 @@ async fn native_promise_rejection_events_finish_shared_dispatch_state() {
     let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
     assert_eq!(expect_post_json(message), "[true,true,11,false]");
 }
+
+#[tokio::test]
+async fn service_worker_install_listeners_survive_worker_navigator_materialization() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        void navigator;
+        addEventListener('install', event => {
+            event.waitUntil(Promise.reject('install listener reached'));
+        });
+        "#,
+    );
+    let completion = dispatch_service_worker_lifecycle_event_for_test(
+        &mut handle,
+        ServiceWorkerLifecycleEventKind::Install,
+        1,
+    )
+    .await;
+    handle.terminate_and_join();
+    assert_eq!(
+        completion.result,
+        Err("service worker waitUntil promise rejected".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn service_worker_message_listeners_survive_worker_navigator_materialization() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        const retainedNavigator = navigator;
+        addEventListener('message', event => {
+            const identity = retainedNavigator === navigator && event.target === self;
+            if (event.data === 'payload' && identity) {
+                event.waitUntil(Promise.reject('message listener reached'));
+            }
+        });
+        "#,
+    );
+    let completion = dispatch_service_worker_message_event_for_test(
+        &mut handle,
+        1,
+        serialize_test_post_message_value("'payload'"),
+    )
+    .await;
+    handle.terminate_and_join();
+    assert_eq!(
+        completion.result,
+        Err("service worker waitUntil promise rejected".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn service_worker_dispatch_survives_navigator_materialization_in_an_earlier_listener() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        addEventListener('install', () => { void navigator; });
+        addEventListener('install', event => {
+            event.waitUntil(Promise.reject('later install listener reached'));
+        });
+        "#,
+    );
+    let completion = dispatch_service_worker_lifecycle_event_for_test(
+        &mut handle,
+        ServiceWorkerLifecycleEventKind::Install,
+        1,
+    )
+    .await;
+    handle.terminate_and_join();
+    assert_eq!(
+        completion.result,
+        Err("service worker waitUntil promise rejected".to_owned())
+    );
+}
