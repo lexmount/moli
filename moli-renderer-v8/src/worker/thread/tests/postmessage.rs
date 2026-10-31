@@ -1,6 +1,62 @@
 use super::*;
 
 #[tokio::test]
+async fn shared_array_buffer_worker_graphs_and_ports_inherit_the_creator_agent_cluster() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            format!(
+                "({}).then(value => {{ postMessage(value); close(); }});",
+                include_str!("../../../../tests/fixtures/shared-memory-worker-roundtrip.js")
+            ),
+            "https://shared-memory-worker.test/parent.js".into(),
+        )
+        .with_policy_context(crate::types::SubresourcePolicyContext {
+            cross_origin_isolated: true,
+            ..Default::default()
+        }),
+    );
+    let message = timeout(Duration::from_secs(35), handle.recv())
+        .await
+        .expect("shared-memory worker fixture should complete")
+        .expect("shared-memory worker fixture should report");
+    let result: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/shared-memory-worker-roundtrip-chromium.json"
+    ))
+    .unwrap();
+    assert_eq!(result, expected);
+}
+
+#[tokio::test]
+async fn shared_array_buffer_workers_cannot_grant_isolation_through_author_properties() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        Object.defineProperty(globalThis, 'crossOriginIsolated', {value: true, configurable: true});
+        const buffer = new WebAssembly.Memory({shared: true, initial: 1, maximum: 1}).buffer;
+        const channel = new MessageChannel();
+        const broadcast = new BroadcastChannel('unisolated-shared-memory');
+        const probe = operation => {
+            try { operation(); return 'accepted'; } catch (error) { return error.name; }
+        };
+        const result = [probe(() => structuredClone(buffer)),
+            probe(() => channel.port1.postMessage(buffer)),
+            probe(() => broadcast.postMessage(buffer)), probe(() => postMessage(buffer))];
+        channel.port1.close(); channel.port2.close(); broadcast.close();
+        postMessage(result); close();
+        "#
+        .into(),
+        "https://shared-memory-worker.test/unisolated.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    assert_eq!(
+        expect_post_json(message),
+        r#"["DataCloneError","DataCloneError","DataCloneError","DataCloneError"]"#
+    );
+}
+
+#[tokio::test]
 async fn worker_observable_catch_preserves_recovery_order_conversion_reentrancy_and_cancellation() {
     ensure_v8();
     let mut handle = spawn_worker(

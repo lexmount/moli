@@ -587,13 +587,15 @@ pub(crate) use self::shared::structured_deserialize_value;
 pub(crate) use self::shared::structured_serialize_value;
 pub(in crate::context_bootstrap) use self::shared::*;
 pub(crate) use self::shared::{
-    CHILD_BROWSING_CONTEXT_HANDLE_SLOT, WINDOW_CUSTOM_ELEMENTS_SLOT, WINDOW_NAME_SLOT,
+    CHILD_BROWSING_CONTEXT_HANDLE_SLOT, WINDOW_CUSTOM_ELEMENTS_SLOT, WINDOW_DOCUMENT_SLOT,
+    WINDOW_NAME_SLOT,
 };
 pub(crate) use self::shared::{
-    RuntimeMessageSourceSecurity, prepare_value_for_window_post_message,
-    runtime_message_allowed_for_current_target, structured_clone_value,
+    RuntimeMessageSourceSecurity, current_shared_memory_agent_cluster,
+    prepare_value_for_window_post_message, runtime_message_allowed_for_current_target,
+    runtime_message_allowed_for_target, structured_clone_value,
     structured_clone_value_with_options, structured_deserialize_value_for_message_event,
-    structured_serialize_value_for_post_message, wasm_module_message_allowed_for_target,
+    structured_serialize_value_for_post_message,
 };
 pub(crate) use self::shared::{
     console_arg_remote_object_json, console_label_arguments, current_console_stack,

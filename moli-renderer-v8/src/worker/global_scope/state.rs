@@ -128,6 +128,8 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) network_partition_key: Option<String>,
     /// COEP/DIP policy container state inherited by worker-owned subresource requests.
     pub(in crate::worker) policy_context: crate::types::SubresourcePolicyContext,
+    pub(in crate::worker) shared_memory_agent_cluster:
+        crate::structured_clone::SharedMemoryAgentCluster,
     /// Async fetch completions routed back onto the worker event loop.
     pub(in crate::worker) fetch_completion_tx: mpsc::UnboundedSender<WorkerFetchEvent>,
     /// Promise resolvers pending async fetch completion.
@@ -341,6 +343,15 @@ pub(crate) fn worker_termination_requested(scope: &mut v8::PinScope<'_, '_>) -> 
 
 pub(crate) fn worker_storage_key(scope: &mut v8::PinScope<'_, '_>) -> Option<MoliStorageKey> {
     Some(get_worker_state(scope)?.borrow().storage_key.clone())
+}
+
+pub(crate) fn worker_shared_memory_agent_cluster(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<crate::structured_clone::SharedMemoryAgentCluster> {
+    let state = get_worker_state(scope)?;
+    let state = state.borrow();
+    (state.secure_context && state.policy_context.cross_origin_isolated)
+        .then(|| state.shared_memory_agent_cluster.clone())
 }
 
 pub(crate) fn worker_storage_partition_identity(

@@ -1,0 +1,98 @@
+{
+  "classic/direct/worker": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    20,
+    4,
+    2,
+    16
+  ],
+  "classic/direct/port": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    20,
+    4,
+    2,
+    16
+  ],
+  "classic/nested/worker": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    20,
+    4,
+    2,
+    16
+  ],
+  "classic/nested/port": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    20,
+    4,
+    2,
+    16
+  ],
+  "module/direct/worker": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    20,
+    4,
+    2,
+    16
+  ],
+  "module/direct/port": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    20,
+    4,
+    2,
+    16
+  ],
+  "module/nested/worker": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    20,
+    4,
+    2,
+    16
+  ],
+  "module/nested/port": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    20,
+    4,
+    2,
+    16
+  ]
+}

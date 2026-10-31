@@ -1848,6 +1848,10 @@ fn window_message_endpoint_security(
         }
     };
     host.window_message_source_security(dispatch)
+        .map(|security| {
+            security
+                .with_shared_memory_agent_cluster(host.window_shared_memory_agent_cluster(dispatch))
+        })
 }
 
 fn window_message_requires_messageerror(
@@ -1857,7 +1861,7 @@ fn window_message_requires_messageerror(
     let Some(target) = target else {
         return false;
     };
-    !crate::context_bootstrap::wasm_module_message_allowed_for_target(&message.data, target)
+    !crate::context_bootstrap::runtime_message_allowed_for_target(&message.data, target)
 }
 
 fn window_message_wasm_eval_csp_violation(
