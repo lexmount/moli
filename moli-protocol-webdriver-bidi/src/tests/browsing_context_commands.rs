@@ -1660,18 +1660,36 @@ fn locale_override_accepts_icu_locales_without_normalizing_input() {
 }
 
 #[test]
-fn locale_override_rejects_many_repeated_transformed_language_extensions() {
-    let locale = format!("abcde{}", "-t-abcdefgh".repeat(10_000));
-    let command = super::super::parse_bidi_command(json!({
-        "id": 10,
-        "method": "emulation.setLocaleOverride",
-        "params": {"contexts": ["TARGET-1"], "locale": locale}
-    }))
-    .expect("BiDi command");
-    let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
-    let error = super::super::automation_command_from_bidi_command(&command, &context)
-        .expect_err("duplicate transformed extensions must be rejected");
-    assert_eq!(error.code, crate::BidiErrorCode::InvalidArgument);
+fn locale_override_checks_repeated_extensions_after_valid_language_prefixes() {
+    // A supported primary language and one valid extension are positive
+    // controls: rejection must not be hidden by an invalid language prefix.
+    for (locale, valid) in [
+        ("en".to_owned(), true),
+        ("en-t-en".to_owned(), true),
+        ("en-t-en-t-en".to_owned(), false),
+        (format!("en{}", "-t-en".repeat(10_000)), false),
+        (format!("en-x{}", "-abcdefgh".repeat(10_000)), true),
+    ] {
+        let command = super::super::parse_bidi_command(json!({
+            "id": 10,
+            "method": "emulation.setLocaleOverride",
+            "params": {"contexts": ["TARGET-1"], "locale": locale}
+        }))
+        .expect("BiDi command");
+        let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
+        let shared = super::super::automation_command_from_bidi_command(&command, &context);
+        if valid {
+            let moli_protocol::automation::AutomationCommand::SetLocaleOverride(command) =
+                shared.expect("valid prefix or private-use sequence")
+            else {
+                panic!("expected SetLocaleOverride command");
+            };
+            assert_eq!(command.locale.as_deref(), Some(locale.as_str()));
+        } else {
+            let error = shared.expect_err("duplicate transformed extensions must be rejected");
+            assert_eq!(error.code, crate::BidiErrorCode::InvalidArgument);
+        }
+    }
 }
 
 #[test]
