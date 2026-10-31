@@ -204,6 +204,7 @@ pub(crate) struct WorkerSpawnOptions {
         Option<crate::content_security_policy::InheritedContentSecurityPolicy>,
     pub(crate) network_policy: WorkerNetworkPolicy,
     pub(crate) policy_context: crate::types::SubresourcePolicyContext,
+    shared_memory_agent_cluster: Option<crate::structured_clone::SharedMemoryAgentCluster>,
     pub(crate) worker_context_runtime: RendererWorkerContextRuntime,
     pub(crate) global_kind: WorkerGlobalKind,
     pub(crate) api_storage_key: Option<BroadcastChannelStorageKey>,
@@ -343,6 +344,7 @@ impl WorkerSpawnOptions {
             ),
             network_policy: WorkerNetworkPolicy::default(),
             policy_context: Default::default(),
+            shared_memory_agent_cluster: None,
             worker_context_runtime: RendererWorkerContextRuntime::new(
                 crate::message_port_runtime::new_message_port_registry(),
                 crate::broadcast_channel_runtime::new_broadcast_channel_registry(),
@@ -467,6 +469,14 @@ impl WorkerSpawnOptions {
         policy_context: crate::types::SubresourcePolicyContext,
     ) -> Self {
         self.policy_context = policy_context;
+        self
+    }
+
+    pub(crate) fn with_shared_memory_agent_cluster(
+        mut self,
+        cluster: Option<crate::structured_clone::SharedMemoryAgentCluster>,
+    ) -> Self {
+        self.shared_memory_agent_cluster = cluster;
         self
     }
 
@@ -1407,6 +1417,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         content_security_policy_snapshot,
         network_policy,
         policy_context,
+        shared_memory_agent_cluster,
         worker_context_runtime,
         global_kind,
         api_storage_key,
@@ -1464,6 +1475,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 content_security_policy_snapshot,
                 network_policy,
                 policy_context,
+                shared_memory_agent_cluster,
                 worker_context_runtime,
                 global_kind,
                 api_storage_key,
@@ -1603,6 +1615,7 @@ async fn worker_main(
     >,
     network_policy: WorkerNetworkPolicy,
     policy_context: crate::types::SubresourcePolicyContext,
+    shared_memory_agent_cluster: Option<crate::structured_clone::SharedMemoryAgentCluster>,
     worker_context_runtime: RendererWorkerContextRuntime,
     global_kind: WorkerGlobalKind,
     api_storage_key: Option<BroadcastChannelStorageKey>,
@@ -1655,6 +1668,16 @@ async fn worker_main(
     let worker_storage_bucket_store = Some(storage_bucket_store.clone());
     let (worker_runtime_wake_tx, mut worker_runtime_wake_rx) = mpsc::unbounded_channel::<()>();
     let resource_owner_id = crate::resource_owner::ResourceOwnerId::new();
+    let shared_memory_agent_cluster = if matches!(&global_kind, WorkerGlobalKind::Dedicated { .. })
+    {
+        shared_memory_agent_cluster.unwrap_or_else(|| {
+            crate::structured_clone::SharedMemoryAgentCluster::worker(resource_owner_id)
+        })
+    } else {
+        // SharedWorker and ServiceWorker agents do not join the requester's
+        // cluster. Their own DedicatedWorker descendants can inherit this one.
+        crate::structured_clone::SharedMemoryAgentCluster::worker(resource_owner_id)
+    };
     let mut worker_isolate = WorkerIsolateState::new(
         crate::v8_platform::V8ForegroundTaskWake::worker(worker_runtime_wake_tx.clone()),
         inspector_task_runner.clone(),
@@ -1810,6 +1833,7 @@ async fn worker_main(
         blocked_url_patterns: network_policy.blocked_url_patterns,
         network_partition_key: network_policy.network_partition_key,
         policy_context,
+        shared_memory_agent_cluster,
         fetch_subresource_interception_enabled: network_policy
             .fetch_subresource_interception_enabled,
         fetch_subresource_interception_resource_type: network_policy

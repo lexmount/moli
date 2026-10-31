@@ -36,6 +36,7 @@ pub(super) enum WorkerExecutionState {
         storage_key_top_level_site: String,
         creator_storage_key: MoliStorageKey,
         creator_message_security: Option<crate::context_bootstrap::RuntimeMessageSourceSecurity>,
+        shared_memory_agent_cluster: Option<crate::structured_clone::SharedMemoryAgentCluster>,
         reserved_service_worker_client_id:
             Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     },

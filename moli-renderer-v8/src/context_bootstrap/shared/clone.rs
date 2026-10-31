@@ -2,7 +2,7 @@ use crate::{
     context_bootstrap::message_port_id_from_object,
     structured_clone::{
         PreparedStructuredClone, RuntimeMessageAgentCluster, RuntimeMessageOpaqueOrigin,
-        StructuredCloneMetadata, V8StructuredClonePayload, WireTransfer, WireTransfers,
+        SharedMemoryAgentCluster, StructuredCloneMetadata, V8StructuredClonePayload, WireTransfer, WireTransfers,
         deserialize_from_wire, deserialize_message_event_from_wire,
         prepare_for_window_post_message, serialize_for_wire_for_runtime,
         serialize_for_wire_for_runtime_message, serialize_for_wire_for_runtime_with_transfers,
@@ -113,6 +113,7 @@ pub(crate) struct RuntimeMessageSourceSecurity {
     origin: Option<String>,
     opaque_origin: Option<std::sync::Arc<RuntimeMessageOpaqueOrigin>>,
     agent_cluster: RuntimeMessageAgentCluster,
+    shared_memory_agent_cluster: Option<SharedMemoryAgentCluster>,
 }
 
 impl RuntimeMessageSourceSecurity {
@@ -124,7 +125,16 @@ impl RuntimeMessageSourceSecurity {
             origin: Some(origin),
             opaque_origin,
             agent_cluster: RuntimeMessageAgentCluster::WindowOrDedicatedWorker,
+            shared_memory_agent_cluster: None,
         }
+    }
+
+    pub(crate) fn with_shared_memory_agent_cluster(
+        mut self,
+        cluster: Option<SharedMemoryAgentCluster>,
+    ) -> Self {
+        self.shared_memory_agent_cluster = cluster;
+        self
     }
 
     pub(crate) fn serialized_origin(&self) -> Option<&str> {
@@ -154,6 +164,7 @@ impl RuntimeMessageSourceSecurity {
             origin,
             opaque_origin,
             agent_cluster,
+            shared_memory_agent_cluster: None,
         }
     }
 
@@ -167,15 +178,21 @@ impl RuntimeMessageSourceSecurity {
                 && let Some(security) =
                     host.window_message_source_security(identity.dispatch_scope())
             {
-                return security;
+                return security.with_shared_memory_agent_cluster(
+                    host.window_shared_memory_agent_cluster(identity.dispatch_scope()),
+                );
             }
         } else if let Some(state) = crate::worker::get_worker_state(scope) {
-            return state.borrow().message_source_security.clone();
+            let security = state.borrow().message_source_security.clone();
+            return security.with_shared_memory_agent_cluster(
+                crate::worker::worker_shared_memory_agent_cluster(scope),
+            );
         }
         Self {
             origin: None,
             opaque_origin: None,
             agent_cluster: RuntimeMessageAgentCluster::WindowOrDedicatedWorker,
+            shared_memory_agent_cluster: None,
         }
     }
 }
@@ -234,7 +251,12 @@ pub(crate) fn prepare_value_for_window_post_message<'s>(
         TransferListOperation::PostMessage("Window"),
         None,
     )?;
-    let mut prepared = prepare_for_window_post_message(scope, value, &transfers.wire_transfers())?;
+    let mut prepared = prepare_for_window_post_message(
+        scope,
+        value,
+        &transfers.wire_transfers(),
+        source_security.shared_memory_agent_cluster.clone(),
+    )?;
     attach_runtime_message_source(prepared.metadata_mut(), source_security);
     Some(prepared)
 }
@@ -261,6 +283,25 @@ pub(crate) fn structured_deserialize_value_for_message_event<'s>(
 
 pub(crate) fn current_runtime_message_origin(scope: &mut v8::PinScope<'_, '_>) -> Option<String> {
     RuntimeMessageSourceSecurity::current(scope).origin
+}
+
+pub(crate) fn current_shared_memory_agent_cluster(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<SharedMemoryAgentCluster> {
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let host = unsafe { &*host_ptr };
+        let identity = host.current_runtime_window_execution_context_identity(scope)?;
+        return host.window_shared_memory_agent_cluster(identity.dispatch_scope());
+    }
+    crate::worker::worker_shared_memory_agent_cluster(scope)
+}
+
+pub(crate) fn runtime_message_allowed_for_target(
+    payload: &V8StructuredClonePayload,
+    target: &RuntimeMessageSourceSecurity,
+) -> bool {
+    payload.shared_memory_allowed_for_agent_cluster(target.shared_memory_agent_cluster.as_ref())
+        && wasm_module_message_allowed_for_target(payload, target)
 }
 
 pub(crate) fn wasm_module_message_allowed_for_target(
@@ -292,10 +333,12 @@ pub(crate) fn runtime_message_allowed_for_current_target(
     scope: &mut v8::PinScope<'_, '_>,
     payload: &V8StructuredClonePayload,
 ) -> bool {
-    if !payload.metadata.contains_wasm_module || !payload.metadata.origin_check_required {
+    if (!payload.metadata.contains_wasm_module || !payload.metadata.origin_check_required)
+        && payload.shared_memory_allowed_for_agent_cluster(None)
+    {
         return true;
     }
-    wasm_module_message_allowed_for_target(payload, &RuntimeMessageSourceSecurity::current(scope))
+    runtime_message_allowed_for_target(payload, &RuntimeMessageSourceSecurity::current(scope))
 }
 
 fn attach_runtime_message_source(
@@ -755,6 +798,7 @@ mod tests {
                     origin: Some("https://example.test".to_owned()),
                     opaque_origin: None,
                     agent_cluster: target_agent_cluster,
+                    shared_memory_agent_cluster: None,
                 },
             ));
         }
