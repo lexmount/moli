@@ -1,4 +1,5 @@
 globalThis.runTextDecoderInputSnapshotContract = async function () {
+  const SharedBuffer = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer.constructor;
   const checks = [];
   function check(name, operation) {
     try { checks.push({ name, passed: operation() === true }); }
@@ -18,12 +19,12 @@ globalThis.runTextDecoderInputSnapshotContract = async function () {
       return { input: new DataView(bytes.buffer, 1, 1), mutate: () => bytes[1] = 66 };
     }],
     ["shared buffer", () => {
-      const bytes = new Uint8Array(new SharedArrayBuffer(1));
+      const bytes = new Uint8Array(new SharedBuffer(1));
       bytes[0] = 65;
       return { input: bytes.buffer, mutate: () => Atomics.store(bytes, 0, 66) };
     }],
     ["shared view offset", () => {
-      const bytes = new Uint8Array(new SharedArrayBuffer(3));
+      const bytes = new Uint8Array(new SharedBuffer(3));
       bytes[1] = 65;
       return { input: bytes.subarray(1, 2), mutate: () => Atomics.store(bytes, 1, 66) };
     }],
@@ -65,7 +66,7 @@ globalThis.runTextDecoderInputSnapshotContract = async function () {
   for (const shared of [false, true]) {
     for (const kind of ["buffer", "view", "DataView"]) {
       invalidSources.push([`${shared ? "growable shared" : "resizable"} ${kind}`, () => {
-        const buffer = shared ? new SharedArrayBuffer(1, { maxByteLength: 2 }) :
+        const buffer = shared ? new SharedBuffer(1, { maxByteLength: 2 }) :
           new ArrayBuffer(1, { maxByteLength: 2 });
         return kind === "buffer" ? buffer : kind === "view" ? new Uint8Array(buffer) : new DataView(buffer);
       }]);
@@ -105,7 +106,7 @@ globalThis.runTextDecoderInputSnapshotContract = async function () {
   });
   for (const kind of ["buffer", "view", "DataView", "shared buffer"]) {
     check(`ignore author buffer getters: ${kind}`, () => {
-      const buffer = kind === "shared buffer" ? new SharedArrayBuffer(1) : new ArrayBuffer(1);
+      const buffer = kind === "shared buffer" ? new SharedBuffer(1) : new ArrayBuffer(1);
       new Uint8Array(buffer)[0] = 65;
       const input = kind === "view" ? new Uint8Array(buffer) : kind === "DataView" ? new DataView(buffer) : buffer;
       let reads = 0;
