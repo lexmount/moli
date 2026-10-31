@@ -1012,6 +1012,11 @@ impl Request {
             .map_or(&self.url, |redirect| &redirect.from_url)
     }
 
+    /// Updates observations attached to already followed redirects.
+    pub fn redirect_chain_mut(&mut self) -> &mut [RedirectInfo] {
+        &mut self.redirect_chain
+    }
+
     /// Records a followed redirect. The caller controls method and current URL
     /// updates so this also supports transports that retain the original URL.
     pub fn record_redirect(&mut self, redirect: RedirectInfo) {
