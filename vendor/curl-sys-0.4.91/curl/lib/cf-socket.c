@@ -1041,6 +1041,7 @@ struct cf_socket_ctx {
   BIT(sock_connected);               /* socket is "connected", e.g. in UDP */
   BIT(active);
   BIT(stats_reported);
+  BIT(moli_gate_attempt); /* current Easy has observed this TCP candidate */
 };
 
 static CURLcode cf_socket_ctx_init(struct cf_socket_ctx *ctx,
@@ -1086,6 +1087,55 @@ static CURLcode cf_socket_ctx_init(struct cf_socket_ctx *ctx,
   return CURLE_OK;
 }
 
+/* The callback state belongs to the current Easy, not to the connection.
+ * Connections may be pooled beyond that Easy's lifetime. The native owner
+ * releases all of an Easy's attempts before detaching it from Multi. */
+static void cf_socket_moli_release(struct cf_socket_ctx *ctx,
+                                   struct Curl_easy *data)
+{
+  if(ctx->moli_gate_attempt) {
+    ctx->moli_gate_attempt = FALSE;
+    if(data && data->set.moli_websocket_gate) {
+      const struct curl_moli_websocket_gate *gate =
+        data->set.moli_websocket_gate;
+      gate->release(gate->userdata, (uintptr_t)ctx);
+    }
+  }
+}
+
+static int cf_socket_moli_admit(struct cf_socket_ctx *ctx,
+                               struct Curl_easy *data)
+{
+  const struct curl_moli_websocket_gate *gate = data->set.moli_websocket_gate;
+  const unsigned char *address;
+  unsigned int length, scope = 0;
+  unsigned short port;
+  if(!gate)
+    return 1;
+  if(ctx->addr.family == AF_INET) {
+    const struct sockaddr_in *addr =
+      (const struct sockaddr_in *)&ctx->addr.addr.sa;
+    address = (const unsigned char *)&addr->sin_addr;
+    length = 4;
+    port = ntohs(addr->sin_port);
+  }
+#ifdef USE_IPV6
+  else if(ctx->addr.family == AF_INET6) {
+    const struct sockaddr_in6 *addr =
+      (const struct sockaddr_in6 *)&ctx->addr.addr.sa;
+    address = (const unsigned char *)&addr->sin6_addr;
+    length = 16;
+    port = ntohs(addr->sin6_port);
+    scope = addr->sin6_scope_id;
+  }
+#endif
+  else
+    return -1;
+  ctx->moli_gate_attempt = TRUE;
+  return gate->acquire(gate->userdata, (uintptr_t)ctx, address, length,
+                        port, scope);
+}
+
 static void cf_socket_ctx_free(struct cf_socket_ctx *ctx)
 {
   if(ctx) {
@@ -1122,6 +1172,7 @@ static void cf_socket_destroy(struct Curl_cfilter *cf, struct Curl_easy *data)
 
   CURL_TRC_CF(data, cf, "destroy");
   if(ctx) {
+    cf_socket_moli_release(ctx, data);
     if(ctx->sock != CURL_SOCKET_BAD) {
       CURL_TRC_CF(data, cf, "cf_socket_close, fd=%" FMT_SOCKET_T, ctx->sock);
       if(ctx->sock == cf->conn->sock[cf->sockindex])
@@ -1482,6 +1533,11 @@ static CURLcode cf_tcp_connect(struct Curl_cfilter *cf,
   *done = FALSE; /* a negative world view is best */
   if(ctx->sock == CURL_SOCKET_BAD) {
     int sockerr;
+    int admitted = cf_socket_moli_admit(ctx, data);
+    if(admitted < 0)
+      return CURLE_ABORTED_BY_CALLBACK;
+    if(!admitted)
+      return CURLE_OK;
 
     result = cf_socket_open(cf, data);
     if(result)
@@ -1540,6 +1596,7 @@ static CURLcode cf_tcp_connect(struct Curl_cfilter *cf,
 out:
   if(result) {
     VERBOSE(char buffer[STRERROR_LEN]);
+    cf_socket_moli_release(ctx, data);
     set_local_ip(cf, data);
     if(ctx->sockerr) {
       data->state.os_errno = ctx->sockerr;

@@ -928,6 +928,8 @@ static CURLcode dupset(struct Curl_easy *dst, struct Curl_easy *src)
   /* Copy src->set into dst->set first, then deal with the strings
      afterwards */
   dst->set = src->set;
+  /* The native owner's borrowed endpoint gate belongs to one Easy lifetime. */
+  dst->set.moli_websocket_gate = NULL;
 #if !defined(CURL_DISABLE_MIME) || !defined(CURL_DISABLE_FORM_API)
   dst->set.mimepostp = NULL;
 #endif
