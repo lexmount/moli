@@ -2429,6 +2429,7 @@ async fn write_script_response(
 }
 
 mod audio_worklet_and_message_ports;
+mod blob_storage_key;
 mod message_port_transfer_semantics;
 mod service_and_shared_worker_lifecycle;
 mod window_request_referrer;
