@@ -2140,6 +2140,35 @@ impl JsContextHost {
         self.abort_subresource_fetch(internal_id)
     }
 
+    /// Preserve a completed transport outcome when a delayed XHR timer runs
+    /// before the Window's queued networking delivery. Authentication and
+    /// response-interception holds remain timeout-able.
+    pub(crate) fn cancel_xhr_fetch_for_timeout(&mut self, internal_id: u64) -> bool {
+        let pending = self
+            .pending_subresource_fetches
+            .get(&internal_id)
+            .or_else(|| {
+                self.running_subresource_fetches
+                    .get(&internal_id)
+                    .map(|running| &running.pending)
+            })
+            .or_else(|| {
+                self.streaming_subresource_fetches
+                    .get(&internal_id)
+                    .map(|streaming| &streaming.pending)
+            });
+        if pending.is_some_and(|pending| {
+            pending.continuation.is_window_xhr() && !pending.load.cancel_if_response_pending()
+        }) {
+            return false;
+        }
+        let _ = self
+            .browser_context_runtime
+            .abort_service_worker_fetch(internal_id);
+        self.abort_subresource_fetch(internal_id);
+        true
+    }
+
     pub(crate) fn abort_subresource_fetch(&mut self, internal_id: u64) -> bool {
         if let Some(pending) = self.pending_subresource_fetches.remove(&internal_id) {
             #[cfg(test)]

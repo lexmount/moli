@@ -807,6 +807,11 @@ impl ResourceRequestClient {
         mut body_eof_observer: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> StreamingRawResponse {
         let head = response.head();
+        // The tee owns cancellation independently, but observes the exact
+        // upstream transport completion, including a finish before delivery.
+        let source_cancel = response.cancellation_handle();
+        let outward_cancel = source_cancel.child_for_subrequest();
+        outward_cancel.adopt_response_progress(&source_cancel);
         let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
         let resource_runtime = self.resource_runtime.clone();
@@ -867,7 +872,7 @@ impl ResourceRequestClient {
                 let _ = completion_tx.send(completion);
             }
         });
-        StreamingRawResponse::new_with_head(head, body_rx, FetchCancelHandle::new(), completion_rx)
+        StreamingRawResponse::new_with_head(head, body_rx, outward_cancel, completion_rx)
     }
 
     pub(crate) fn fetch_text_callback<F>(&self, request: Request, callback: F) -> Result<()>
