@@ -71,8 +71,15 @@ impl BrowserCookieStore {
             if cookie.is_expired() {
                 continue;
             }
-            let (input, url) = canonical_cookie_input_from_stored_cookie(&cookie, None)
+            let (input, mut url) = canonical_cookie_input_from_stored_cookie(&cookie, None)
                 .ok_or_else(|| "invalid persisted cookie identity".to_owned())?;
+            // Source-scheme metadata can differ from the HTTPS request that
+            // originally admitted a Secure cookie. Validate over HTTPS while
+            // retaining that metadata in the canonical input.
+            if cookie.secure {
+                url.set_scheme("https")
+                    .map_err(|()| "invalid persisted cookie URL scheme".to_owned())?;
+            }
             let native = cookie_store::Cookie::try_from_canonical_input(input, &url)
                 .map_err(|error| error.to_string())?
                 .with_persistent_ordering(cookie.creation_index, cookie.last_access_index);
@@ -139,6 +146,36 @@ mod tests {
             .unwrap();
         assert_eq!(added.creation_index, 18);
         assert_eq!(added.last_access_index, 104);
+    }
+
+    #[test]
+    fn restore_preserves_secure_cookie_source_metadata() {
+        let https = Url::parse("https://restore.test/").unwrap();
+        let http = Url::parse("http://restore.test/").unwrap();
+        for scheme in [
+            StoredCookieSourceScheme::NonSecure,
+            StoredCookieSourceScheme::Secure,
+            StoredCookieSourceScheme::Unset,
+        ] {
+            let mut row = cookie("__Host-sid");
+            row.source_scheme = scheme;
+            row.source_port = 80;
+            let mut store = BrowserCookieStore::default();
+            assert!(
+                !store
+                    .upsert_with_request_url_report(row.clone(), Some(&http), CookieSource::Cdp)
+                    .is_accepted(),
+                "ordinary HTTP writes still enforce Secure"
+            );
+            assert!(
+                store
+                    .upsert_with_request_url_report(row, Some(&https), CookieSource::Cdp)
+                    .is_accepted()
+            );
+            let expected = store.cookies();
+            let mut restored = BrowserCookieStore::from_persisted(expected.clone()).unwrap();
+            assert_eq!(restored.cookies(), expected);
+        }
     }
 
     #[test]

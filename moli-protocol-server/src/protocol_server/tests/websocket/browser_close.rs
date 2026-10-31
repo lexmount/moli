@@ -85,3 +85,75 @@ async fn websocket_cdp_browser_close_releases_lock_and_persists_profile() {
     wait_for_profile_lock_release(&paths).await;
     fixture_server.abort();
 }
+
+#[tokio::test]
+async fn websocket_cdp_secure_cookie_with_nonsecure_source_survives_restart() {
+    let profile = TempDir::new("secure-cookie-source-profile");
+    let paths = BrowserProfilePaths::new(&profile.path);
+    let mut expected = Vec::new();
+    for round in 0..2 {
+        let (addr, server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
+        let (mut socket, _) =
+            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+                .await
+                .expect("connect to profiled browser");
+        let target = cdp_create_attached_target(&mut socket, 1, "BID-default").await;
+        if round == 0 {
+            for (id, params) in [
+                (
+                    3,
+                    json!({
+                        "url": "https://cookie.test/",
+                        "name": "sid",
+                        "value": "123",
+                        "secure": true,
+                        "sourceScheme": "NonSecure"
+                    }),
+                ),
+                (
+                    4,
+                    json!({
+                        "url": "https://other.test/",
+                        "name": "other",
+                        "value": "kept"
+                    }),
+                ),
+            ] {
+                let messages = send_cdp_command(
+                    &mut socket,
+                    id,
+                    "Network.setCookie",
+                    Some(&target.session_id),
+                    params,
+                )
+                .await;
+                let response = messages.iter().find(|message| message["id"] == id).unwrap();
+                assert!(response["error"].is_null(), "{response}");
+                assert_eq!(response["result"]["success"], true);
+            }
+        }
+        let messages =
+            send_cdp_command(&mut socket, 5, "Storage.getCookies", None, json!({})).await;
+        let response = messages.iter().find(|message| message["id"] == 5).unwrap();
+        assert!(response["error"].is_null(), "{response}");
+        let cookies = response["result"]["cookies"].as_array().unwrap();
+        if round == 0 {
+            assert_eq!(cookies.len(), 2);
+            let cookie = cookies
+                .iter()
+                .find(|cookie| cookie["name"] == "sid")
+                .unwrap();
+            assert_eq!(cookie["secure"], true);
+            assert_eq!(cookie["sourceScheme"], "NonSecure");
+            assert_eq!(cookie["value"], "123");
+            expected = cookies.clone();
+        } else {
+            assert_eq!(
+                cookies, &expected,
+                "all cookies and metadata survive restart"
+            );
+        }
+        close_profiled_server(&mut socket, server).await;
+        wait_for_profile_lock_release(&paths).await;
+    }
+}
