@@ -37,7 +37,6 @@ impl JsContextHost {
                         .as_ref()?
                         .resource_owner_id,
                     owner,
-                    self.browser_context_runtime().storage_partition_identity(),
                 ))
             });
             return Some(RuntimeMessageSourceSecurity::window(

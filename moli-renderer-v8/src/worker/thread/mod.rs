@@ -1660,7 +1660,6 @@ async fn worker_main(
         current_script_url.as_ref(),
         creator_message_security,
         resource_owner_id,
-        worker_context_runtime.storage_partition_identity(),
         message_agent_cluster,
     );
     let state = Rc::new(RefCell::new(WorkerGlobalState {

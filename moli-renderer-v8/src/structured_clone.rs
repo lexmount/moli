@@ -400,12 +400,11 @@ pub(crate) enum RuntimeMessageAgentCluster {
     ServiceWorker,
 }
 
-/// Security-origin identity, independent of storage partition nonces. Window
-/// identity is scoped by its host, since LocalWindow ids are owner-local.
+/// Native opaque security-origin identity, independent of storage partitions
+/// and their nonces. Window ids are owner-local, so include the host identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RuntimeMessageOpaqueOrigin {
     owner: RuntimeOpaqueOriginOwner,
-    partition: crate::runtime::RendererStoragePartitionIdentity,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -421,21 +420,15 @@ impl RuntimeMessageOpaqueOrigin {
     pub(crate) fn window(
         host: crate::resource_owner::ResourceOwnerId,
         window: crate::native_bridge::WindowExecutionContextOwner,
-        partition: crate::runtime::RendererStoragePartitionIdentity,
     ) -> Arc<Self> {
         Arc::new(Self {
             owner: RuntimeOpaqueOriginOwner::Window { host, window },
-            partition,
         })
     }
 
-    pub(crate) fn worker(
-        owner: crate::resource_owner::ResourceOwnerId,
-        partition: crate::runtime::RendererStoragePartitionIdentity,
-    ) -> Arc<Self> {
+    pub(crate) fn worker(owner: crate::resource_owner::ResourceOwnerId) -> Arc<Self> {
         Arc::new(Self {
             owner: RuntimeOpaqueOriginOwner::Worker(owner),
-            partition,
         })
     }
 }

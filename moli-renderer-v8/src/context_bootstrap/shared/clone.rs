@@ -112,7 +112,6 @@ impl RuntimeMessageSourceSecurity {
         script_url: Option<&url::Url>,
         creator: Option<Self>,
         owner: crate::resource_owner::ResourceOwnerId,
-        partition: crate::runtime::RendererStoragePartitionIdentity,
         agent_cluster: RuntimeMessageAgentCluster,
     ) -> Self {
         if script_url.is_some_and(|url| url.scheme() == "blob")
@@ -122,8 +121,8 @@ impl RuntimeMessageSourceSecurity {
             return creator;
         }
         let origin = script_url.map(moli_url::origin_ascii_serialization);
-        let opaque_origin = (origin.as_deref() == Some("null"))
-            .then(|| RuntimeMessageOpaqueOrigin::worker(owner, partition));
+        let opaque_origin =
+            (origin.as_deref() == Some("null")).then(|| RuntimeMessageOpaqueOrigin::worker(owner));
         Self {
             origin,
             opaque_origin,
@@ -534,6 +533,10 @@ fn throw_post_message_data_clone_error(
 mod tests {
     use super::*;
     use crate::structured_clone::{RuntimeMessageAgentCluster, StructuredCloneMetadata};
+    use crate::{
+        frame_owner_model::LocalWindowId, native_bridge::WindowExecutionContextOwner,
+        resource_owner::ResourceOwnerId,
+    };
 
     fn wasm_message(sender_origin: &str) -> V8StructuredClonePayload {
         let mut payload = V8StructuredClonePayload::default();
@@ -546,6 +549,104 @@ mod tests {
             sender_opaque_origin: None,
         };
         payload
+    }
+
+    fn opaque_window(host: ResourceOwnerId, window: u64) -> RuntimeMessageSourceSecurity {
+        RuntimeMessageSourceSecurity::window(
+            "null".to_owned(),
+            Some(RuntimeMessageOpaqueOrigin::window(
+                host,
+                WindowExecutionContextOwner::Frame(LocalWindowId(window)),
+            )),
+        )
+    }
+
+    #[test]
+    fn wasm_module_message_opaque_windows_require_the_same_host_and_document() {
+        let host = ResourceOwnerId::new();
+        let sender = opaque_window(host, 1);
+        let mut payload = wasm_message("null");
+        attach_runtime_message_source(&mut payload.metadata, sender.clone());
+
+        assert!(wasm_module_message_allowed_for_target(
+            &payload,
+            &opaque_window(host, 1),
+        ));
+        for target in [
+            opaque_window(ResourceOwnerId::new(), 1),
+            opaque_window(host, 2),
+            RuntimeMessageSourceSecurity::window("null".to_owned(), None),
+        ] {
+            assert!(!wasm_module_message_allowed_for_target(&payload, &target));
+        }
+        payload.metadata.sender_opaque_origin = None;
+        assert!(!wasm_module_message_allowed_for_target(&payload, &sender));
+    }
+
+    #[test]
+    fn wasm_module_message_data_workers_require_the_same_resource_owner() {
+        let creator = opaque_window(ResourceOwnerId::new(), 1);
+        let script = url::Url::parse("data:text/javascript,onmessage=()=>{}").unwrap();
+        let owner = ResourceOwnerId::new();
+        let worker = |owner| {
+            RuntimeMessageSourceSecurity::worker(
+                Some(&script),
+                Some(creator.clone()),
+                owner,
+                RuntimeMessageAgentCluster::WindowOrDedicatedWorker,
+            )
+        };
+        let sender = worker(owner);
+        assert!(sender.opaque_origin.is_some());
+        let mut payload = wasm_message("null");
+        attach_runtime_message_source(&mut payload.metadata, sender);
+
+        assert!(wasm_module_message_allowed_for_target(
+            &payload,
+            &worker(owner),
+        ));
+        for target in [
+            worker(ResourceOwnerId::new()),
+            creator,
+            opaque_window(owner, 1),
+        ] {
+            assert!(!wasm_module_message_allowed_for_target(&payload, &target));
+        }
+    }
+
+    #[test]
+    fn wasm_module_message_blob_workers_inherit_origin_but_check_agent_cluster_separately() {
+        let creator = opaque_window(ResourceOwnerId::new(), 1);
+        let script = url::Url::parse("blob:null/00000000-0000-0000-0000-000000000001").unwrap();
+        let mut payload = wasm_message("null");
+        attach_runtime_message_source(&mut payload.metadata, creator.clone());
+
+        for agent_cluster in [
+            RuntimeMessageAgentCluster::WindowOrDedicatedWorker,
+            RuntimeMessageAgentCluster::SharedWorker,
+            RuntimeMessageAgentCluster::ServiceWorker,
+        ] {
+            let child = RuntimeMessageSourceSecurity::worker(
+                Some(&script),
+                Some(creator.clone()),
+                ResourceOwnerId::new(),
+                agent_cluster,
+            );
+            let nested = RuntimeMessageSourceSecurity::worker(
+                Some(&script),
+                Some(child.clone()),
+                ResourceOwnerId::new(),
+                agent_cluster,
+            );
+            for target in [child, nested] {
+                assert_eq!(target.opaque_origin, creator.opaque_origin);
+                assert_eq!(target.agent_cluster, agent_cluster);
+                assert_eq!(
+                    wasm_module_message_allowed_for_target(&payload, &target),
+                    agent_cluster == RuntimeMessageAgentCluster::WindowOrDedicatedWorker,
+                );
+            }
+        }
     }
 
     #[test]
