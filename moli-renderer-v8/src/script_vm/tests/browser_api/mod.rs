@@ -50,6 +50,7 @@ mod misc;
 mod navigation;
 mod navigation_event_init;
 mod notification_init;
+mod opaque_wasm_origins;
 mod payload_event_init;
 mod performance;
 mod performance_memory;

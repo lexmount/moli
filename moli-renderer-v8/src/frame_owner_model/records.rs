@@ -584,6 +584,10 @@ pub(crate) struct LocalWindowRecord {
     pub(crate) document_id: DocumentId,
     pub(crate) realm_id: Option<FrameRealmId>,
     pub(crate) settings: FrameSettingsObject,
+    // Captured when an inherited Document moves into a new host. The host's
+    // own LocalWindow id cannot reconstruct the creator's opaque origin.
+    pub(crate) inherited_opaque_origin:
+        Option<std::sync::Arc<crate::structured_clone::RuntimeMessageOpaqueOrigin>>,
     pub(crate) lifecycle: LocalWindowLifecycleState,
 }
 

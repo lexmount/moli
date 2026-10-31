@@ -210,6 +210,7 @@ impl JsContextHost {
             .browser_context_runtime()
             .allocate_dedicated_worker_instance_id();
         let client_event_producer = self.dedicated_worker_client_event_producer(worker_id, &owner);
+        let creator_message_security = self.window_message_source_security(owner.dispatch_scope());
         self.workers.insert(
             worker_id,
             WorkerConnectionState {
@@ -229,6 +230,7 @@ impl JsContextHost {
                     module_static_import_policy: None,
                     storage_key_top_level_site,
                     creator_storage_key,
+                    creator_message_security,
                     reserved_service_worker_client_id,
                 },
             },
@@ -442,6 +444,8 @@ impl JsContextHost {
             name: String,
             storage_key_top_level_site: String,
             creator_storage_key: MoliStorageKey,
+            creator_message_security:
+                Option<crate::context_bootstrap::RuntimeMessageSourceSecurity>,
             reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
             module_credentials_mode: moli_fetch::RequestCredentialsMode,
             module_static_import_policy: Option<Box<WorkerModuleStaticImportPolicySnapshot>>,
@@ -465,6 +469,7 @@ impl JsContextHost {
                     module_static_import_policy,
                     storage_key_top_level_site,
                     creator_storage_key,
+                    creator_message_security,
                     reserved_service_worker_client_id,
                     outside_settings_load,
                 } => {
@@ -477,6 +482,7 @@ impl JsContextHost {
                             name: name.clone(),
                             storage_key_top_level_site: storage_key_top_level_site.clone(),
                             creator_storage_key: creator_storage_key.clone(),
+                            creator_message_security: creator_message_security.clone(),
                             reserved_service_worker_client_id: reserved_service_worker_client_id
                                 .take(),
                             module_credentials_mode: *module_credentials_mode,
@@ -494,6 +500,7 @@ impl JsContextHost {
             name,
             storage_key_top_level_site,
             creator_storage_key,
+            creator_message_security,
             reserved_service_worker_client_id,
             module_credentials_mode,
             module_static_import_policy,
@@ -535,6 +542,7 @@ impl JsContextHost {
         .with_global_kind(WorkerGlobalKind::Dedicated { name })
         .with_storage_key_top_level_site(Some(storage_key_top_level_site))
         .with_creator_storage_key(creator_storage_key)
+        .with_creator_message_security(creator_message_security)
         .with_storage_bucket_store(Some(self.storage_bucket_store()))
         .with_indexed_db_manager(self.indexed_db_manager())
         .with_pause_evaluation_until_debugger(

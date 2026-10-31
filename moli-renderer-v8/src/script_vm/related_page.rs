@@ -20,6 +20,9 @@ impl ScriptVmDefaultWorldBootstrap {
         let global_template = isolate_bootstrap
             .bridge_bindings
             .window_global_template(scope);
+        let opaque_origin = (!env.document_policy_container.sandbox.forces_opaque_origin)
+            .then(|| crate::context_bootstrap::RuntimeMessageSourceSecurity::current(scope))
+            .and_then(|security| security.opaque_origin());
         let bootstrap = ScriptVmPageRealmBootstrap::new_from_dom_host(
             dom_host,
             &env.document_settings,
@@ -38,6 +41,7 @@ impl ScriptVmDefaultWorldBootstrap {
             None,
             Some(ScriptVmInitialDocumentEnvironment {
                 security_token: None,
+                opaque_origin,
                 document_domain_override: Rc::default(),
                 fallback_base_url: None,
                 storage_key: None,

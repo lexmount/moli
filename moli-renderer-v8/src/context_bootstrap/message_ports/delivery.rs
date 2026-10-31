@@ -212,17 +212,13 @@ fn dispatch_one_message_port_event_in_current_context<'s>(
         };
     };
 
-    let target_origin = crate::context_bootstrap::current_runtime_message_origin(scope);
-    let target_agent_cluster =
-        crate::context_bootstrap::current_runtime_message_agent_cluster(scope);
     let callback_dispatched = {
         let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
         let mut scope = try_catch.init();
-        if !crate::context_bootstrap::wasm_module_message_allowed_for_target(
-            &payload,
-            target_origin.as_deref(),
-            target_agent_cluster,
+        if !crate::context_bootstrap::runtime_message_allowed_for_current_target(
+            &mut scope, &payload,
         ) {
+            registry.discard_message(payload);
             dispatch_message_port_messageerror_event(&mut scope, target, callback_errors)
         } else if let Some((data, ports)) =
             crate::context_bootstrap::structured_deserialize_value_for_message_event(

@@ -331,6 +331,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             })
             .with_storage_key_top_level_site(Some(creator_top_level_site.clone()))
             .with_creator_storage_key(creator_storage_key)
+            .with_creator_message_security(host.window_message_source_security(dispatch_scope))
             .with_indexed_db_manager(host.indexed_db_manager())
             .with_storage_bucket_store(Some(host.storage_bucket_store()))
             .with_pause_evaluation_until_debugger(
@@ -533,6 +534,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         })
         .with_storage_key_top_level_site(Some(nested_context.storage_key_top_level_site.clone()))
         .with_creator_storage_key(nested_context.creator_storage_key.clone())
+        .with_creator_message_security(Some(nested_context.creator_message_security.clone()))
         .with_indexed_db_manager(nested_context.indexed_db_manager.clone())
         .with_storage_bucket_store(nested_context.storage_bucket_store.clone());
         let options = if let Some(runtime) = nested_context.service_worker_runtime.clone() {

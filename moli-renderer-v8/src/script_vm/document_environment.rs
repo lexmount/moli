@@ -87,8 +87,20 @@ impl ScriptVmInitialDocumentEnvironment {
                 host.inherited_document_domain(child)
             })
             .unwrap_or_default();
+        let opaque_origin = (!policy_container.sandbox.forces_opaque_origin)
+            .then(|| crate::util::context_host_ptr_from_context_slot(context))
+            .flatten()
+            .and_then(|host_ptr| {
+                let host = unsafe { &*host_ptr };
+                let dispatch = host
+                    .window_execution_context_identity_for_access_check(context)?
+                    .dispatch_scope();
+                host.window_message_source_security(dispatch)?
+                    .opaque_origin()
+            });
         Ok(Self {
             security_token,
+            opaque_origin,
             document_domain_override,
             origin,
             policy_container,
@@ -452,6 +464,9 @@ impl ScriptVm {
             let token = scope.get_current_context().get_security_token(scope);
             Ok(ScriptVmInitialDocumentEnvironment {
                 security_token: Some(v8::Global::new(scope, token)),
+                opaque_origin: host
+                    .window_message_source_security(crate::native_bridge::OwnerDispatchScope::Top)
+                    .and_then(|security| security.opaque_origin()),
                 document_domain_override: host.inherited_document_domain(None),
                 origin,
                 policy_container,

@@ -388,6 +388,7 @@ impl StructuredClonePolicy {
             locked_to_sender_agent_cluster: contains_wasm_module && self == Self::RuntimeMessage,
             sender_agent_cluster: None,
             sender_origin: None,
+            sender_opaque_origin: None,
         }
     }
 }
@@ -399,6 +400,46 @@ pub(crate) enum RuntimeMessageAgentCluster {
     ServiceWorker,
 }
 
+/// Security-origin identity, independent of storage partition nonces. Window
+/// identity is scoped by its host, since LocalWindow ids are owner-local.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RuntimeMessageOpaqueOrigin {
+    owner: RuntimeOpaqueOriginOwner,
+    partition: crate::runtime::RendererStoragePartitionIdentity,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RuntimeOpaqueOriginOwner {
+    Window {
+        host: crate::resource_owner::ResourceOwnerId,
+        window: crate::native_bridge::WindowExecutionContextOwner,
+    },
+    Worker(crate::resource_owner::ResourceOwnerId),
+}
+
+impl RuntimeMessageOpaqueOrigin {
+    pub(crate) fn window(
+        host: crate::resource_owner::ResourceOwnerId,
+        window: crate::native_bridge::WindowExecutionContextOwner,
+        partition: crate::runtime::RendererStoragePartitionIdentity,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            owner: RuntimeOpaqueOriginOwner::Window { host, window },
+            partition,
+        })
+    }
+
+    pub(crate) fn worker(
+        owner: crate::resource_owner::ResourceOwnerId,
+        partition: crate::runtime::RendererStoragePartitionIdentity,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            owner: RuntimeOpaqueOriginOwner::Worker(owner),
+            partition,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StructuredCloneMetadata {
     pub(crate) contains_wasm_module: bool,
@@ -406,6 +447,7 @@ pub(crate) struct StructuredCloneMetadata {
     pub(crate) locked_to_sender_agent_cluster: bool,
     pub(crate) sender_agent_cluster: Option<RuntimeMessageAgentCluster>,
     pub(crate) sender_origin: Option<String>,
+    pub(crate) sender_opaque_origin: Option<Arc<RuntimeMessageOpaqueOrigin>>,
 }
 
 struct WireSerializer {

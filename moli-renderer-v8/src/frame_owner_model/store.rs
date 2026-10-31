@@ -142,6 +142,7 @@ impl FrameOwnerStore {
                 document_id,
                 realm_id: Some(realm_id),
                 settings,
+                inherited_opaque_origin: None,
                 lifecycle: LocalWindowLifecycleState::Current,
             },
         );
@@ -551,6 +552,7 @@ impl FrameOwnerStore {
                 document_id,
                 realm_id: None,
                 settings,
+                inherited_opaque_origin: None,
                 lifecycle: LocalWindowLifecycleState::Current,
             },
         );
