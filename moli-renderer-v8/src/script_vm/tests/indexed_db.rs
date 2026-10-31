@@ -1,6 +1,8 @@
 use super::*;
 use moli_url::origin_ascii_serialization;
 
+mod store_rename;
+
 #[test]
 fn indexed_db_first_use_ignores_public_constructor_overrides() {
     let fixture = include_str!("../../../tests/fixtures/indexeddb-first-use.js");
@@ -413,7 +415,7 @@ fn indexed_db_request_declared_properties_preserve_own_enumerable_surface() {
 
     assert_eq!(
         result,
-        r#"{"openKeys":["onblocked","onerror","onsuccess","onupgradeneeded"],"openHandlers":[true,true],"databaseKeys":["onabort","onclose","onerror","onversionchange"],"databaseHandlers":[true,true,true,true],"databaseVersion":1,"databaseStores":true,"transactionKeys":["objectStoreNames","onabort","oncomplete","onerror"],"transactionHandlers":[true,true,true],"transactionMode":"readonly","transactionStores":true,"requestKeys":["onerror","onsuccess"],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
+        r#"{"openKeys":["onblocked","onerror","onsuccess","onupgradeneeded"],"openHandlers":[true,true],"databaseKeys":["onabort","onclose","onerror","onversionchange"],"databaseHandlers":[true,true,true,true],"databaseVersion":1,"databaseStores":true,"transactionKeys":["onabort","oncomplete","onerror"],"transactionHandlers":[true,true,true],"transactionMode":"readonly","transactionStores":true,"requestKeys":["onerror","onsuccess"],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
     );
 }
 
@@ -3746,7 +3748,7 @@ fn indexed_db_object_store_index_metadata_is_available() {
 
     assert_eq!(
         result,
-        "name|false|false|false||false|true|by-id|id|true|false|by-id|kv"
+        "|false|false|false||false|true|by-id|id|true|false|by-id|kv"
     );
 }
 

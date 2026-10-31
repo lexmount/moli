@@ -17,9 +17,9 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_count_callback<'s>(
         return;
     };
     let index = args.this();
-    let Some((transaction, store_name, _)) = index_operation_state(scope, index) else {
+    if index_active_transaction(scope, index).is_none() {
         return;
-    };
+    }
     let query_value = parsed.query.unwrap_or_else(|| v8::undefined(scope).into());
     let query = match parse_key_or_range(scope, query_value) {
         Ok(query) => query,
@@ -27,6 +27,9 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_count_callback<'s>(
             error.throw(scope);
             return;
         }
+    };
+    let Some((transaction, store_name, _)) = index_operation_state(scope, index) else {
+        return;
     };
     let Some(request) = create_operation_request(scope, index, transaction) else {
         return;

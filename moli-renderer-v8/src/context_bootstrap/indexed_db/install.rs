@@ -18,6 +18,7 @@ use super::{
     idb_object_store_get_all_keys_callback, idb_object_store_get_all_records_callback,
     idb_object_store_get_callback, idb_object_store_get_key_callback,
     idb_object_store_index_callback, idb_object_store_index_names_getter,
+    idb_object_store_name_getter, idb_object_store_name_setter,
     idb_object_store_open_cursor_callback, idb_object_store_open_key_cursor_callback,
     idb_object_store_put_callback, idb_schema_attribute_getter, idb_transaction_abort_callback,
     idb_transaction_commit_callback, idb_transaction_object_store_callback,
