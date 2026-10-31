@@ -2389,9 +2389,9 @@ mod fetch_referrer;
 mod fetch_request_guard;
 mod fetch_resource_timing;
 mod frame_element_security;
-mod gamepad_interfaces;
 mod geometry_matrix_constructor_union;
 mod video_frame;
+
 mod audio_value_owner_interface_exposure_interfaces;
 mod cross_origin_named_children;
 mod declarative_receivers;
