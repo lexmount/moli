@@ -486,16 +486,43 @@ async fn indexed_db_cursors_observe_writes_without_changing_pending_values() -> 
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
     let fixture = include_str!("fixtures/indexeddb-cursor-live.js");
+    // Each independent matrix gets its own runtime command budget. One large
+    // SQL probe can exhaust the 30-second awaitPromise limit under CI load.
+    let sections = [
+        ("store", Some("next"), 66),
+        ("store", Some("prev"), 66),
+        ("store", Some("nextunique"), 66),
+        ("store", Some("prevunique"), 66),
+        ("index", Some("next"), 66),
+        ("index", Some("prev"), 66),
+        ("index", Some("nextunique"), 66),
+        ("index", Some("prevunique"), 66),
+        ("duplicates", None, 60),
+        ("mutations", None, 48),
+        ("multi-entry", None, 12),
+        ("concurrent", None, 12),
+    ];
     for target in ["window", "child", "worker"] {
-        let source = format!(
-            "{fixture}\ncursorLiveProbe('cursor-live-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: liveChecks}}));"
-        );
-        let result = run_probe(&browser, &server, target, &source).await?;
-        assert_eq!(result["state"], "pass", "{target}: {result}");
-        assert!(
-            result["checks"].as_array().unwrap().len() > 500,
-            "{target}: {result}"
-        );
+        let mut checks = 0;
+        for (section, direction, expected_checks) in sections {
+            let case = format!("{target}/{section}/{}", direction.unwrap_or("all"));
+            let name = format!(
+                "cursor-live-{target}-{section}-{}",
+                direction.unwrap_or("all")
+            );
+            let direction = serde_json::to_string(&direction)?;
+            let source = format!(
+                "{fixture}\ncursorLiveProbe('{name}', '{section}', {direction}).then(finish, error => finish({{state: 'error', error: String(error), checks: liveChecks}}));"
+            );
+            let result = run_probe(&browser, &server, target, &source)
+                .await
+                .map_err(|error| error.context(format!("cursor live probe {case}")))?;
+            assert_eq!(result["state"], "pass", "{case}: {result}");
+            let count = result["checks"].as_array().unwrap().len();
+            assert_eq!(count, expected_checks, "{case}: {result}");
+            checks += count;
+        }
+        assert_eq!(checks, 660, "{target}: all cursor matrices must run");
     }
     server.shutdown().await;
     Ok(())
