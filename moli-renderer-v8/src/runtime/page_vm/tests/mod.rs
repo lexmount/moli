@@ -3,6 +3,7 @@ mod bitmap_renderer;
 mod canvas_loaded_images;
 mod offscreen_canvas_blob;
 mod offscreen_canvas_transfer;
+mod pending_document_policy;
 use crate::types::SubresourceInterceptionClasses;
 use std::{
     sync::Arc,
@@ -686,10 +687,30 @@ fn test_page_vm_with_loader_dom_host_hooks_and_response_referrer_policy(
     response_referrer_policy: Option<String>,
     root_frame_id: Option<String>,
 ) -> PageVm {
+    test_page_vm_with_id(
+        PageId::new_for_testing(1),
+        loader,
+        extra_http_headers,
+        dom_host,
+        runtime_hooks,
+        response_referrer_policy,
+        root_frame_id,
+    )
+}
+
+fn test_page_vm_with_id(
+    page_id: PageId,
+    loader: &crate::network::ResourceRequestClient,
+    extra_http_headers: Vec<(String, String)>,
+    dom_host: DomHost,
+    runtime_hooks: PageVmRuntimeHooks,
+    response_referrer_policy: Option<String>,
+    root_frame_id: Option<String>,
+) -> PageVm {
     let _js_runtime = crate::JsRuntime::initialize();
     let local_executor = crate::local_executor::JsLocalExecutor::new();
     PageVm::new(
-        PageId::new_for_testing(1),
+        page_id,
         local_executor,
         loader,
         &PageVmEnvConfig {
