@@ -23,7 +23,6 @@ pub fn deep_clone_shared_web_storage_store(
     // SQLite store is not a sessionStorage namespace and cannot be copied here.
     let memory = match &source.backend {
         WebStorageBackend::Memory(memory) => memory.lock().clone(),
-        WebStorageBackend::Json(json) => json.lock().memory.clone(),
         WebStorageBackend::Sqlite(_) => {
             panic!("sessionStorage cloning requires an in-memory namespace")
         }
@@ -32,13 +31,6 @@ pub fn deep_clone_shared_web_storage_store(
         backend: WebStorageBackend::Memory(Mutex::new(memory)),
         mutation_subscribers: Mutex::new(Vec::new()),
     })
-}
-pub fn new_shared_json_web_storage_store(path: impl AsRef<Path>) -> Result<SharedWebStorageStore> {
-    let backend = JsonWebStorageBackend::open(path.as_ref())?;
-    Ok(Arc::new(WebStorageStore {
-        backend: WebStorageBackend::Json(Mutex::new(backend)),
-        mutation_subscribers: Mutex::new(Vec::new()),
-    }))
 }
 impl Default for WebStorageStore {
     fn default() -> Self {
@@ -52,7 +44,6 @@ impl fmt::Debug for WebStorageStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let kind = match &self.backend {
             WebStorageBackend::Memory(_) => "memory",
-            WebStorageBackend::Json(_) => "legacy-json",
             WebStorageBackend::Sqlite(_) => "sqlite",
         };
         f.debug_struct("WebStorageStore")
@@ -68,7 +59,6 @@ impl WebStorageStore {
     ) -> std::result::Result<R, WebStorageMutationError> {
         match &self.backend {
             WebStorageBackend::Memory(memory) => Ok(read(memory.lock().origins.get(origin))),
-            WebStorageBackend::Json(json) => Ok(read(json.lock().memory.origins.get(origin))),
             WebStorageBackend::Sqlite(sqlite) => sqlite.read(origin, read),
         }
     }
@@ -95,22 +85,6 @@ impl WebStorageStore {
                     .is_some_and(|area| area.values.is_empty())
                 {
                     memory.origins.remove(origin);
-                }
-                Ok(publish(result))
-            }
-            WebStorageBackend::Json(json) => {
-                let mut json = json.lock();
-                let mut area = json.memory.origins.get(origin).cloned().unwrap_or_default();
-                let result = edit(&mut area)?;
-                if result.mutation.is_some() {
-                    json.update(&[origin], |memory| {
-                        if area.values.is_empty() {
-                            memory.origins.remove(origin);
-                        } else {
-                            memory.origins.insert(origin.to_owned(), area);
-                        }
-                        true
-                    })?;
                 }
                 Ok(publish(result))
             }
@@ -306,17 +280,6 @@ impl WebStorageStore {
                 }
                 Ok(removed.is_some())
             }
-            WebStorageBackend::Json(json) => {
-                let mut json = json.lock();
-                let had_items = json.memory.len(origin) > 0;
-                let removed = json.update(&[origin], |memory| memory.clear_origin(origin))?;
-                if removed && had_items {
-                    self.publish_mutation(WebStorageMutation::ItemsCleared {
-                        area_key: origin.to_owned(),
-                    });
-                }
-                Ok(removed)
-            }
             WebStorageBackend::Sqlite(_) => {
                 self.try_clear_change(origin).map(|change| change.is_some())
             }
@@ -439,27 +402,6 @@ impl WebStorageStore {
                 }
                 publish(nonempty);
                 Ok(!keys.is_empty())
-            }
-            WebStorageBackend::Json(json) => {
-                let mut json = json.lock();
-                let keys = json.memory.area_keys_for_origin(origin);
-                if keys.is_empty() {
-                    return Ok(false);
-                }
-                let nonempty = keys
-                    .iter()
-                    .filter(|key| json.memory.len(key) > 0)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let affected = keys.iter().map(String::as_str).collect::<Vec<_>>();
-                json.update(&affected, |memory| {
-                    for key in &keys {
-                        memory.origins.remove(key);
-                    }
-                    true
-                })?;
-                publish(nonempty);
-                Ok(true)
             }
             WebStorageBackend::Sqlite(sqlite) => {
                 sqlite.clear_origin_areas(origin, |mutation| self.publish_mutation(mutation))

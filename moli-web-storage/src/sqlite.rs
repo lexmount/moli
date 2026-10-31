@@ -4,7 +4,13 @@ use moli_sqlite::writeback::{
 };
 use moli_sqlite::{OpenMode, RuntimeHandle};
 use rusqlite::{Connection, OptionalExtension, params};
-use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
+use std::path::Path;
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 pub(super) const APPLICATION_ID: i32 = 0x4d4c4c53; // MLLS
 pub struct SqliteWebStorageOwner {

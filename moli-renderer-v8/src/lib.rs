@@ -211,8 +211,7 @@ pub use context_bootstrap::{
 pub use context_bootstrap::{
     SharedWebStorageStore, WebStorageAreaKind, WebStorageMutation, WebStorageMutationRecord,
     WebStorageMutationSubscription, WebStorageString, deep_clone_shared_web_storage_store,
-    new_shared_json_web_storage_store, new_shared_web_storage_store,
-    web_storage_partitioned_area_key,
+    new_shared_web_storage_store, web_storage_partitioned_area_key,
 };
 pub(crate) use context_bootstrap::{
     construct_form_data_entries_for_form, form_data_entries_multipart_body,

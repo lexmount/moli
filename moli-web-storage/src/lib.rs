@@ -1,21 +1,16 @@
-//! Renderer-independent Web Storage data, mutation events and legacy JSON codec.
+//! Renderer-independent Web Storage data, mutation events, and SQLite persistence.
 
 use std::{
-    collections::BTreeMap,
     collections::{HashMap, VecDeque},
-    fmt, fs,
-    path::{Path, PathBuf},
+    fmt,
     sync::{Arc, Weak},
 };
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use moli_storage_key::{
     MoliStorageKey, storage_key_for_origin_and_top_level_site, storage_key_prefix_for_origin,
 };
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
-use serde_json::value::RawValue;
-use typed_num::Num;
 
 fn utf16_units(value: &str) -> Vec<u16> {
     value.encode_utf16().collect()
@@ -25,24 +20,15 @@ fn string_from_utf16_units_lossy(units: &[u16]) -> String {
     String::from_utf16_lossy(units)
 }
 
-fn utf16_units_contain_unpaired_surrogate(units: &[u16]) -> bool {
-    char::decode_utf16(units.iter().copied()).any(|decoded| decoded.is_err())
-}
-
 mod sqlite;
 mod store;
 pub use sqlite::{
     SqliteWebStorageOwner, WebStorageAreaLease, import_sqlite_web_storage,
     new_lazy_sqlite_web_storage_store, new_sqlite_web_storage_store,
 };
-pub use store::{
-    deep_clone_shared_web_storage_store, new_shared_json_web_storage_store,
-    new_shared_web_storage_store,
-};
+pub use store::{deep_clone_shared_web_storage_store, new_shared_web_storage_store};
 
 const WEB_STORAGE_QUOTA_BYTES: usize = 5 * 1024 * 1024;
-type WebStorageJsonVersion = Num<1>;
-type SerializedWebStorageAreas = BTreeMap<String, Arc<RawValue>>;
 
 pub fn web_storage_partitioned_area_key(origin: &str, top_level_site: &str) -> String {
     storage_key_for_origin_and_top_level_site(origin, top_level_site)
@@ -72,16 +58,8 @@ struct MemoryWebStorageBackend {
     origins: HashMap<String, MemoryWebStorageArea>,
 }
 
-#[derive(Debug, Clone)]
-struct JsonWebStorageBackend {
-    path: PathBuf,
-    memory: MemoryWebStorageBackend,
-    serialized_areas: SerializedWebStorageAreas,
-}
-
 enum WebStorageBackend {
     Memory(Mutex<MemoryWebStorageBackend>),
-    Json(Mutex<JsonWebStorageBackend>),
     Sqlite(sqlite::SqliteBackend),
 }
 
@@ -199,10 +177,6 @@ impl WebStorageString {
         string_from_utf16_units_lossy(&self.units)
     }
 
-    fn contains_unpaired_surrogate(&self) -> bool {
-        utf16_units_contain_unpaired_surrogate(&self.units)
-    }
-
     fn usage_bytes(&self) -> usize {
         let mut bytes = 0usize;
         for decoded in char::decode_utf16(self.units.iter().copied()) {
@@ -266,10 +240,6 @@ fn updated_storage_size(
 }
 
 impl MemoryWebStorageBackend {
-    fn clear_origin(&mut self, origin: &str) -> bool {
-        self.origins.remove(origin).is_some()
-    }
-
     fn len(&self, origin: &str) -> usize {
         self.origins
             .get(origin)
@@ -286,211 +256,14 @@ impl MemoryWebStorageBackend {
     }
 }
 
-impl JsonWebStorageBackend {
-    fn open(path: &Path) -> Result<Self> {
-        let (memory, serialized_areas) = load_json_web_storage(path)?;
-        Ok(Self {
-            path: path.to_path_buf(),
-            memory,
-            serialized_areas,
-        })
-    }
-
-    fn update(
-        &mut self,
-        affected_areas: &[&str],
-        update: impl FnOnce(&mut MemoryWebStorageBackend) -> bool,
-    ) -> std::result::Result<bool, WebStorageMutationError> {
-        // A Chrome import can contain thousands of unrelated storage areas.
-        // Stage only the affected areas, retaining rollback on persistence
-        // failure without cloning and re-encoding the entire profile per key.
-        let mut next = MemoryWebStorageBackend {
-            origins: affected_areas
-                .iter()
-                .filter_map(|origin| {
-                    self.memory
-                        .origins
-                        .get(*origin)
-                        .map(|area| ((*origin).to_owned(), area.clone()))
-                })
-                .collect(),
-        };
-        if !update(&mut next) {
-            return Ok(false);
-        }
-        let mut serialized_areas = self.serialized_areas.clone();
-        for origin in affected_areas {
-            if let Some(area) = next.origins.get(*origin) {
-                let serialized =
-                    serde_json::value::to_raw_value(&JsonWebStorageAreaFile::from(area))
-                        .map_err(|error| WebStorageMutationError::Persistence(error.to_string()))?;
-                serialized_areas.insert((*origin).to_owned(), Arc::from(serialized));
-            } else {
-                serialized_areas.remove(*origin);
-            }
-        }
-        persist_json_web_storage(&self.path, &serialized_areas)
-            .map_err(|error| WebStorageMutationError::Persistence(error.to_string()))?;
-        for origin in affected_areas {
-            if let Some(area) = next.origins.remove(*origin) {
-                self.memory.origins.insert((*origin).to_owned(), area);
-            } else {
-                self.memory.origins.remove(*origin);
-            }
-        }
-        self.serialized_areas = serialized_areas;
-        Ok(true)
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct JsonWebStorageFile<Area = JsonWebStorageAreaFile> {
-    version: WebStorageJsonVersion,
-    origins: BTreeMap<String, Area>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct JsonWebStorageAreaFile {
-    entries: Vec<JsonWebStorageEntry>,
-}
-
-impl From<&MemoryWebStorageArea> for JsonWebStorageAreaFile {
-    fn from(area: &MemoryWebStorageArea) -> Self {
-        let mut pairs = area.values.iter().collect::<Vec<_>>();
-        pairs.sort_by_key(|(key, _)| *key);
-        Self {
-            entries: pairs
-                .into_iter()
-                .map(|(key, value)| JsonWebStorageEntry {
-                    key: JsonWebStorageDomString::from_web_storage_string(key),
-                    value: JsonWebStorageDomString::from_web_storage_string(value),
-                })
-                .collect(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct JsonWebStorageEntry {
-    key: JsonWebStorageDomString,
-    value: JsonWebStorageDomString,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-enum JsonWebStorageDomString {
-    Text(String),
-    Utf16 { utf16: Vec<u16> },
-}
-
-impl JsonWebStorageDomString {
-    fn from_web_storage_string(value: &WebStorageString) -> Self {
-        if value.contains_unpaired_surrogate() {
-            Self::Utf16 {
-                utf16: value.as_units().to_vec(),
-            }
-        } else {
-            Self::Text(value.to_string_lossy())
-        }
-    }
-
-    fn into_web_storage_string(self) -> WebStorageString {
-        match self {
-            Self::Text(value) => WebStorageString::from_utf8(&value),
-            Self::Utf16 { utf16 } => WebStorageString::from_utf16_units(utf16),
-        }
-    }
-}
-
-fn load_json_web_storage(
-    path: &Path,
-) -> Result<(MemoryWebStorageBackend, SerializedWebStorageAreas)> {
-    if !path.exists() {
-        return Ok(Default::default());
-    }
-    let bytes = fs::read(path)
-        .with_context(|| format!("failed to read localStorage store `{}`", path.display()))?;
-    if bytes.is_empty() {
-        return Ok(Default::default());
-    }
-    let file: JsonWebStorageFile<Box<RawValue>> = serde_json::from_slice(&bytes)
-        .with_context(|| format!("failed to parse localStorage store `{}`", path.display()))?;
-    let mut memory = MemoryWebStorageBackend::default();
-    let mut serialized_areas = BTreeMap::new();
-    for (origin, serialized) in file.origins {
-        let area: JsonWebStorageAreaFile = serde_json::from_str(serialized.get())
-            .with_context(|| format!("failed to parse localStorage store `{}`", path.display()))?;
-        let values = area
-            .entries
-            .into_iter()
-            .map(|entry| {
-                (
-                    entry.key.into_web_storage_string(),
-                    entry.value.into_web_storage_string(),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        let size = values.values().map(WebStorageString::usage_bytes).sum();
-        memory
-            .origins
-            .insert(origin.clone(), MemoryWebStorageArea { values, size });
-        serialized_areas.insert(origin, Arc::from(serialized));
-    }
-    Ok((memory, serialized_areas))
-}
-
-fn persist_json_web_storage(path: &Path, areas: &SerializedWebStorageAreas) -> Result<()> {
-    let file = JsonWebStorageFile {
-        version: WebStorageJsonVersion::default(),
-        origins: areas
-            .iter()
-            .map(|(origin, area)| (origin.clone(), area.as_ref()))
-            .collect(),
-    };
-    let bytes =
-        serde_json::to_vec_pretty(&file).context("failed to serialize localStorage store")?;
-
-    moli_browser_profile::write_profile_file(path, &bytes, "localStorage store")
-}
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        path::PathBuf,
-        time::{SystemTime, UNIX_EPOCH},
-    };
-
     use super::{
         MemoryWebStorageArea, WEB_STORAGE_QUOTA_BYTES, WebStorageAreaKind, WebStorageBackend,
         WebStorageMutation, WebStorageMutationError, WebStorageMutationRecord, WebStorageStore,
-        WebStorageString, deep_clone_shared_web_storage_store, new_shared_json_web_storage_store,
-        new_shared_web_storage_store, web_storage_partitioned_area_key,
+        WebStorageString, deep_clone_shared_web_storage_store, new_shared_web_storage_store,
+        web_storage_partitioned_area_key,
     };
-
-    struct TempPath {
-        path: PathBuf,
-    }
-
-    impl TempPath {
-        fn new(name: &str) -> Self {
-            let nonce = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("system clock should be after epoch")
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "moli-web-storage-{name}-{}-{nonce}.json",
-                std::process::id()
-            ));
-            Self { path }
-        }
-    }
-
-    impl Drop for TempPath {
-        fn drop(&mut self) {
-            let _ = fs::remove_file(&self.path);
-        }
-    }
 
     fn first_party_area_key(origin: &str) -> String {
         web_storage_partitioned_area_key(origin, origin)
@@ -685,161 +458,6 @@ mod tests {
             assert!(source.set_item(&b_area_key, "source-only", "yes"));
         }
         assert_eq!(cloned.as_ref().get_item(&b_area_key, "source-only"), None);
-    }
-
-    #[test]
-    fn json_web_storage_persists_values_by_storage_key() {
-        let temp = TempPath::new("persist");
-        let a_area_key = first_party_area_key("https://a.test");
-        let b_area_key = first_party_area_key("https://b.test");
-        {
-            let store = new_shared_json_web_storage_store(&temp.path)
-                .expect("json web storage should open");
-            let store = store.as_ref();
-            assert!(store.set_item(&a_area_key, "b", "2"));
-            assert!(store.set_item(&a_area_key, "a", "1"));
-            assert!(store.set_item(&b_area_key, "a", "other"));
-            assert_eq!(store.sorted_keys(&a_area_key), vec!["a", "b"]);
-        }
-
-        let store =
-            new_shared_json_web_storage_store(&temp.path).expect("json web storage should reopen");
-        let store = store.as_ref();
-        assert_eq!(store.get_item(&a_area_key, "a"), Some("1".to_owned()));
-        assert_eq!(store.get_item(&b_area_key, "a"), Some("other".to_owned()));
-        assert_eq!(store.len(&a_area_key), 2);
-        store.clear_origin(&a_area_key);
-        assert_eq!(store.len(&a_area_key), 0);
-        assert_eq!(store.get_item(&b_area_key, "a"), Some("other".to_owned()));
-    }
-
-    #[test]
-    fn json_web_storage_reports_persistence_error_without_mutating_memory() {
-        let temp = TempPath::new("persist-error-dir");
-        let area_key = first_party_area_key("https://a.test");
-        let other_area_key = first_party_area_key("https://b.test");
-        let shared =
-            new_shared_json_web_storage_store(&temp.path).expect("json web storage should open");
-        let store = shared.as_ref();
-        assert!(store.set_item(&area_key, "a", "1"));
-        assert!(store.set_item(&other_area_key, "b", "2"));
-        fs::remove_file(&temp.path).expect("storage file should be removed");
-        fs::create_dir_all(&temp.path).expect("storage path directory should be created");
-        let subscription = store.subscribe_mutations(WebStorageAreaKind::Local);
-
-        for result in [
-            store.try_set_item(&area_key, "a", "changed"),
-            store.try_remove_item(&area_key, "a"),
-            store.try_clear_origin(&area_key),
-        ] {
-            assert!(matches!(
-                result,
-                Err(WebStorageMutationError::Persistence(_))
-            ));
-        }
-        assert_eq!(store.get_item(&area_key, "a"), Some("1".to_owned()));
-        assert!(subscription.is_empty());
-        fs::remove_dir_all(&temp.path).expect("storage path directory should be removed");
-
-        assert!(store.set_item(&other_area_key, "b", "recovered"));
-        let reopened = new_shared_json_web_storage_store(&temp.path)
-            .expect("json web storage should reopen after recovery");
-        let reopened = reopened.as_ref();
-        assert_eq!(reopened.get_item(&area_key, "a"), Some("1".to_owned()));
-        assert_eq!(
-            reopened.get_item(&other_area_key, "b"),
-            Some("recovered".to_owned())
-        );
-    }
-
-    #[test]
-    fn json_web_storage_updates_and_origin_clears_preserve_unrelated_imported_areas() {
-        let temp = TempPath::new("imported-areas");
-        let origin = "https://cdn.example.test";
-        let first_party = first_party_area_key(origin);
-        let partitioned = web_storage_partitioned_area_key(origin, "https://top.example.test");
-        let unrelated = first_party_area_key("https://other.example.test");
-        let surrogate_key = [0xD800];
-        let surrogate_value = [0xDC00, u16::from(b'"'), u16::from(b'\\')];
-        {
-            let shared =
-                new_shared_json_web_storage_store(&temp.path).expect("storage should open");
-            let store = shared.as_ref();
-            assert!(store.set_item(&first_party, "existing", "first"));
-            assert!(store.set_item(&partitioned, "existing", "partitioned"));
-            assert!(store.set_item_utf16(&unrelated, &surrogate_key, &surrogate_value));
-        }
-        {
-            let shared =
-                new_shared_json_web_storage_store(&temp.path).expect("storage should reopen");
-            let store = shared.as_ref();
-            assert!(store.set_item(&first_party, "existing", "updated"));
-            assert!(store.set_item(&first_party, "new", "added"));
-            assert!(store.remove_item(&first_party, "existing"));
-            assert_eq!(
-                store.get_item(&partitioned, "existing"),
-                Some("partitioned".to_owned())
-            );
-            assert!(
-                store
-                    .try_clear_origin_areas(origin)
-                    .expect("origin areas should clear")
-            );
-        }
-        let shared = new_shared_json_web_storage_store(&temp.path)
-            .expect("storage should reopen after clearing");
-        let store = shared.as_ref();
-        assert_eq!(store.len(&first_party), 0);
-        assert_eq!(store.len(&partitioned), 0);
-        assert_eq!(
-            store.get_item_utf16(&unrelated, &surrogate_key),
-            Some(surrogate_value.to_vec())
-        );
-        assert!(store.set_item(&first_party, "new", "restored"));
-        let reopened = new_shared_json_web_storage_store(&temp.path)
-            .expect("storage should reopen after restoring");
-        assert_eq!(
-            reopened.as_ref().get_item(&first_party, "new"),
-            Some("restored".to_owned())
-        );
-        assert_eq!(
-            reopened.as_ref().get_item_utf16(&unrelated, &surrogate_key),
-            Some(surrogate_value.to_vec())
-        );
-    }
-
-    #[test]
-    fn json_web_storage_persists_unpaired_surrogates_losslessly() {
-        let temp = TempPath::new("persist-utf16");
-        let area_key = first_party_area_key("https://a.test");
-        let key = vec![0xD800];
-        let value = vec![0xDC00];
-        {
-            let store = new_shared_json_web_storage_store(&temp.path)
-                .expect("json web storage should open");
-            let store = store.as_ref();
-            assert!(store.set_item_utf16(&area_key, &key, &value));
-        }
-
-        let persisted = fs::read_to_string(&temp.path).expect("json storage should be persisted");
-        assert!(
-            persisted.contains(r#""entries""#),
-            "lossless storage should use entry form: {persisted}"
-        );
-        assert!(
-            persisted.contains(r#""utf16""#),
-            "lossless storage should encode unpaired surrogates explicitly: {persisted}"
-        );
-        assert!(
-            persisted.contains("55296") && persisted.contains("56320"),
-            "persisted JSON should contain the raw UTF-16 units: {persisted}"
-        );
-
-        let store =
-            new_shared_json_web_storage_store(&temp.path).expect("json web storage should reopen");
-        let store = store.as_ref();
-        assert_eq!(store.get_item_utf16(&area_key, &key), Some(value.clone()));
-        assert_eq!(store.key_utf16(&area_key, 0), Some(key));
     }
 
     #[test]

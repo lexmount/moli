@@ -3722,15 +3722,11 @@ name = "moli-web-storage"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "moli-browser-profile",
  "moli-sqlite",
  "moli-storage-key",
  "parking_lot",
  "rusqlite",
- "serde",
- "serde_json",
  "tempfile",
- "typed-num",
 ]
 
 [[package]]
