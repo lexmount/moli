@@ -32,7 +32,6 @@ url = "2.5.7"
 
 [dev-dependencies]
 moli-browser-profile = { path = "../moli-browser-profile" }
-moli-cookie-cache = { path = "../moli-cookie-cache" }
 moli-protocol = { path = "../moli-protocol", features = ["test-support"] }
 png = "0.18"
 time = "0.3"

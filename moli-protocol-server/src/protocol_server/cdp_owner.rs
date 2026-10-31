@@ -22,9 +22,6 @@ use super::{
     protocol_local_executor::spawn_protocol_local_task,
 };
 
-#[cfg(test)]
-mod checkpoint;
-
 #[derive(Clone)]
 pub(super) struct SharedCdpOwnerRegistry {
     inner: Arc<CdpOwnerRegistryInner>,

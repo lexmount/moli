@@ -1775,9 +1775,6 @@ pub(super) async fn webdriver_classic_delete_session(
         if let Err(error) = runtime.shutdown_and_join().await {
             warn!(?error, "Classic session shutdown failed");
         }
-        if let Err(error) = state.cookie_profile.flush(&state.storage_partition).await {
-            warn!(?error, "failed to persist Classic cookie profile");
-        }
         return classic_webdriver_json_response(StatusCode::OK, delete_session_response());
     }
     classic_error_into_response(ClassicError::new(

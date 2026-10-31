@@ -33,7 +33,7 @@ async fn websocket_bidi_delete_cookies_preserves_unselected_partition_identities
         .chain([stored_cookie("unrelated", "keep")])
         .collect();
     let (addr, server) =
-        spawn_profiled_test_protocol_server_with_cookie_profile(profile.path.clone(), cookies)
+        spawn_profiled_test_protocol_server_with_initial_cookies(profile.path.clone(), cookies)
             .await;
     let (mut socket, _) = connect_async(format!("ws://{addr}/session"))
         .await

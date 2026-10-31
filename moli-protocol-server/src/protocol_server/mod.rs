@@ -1,5 +1,3 @@
-#[cfg(test)]
-use std::path::PathBuf;
 use std::{
     future::IntoFuture,
     net::SocketAddr,
@@ -28,14 +26,9 @@ use moli_fetch::FetchConfig;
 #[cfg(test)]
 use moli_protocol::DEFAULT_CDP_TAB_TARGET_ID;
 use moli_protocol::{CdpInitialStoragePartition, DEFAULT_CDP_PAGE_TARGET_ID};
-#[cfg(test)]
-use parking_lot::Mutex;
 use tokio::net::TcpListener;
 use tower::Layer;
 use tracing::info;
-
-#[cfg(test)]
-use moli_cookie_cache as cookie_cache;
 
 pub use crate::config::ServerConfig;
 pub use instance_control::{BrowserInstanceControl, InstanceCommand};
@@ -184,7 +177,6 @@ async fn serve_listener(listener: TcpListener, app_state: AppState) -> Result<()
     let control = app_state.control.clone();
     let cdp_owner_registry = app_state.cdp_owner_registry.clone();
     let classic_session_registry = app_state.classic_session_registry.clone();
-    let cookie_profile = app_state.cookie_profile.clone();
     let storage_partition = app_state.storage_partition.clone();
     let listener =
         listener.tap_io(|stream| tcp_options::configure_accepted_protocol_stream(stream));
@@ -210,13 +202,15 @@ async fn serve_listener(listener: TcpListener, app_state: AppState) -> Result<()
             .context("protocol server failed")?;
             classic_session_registry.shutdown().await?;
             control.drained().await;
-            cookie_profile.flush(&storage_partition).await?;
+            tokio::task::spawn_blocking(move || storage_partition.shutdown())
+                .await
+                .context("storage shutdown worker stopped")??;
             Ok(())
         });
         result
     })
     .await
-    .context("protocol server shutdown timed out; checkpoints may be incomplete")?
+    .context("protocol server shutdown timed out; storage may be incomplete")?
 }
 
 // Matchit accepts an empty final parameter when a literal slash follows it.
@@ -574,7 +568,6 @@ struct AppState {
     cdp_agent_host_directory: SharedCdpAgentHostDirectory,
     cdp_owner_registry: SharedCdpOwnerRegistry,
     devtools_frontend_url: String,
-    cookie_profile: SharedCookieProfile,
     storage_partition: Arc<StoragePartitionState>,
     fetch_config: FetchConfig,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
@@ -612,30 +605,6 @@ impl AppState {
         screencast_interval_ms: u32,
         control: BrowserInstanceControl,
     ) -> anyhow::Result<Self> {
-        Ok(Self::from_parts(
-            addr,
-            SharedCookieProfile::from_storage_partition(storage_partition.clone()),
-            storage_partition,
-            navigation_runtime_config,
-            screencast_interval_ms,
-            control,
-        ))
-    }
-
-    fn from_parts(
-        addr: SocketAddr,
-        cookie_profile: SharedCookieProfile,
-        storage_partition: Arc<StoragePartitionState>,
-        navigation_runtime_config: NavigationRuntimeConfig,
-        screencast_interval_ms: u32,
-        control: BrowserInstanceControl,
-    ) -> Self {
-        #[cfg(test)]
-        if let SharedCookieProfileBacking::Legacy(inner) = &cookie_profile.backing {
-            storage_partition
-                .import_cookies(inner.lock().cookies.clone())
-                .expect("legacy test cookie import");
-        }
         let cdp_agent_host_directory = SharedCdpAgentHostDirectory::default();
         let cdp_target_id_allocator = Arc::new(AtomicU64::new(0));
         let cdp_tab_target_id_allocator = Arc::new(AtomicU64::new(0));
@@ -648,7 +617,7 @@ impl AppState {
             screencast_interval_ms,
             control.clone(),
         );
-        Self {
+        Ok(Self {
             control,
             browser_ws_url: format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"),
             debugger_enabled: navigation_runtime_config.debugger_enabled(),
@@ -661,201 +630,17 @@ impl AppState {
             devtools_frontend_url: format!(
                 "/devtools/inspector.html?ws={addr}/devtools/page/{DEFAULT_TARGET_ID}"
             ),
-            cookie_profile,
             storage_partition,
             fetch_config: navigation_runtime_config.fetch_config().clone(),
             optional_resource_fetch_mask: navigation_runtime_config.optional_resource_fetch_mask(),
             subframe_loading_enabled: navigation_runtime_config.subframe_loading_enabled(),
             layout_configuration: navigation_runtime_config.layout_configuration(),
-        }
+        })
     }
 
     fn initial_storage_partition(&self) -> CdpInitialStoragePartition {
         CdpInitialStoragePartition::from_storage_partition(&self.storage_partition)
     }
-}
-
-#[derive(Debug, Clone)]
-struct SharedCookieProfile {
-    backing: SharedCookieProfileBacking,
-}
-
-#[derive(Debug, Clone)]
-enum SharedCookieProfileBacking {
-    #[cfg(test)]
-    Legacy(Arc<Mutex<CookieProfile>>),
-    StoragePartition(Arc<StoragePartitionState>),
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Default)]
-struct CookieProfileCommit {
-    initial_cookies: Vec<StoredCookie>,
-    final_cookies: Option<Vec<StoredCookie>>,
-}
-
-#[cfg(test)]
-impl CookieProfileCommit {
-    fn new(initial_cookies: Vec<StoredCookie>, final_cookies: Vec<StoredCookie>) -> Self {
-        Self {
-            initial_cookies,
-            final_cookies: Some(final_cookies),
-        }
-    }
-
-    fn is_unchanged(&self) -> bool {
-        self.final_cookies.is_none()
-    }
-}
-
-impl SharedCookieProfile {
-    async fn flush(&self, partition: &Arc<StoragePartitionState>) -> Result<()> {
-        let profile = self.clone();
-        let partition = partition.clone();
-        tokio::task::spawn_blocking(move || profile.flush_from_partition(&partition))
-            .await
-            .context("storage flush worker stopped")?
-    }
-
-    #[cfg(test)]
-    fn new(initial_cookies: Vec<StoredCookie>, cache_paths: Vec<PathBuf>) -> Self {
-        Self {
-            backing: SharedCookieProfileBacking::Legacy(Arc::new(Mutex::new(CookieProfile {
-                cookies: initial_cookies,
-                cache_paths,
-            }))),
-        }
-    }
-
-    fn from_storage_partition(storage_partition: Arc<StoragePartitionState>) -> Self {
-        Self {
-            backing: SharedCookieProfileBacking::StoragePartition(storage_partition),
-        }
-    }
-
-    #[cfg(test)]
-    fn snapshot(&self) -> Vec<StoredCookie> {
-        match &self.backing {
-            #[cfg(test)]
-            SharedCookieProfileBacking::Legacy(inner) => inner.lock().cookies.clone(),
-            SharedCookieProfileBacking::StoragePartition(storage_partition) => storage_partition
-                .cookies()
-                .expect("storage partition cookie snapshot should succeed"),
-        }
-    }
-
-    #[cfg(test)]
-    fn commit_and_save(&self, commit: CookieProfileCommit) -> Result<()> {
-        if commit.is_unchanged() {
-            return Ok(());
-        }
-
-        match &self.backing {
-            #[cfg(test)]
-            SharedCookieProfileBacking::Legacy(inner) => {
-                let mut profile = inner.lock();
-                commit_cookie_profile(&mut profile.cookies, commit);
-                // Keep publication and disk writes in the same order across
-                // owners, including checkpoints with an empty cookie delta.
-                for path in &profile.cache_paths {
-                    cookie_cache::save_cookie_cache(path, profile.cookies.clone()).with_context(
-                        || anyhow!("failed to save cookie cache `{}`", path.display()),
-                    )?;
-                }
-                Ok(())
-            }
-            SharedCookieProfileBacking::StoragePartition(storage_partition) => {
-                // Mutations already reached the one canonical jar. An old
-                // owner snapshot is never another source of writes.
-                drop(commit);
-                storage_partition.flush()
-            }
-        }
-    }
-
-    fn flush_from_partition(&self, _partition: &StoragePartitionState) -> Result<()> {
-        match &self.backing {
-            SharedCookieProfileBacking::StoragePartition(partition) => partition.flush(),
-            #[cfg(test)]
-            SharedCookieProfileBacking::Legacy(inner) => {
-                _partition.flush()?;
-                // Explicit legacy JSON export for codec/lifecycle tests only.
-                let mut profile = inner.lock();
-                profile.cookies = _partition.cookies()?;
-                for path in &profile.cache_paths {
-                    cookie_cache::save_cookie_cache(path, profile.cookies.clone())?;
-                }
-                Ok(())
-            }
-        }
-    }
-
-    #[cfg(test)]
-    fn merge_and_save(&self, cookies: Vec<StoredCookie>) -> Result<()> {
-        self.commit_and_save(CookieProfileCommit::new(Vec::new(), cookies))
-    }
-}
-
-#[cfg(test)]
-#[derive(Debug)]
-struct CookieProfile {
-    cookies: Vec<StoredCookie>,
-    cache_paths: Vec<PathBuf>,
-}
-
-#[cfg(test)]
-fn merge_cookie_profiles(base: &mut Vec<StoredCookie>, updates: Vec<StoredCookie>) {
-    for cookie in updates.into_iter().filter(|cookie| !cookie.is_expired()) {
-        if let Some(existing) = base
-            .iter_mut()
-            .find(|existing| same_cookie_key(existing, &cookie))
-        {
-            *existing = cookie;
-        } else {
-            base.push(cookie);
-        }
-    }
-    base.retain(|cookie| !cookie.is_expired());
-}
-
-#[cfg(test)]
-fn commit_cookie_profile(base: &mut Vec<StoredCookie>, commit: CookieProfileCommit) {
-    let Some(final_cookies) = commit.final_cookies else {
-        return;
-    };
-    let final_cookies = final_cookies
-        .into_iter()
-        .filter(|cookie| !cookie.is_expired())
-        .collect::<Vec<_>>();
-
-    for initial in commit
-        .initial_cookies
-        .iter()
-        .filter(|cookie| !cookie.is_expired())
-    {
-        let cookie_still_exists_in_session = final_cookies
-            .iter()
-            .any(|cookie| same_cookie_key(cookie, initial));
-        if cookie_still_exists_in_session {
-            continue;
-        }
-        if let Some(position) = base
-            .iter()
-            .position(|cookie| same_cookie_key(cookie, initial) && cookie == initial)
-        {
-            base.remove(position);
-        }
-    }
-
-    merge_cookie_profiles(base, final_cookies);
-}
-
-#[cfg(test)]
-fn same_cookie_key(left: &StoredCookie, right: &StoredCookie) -> bool {
-    left.name == right.name
-        && left.domain == right.domain
-        && left.path == right.path
-        && left.partition_key == right.partition_key
 }
 
 #[cfg(test)]

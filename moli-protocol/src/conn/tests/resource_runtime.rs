@@ -196,7 +196,7 @@ fn connection_initial_cookies_seed_new_browser_contexts() {
 
     for id in ["BID-1", "BID-2"] {
         let bc = conn.new_browser_context(id.to_owned());
-        assert!(bc.is_profile_backed_storage_partition());
+
         assert_eq!(bc.storage_partition_kind_label(), "profile-backed");
         assert_eq!(bc.storage_partition_id(), "default");
         let cookies = bc.snapshot_cookies().unwrap();
@@ -317,7 +317,6 @@ fn connection_ephemeral_browser_context_uses_isolated_storage_partition() {
         .new_ephemeral_browser_context("BID-ephemeral".to_owned())
         .expect("temporary context");
 
-    assert!(!bc.is_profile_backed_storage_partition());
     assert_eq!(bc.storage_partition_kind_label(), "ephemeral");
     assert_eq!(bc.storage_partition_id(), "BID-ephemeral");
     assert!(bc.snapshot_cookies().unwrap().is_empty());
@@ -339,14 +338,17 @@ fn connection_default_and_ephemeral_context_creation_use_named_partition_paths()
         .shared_storage_handles()
         .web_storage_store();
 
-    assert!(profile_backed.is_profile_backed_storage_partition());
+    assert_eq!(
+        profile_backed.storage_partition_kind_label(),
+        "profile-backed"
+    );
     assert_eq!(profile_backed.storage_partition_id(), "default");
     assert!(Arc::ptr_eq(
         profile_backed.web_storage_store_for_test(),
         &expected_web_storage_store
     ));
 
-    assert!(!ephemeral.is_profile_backed_storage_partition());
+    assert_eq!(ephemeral.storage_partition_kind_label(), "ephemeral");
     assert_eq!(ephemeral.storage_partition_id(), "BID-ephemeral");
     assert!(!Arc::ptr_eq(
         ephemeral.web_storage_store_for_test(),
@@ -603,39 +605,6 @@ fn connection_snapshot_cookies_collects_active_and_inactive_contexts() {
     names.sort();
 
     assert_eq!(names, vec!["active", "inactive"]);
-}
-
-#[test]
-fn connection_profile_backed_cookie_snapshot_ignores_ephemeral_contexts() {
-    let mut conn = CdpConnection::new();
-    let profile_backed = conn.new_browser_context("BID-profile".to_owned());
-    profile_backed.upsert_cookie_for_test(stored_cookie("profile", "1"));
-    let ephemeral = conn
-        .new_ephemeral_browser_context("BID-ephemeral".to_owned())
-        .expect("temporary context");
-    ephemeral.upsert_cookie_for_test(stored_cookie("ephemeral", "1"));
-    conn.install_browser_context_fixture_for_test(ephemeral);
-    conn.push_inactive_browser_context_fixture_for_test(profile_backed);
-
-    let cookies = conn
-        .snapshot_profile_backed_cookies()
-        .unwrap()
-        .expect("profile-backed snapshot");
-
-    assert_eq!(cookies.len(), 1);
-    assert_eq!(cookies[0].name, "profile");
-}
-
-#[test]
-fn connection_profile_backed_cookie_snapshot_is_none_without_profile_backed_context() {
-    let mut conn = CdpConnection::new_with_initial_cookies(vec![stored_cookie("sid", "seeded")]);
-    let ephemeral = conn
-        .new_ephemeral_browser_context("BID-ephemeral".to_owned())
-        .expect("temporary context");
-    assert!(ephemeral.snapshot_cookies().unwrap().is_empty());
-    conn.install_browser_context_fixture_for_test(ephemeral);
-
-    assert!(conn.snapshot_profile_backed_cookies().unwrap().is_none());
 }
 
 #[tokio::test]

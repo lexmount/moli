@@ -3229,22 +3229,6 @@ impl CdpConnection {
             .map_err(Into::into)
     }
 
-    pub fn snapshot_profile_backed_cookies(&mut self) -> Result<Option<Vec<StoredCookie>>> {
-        let mut saw_profile_backed_context = false;
-        let cookies = self
-            .browser_context
-            .iter()
-            .chain(self.inactive_browser_contexts.iter())
-            .filter(|context| {
-                let is_profile_backed = context.is_profile_backed_storage_partition();
-                saw_profile_backed_context |= is_profile_backed;
-                is_profile_backed
-            })
-            .map(BrowserContext::snapshot_cookies)
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(saw_profile_backed_context.then(|| cookies.into_iter().flatten().collect()))
-    }
-
     // ── ID generators ────────────────────────────────────────────────────────
 
     pub fn gen_bc_id(&mut self) -> String {

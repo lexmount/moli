@@ -199,10 +199,6 @@ impl BrowserContextStoragePartitionIdentity {
         }
     }
 
-    pub(crate) fn kind(&self) -> BrowserContextStoragePartitionKind {
-        self.kind
-    }
-
     pub(crate) fn id(&self) -> &str {
         &self.id
     }
@@ -647,11 +643,6 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<&mut NavigationEngine> {
         self.page_target_mut(target_id)?.navigation_engine_mut()
-    }
-
-    pub(crate) fn is_profile_backed_storage_partition(&self) -> bool {
-        self.storage_partition.identity().kind()
-            == BrowserContextStoragePartitionKind::ProfileBacked
     }
 
     pub(crate) fn storage_partition_id(&self) -> &str {

@@ -367,7 +367,7 @@ impl StoragePartitionState {
 
     /// Called after renderer and network producers have joined. All accepted
     /// bucket cleanup and SQL rollback/commit must finish before profile unlock.
-    pub(crate) fn shutdown(&self) -> Result<()> {
+    pub fn shutdown(&self) -> Result<()> {
         let mut closed = self.shutdown_result.lock();
         if let Some(result) = closed.as_ref() {
             return result.clone().map_err(anyhow::Error::msg);
@@ -391,7 +391,6 @@ impl StoragePartitionState {
             .drain_maintenance()
             .map_err(anyhow::Error::new);
         let io = self.storage_service.drain_io().map_err(anyhow::Error::new);
-        let flush = self.flush_open_services();
         let cookies = self.cookie_database.close().map_err(anyhow::Error::new);
         let local = self.local_storage_database.close();
         let runtime = self
@@ -405,7 +404,6 @@ impl StoragePartitionState {
             .and(sql)
             .and(late_maintenance)
             .and(io)
-            .and(flush)
             .and(cookies)
             .and(local)
             .and(runtime);

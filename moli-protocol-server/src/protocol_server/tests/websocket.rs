@@ -100,7 +100,7 @@ async fn assert_profile_cookie_delete_command_persists_across_restart(
     let page_url = format!("{page_origin}/page");
 
     let (cdp_addr, cdp_server) =
-        spawn_profiled_test_protocol_server_with_cookie_profile(profile.path.clone(), Vec::new())
+        spawn_profiled_test_protocol_server_with_initial_cookies(profile.path.clone(), Vec::new())
             .await;
     let (mut socket, _) = connect_async(format!(
         "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
@@ -158,7 +158,7 @@ async fn assert_profile_cookie_delete_command_persists_across_restart(
     );
 
     let (cdp_addr, cdp_server) =
-        spawn_profiled_test_protocol_server_with_cookie_profile(profile.path.clone(), Vec::new())
+        spawn_profiled_test_protocol_server_with_initial_cookies(profile.path.clone(), Vec::new())
             .await;
     let (mut socket, _) = connect_async(format!(
         "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
@@ -201,7 +201,7 @@ async fn assert_profile_cookie_delete_command_persists_across_restart(
     );
 
     let (cdp_addr, cdp_server) =
-        spawn_profiled_test_protocol_server_with_cookie_profile(profile.path.clone(), Vec::new())
+        spawn_profiled_test_protocol_server_with_initial_cookies(profile.path.clone(), Vec::new())
             .await;
     let (mut socket, _) = connect_async(format!(
         "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"

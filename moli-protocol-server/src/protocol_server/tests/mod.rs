@@ -742,10 +742,10 @@ async fn spawn_response_stage_streaming_document_fixture_server_with_head_signal
 async fn spawn_profiled_test_protocol_server(
     profile_dir: PathBuf,
 ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
-    spawn_profiled_test_protocol_server_with_cookie_profile(profile_dir, Vec::new()).await
+    spawn_profiled_test_protocol_server_with_initial_cookies(profile_dir, Vec::new()).await
 }
 
-async fn spawn_profiled_test_protocol_server_with_cookie_profile(
+async fn spawn_profiled_test_protocol_server_with_initial_cookies(
     profile_dir: PathBuf,
     initial_cookies: Vec<StoredCookie>,
 ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {

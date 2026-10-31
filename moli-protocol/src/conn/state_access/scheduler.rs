@@ -338,10 +338,6 @@ impl ProtocolWorkflowState<'_> {
             .set_runtime_inspector_response_ready_sender(sender)
     }
 
-    pub fn snapshot_profile_backed_cookies(self) -> anyhow::Result<Option<Vec<StoredCookie>>> {
-        self.connection.snapshot_profile_backed_cookies()
-    }
-
     pub fn start_automation_command_dispatch(
         self,
         command: AutomationCommand,

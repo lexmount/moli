@@ -1,7 +1,7 @@
 use super::*;
 
 async fn instance(
-    cookie_path: Option<PathBuf>,
+    profile_dir: Option<PathBuf>,
 ) -> (
     SocketAddr,
     tokio::task::JoinHandle<anyhow::Result<()>>,
@@ -11,17 +11,19 @@ async fn instance(
         .await
         .expect("bind owned instance");
     let addr = listener.local_addr().expect("owned instance address");
-    let state = AppState::from_parts(
+    let state = AppState::new_with_storage_partition_and_runtime_config(
         addr,
-        SharedCookieProfile::new(Vec::new(), cookie_path.into_iter().collect()),
-        Arc::new(StoragePartitionState::open(None).expect("in-memory storage")),
+        Arc::new(
+            StoragePartitionState::open(profile_dir.as_deref()).expect("owned storage partition"),
+        ),
         protocol_server_test_runtime_config(
             FetchConfig::default(),
             OptionalResourceFetchMask::NONE,
         ),
         crate::config::DEFAULT_SCREENCAST_INTERVAL_MS,
         BrowserInstanceControl::new(),
-    );
+    )
+    .expect("owned app state");
     let serving = state.clone();
     let task = tokio::spawn(async move { serve_listener(listener, serving).await });
     (addr, task, state)
@@ -64,12 +66,12 @@ async fn close_instance(socket: &mut TestCdpSocket, id: u64) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn browser_close_joins_its_listener_connections_and_checkpoint_only() {
+async fn browser_close_joins_its_listener_connections_and_storage_only() {
     assert_instance_shutdown(false).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_control_joins_its_listener_connections_and_checkpoint_only() {
+async fn native_control_joins_its_listener_connections_and_storage_only() {
     assert_instance_shutdown(true).await;
 }
 
@@ -94,10 +96,9 @@ async fn native_control_can_stop_a_server_without_a_protocol_connection() {
 }
 
 async fn assert_instance_shutdown(native: bool) {
-    let profile = TempDir::new("browser-close-checkpoint");
-    fs::create_dir_all(&profile.path).expect("own checkpoint directory");
-    let cookie_path = profile.path.join("cookies.json");
-    let (addr, task, state) = instance(Some(cookie_path.clone())).await;
+    let profile = TempDir::new("browser-close-storage");
+    fs::create_dir_all(&profile.path).expect("own storage directory");
+    let (addr, task, state) = instance(Some(profile.path.clone())).await;
     let (other_addr, other_task, other_state) = instance(None).await;
     let mut root = browser(addr).await;
     let mut other_root = browser(other_addr).await;
@@ -162,7 +163,11 @@ async fn assert_instance_shutdown(native: bool) {
     assert_eq!(state.cdp_owner_registry.owner_count(), 0);
     assert!(!state.classic_session_registry.has_session(classic_id));
     assert_eq!(state.bidi_session_registry.lock().active_session_count(), 0);
-    let persisted = cookie_cache::load_cookie_cache(&cookie_path).expect("checkpoint on disk");
+    drop(state);
+    let persisted = StoragePartitionState::open(Some(&profile.path))
+        .expect("reopen closed profile")
+        .cookies()
+        .expect("read persisted cookies");
     assert!(
         persisted
             .iter()
@@ -411,7 +416,7 @@ async fn incomplete_worker_drain_is_bounded_and_not_reported_as_clean_shutdown()
         .expect("bounded shutdown")
         .expect("server task joins")
         .expect_err("stalled worker cannot be clean shutdown");
-    assert!(error.to_string().contains("checkpoints may be incomplete"));
+    assert!(error.to_string().contains("storage may be incomplete"));
     assert_eq!(state.cdp_owner_registry.owner_count(), 0);
     assert!(tokio::net::TcpStream::connect(addr).await.is_err());
     drop(held_worker);

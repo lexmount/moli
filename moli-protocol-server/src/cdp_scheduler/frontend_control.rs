@@ -1,7 +1,5 @@
 use std::{cell::Cell, rc::Rc};
 
-#[cfg(test)]
-use moli_cookie_jar::StoredCookie;
 use tokio::sync::mpsc;
 
 use crate::{
@@ -13,25 +11,6 @@ use crate::{
 use self::target_control::CdpFrontendTargetControl;
 
 mod target_control;
-
-#[cfg(test)]
-#[derive(Debug, Clone, Default)]
-pub(crate) struct CdpCookieSnapshot {
-    profile_backed_cookies: Option<Vec<StoredCookie>>,
-}
-
-#[cfg(test)]
-impl CdpCookieSnapshot {
-    pub(crate) fn from_profile_backed_cookies(cookies: Option<Vec<StoredCookie>>) -> Self {
-        Self {
-            profile_backed_cookies: cookies,
-        }
-    }
-
-    pub(crate) fn into_profile_backed_cookies(self) -> Option<Vec<StoredCookie>> {
-        self.profile_backed_cookies
-    }
-}
 
 pub(crate) struct CdpOwnerActorLifecycle {
     pub(crate) instance_control: BrowserInstanceControl,

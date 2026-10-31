@@ -49,8 +49,6 @@ pub(crate) use automation_dispatch::{
     AutomationCommandProgress, AutomationWorkflowReady, PendingAutomationExecution,
 };
 pub(crate) use command_dispatch::CommandTurnOutput;
-#[cfg(test)]
-pub(crate) use frontend_control::CdpCookieSnapshot;
 pub(crate) use frontend_control::CdpOwnerActorLifecycle;
 use protocol_residence::{ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues};
 use runtime_command_barrier::CommandOutputReleasePermit;
