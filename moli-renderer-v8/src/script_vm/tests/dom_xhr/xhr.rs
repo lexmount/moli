@@ -4621,7 +4621,6 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
-
                     negotiated_http_version: None,
                 };
                 if streaming {
