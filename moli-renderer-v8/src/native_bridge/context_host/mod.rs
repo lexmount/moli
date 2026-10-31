@@ -69,6 +69,7 @@ use widestring::U16String;
 pub(crate) use self::resource_timing::SharedResourceTimingBufferRegistry;
 
 mod activity;
+mod blob_navigation;
 mod bridge_install;
 mod broadcast_channels;
 mod canvas_resources;

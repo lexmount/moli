@@ -152,6 +152,10 @@ impl JsContextHost {
                 Some(snapshot)
             }
             LocalChildDocumentPreparation::Historical(snapshot) => Some(*snapshot),
+            LocalChildDocumentPreparation::ErrorDocument(snapshot) => {
+                creation_kind = DocumentCreationKind::Error;
+                Some(*snapshot)
+            }
             LocalChildDocumentPreparation::Unavailable => None,
             LocalChildDocumentPreparation::IgnoredNavigation => {
                 crate::context_bootstrap::finish_joint_history_without_document_commit(
@@ -187,8 +191,8 @@ impl JsContextHost {
                         initiator_url,
                         initiator,
                         target_snapshot,
+                        blob_resource,
                     )
-                    .with_blob_resource(blob_resource)
                     .with_source_policy(source_policy)
                     .with_request_initiator(request_initiator),
                 )

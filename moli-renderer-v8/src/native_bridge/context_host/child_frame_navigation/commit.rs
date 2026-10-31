@@ -266,6 +266,7 @@ impl JsContextHost {
             handle,
             "The navigation was canceled.".to_owned(),
         );
+        let blob_resource = self.capture_child_blob_resource(url, initiator);
         if self
             .set_child_browsing_context_pending_navigation(
                 handle,
@@ -274,6 +275,7 @@ impl JsContextHost {
                     initiator_url,
                     navigation_initiator,
                     self.snapshot_child_navigation_target(handle, url),
+                    blob_resource,
                 ),
                 true,
                 initiator,
@@ -375,6 +377,7 @@ impl JsContextHost {
                     None,
                     ChildDocumentNavigationInitiator::FrameOwnerElement,
                     target_snapshot,
+                    None,
                 ),
                 true,
                 entry_snapshot.pending_javascript_initiator_origin(),
@@ -408,8 +411,8 @@ impl JsContextHost {
                 None,
                 ChildDocumentNavigationInitiator::FrameOwnerElement,
                 target_snapshot,
+                attribute_navigation.blob_resource,
             )
-            .with_blob_resource(attribute_navigation.blob_resource)
             .with_request_initiator(
                 self.owner_dispatch_scope_for_node(handle)
                     .and_then(|source| self.navigation_initiator_for_owner(source)),

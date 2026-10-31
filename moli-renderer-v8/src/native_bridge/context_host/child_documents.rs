@@ -27,6 +27,8 @@ pub(crate) enum LocalChildDocumentPreparation {
     Unavailable,
     /// A local response is available, but must not replace the active Document.
     IgnoredNavigation,
+    /// A failed local request still commits an opaque error Document and load.
+    ErrorDocument(Box<super::ChildBrowsingContextSnapshot>),
     Ready(Box<super::ChildBrowsingContextSnapshot>),
     /// Restore the historical local resource and its policy container intact;
     /// current iframe attributes apply to new navigations, not this resource.
@@ -39,7 +41,7 @@ impl LocalChildDocumentPreparation {
     pub(crate) fn into_snapshot(self) -> Option<super::ChildBrowsingContextSnapshot> {
         match self {
             Self::Ready(snapshot) | Self::Historical(snapshot) => Some(*snapshot),
-            Self::Unavailable | Self::IgnoredNavigation => None,
+            Self::Unavailable | Self::IgnoredNavigation | Self::ErrorDocument(_) => None,
         }
     }
 }

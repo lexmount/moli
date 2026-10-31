@@ -16,6 +16,22 @@ pub(crate) struct BlobUrlFetchEnvironment {
 }
 
 impl BlobUrlFetchEnvironment {
+    pub(crate) fn for_child_navigation(
+        host: &mut crate::native_bridge::JsContextHost,
+        source: crate::native_bridge::OwnerDispatchScope,
+    ) -> Option<Self> {
+        let context = host.storage_context_for_dispatch_scope(source)?;
+        Some(Self {
+            access_key: crate::blob::ObjectUrlAccessKey::new(
+                host.browser_context_runtime().storage_partition_identity(),
+                context.storage_key().clone(),
+            ),
+            // The top-level document self-fetch exception cannot authorize
+            // a new child Document, even when its URL is the same.
+            top_level_creation_url: None,
+        })
+    }
+
     pub(super) fn allows(&self, key: &crate::blob::ObjectUrlAccessKey, url: &url::Url) -> bool {
         key == &self.access_key
             || (key.same_partition(&self.access_key)

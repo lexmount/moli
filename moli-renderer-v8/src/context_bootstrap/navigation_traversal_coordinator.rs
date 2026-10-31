@@ -584,6 +584,9 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
             participant.seed.clone(),
             None,
             None,
+            Some(crate::native_bridge::OwnerDispatchScope::Child(
+                participant.handle,
+            )),
         ) {
             for queued in &cross_document {
                 host.cancel_joint_child_history_navigation(queued.handle, step);

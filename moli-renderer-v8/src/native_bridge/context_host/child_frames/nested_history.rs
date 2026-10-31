@@ -257,6 +257,7 @@ impl JsContextHost {
             record.seed,
             None,
             None,
+            Some(OwnerDispatchScope::Child(handle)),
         );
     }
 
