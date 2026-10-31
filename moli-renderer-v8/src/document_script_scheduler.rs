@@ -1107,6 +1107,7 @@ mod tests {
                 redirect_chain: Vec::new(),
                 from_cache: true,
                 cache_state: moli_fetch::ResponseCacheState::Local,
+                timing_info: Default::default(),
                 negotiated_http_version: None,
             },
             "export default 1;".to_owned(),

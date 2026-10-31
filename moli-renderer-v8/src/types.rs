@@ -227,6 +227,7 @@ impl PendingSubresourceContinuation {
 }
 
 pub(super) struct PendingWindowFetchContinuation {
+    pub(super) timing: crate::context_bootstrap::FetchResourceTiming,
     promise: PendingWindowFetchPromise,
     keepalive: bool,
     connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
@@ -249,6 +250,7 @@ impl PendingWindowFetchContinuation {
     ) -> Self {
         Self {
             promise: PendingWindowFetchPromise::Active(resolver),
+            timing: crate::context_bootstrap::FetchResourceTiming::new(),
             keepalive,
             connect_policy,
             csp_report_context,

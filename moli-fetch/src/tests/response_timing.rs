@@ -1,6 +1,158 @@
 use super::*;
 use std::io::Write;
 
+const EMPTY_GZIP: &[u8] = &[
+    31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+fn compressed_response_server(
+    gzip: &'static [u8],
+    chunked: bool,
+) -> Result<(String, thread::JoinHandle<std::io::Result<()>>)> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let url = format!("http://{}/compressed", listener.local_addr()?);
+    let server = thread::spawn(move || -> std::io::Result<()> {
+        let (mut stream, _) = listener.accept()?;
+        let mut request = Vec::new();
+        let mut byte = [0];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte)?;
+            request.extend_from_slice(&byte);
+        }
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nCache-Control: max-age=600\r\nConnection: close\r\n"
+        )?;
+        if chunked {
+            write!(
+                stream,
+                "Transfer-Encoding: chunked\r\n\r\n{:x}\r\n",
+                gzip.len()
+            )?;
+            stream.write_all(gzip)?;
+            stream.write_all(b"\r\n0\r\n\r\n")?;
+        } else {
+            write!(stream, "Content-Length: {}\r\n\r\n", gzip.len())?;
+            stream.write_all(gzip)?;
+        }
+        Ok(())
+    });
+    Ok((url, server))
+}
+
+#[tokio::test]
+async fn encoded_body_size_survives_compression_and_response_materialization() -> Result<()> {
+    const TEXT_GZIP: &[u8] = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x4b\x49\x4d\xce\x4f\x49\x4d\x01\x00\xf6\x9a\xf0\x1a\x07\x00\x00\x00";
+    for (gzip, decoded) in [(EMPTY_GZIP, ""), (TEXT_GZIP, "decoded")] {
+        for chunked in [false, true] {
+            for transport in ["buffered", "raw", "html"] {
+                let (url, server) = compressed_response_server(gzip, chunked)?;
+                let config = FetchConfig::default();
+                let request = Request::get(&url)?;
+                let response = if transport == "buffered" {
+                    let owner = FetchRuntimeOwner::new(&config, new_shared_browser_cookie_store());
+                    let response = owner
+                        .handle()
+                        .submit_with_cancel(request, FetchCancelHandle::new())?
+                        .await??;
+                    assert!(owner.shutdown().is_clean());
+                    response
+                } else {
+                    let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+                    let response = if transport == "raw" {
+                        client.fetch(request).await?
+                    } else {
+                        client
+                            .fetch_html_stream(request)
+                            .await?
+                            .into_materialized_text_response()
+                            .await?
+                    };
+                    assert!(client.shutdown().is_clean());
+                    response
+                };
+                assert_eq!(
+                    response.body_text(),
+                    decoded,
+                    "{transport}, chunked={chunked}"
+                );
+                assert_eq!(
+                    response.timing_info.encoded_body_size(),
+                    Some(gzip.len() as u64),
+                    "{transport}, chunked={chunked}"
+                );
+                assert!(
+                    response
+                        .timing_info
+                        .transport()
+                        .response_started_at()
+                        .is_some()
+                );
+                let raw = response.into_materialized_raw_response();
+                assert_eq!(raw.timing_info.encoded_body_size(), Some(gzip.len() as u64));
+                let text = raw.into_lossy_materialized_text_response();
+                assert_eq!(
+                    text.head().timing_info.encoded_body_size(),
+                    Some(gzip.len() as u64)
+                );
+                server.join().expect("compressed response server")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn disk_cache_retains_encoded_body_size_after_client_restart() -> Result<()> {
+    for html in [false, true] {
+        let root = unique_test_cache_dir();
+        let mut config = FetchConfig::default();
+        config.set_http_cache_dir(Some(root.display().to_string()));
+        let (url, server) = compressed_response_server(EMPTY_GZIP, true)?;
+        let mut original_start = None;
+        for cached in [false, true] {
+            let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+            let request = Request::get(&url)?;
+            let response = if html {
+                client
+                    .fetch_html_stream(request)
+                    .await?
+                    .into_materialized_text_response()
+                    .await?
+            } else {
+                client.fetch(request).await?
+            };
+            assert_eq!(response.from_cache, cached);
+            assert_eq!(response.body_bytes().len(), 0);
+            assert_eq!(
+                response.timing_info.encoded_body_size(),
+                Some(EMPTY_GZIP.len() as u64)
+            );
+            let start = response
+                .timing_info
+                .transport()
+                .response_started_at()
+                .unwrap();
+            if cached {
+                assert!(start > original_start.unwrap());
+                assert!(
+                    response
+                        .timing_info
+                        .transport()
+                        .request_started_at()
+                        .is_none()
+                );
+            } else {
+                original_start = Some(start);
+            }
+            assert!(client.shutdown().is_clean());
+        }
+        server.join().expect("cache response server")?;
+        fs::remove_dir_all(root)?;
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn native_response_timing_distinguishes_encoded_empty_bodies_from_head_headers() -> Result<()>
 {

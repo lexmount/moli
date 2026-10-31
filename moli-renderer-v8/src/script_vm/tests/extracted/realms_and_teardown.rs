@@ -25,6 +25,7 @@ fn new_vm_with_pending_response_for_teardown_test()
                     redirect_chain: Vec::new(),
                     from_cache: false,
                     cache_state: Default::default(),
+                    timing_info: Default::default(),
                     negotiated_http_version: None,
                 },
                 body_source_id,
@@ -2050,6 +2051,7 @@ fn isolated_realm_destruction_aborts_fetch_and_detaches_keepalive() {
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: Default::default(),
+            timing_info: Default::default(),
             negotiated_http_version: None,
         },
     })

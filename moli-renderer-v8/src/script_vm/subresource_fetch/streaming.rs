@@ -124,6 +124,7 @@ impl ScriptVm {
                         response_body: SubresourceResponseBody::from_navigation_response(&response),
                         response_from_cache: response.from_cache,
                         response_cache_state: response.cache_state,
+                        response_timing_info: response.timing_info.clone(),
                     };
                     trace_async_subresource_stage(
                         "async_subresource_complete_running_auth_required",
@@ -178,6 +179,7 @@ impl ScriptVm {
                         response_body: SubresourceResponseBody::from_navigation_response(&response),
                         from_cache: response.from_cache,
                         cache_state: response.cache_state,
+                        timing_info: response.timing_info.clone(),
                     };
                     self._context_host
                         .borrow_mut()
@@ -527,6 +529,9 @@ impl ScriptVm {
             );
             return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
         };
+        if let PendingSubresourceContinuation::Fetch(fetch) = &mut pending.continuation {
+            fetch.timing.response_started();
+        }
         let trace_fields = async_subresource_trace_fields_for_pending_with_body(
             "streaming_started",
             started.internal_id,
@@ -658,6 +663,9 @@ impl ScriptVm {
                     .record_subresource_network(network_record);
                 match &pending.continuation {
                     PendingSubresourceContinuation::Fetch(fetch) => {
+                        crate::context_bootstrap::record_resource_performance_entry(
+                            scope, fetch.timing.failure(&pending.info.url),
+                        );
                         let resolver = fetch
                             .resolver()
                             .expect("detached keepalive stream is handled before V8 entry");
@@ -1579,6 +1587,16 @@ impl ScriptVm {
                             moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                         let response_body = streaming.body_writer.finish();
                         let response_body_size = response_body.len();
+                        if let PendingSubresourceContinuation::Fetch(fetch) = &streaming.pending.continuation {
+                            let filter = streaming.response_filter.or_else(|| crate::network_host::network_response_filter(
+                                &streaming.pending.request_origin, &streaming.head, streaming.pending.request_mode,
+                            ));
+                            let entry = fetch.timing.response(
+                                &streaming.pending.info.url, &streaming.pending.request_origin,
+                                &streaming.head, filter.is_none_or(|filter| filter.is_readable()), response_body_size,
+                            );
+                            crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+                        }
                         trace_async_subresource_stage(
                             "async_subresource_streaming_body_finished",
                             trace_fields,
@@ -1775,6 +1793,12 @@ impl ScriptVm {
                         }
                     }
                     Err(error_text) => {
+                        if let PendingSubresourceContinuation::Fetch(fetch) = &streaming.pending.continuation
+                        {
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope, fetch.timing.failure(&streaming.pending.info.url),
+                            );
+                        }
                         let error_started =
                             moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                         crate::network_host::error_pending_network_body_stream(

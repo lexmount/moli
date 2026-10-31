@@ -115,7 +115,11 @@ fn service_worker_fetch_stream_response_head(
         redirected: response_head.redirected || !job.request.redirect_chain().is_empty(),
         redirect_chain: job.request.redirect_chain().to_vec(),
         from_cache: false,
-        cache_state: Default::default(),
+        cache_state: moli_fetch::ResponseCacheState::Local,
+        timing_info: job
+            .response_timing_info
+            .clone()
+            .unwrap_or_else(moli_fetch::ResponseTimingInfo::from_service_worker),
         negotiated_http_version: None,
     }
 }
@@ -153,6 +157,7 @@ fn apply_service_worker_synthetic_redirect(
     response: ServiceWorkerFetchResponse,
     next_url: Url,
 ) -> Result<(), String> {
+    job.response_timing_info = None;
     let from_url = response
         .final_url
         .unwrap_or_else(|| job.request.url.clone());
@@ -370,6 +375,8 @@ impl ServiceWorkerRuntimeService {
             if !job.is_bound_to_owner(&started.owner) {
                 return;
             }
+            job.response_timing_info
+                .get_or_insert_with(moli_fetch::ResponseTimingInfo::from_service_worker);
             match service_worker_fetch_can_forward_stream(job, &started.response_head) {
                 Ok(true) => {}
                 Ok(false) => {
@@ -615,7 +622,11 @@ impl ServiceWorkerRuntimeService {
                 redirected: response.redirected || !job.request.redirect_chain().is_empty(),
                 redirect_chain: job.request.redirect_chain().to_vec(),
                 from_cache: false,
-                cache_state: Default::default(),
+                cache_state: moli_fetch::ResponseCacheState::Local,
+                timing_info: job
+                    .response_timing_info
+                    .clone()
+                    .unwrap_or_else(moli_fetch::ResponseTimingInfo::from_service_worker),
                 negotiated_http_version: None,
             },
             String::from_utf8_lossy(&response.body).into_owned(),
@@ -1186,6 +1197,7 @@ mod tests {
                 cancel_handle: moli_fetch::FetchCancelHandle::new(),
                 navigation_preload_cancel_handle: None,
                 streaming_body_source_id: None,
+                response_timing_info: None,
                 direct_completion_tx: None,
             },
         );
@@ -1982,6 +1994,7 @@ mod tests {
             cancel_handle: moli_fetch::FetchCancelHandle::new(),
             navigation_preload_cancel_handle: None,
             streaming_body_source_id: None,
+            response_timing_info: None,
             direct_completion_tx: None,
         };
         let origin = moli_url::WebOrigin::from_url(&url("https://initiator.test/"));

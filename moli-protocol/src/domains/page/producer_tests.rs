@@ -1793,6 +1793,7 @@ async fn unattached_child_frame_activity_uses_captured_owner_for_network_and_lif
             response_body: Some(SubresourceResponseBody::from_bytes(b"child body".to_vec())),
             from_cache: false,
             cache_state: Default::default(),
+            timing_info: Default::default(),
         };
         let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
             12.5,
@@ -1938,6 +1939,7 @@ async fn child_frame_activity_emits_document_network_events_from_prepared_load()
                 response_body: Some(SubresourceResponseBody::from_bytes(vec![0x00, 0xff, b'a'])),
                 from_cache: true,
                 cache_state: moli_fetch::ResponseCacheState::Local,
+                timing_info: Default::default(),
             }),
         }],
         "https://example.test".to_owned(),
@@ -2069,6 +2071,7 @@ async fn stale_child_document_response_emits_network_without_navigation_or_lifec
                 )),
                 from_cache: false,
                 cache_state: Default::default(),
+                timing_info: Default::default(),
             },
         }],
         Vec::new(),
@@ -2170,6 +2173,7 @@ async fn child_document_network_without_body_records_known_no_data() {
         response_body: None,
         from_cache: false,
         cache_state: Default::default(),
+        timing_info: Default::default(),
     };
     let mut background_events = Vec::new();
 
@@ -2455,6 +2459,7 @@ async fn prepared_child_frame_activity_keeps_implicit_owner_after_foreground_cha
                 response_body: Some(SubresourceResponseBody::from_bytes(b"child".to_vec())),
                 from_cache: false,
                 cache_state: Default::default(),
+                timing_info: Default::default(),
             },
         }],
         Vec::new(),

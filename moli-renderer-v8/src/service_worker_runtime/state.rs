@@ -786,6 +786,7 @@ pub(super) struct ServiceWorkerFetchJob {
     pub(super) cancel_handle: moli_fetch::FetchCancelHandle,
     pub(super) navigation_preload_cancel_handle: Option<moli_fetch::FetchCancelHandle>,
     pub(super) streaming_body_source_id: Option<crate::types::NetworkBodySourceId>,
+    pub(super) response_timing_info: Option<moli_fetch::ResponseTimingInfo>,
     pub(super) direct_completion_tx:
         Option<tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>>,
 }

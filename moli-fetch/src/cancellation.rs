@@ -24,9 +24,30 @@ pub(crate) struct ResponseProgress {
 struct ResponseProgressState {
     state: AtomicU8,
     timing: Mutex<FetchResponseTiming>,
+    encoded_body_size: Mutex<Option<u64>>,
 }
 
 impl ResponseProgress {
+    pub(crate) fn timing(&self) -> FetchResponseTiming {
+        *self.inner.timing.lock()
+    }
+
+    pub(crate) fn set_encoded_body_size(&self, size: Option<u64>) {
+        *self.inner.encoded_body_size.lock() = size;
+    }
+
+    pub(crate) fn encoded_body_size(&self) -> Option<u64> {
+        *self.inner.encoded_body_size.lock()
+    }
+
+    pub(crate) fn timing_info(&self) -> crate::ResponseTimingInfo {
+        crate::ResponseTimingInfo::from_progress(self.clone())
+    }
+
+    pub(crate) fn same_transfer(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub(crate) fn mark_request_started(&self) {
         self.inner
             .timing

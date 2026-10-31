@@ -64,6 +64,7 @@ pub struct ResponseHead {
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
     pub cache_state: crate::ResponseCacheState,
+    pub timing_info: crate::ResponseTimingInfo,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
 }
 
@@ -341,6 +342,7 @@ pub struct Response {
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
     pub cache_state: crate::ResponseCacheState,
+    pub timing_info: crate::ResponseTimingInfo,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
 }
@@ -362,6 +364,7 @@ impl Clone for Response {
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            timing_info: self.timing_info.clone(),
             negotiated_http_version: self.negotiated_http_version,
             network_request_extra_info: self.network_request_extra_info.clone(),
         }
@@ -417,6 +420,7 @@ impl Response {
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            timing_info: self.timing_info.clone(),
             negotiated_http_version: self.negotiated_http_version,
         }
     }
@@ -456,6 +460,7 @@ impl Response {
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
             cache_state: head.cache_state,
+            timing_info: head.timing_info.clone(),
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
         })
@@ -475,6 +480,7 @@ impl Response {
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
             cache_state: head.cache_state,
+            timing_info: head.timing_info.clone(),
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
         })
@@ -492,6 +498,7 @@ impl Response {
             redirect_chain: self.redirect_chain,
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            timing_info: self.timing_info.clone(),
             negotiated_http_version: self.negotiated_http_version,
         };
         let (body, body_bytes) = self
@@ -530,6 +537,7 @@ impl Response {
             redirect_chain: self.redirect_chain,
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            timing_info: self.timing_info.clone(),
             negotiated_http_version: self.negotiated_http_version,
         };
         (head, self.body)
@@ -557,6 +565,7 @@ pub struct RawResponse {
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
     pub cache_state: crate::ResponseCacheState,
+    pub timing_info: crate::ResponseTimingInfo,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
 }
@@ -578,6 +587,7 @@ impl Clone for RawResponse {
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            timing_info: self.timing_info.clone(),
             negotiated_http_version: self.negotiated_http_version,
             network_request_extra_info: self.network_request_extra_info.clone(),
         }
@@ -627,6 +637,7 @@ impl RawResponse {
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            timing_info: self.timing_info.clone(),
             negotiated_http_version: self.negotiated_http_version,
         }
     }
@@ -652,6 +663,7 @@ impl RawResponse {
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
             cache_state: head.cache_state,
+            timing_info: head.timing_info.clone(),
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
         })
@@ -671,6 +683,7 @@ impl RawResponse {
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
             cache_state: head.cache_state,
+            timing_info: head.timing_info.clone(),
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
         })
@@ -688,6 +701,7 @@ impl RawResponse {
             redirect_chain: self.redirect_chain,
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            timing_info: self.timing_info.clone(),
             negotiated_http_version: self.negotiated_http_version,
         };
         (head, self.body)

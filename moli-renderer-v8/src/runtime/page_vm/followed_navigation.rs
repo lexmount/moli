@@ -493,6 +493,7 @@ fn about_blank_navigation_response(url: &Url) -> Option<moli_fetch::Response> {
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: Default::default(),
+            timing_info: Default::default(),
             negotiated_http_version: None,
         },
         Vec::new(),

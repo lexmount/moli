@@ -390,6 +390,7 @@ fn register_pending_window_fetch_for_test(
                             redirect_chain: Vec::new(),
                             from_cache: false,
                             cache_state: Default::default(),
+                            timing_info: Default::default(),
                             negotiated_http_version: None,
                         },
                         network_request_headers: None,
@@ -2407,3 +2408,5 @@ mod hyperlink_audit_owner;
 
 mod fetch_integrity;
 mod fetch_referrer;
+
+mod fetch_resource_timing;

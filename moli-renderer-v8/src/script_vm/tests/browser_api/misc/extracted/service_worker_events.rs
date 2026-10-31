@@ -3453,3 +3453,85 @@ async fn message_event_sources_accept_registered_service_workers_and_reject_auth
     .await;
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn navigator_service_worker_timing_uses_response_provenance_instead_of_the_url() {
+    let (base_url, worker_server) = spawn_service_worker_response_server(vec![(
+        "/app/worker.js",
+        "text/javascript; charset=utf-8",
+        r#"
+        self.addEventListener('activate', event => event.waitUntil(clients.claim()));
+        self.addEventListener('fetch', event => {
+          if (new URL(event.request.url).pathname.startsWith('/handled')) {
+            event.respondWith(new Response('hello', {headers:{'Content-Type':'text/plain'}}));
+          }
+        });
+        "#,
+    )])
+    .await;
+    let (network_url, network_server) = spawn_service_worker_response_server_with_headers(vec![(
+        "/network",
+        "text/plain",
+        vec![("Access-Control-Allow-Origin", "*")],
+        "network",
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(&format!(
+        "globalThis.timingNetworkUrl = {}; globalThis.timingResult = null;",
+        serde_json::to_string(&format!("{network_url}/network")).unwrap(),
+    ))
+    .unwrap();
+    vm.eval(
+        r#"
+        (async () => {
+          const failures = [];
+          const entryFor = url => new Promise(resolve => {
+            const previous = performance.getEntriesByName(url, 'resource').at(-1);
+            if (previous) { resolve(previous); return; }
+            const observer = new PerformanceObserver(list => {
+              const entry = list.getEntriesByName(url, 'resource')[0];
+              if (entry) { clearTimeout(timer); observer.disconnect(); resolve(entry); }
+            });
+            observer.observe({type:'resource'});
+            const timer = setTimeout(() => { observer.disconnect(); resolve(undefined); }, 500);
+          });
+          performance.clearResourceTimings();
+          await navigator.serviceWorker.register('worker.js', {scope:'./'});
+          await navigator.serviceWorker.ready;
+          for (const [index, integrity] of ['', 'sha256-LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ='].entries()) {
+            const url = 'http://cross-origin.invalid/handled-' + index;
+            const response = await fetch(url, {integrity});
+            if (await response.text() !== 'hello') failures.push('worker/body');
+            const entry = await entryFor(url);
+            if (!entry) { failures.push('worker/missing-entry'); continue; }
+            if (!(entry.responseStart > 0 && entry.responseStart >= entry.startTime && entry.responseEnd >= entry.responseStart)) failures.push('worker/timing');
+            if (entry.encodedBodySize !== 5 || entry.decodedBodySize !== 5 || entry.responseStatus !== 200) failures.push('worker/body-info');
+            if (entry.transferSize !== 0 || entry.nextHopProtocol !== '') failures.push('worker/transport-info');
+          }
+          const response = await fetch(timingNetworkUrl);
+          if (await response.text() !== 'network') failures.push('network/body');
+          const entry = await entryFor(timingNetworkUrl);
+          if (!entry || entry.responseStart !== 0 || entry.transferSize !== 0 || entry.nextHopProtocol !== '') failures.push('network/TAO');
+          if (!entry || entry.encodedBodySize !== 7 || entry.decodedBodySize !== 7) failures.push('network/body-info');
+          timingResult = JSON.stringify(failures);
+        })().catch(error => timingResult = String(error.stack || error));
+        "#,
+    )
+    .unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(timingResult !== null)",
+        "true",
+    )
+    .await;
+    assert_eq!(vm.eval("timingResult").unwrap(), "[]");
+    worker_server.await.unwrap();
+    network_server.await.unwrap();
+}

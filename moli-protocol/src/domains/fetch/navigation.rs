@@ -229,6 +229,7 @@ pub(super) fn pause_data_url_response_stage_navigation_into_buffer(
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: Default::default(),
+            timing_info: Default::default(),
             negotiated_http_version: None,
         },
         body,
