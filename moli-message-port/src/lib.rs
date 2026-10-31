@@ -19,6 +19,7 @@ mod wake;
 
 pub use id::MessagePortId;
 pub use registry::{
-    DiscardedMessagePort, MessagePortCloseKind, MessagePortCloseResult, MessagePortRegistry,
+    DiscardedMessagePort, MessagePortCloseKind, MessagePortCloseResult, MessagePortPoll,
+    MessagePortRegistry,
 };
 pub use wake::MessagePortWake;
