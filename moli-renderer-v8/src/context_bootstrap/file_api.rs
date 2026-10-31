@@ -10,6 +10,9 @@ mod file_reader;
 mod file_reader_sync;
 mod install;
 
+#[cfg(test)]
+pub(crate) use data_transfer::drag_data_read_count_for_test;
+
 pub(super) use data_transfer::data_transfer_constructor_callback;
 pub(crate) use data_transfer::{
     DragDataStoreMode, NativeDragDataStore, create_drag_data_transfer_view,
