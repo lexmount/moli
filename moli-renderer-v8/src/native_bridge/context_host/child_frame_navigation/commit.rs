@@ -305,10 +305,11 @@ impl JsContextHost {
             return None;
         }
         let attribute_bootstrap = entry_snapshot.attribute_bootstrap().clone();
-        let target_snapshot = entry_snapshot
+        let attribute_navigation = entry_snapshot
             .pending_attribute_navigation()
             .cloned()
             .expect("an admitted attribute navigation retains its target snapshot");
+        let target_snapshot = attribute_navigation.target_snapshot;
         let url = Self::child_browsing_context_navigation_entry_url(&attribute_bootstrap)?;
         let is_attribute_about_blank_noop = matches!(
             attribute_bootstrap,
@@ -408,6 +409,7 @@ impl JsContextHost {
                 ChildDocumentNavigationInitiator::FrameOwnerElement,
                 target_snapshot,
             )
+            .with_blob_resource(attribute_navigation.blob_resource)
             .with_request_initiator(
                 self.owner_dispatch_scope_for_node(handle)
                     .and_then(|source| self.navigation_initiator_for_owner(source)),

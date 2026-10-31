@@ -246,6 +246,7 @@ async fn renderer_navigation_publishes_one_fact_and_separate_cdp_projection() {
             None,
             None,
             None,
+            None,
         )
     });
     let mut command = crate::conn::CommandDispatchContext::default();

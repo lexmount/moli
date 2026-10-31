@@ -1140,6 +1140,36 @@ impl BackgroundNavigationLoadJob {
             }
 
             ensure_url_not_blocked_for_load_inputs(&self.load_inputs, &self.raw_url)?;
+            if let Some(resource) = &self.load_inputs.blob_resource {
+                let url = Url::parse(&self.raw_url)?;
+                if let Some(response) = resource
+                    .response(&url, &self.method, &self.request_headers.to_byte_strings())
+                    .await
+                {
+                    let (head, bytes) = response?.into_byte_parts();
+                    let body = CapturedBody::from_bytes(bytes);
+                    let navigation = prepare_navigation_from_captured_raw_response_with_engine_async(
+                        &mut engine,
+                        self.page_reservation.clone(),
+                        &self.load_inputs,
+                        url,
+                        self.method.clone(),
+                        self.request_headers.clone(),
+                        head,
+                        body,
+                        self.body_progress_source.clone(),
+                        NetworkObservationJournal::default(),
+                        None,
+                        false,
+                        reply_boundary,
+                    )
+                    .await
+                    .map(NavigationLoadOutcome::response_commit_ready);
+                    early_result_sent =
+                        Self::emit_early_result_for_successful_document(&mut early_result, &navigation);
+                    return navigation;
+                }
+            }
             if self.load_inputs.network_offline {
                 // Emulated offline is a network failure, not a protocol error.
                 // Report it like any other transport failure: commit a
@@ -1892,6 +1922,7 @@ impl CdpConnection {
         )
         .with_navigation_history(navigation.navigation_history.clone());
         inputs.auxiliary_document_response = navigation.auxiliary_document_response.clone();
+        inputs.blob_resource = navigation.blob_resource.clone();
         if let Some(initiator) = navigation.navigation_initiator.as_ref() {
             inputs.navigation_initiator_url = Some(initiator.url().clone());
             inputs.navigation_request_metadata = Some(initiator.request_metadata());

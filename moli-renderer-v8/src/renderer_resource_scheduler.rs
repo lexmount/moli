@@ -185,6 +185,7 @@ impl RendererResourceScheduler {
     ) {
         let schedule = MainModuleFetchSchedule::Runtime(target);
         let fetch_context = request.fetch_context().cloned();
+        let blob_resource = request.blob_resource().cloned();
         let attribution = MainModuleFetchNetworkAttribution::new(
             service_worker.document_url.clone(),
             script.url.clone(),
@@ -253,11 +254,19 @@ impl RendererResourceScheduler {
             // lookup. Keep its Service Worker response filtering and SRI checks,
             // but publish the result to the graph's single-module reservation.
             let outcome = tokio::select! {
-                outcome = crate::planning::load_service_worker_aware_external_script_source_outcome_with_request(
-                    &script, &request_origin, &request_client, runner, None, request,
-                    service_worker.browser_context_runtime, service_worker.client_id,
-                    service_worker.document_url,
-                ) => outcome,
+                outcome = async {
+                    if let Some(resource) = blob_resource {
+                        crate::planning::load_captured_blob_script_source_outcome(
+                            &script, &request_origin, &resource, None,
+                        ).await
+                    } else {
+                        crate::planning::load_service_worker_aware_external_script_source_outcome_with_request(
+                            &script, &request_origin, &request_client, runner, None, request,
+                            service_worker.browser_context_runtime, service_worker.client_id,
+                            service_worker.document_url,
+                        ).await
+                    }
+                } => outcome,
                 _ = cancel_rx => {
                     let error = "module root fetch cancelled".to_owned();
                     load.finish();

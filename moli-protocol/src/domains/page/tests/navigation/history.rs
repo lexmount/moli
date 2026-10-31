@@ -41,6 +41,7 @@ async fn renderer_fragment_navigation_preserves_initial_document_residence() {
             None,
             None,
             None,
+            None,
         )
     });
     let mut command = crate::conn::CommandDispatchContext::default();

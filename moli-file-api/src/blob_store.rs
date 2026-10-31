@@ -47,6 +47,22 @@ pub struct ObjectUrlEntry<AccessKey, MediaSource = std::convert::Infallible> {
     pub access_key: Option<AccessKey>,
 }
 
+/// The backing retained when a byte-resource request resolves a Blob URL.
+/// MediaSource URLs retain their unsupported kind without moving a native
+/// MediaSource object across the resource-loading boundary.
+#[derive(Clone, Debug)]
+pub enum ObjectUrlResourceData {
+    Blob { data: BlobData, mime_type: String },
+    MediaSource,
+}
+
+/// Captures an immutable backing and creator key without starting I/O.
+#[derive(Clone, Debug)]
+pub struct ObjectUrlResourceEntry<AccessKey> {
+    pub data: ObjectUrlResourceData,
+    pub access_key: Option<AccessKey>,
+}
+
 #[derive(Clone, Debug)]
 struct BlobState<OwnerId, PartitionId> {
     owner_id: Option<OwnerId>,
@@ -460,6 +476,29 @@ where
         self.object_url_entry_if(url, |_| true)
     }
 
+    /// Resolve the URL at request preparation, retaining its backing even if
+    /// the URL and its Blob wrapper are later released. Permission checks and
+    /// byte consumption remain the resource consumer's responsibility.
+    pub fn object_url_resource_entry(&self, url: &str) -> Option<ObjectUrlResourceEntry<AccessKey>>
+    where
+        AccessKey: Clone,
+    {
+        let url = url.split_once('#').map_or(url, |(url, _)| url);
+        let object_urls = self.object_urls.lock();
+        let state = object_urls.get(url)?;
+        let data = match &state.target {
+            ObjectUrlTarget::Blob(id) => {
+                let (data, mime_type) = self.object_url_blob_data(*id)?;
+                ObjectUrlResourceData::Blob { data, mime_type }
+            }
+            ObjectUrlTarget::MediaSource(_) => ObjectUrlResourceData::MediaSource,
+        };
+        Some(ObjectUrlResourceEntry {
+            data,
+            access_key: state.access_key.clone(),
+        })
+    }
+
     /// Authorize and capture the entry under the URL-store lock, before reading
     /// a file or database backing store. Missing creator keys are not public.
     pub fn object_url_entry_with_access_key(
@@ -659,6 +698,79 @@ fn random_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_entries_retain_lazy_data_without_url_or_wrapper_references() {
+        use std::sync::atomic::AtomicUsize;
+
+        #[derive(Debug)]
+        struct Source(AtomicUsize);
+        impl crate::BlobSource for Source {
+            fn read(&self, range: std::ops::Range<usize>, complete: crate::BlobReadCompletion) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                complete(Ok(b"retained"[range].to_vec()));
+            }
+        }
+        let store = BlobStore::<u64, u64, String>::default();
+        let source = Arc::new(Source(AtomicUsize::new(0)));
+        let weak = Arc::downgrade(&source);
+        let blob = store.create_blob_from_data(
+            Some(1),
+            Some(2),
+            BlobData::from_source(source.clone(), 8),
+            "text/javascript".to_owned(),
+        );
+        let key = "creator".to_owned();
+        let url = store
+            .create_object_url_with_access_key(Some(1), blob, "null", Some(key.clone()))
+            .unwrap();
+        let captured = store
+            .object_url_resource_entry(&format!("{url}#fragment"))
+            .unwrap();
+        assert!(
+            store
+                .object_url_resource_entry(&format!("{url}?query"))
+                .is_none()
+        );
+        assert_eq!(source.0.load(Ordering::Relaxed), 0);
+        assert!(store.revoke_object_url(&url));
+        store.release_blob_wrapper_ref(blob);
+        assert!(store.blob_size(blob).is_none());
+        assert!(store.object_url_resource_entry(&url).is_none());
+        assert_eq!(captured.access_key, Some(key));
+        let ObjectUrlResourceData::Blob { data, mime_type } = captured.data else {
+            panic!("Blob entry must retain its lazy byte source");
+        };
+        assert_eq!(mime_type, "text/javascript");
+        assert_eq!(data.slice(2..6).read_blocking().unwrap(), b"tain");
+        assert_eq!(source.0.load(Ordering::Relaxed), 1);
+        drop(source);
+        assert!(weak.upgrade().is_some());
+        drop(data);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn resource_entries_preserve_media_source_kind_without_retaining_native_objects() {
+        let store = BlobStore::<u64, u64, String, (), Arc<()>>::default();
+        let source = Arc::new(());
+        let weak = Arc::downgrade(&source);
+        let url = store
+            .create_object_url_with_target(
+                None,
+                None,
+                ObjectUrlTarget::MediaSource(source),
+                "null",
+                None,
+                None,
+            )
+            .unwrap();
+        let captured = store.object_url_resource_entry(&url).unwrap();
+        assert!(matches!(captured.data, ObjectUrlResourceData::MediaSource));
+        assert!(captured.access_key.is_none());
+        assert!(store.revoke_object_url(&url));
+        assert!(weak.upgrade().is_none());
+    }
 
     #[test]
     fn shared_blob_backing_is_installed_without_copy_and_outlives_wrapper_release() {

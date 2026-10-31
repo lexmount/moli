@@ -65,7 +65,7 @@ pub(super) struct ChildBrowsingContextEntry {
     // navigation machinery. Keep them separate from an admitted document load,
     // which can still complete after the fragment change.
     same_document_attribute_bootstrap: Option<ChildBrowsingContextBootstrap>,
-    pending_attribute_navigation: Option<ChildNavigationTargetSnapshot>,
+    pending_attribute_navigation: Option<PendingChildAttributeNavigation>,
     pending_live_navigation: Option<PendingChildFrameNavigation>,
     // Snapshot at navigation admission. The target's origin is checked again
     // when queued javascript: code is about to execute.
@@ -94,11 +94,21 @@ pub(super) struct ChildBrowsingContextEntry {
     pending_service_worker_client_navigation: Option<ServiceWorkerClientNavigateContinuation>,
 }
 
+/// The resource and target settings of an accepted frame attribute load.
+/// Wrapper refreshes retain this request; a deferred commit must not resolve
+/// its Blob URL again after the inserting script has revoked it.
+#[derive(Debug, Clone)]
+pub(super) struct PendingChildAttributeNavigation {
+    pub(super) target_snapshot: ChildNavigationTargetSnapshot,
+    pub(super) blob_resource: Option<crate::network_host::CapturedBlobResource>,
+}
+
 /// Provenance belongs to the queued navigation, including when an attribute
 /// setter reuses the history machinery for an already loaded child Document.
 #[derive(Debug, Clone)]
 pub(super) struct PendingChildFrameNavigation {
     pub(super) bootstrap: ChildBrowsingContextBootstrap,
+    pub(super) blob_resource: Option<crate::network_host::CapturedBlobResource>,
     pub(super) initiator_url: Option<Url>,
     pub(super) initiator: ChildDocumentNavigationInitiator,
     pub(super) target_snapshot: ChildNavigationTargetSnapshot,
@@ -116,6 +126,9 @@ impl PendingChildFrameNavigation {
         target_snapshot: ChildNavigationTargetSnapshot,
     ) -> Self {
         Self {
+            blob_resource: JsContextHost::child_browsing_context_bootstrap_url(&bootstrap)
+                .as_ref()
+                .and_then(crate::network_host::CapturedBlobResource::capture),
             bootstrap,
             initiator_url,
             initiator,
@@ -130,6 +143,14 @@ impl PendingChildFrameNavigation {
         policy: Option<crate::runtime::RendererNavigationPolicy>,
     ) -> Self {
         self.source_policy = policy;
+        self
+    }
+
+    pub(super) fn with_blob_resource(
+        mut self,
+        resource: Option<crate::network_host::CapturedBlobResource>,
+    ) -> Self {
+        self.blob_resource = resource;
         self
     }
 
@@ -174,7 +195,7 @@ impl ChildPerformanceTimeOrigin {
 pub(crate) struct ChildBrowsingContextNavigationSeedSnapshot {
     pub(crate) navigation_entry_seed: NavigationHistoryEntrySeed,
     pub(crate) committed_navigation_entry_seed: NavigationHistoryEntrySeed,
-    pending_attribute_navigation: Option<ChildNavigationTargetSnapshot>,
+    pending_attribute_navigation: Option<PendingChildAttributeNavigation>,
     pub(crate) pending_live_navigation_reflects_window_state: bool,
 }
 
@@ -272,7 +293,7 @@ impl ChildBrowsingContextEntry {
         self.pending_attribute_navigation.is_some()
     }
 
-    pub(super) fn pending_attribute_navigation(&self) -> Option<&ChildNavigationTargetSnapshot> {
+    pub(super) fn pending_attribute_navigation(&self) -> Option<&PendingChildAttributeNavigation> {
         self.pending_attribute_navigation.as_ref()
     }
 

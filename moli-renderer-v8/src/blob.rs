@@ -516,6 +516,12 @@ pub(crate) fn object_url_entry(url: &str) -> Option<RendererObjectUrlEntry> {
     blob_store().object_url_entry(url)
 }
 
+pub(crate) fn object_url_resource_entry(
+    url: &str,
+) -> Option<moli_file_api::ObjectUrlResourceEntry<ObjectUrlAccessKey>> {
+    blob_store().object_url_resource_entry(url)
+}
+
 pub(crate) fn object_url_body_and_type_with_access_key(
     url: &str,
     access_key: &ObjectUrlAccessKey,

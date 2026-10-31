@@ -72,6 +72,7 @@ pub(super) struct DynamicScriptOwner {
     continuation_tx: Arc<Mutex<Option<MainDocumentRuntimeContinuationSender>>>,
     continuation_turn_queued: Arc<AtomicBool>,
     load_delay_bindings: HashMap<DynamicScriptOwnerId, MainDocumentScriptLoadDelayLease>,
+    blob_resources: HashMap<DynamicScriptOwnerId, crate::network_host::CapturedBlobResource>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -392,6 +393,7 @@ impl DynamicScriptOwner {
             continuation_tx: Arc::default(),
             continuation_turn_queued: Arc::default(),
             load_delay_bindings: HashMap::new(),
+            blob_resources: HashMap::new(),
         }
     }
 
@@ -466,8 +468,11 @@ impl DynamicScriptOwner {
         document_character_set: Option<&str>,
         service_worker_context: Option<&DynamicScriptServiceWorkerContext>,
     ) {
-        let (payload, binding) = admission.into_parts();
+        let (payload, binding, blob_resource) = admission.into_parts();
         let id = self.reserve_script_id();
+        if let Some(resource) = blob_resource {
+            self.blob_resources.insert(id, resource);
+        }
         match payload {
             RuntimeScriptAdmissionPayload::Script(script) => {
                 let queue_kind = DynamicScriptQueueKind::for_mode(script.mode);
@@ -603,9 +608,17 @@ impl DynamicScriptOwner {
         id: DynamicScriptOwnerId,
     ) -> Option<MainDocumentScriptLoadDelayLease> {
         let _ = self.remove_entry_by_id(id);
+        self.blob_resources.remove(&id);
         let lease = self.load_delay_bindings.remove(&id);
         self.refresh_followup_work();
         lease
+    }
+
+    pub(super) fn take_blob_resource(
+        &mut self,
+        id: DynamicScriptOwnerId,
+    ) -> Option<crate::network_host::CapturedBlobResource> {
+        self.blob_resources.remove(&id)
     }
 
     /// Transfers terminal responsibility for one already-selected non-module
@@ -1487,9 +1500,18 @@ impl DynamicScriptOwner {
                 let document_character_set = document_character_set.map(str::to_owned);
                 let service_worker_context = service_worker_context.cloned();
                 let fetch_task_runner = task_runner.clone();
+                let blob_resource = self.take_blob_resource(id);
                 self.in_flight_loads += 1;
                 task_runner.spawn(async move {
-                    let outcome = if let Some(context) = service_worker_context {
+                    let outcome = if let Some(resource) = blob_resource {
+                        crate::planning::load_captured_blob_script_source_outcome(
+                            &script_for_load,
+                            &request_origin,
+                            &resource,
+                            document_character_set.as_deref(),
+                        )
+                        .await
+                    } else if let Some(context) = service_worker_context {
                         load_service_worker_aware_external_script_source_outcome(
                             &script_for_load,
                             &request_origin,

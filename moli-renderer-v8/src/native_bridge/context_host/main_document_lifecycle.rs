@@ -269,9 +269,19 @@ impl JsContextHost {
             } => {
                 let binding = load_delay_binding
                     .expect("runtime-script admission must own its load-delay lease");
-                let admission = RuntimeScriptAdmission::from_boxed_payload(payload, binding);
+                let admission = RuntimeScriptAdmission::from_boxed_payload(payload, binding)
+                    .capture_blob_resource(|| {
+                        self.current_registered_window_execution_context_identity(
+                            super::OwnerDispatchScope::Top,
+                        )
+                        .and_then(|identity| {
+                            crate::network_host::BlobUrlFetchEnvironment::for_identity(
+                                self, identity,
+                            )
+                        })
+                    });
                 if let Err(rejected) = runtime.publish_runtime_script_admission(admission) {
-                    let (_, binding) = rejected.into_parts();
+                    let (_, binding, _) = rejected.into_parts();
                     let _ = self.release_main_document_script_load_delay(binding);
                     runtime.cancel_runtime_script_start_admission(reservation);
                     return Err(

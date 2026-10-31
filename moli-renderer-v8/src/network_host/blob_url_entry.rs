@@ -16,11 +16,24 @@ pub(crate) struct BlobUrlFetchEnvironment {
 }
 
 impl BlobUrlFetchEnvironment {
+    pub(super) fn allows(&self, key: &crate::blob::ObjectUrlAccessKey, url: &url::Url) -> bool {
+        key == &self.access_key
+            || (key.same_partition(&self.access_key)
+                && self.top_level_creation_url.as_ref() == Some(url))
+    }
+
     pub(crate) fn for_window(
         host: &mut crate::native_bridge::JsContextHost,
         binding: &crate::native_bridge::WindowExecutionContextBinding,
     ) -> Option<Self> {
         let identity = binding.resolve_identity(host)?;
+        Self::for_identity(host, identity)
+    }
+
+    pub(crate) fn for_identity(
+        host: &mut crate::native_bridge::JsContextHost,
+        identity: crate::native_bridge::WindowExecutionContextIdentity,
+    ) -> Option<Self> {
         let storage_context =
             host.storage_context_for_window_execution_context_identity(identity)?;
         let dispatch_scope = identity.dispatch_scope();
@@ -79,13 +92,10 @@ impl CapturedBlobUrl {
     pub(crate) fn for_environment(mut self, environment: Option<&BlobUrlFetchEnvironment>) -> Self {
         self.fetch_authorized = self.entry.as_ref().is_some_and(|entry| {
             environment.is_some_and(|environment| {
-                entry.access_key.as_ref().is_some_and(|key| {
-                    key == &environment.access_key
-                    // Fetch explicitly exempts a top-level document fetching
-                    // its own creation URL from storage-key partition checks.
-                    || (key.same_partition(&environment.access_key)
-                        && environment.top_level_creation_url.as_ref() == Some(&self.url))
-                })
+                entry
+                    .access_key
+                    .as_ref()
+                    .is_some_and(|key| environment.allows(key, &self.url))
             })
         });
         if !self.fetch_authorized {

@@ -60,6 +60,7 @@ pub(crate) struct PendingLocationNavigation {
     /// The complete browser request. URL-only callers use the GET wrapper;
     /// form POST callers retain raw bytes and their generated Content-Type.
     pub(crate) url: Url,
+    pub(crate) blob_resource: Option<crate::network_host::CapturedBlobResource>,
     pub(crate) request_method: String,
     pub(crate) request_body: Option<bytes::Bytes>,
     pub(crate) request_headers: Vec<(String, String)>,
@@ -338,6 +339,7 @@ impl JsContextHost {
                     .as_ref()
                     .map(RendererDocumentLifecycleJournalHandle::identity),
                 runtime_command_cause: self.active_runtime_command_cause.clone(),
+                blob_resource: crate::network_host::CapturedBlobResource::capture(&url),
                 url,
                 request_method,
                 request_body,
@@ -372,6 +374,7 @@ impl JsContextHost {
                     .as_ref()
                     .map(RendererDocumentLifecycleJournalHandle::identity),
                 runtime_command_cause: None,
+                blob_resource: crate::network_host::CapturedBlobResource::capture(&url),
                 url,
                 request_method: "GET".to_owned(),
                 request_body: None,

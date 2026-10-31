@@ -479,7 +479,12 @@ impl JsContextHost {
                     let target_url =
                         Self::child_browsing_context_bootstrap_url(&attribute_bootstrap)
                             .unwrap_or_else(|| self.document_url_for_child_context(handle));
-                    Some(self.snapshot_child_navigation_target(handle, &target_url))
+                    Some(PendingChildAttributeNavigation {
+                        target_snapshot: self.snapshot_child_navigation_target(handle, &target_url),
+                        blob_resource: crate::network_host::CapturedBlobResource::capture(
+                            &target_url,
+                        ),
+                    })
                 };
                 let pending_attribute_permissions_policy =
                     pending_attribute_bootstrap_commit.then(|| {

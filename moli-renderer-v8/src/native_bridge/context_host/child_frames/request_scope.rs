@@ -154,7 +154,11 @@ impl JsContextHost {
         let scripting_enabled = self.child_browsing_context_scripting_enabled(handle);
         if entry.pending_attribute_bootstrap_commit()
             && let Some(snapshot) = self
-                .materialize_local_child_snapshot_for_bootstrap(handle, entry.attribute_bootstrap())
+                .materialize_local_child_snapshot_for_bootstrap(
+                    handle,
+                    entry.attribute_bootstrap(),
+                    None,
+                )
                 .into_snapshot()
         {
             if moli_url::is_about_blank(&snapshot.url)
