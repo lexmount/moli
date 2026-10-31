@@ -867,7 +867,7 @@ mod tests {
     }
 
     #[test]
-    fn origin_area_usage_and_clear_include_partitioned_area_keys() {
+    fn origin_clear_includes_partitioned_area_keys() {
         let origin = "https://cdn.example.test";
         let first_party = first_party_area_key(origin);
         let top_a = web_storage_partitioned_area_key(origin, "https://top-a.example.test");
@@ -883,18 +883,12 @@ mod tests {
         assert!(store.set_item(&sibling, "s", "dddd"));
 
         assert_eq!(store.usage_bytes(&first_party), 1);
-        assert_eq!(store.usage_bytes_for_origin_areas(origin), 6);
-        assert_eq!(
-            store.usage_bytes_for_origin_areas("https://sibling.example.test"),
-            4
-        );
 
         store.clear_origin(&first_party);
-        assert_eq!(store.usage_bytes_for_origin_areas(origin), 5);
         assert_eq!(store.get_item(&top_a, "a"), Some("bb".to_owned()));
 
         store.clear_origin_areas(origin);
-        assert_eq!(store.usage_bytes_for_origin_areas(origin), 0);
+        assert_eq!(store.get_item(&first_party, "fp"), None);
         assert_eq!(store.get_item(&top_a, "a"), None);
         assert_eq!(store.get_item(&top_b, "b"), None);
         assert_eq!(store.get_item(&sibling, "s"), Some("dddd".to_owned()));

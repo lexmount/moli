@@ -414,33 +414,6 @@ impl WebStorageStore {
     pub fn usage_bytes(&self, origin: &str) -> usize {
         self.try_usage_bytes(origin).unwrap_or(0)
     }
-    fn area_keys_for_origin(
-        &self,
-        origin: &str,
-    ) -> std::result::Result<Vec<String>, WebStorageMutationError> {
-        match &self.backend {
-            WebStorageBackend::Memory(memory) => Ok(memory.lock().area_keys_for_origin(origin)),
-            WebStorageBackend::Json(json) => Ok(json.lock().memory.area_keys_for_origin(origin)),
-            WebStorageBackend::Sqlite(sqlite) => sqlite.area_keys_for_origin(origin),
-        }
-    }
-    pub fn try_usage_bytes_for_origin_areas(
-        &self,
-        origin: &str,
-    ) -> std::result::Result<usize, WebStorageMutationError> {
-        if let WebStorageBackend::Sqlite(sqlite) = &self.backend {
-            return sqlite.usage_bytes_for_origin_areas(origin);
-        }
-        self.area_keys_for_origin(origin)?
-            .iter()
-            .try_fold(0usize, |sum, key| {
-                self.try_usage_bytes(key)
-                    .map(|usage| sum.saturating_add(usage))
-            })
-    }
-    pub fn usage_bytes_for_origin_areas(&self, origin: &str) -> usize {
-        self.try_usage_bytes_for_origin_areas(origin).unwrap_or(0)
-    }
     pub fn try_clear_origin_areas(
         &self,
         origin: &str,

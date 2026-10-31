@@ -441,45 +441,24 @@ fn origin_clear_includes_cold_partitioned_areas_and_preserves_other_origins() {
 }
 
 #[test]
-fn usage_queries_read_cold_metadata_and_overlay_uncommitted_area_sizes() {
+fn single_area_usage_reads_cold_metadata_and_current_dirty_size() {
     let root = tempfile::tempdir().unwrap();
     let runtime = Runtime::new().unwrap();
     let (store, owner) = open(root.path(), &runtime);
-    let origin = "https://usage.test";
-    let first = web_storage_partitioned_area_key(origin, origin);
-    let other = web_storage_partitioned_area_key(origin, "https://other.test");
-    let fresh = web_storage_partitioned_area_key(origin, "https://new.test");
-    let sibling = web_storage_partitioned_area_key("https://usage.test.sibling", origin);
-    for key in [origin, &first, &other, &sibling] {
-        store.try_set_item(key, "key", "old").unwrap();
-    }
+    let key = web_storage_partitioned_area_key("https://usage.test", "https://usage.test");
+    store.try_set_item(&key, "key", "old").unwrap();
     owner.flush().unwrap();
     assert_eq!(resident(&store), 0);
-    let cold = store.lease_area(&first).unwrap().unwrap();
-    assert!(cold.area.state.lock().is_none());
-    assert_eq!(store.try_usage_bytes(&first).unwrap(), 3);
-    assert_eq!(store.try_usage_bytes_for_origin_areas(origin).unwrap(), 9);
+    let cold = store.lease_area(&key).unwrap().unwrap();
+    assert_eq!(store.try_usage_bytes(&key).unwrap(), 3);
     assert!(
         cold.area.state.lock().is_none(),
-        "usage must not materialize entries"
+        "usage must not load entries"
     );
-
-    store.try_set_item(&other, "key", "changed").unwrap();
-    store.try_set_item(&fresh, "new", "fresh").unwrap();
-    store.try_clear(origin).unwrap();
-    // The known single area reads its uncommitted value; the origin query
-    // overlays both newly created and modified maps, including pending clear.
-    assert_eq!(store.try_usage_bytes(&other).unwrap(), 7);
-    assert_eq!(store.try_usage_bytes_for_origin_areas(origin).unwrap(), 15);
-    assert!(cold.area.state.lock().is_none());
-    owner.flush().unwrap();
-    assert_eq!(store.try_usage_bytes_for_origin_areas(origin).unwrap(), 15);
-    assert_eq!(
-        store
-            .try_usage_bytes_for_origin_areas("https://usage.test.sibling")
-            .unwrap(),
-        3
-    );
+    store.try_set_item(&key, "key", "changed").unwrap();
+    assert_eq!(store.try_usage_bytes(&key).unwrap(), 7);
+    store.try_clear(&key).unwrap();
+    assert_eq!(store.try_usage_bytes(&key).unwrap(), 0);
     drop(cold);
     owner.close().unwrap();
 }

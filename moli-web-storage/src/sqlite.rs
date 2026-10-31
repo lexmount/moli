@@ -35,11 +35,7 @@ pub(super) struct SqliteBackend {
     cache: Mutex<Cache>,
     pub(super) namespace: parking_lot::RwLock<()>,
 }
-struct AreaMetadata {
-    usage: usize,
-    entries: usize,
-}
-const ORIGIN_METADATA_SQL: &str = "SELECT storage_key,usage_bytes,entry_count FROM areas
+const ORIGIN_METADATA_SQL: &str = "SELECT storage_key,entry_count FROM areas
     WHERE storage_key=?1 OR (storage_key>=?2 AND storage_key<?3)";
 
 fn origin_prefix_range(origin: &str) -> (String, String) {
@@ -356,55 +352,21 @@ impl SqliteBackend {
     fn area_metadata_for_origin(
         &self,
         origin: &str,
-    ) -> std::result::Result<BTreeMap<String, AreaMetadata>, WebStorageMutationError> {
+    ) -> std::result::Result<BTreeMap<String, usize>, WebStorageMutationError> {
         let (prefix, upper) = origin_prefix_range(origin);
         let origin = origin.to_owned();
         Ok(self.client.query(move |connection| {
             let mut statement = connection.prepare_cached(ORIGIN_METADATA_SQL)?;
             statement
                 .query_map(params![origin, prefix, upper], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
                 })?
                 .map(|row| {
-                    let (key, usage, entries) = row?;
-                    Ok((
-                        key,
-                        AreaMetadata {
-                            usage: usize::try_from(usage).map_err(WritebackError::new)?,
-                            entries: usize::try_from(entries).map_err(WritebackError::new)?,
-                        },
-                    ))
+                    let (key, entries) = row?;
+                    Ok((key, usize::try_from(entries).map_err(WritebackError::new)?))
                 })
                 .collect()
         })?)
-    }
-    pub(super) fn usage_bytes_for_origin_areas(
-        &self,
-        origin: &str,
-    ) -> std::result::Result<usize, WebStorageMutationError> {
-        let _namespace = self.namespace.write();
-        // Pin live areas before querying SQL: a concurrent acknowledgement can
-        // otherwise release the last copy of a newer logical value.
-        let live = self.live_areas_for_origin(origin);
-        let mut metadata = self.area_metadata_for_origin(origin)?;
-        for (key, area) in live {
-            if let Some(state) = &*area.state.lock() {
-                metadata.insert(
-                    key,
-                    AreaMetadata {
-                        usage: state.size,
-                        entries: state.values.len(),
-                    },
-                );
-            }
-        }
-        Ok(metadata
-            .values()
-            .fold(0usize, |sum, area| sum.saturating_add(area.usage)))
     }
     fn area(&self, origin: &str) -> Arc<Area> {
         let mut cache = self.cache.lock();
@@ -533,7 +495,7 @@ impl SqliteBackend {
                 let nonempty = state
                     .as_ref()
                     .map(|data| !data.values.is_empty())
-                    .unwrap_or_else(|| metadata.get(key).is_some_and(|area| area.entries > 0));
+                    .unwrap_or_else(|| metadata.get(key).is_some_and(|entries| *entries > 0));
                 if !nonempty {
                     continue;
                 }
@@ -562,28 +524,6 @@ impl SqliteBackend {
             publish(mutation);
         }
         Ok(changed)
-    }
-    pub(super) fn area_keys_for_origin(
-        &self,
-        origin: &str,
-    ) -> std::result::Result<Vec<String>, WebStorageMutationError> {
-        let prefix = web_storage_area_key_prefix_for_origin(origin);
-        let mut keys = self
-            .area_metadata_for_origin(origin)?
-            .into_keys()
-            .collect::<Vec<_>>();
-        keys.extend(
-            self.cache
-                .lock()
-                .areas
-                .iter()
-                .filter(|(_, area)| area.strong_count() != 0)
-                .map(|(key, _)| key.clone()),
-        );
-        keys.retain(|key| key == origin || key.starts_with(&prefix));
-        keys.sort();
-        keys.dedup();
-        Ok(keys)
     }
 }
 impl WebStorageStore {
