@@ -350,26 +350,17 @@ fn append_browser_navigation_headers(
             .to_owned(),
     );
     append_encoded_header_if_missing(outgoing, "Upgrade-Insecure-Requests", "1".to_owned());
-    append_encoded_header_if_missing(outgoing, "Sec-Fetch-Mode", "navigate".to_owned());
-    append_encoded_header_if_missing(
+    append_fetch_metadata_headers(
         outgoing,
-        "Sec-Fetch-Dest",
+        request,
+        request_url,
+        "navigate",
         if request.is_subframe_navigation_request() {
             "iframe"
         } else {
             "document"
-        }
-        .to_owned(),
+        },
     );
-    append_encoded_header_if_missing(
-        outgoing,
-        "Sec-Fetch-Site",
-        request_sec_fetch_site(request, request_url),
-    );
-
-    if request.is_top_level_navigation_request() && request.cookie_context.initiator_url.is_none() {
-        append_encoded_header_if_missing(outgoing, "Sec-Fetch-User", "?1".to_owned());
-    }
 
     if request.browser_navigation_kind() == crate::BrowserNavigationRequestKind::Reload {
         append_encoded_header_if_missing(outgoing, "Cache-Control", "max-age=0".to_owned());
@@ -426,16 +417,6 @@ fn append_browser_subresource_headers(
                     .accept_language()
                     .to_owned(),
             );
-            append_encoded_header_if_missing(
-                outgoing,
-                "Sec-Fetch-Site",
-                request_sec_fetch_site(request, request_url),
-            );
-            append_encoded_header_if_missing(
-                outgoing,
-                "Sec-Fetch-Mode",
-                request.request_mode.as_ref().to_owned(),
-            );
             let destination = match metadata {
                 BrowserRequestMetadata::Audio => "audio",
                 BrowserRequestMetadata::AudioWorklet => "audioworklet",
@@ -453,9 +434,39 @@ fn append_browser_subresource_headers(
                 | BrowserRequestMetadata::Ping
                 | BrowserRequestMetadata::Xhr => "empty",
             };
-            append_encoded_header_if_missing(outgoing, "Sec-Fetch-Dest", destination.to_owned());
+            append_fetch_metadata_headers(
+                outgoing,
+                request,
+                request_url,
+                request.request_mode.as_ref(),
+                destination,
+            );
             append_browser_client_hints(outgoing, request.browser_identity(config));
         }
+    }
+}
+
+// Fetch Metadata uses the current URL, including on every redirect hop.
+// Loopback and localhost HTTP destinations are potentially trustworthy too.
+fn append_fetch_metadata_headers(
+    outgoing: &mut crate::RequestHeaders,
+    request: &Request,
+    request_url: &Url,
+    mode: &str,
+    destination: &str,
+) {
+    if !is_potentially_trustworthy_url(request_url) {
+        return;
+    }
+    append_encoded_header_if_missing(outgoing, "Sec-Fetch-Mode", mode.to_owned());
+    append_encoded_header_if_missing(outgoing, "Sec-Fetch-Dest", destination.to_owned());
+    append_encoded_header_if_missing(
+        outgoing,
+        "Sec-Fetch-Site",
+        request_sec_fetch_site(request, request_url),
+    );
+    if request.is_top_level_navigation_request() && request.cookie_context.initiator_url.is_none() {
+        append_encoded_header_if_missing(outgoing, "Sec-Fetch-User", "?1".to_owned());
     }
 }
 
@@ -1334,9 +1345,9 @@ mod tests {
     #[test]
     fn browser_subresource_origin_uses_redirect_target_url() {
         let config = FetchConfig::default();
-        let initiator_url = url("http://app.test/page");
-        let original_url = url("http://app.test/redirect");
-        let redirected_url = url("http://api.test/data");
+        let initiator_url = url("https://app.test/page");
+        let original_url = url("https://app.test/redirect");
+        let redirected_url = url("https://api.test/data");
         let request = Request::new("GET", original_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&initiator_url)
@@ -1349,7 +1360,7 @@ mod tests {
 
         assert_eq!(
             header_value(&headers, "origin"),
-            Some("http://app.test".to_owned())
+            Some("https://app.test".to_owned())
         );
         assert_eq!(
             header_value(&headers, "sec-fetch-site"),
@@ -1388,9 +1399,9 @@ mod tests {
     #[test]
     fn browser_subresource_origin_serializes_null_after_cross_site_redirect() {
         let config = FetchConfig::default();
-        let initiator_url = url("http://app.test/page");
-        let original_url = url("http://api.test/redirect");
-        let redirected_url = url("http://app.test/data");
+        let initiator_url = url("https://app.test/page");
+        let original_url = url("https://api.test/redirect");
+        let redirected_url = url("https://app.test/data");
         let request = Request::new("GET", original_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&initiator_url)
@@ -1411,10 +1422,10 @@ mod tests {
     #[test]
     fn browser_subresource_origin_serializes_null_after_same_site_redirect_chain() {
         let config = FetchConfig::default();
-        let initiator_url = url("http://app.test:8000/page");
-        let original_url = url("http://app.test:8000/redirect");
-        let intermediate_url = url("http://app.test:8001/redirect");
-        let final_url = url("http://app.test:8000/data");
+        let initiator_url = url("https://app.test:8000/page");
+        let original_url = url("https://app.test:8000/redirect");
+        let intermediate_url = url("https://app.test:8001/redirect");
+        let final_url = url("https://app.test:8000/data");
         let request = Request::new("GET", original_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&initiator_url)
@@ -1439,10 +1450,10 @@ mod tests {
     fn browser_subresource_origin_serializes_null_after_cross_site_redirect_chain_returns_to_origin()
      {
         let config = FetchConfig::default();
-        let initiator_url = url("http://app.test/page");
-        let original_url = url("http://app.test/redirect");
-        let cross_site_url = url("http://cross.test/redirect");
-        let final_url = url("http://app.test/data");
+        let initiator_url = url("https://app.test/page");
+        let original_url = url("https://app.test/redirect");
+        let cross_site_url = url("https://cross.test/redirect");
+        let final_url = url("https://app.test/data");
         let request = Request::new("GET", original_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&initiator_url)
@@ -1467,10 +1478,10 @@ mod tests {
     fn browser_subresource_origin_serializes_null_after_cross_site_redirect_chain_stays_cross_site()
     {
         let config = FetchConfig::default();
-        let initiator_url = url("http://app.test/page");
-        let original_url = url("http://app.test/redirect");
-        let cross_site_redirect_url = url("http://cross.test/redirect");
-        let final_url = url("http://api.test/data");
+        let initiator_url = url("https://app.test/page");
+        let original_url = url("https://app.test/redirect");
+        let cross_site_redirect_url = url("https://cross.test/redirect");
+        let final_url = url("https://api.test/data");
         let request = Request::new("GET", original_url.as_str(), None, Vec::new())
             .unwrap()
             .with_initiator_url(&initiator_url)
