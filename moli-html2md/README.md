@@ -4,7 +4,8 @@ Convert an existing DOM to Markdown through a small read-only interface. This
 is an independent implementation without an HTML parser or intermediate DOM.
 Unicode character classification uses `icu_properties`, with an ASCII fast path.
 MathML escaping stays fused with Markdown protection and whitespace handling.
-`moli-dom::native::NativeDom` implements the interface directly.
+`moli-dom::native::NativeDom` implements the source-only interface; the browser
+wraps it in a read-only view with computed CSS and live control values.
 
 ```rust
 let root = dom.body_node_id().unwrap_or(dom.document_node_id());
@@ -18,11 +19,19 @@ let markdown = moli_html2md::Converter::new(moli_html2md::Options {
 
 ## DOM interface
 
-Implement `Dom` with a copyable node ID and four borrowed queries:
+Implement `Dom` with a copyable node ID, four required borrowed queries and four
+optional hooks:
 
 - `node_kind`: document/fragment, lowercase element tag, decoded text, or ignored node.
 - `first_child` and `next_sibling`: ordered traversal of a stable, acyclic tree.
 - `attribute`: decoded attribute value, borrowed from the DOM.
+- Optional hooks: `control_value`, `has_block_layout`, `has_text_boundary`,
+  and `may_have_fragment_links`.
+
+Browser adapters can provide `control_value` for current input and textarea values,
+including an empty string after a user clears it. Without that optional query,
+input attributes and textarea child text supply defaults; a nonstandard textarea
+`value` attribute does not override its child text.
 
 The converter does not need parent pointers, mutable access, serialization, or
 an allocation for each node. The caller chooses the root; its siblings are not
@@ -39,7 +48,7 @@ their children as ordinary content. Comments and doctypes produce no output.
 - Lists, quotes, headings, and table cells have output buffers finalized by exit
   tasks. Raw code text uses the same iterative traversal with formatting disabled.
 - Tables inspect their direct sections, rows and cells before conversion. Nested
-  content uses the task stack; eligibility checks never rescan cell descendants.
+  content uses the task stack; structural pre-scans stop at nested table boundaries.
 - Finished blocks and table cells form an owned fragment tree. Fallback joins
   and writes to parent buffers move fragment roots without copying descendant
   text; the final output is flattened in one iterative pass. Fragment destruction
@@ -99,13 +108,26 @@ default is `false`, which collapses ordinary HTML whitespace and moves boundary
 spaces outside code delimiters. Fenced blocks always preserve nonempty code's
 spaces and blank lines. Empty blocks still separate surrounding text.
 
+## Content policy
+
 This is a structural content dump. It omits non-rendered serialized state blobs
 but retains content in collapsed panels and inactive tabs. It does not evaluate
 stylesheets, layout, or JavaScript. Callers may supply computed block boundaries
-through the optional DOM query. The converter
-cannot preserve all HTML presentation (for example, arbitrary ordered-list numbering).
-DOM snapshots used by Moli's optional
-strip/base/frame transformations remain the responsibility of the caller.
+through the optional boundary hooks.
+
+Moli's browser export uses current CSS visibility. It retains explicit
+disclosure targets, content tabpanels, searchable hidden content and collapsed
+lines inside visible preformatted source. Hidden navigation, menus, dialogs and
+popovers do not become disclosure content. An inherited root visibility veil
+does not discard the document; explicitly hidden descendants remain excluded.
+Hidden table cells retain their positions, while wholly invisible tables and
+lists and collapsed rows are omitted. Computed boxes supplement document
+structure without changing a tight list into a loose one merely because each
+item contains a single block box.
+
+The converter cannot preserve all HTML presentation (for example, arbitrary
+ordered-list numbering). DOM snapshots used by Moli's optional strip/base/frame
+transformations remain the responsibility of the caller.
 
 ## Verification
 
@@ -140,12 +162,12 @@ file input values are omitted.
 
 Plain DOM attributes describe the supplied snapshot, including default form
 values and checked state. Browser adapters can expose live attributes and
-`control_value` instead. Placeholder hints are not field values.
-Empty text-entry controls emit no value; button-like
-controls may use accessible labels; generic containers do not acquire text
-from tooltip titles or prohibited names. Child output takes precedence over
-any fallback label. Links retain application protocols while executable
-JavaScript and inline HTML document URLs are excluded.
+`control_value` instead. Placeholder hints are not field values. Empty
+text-entry controls emit no value; button-like controls may use accessible
+labels. Generic containers do not acquire text from tooltip titles or prohibited
+names. Child output takes precedence over any fallback label. Links retain
+application protocols while executable JavaScript and inline HTML document URLs
+are excluded.
 
 SVG title children are tooltip metadata, not body text. They supply a name only
 when an SVG has no emitted content; title elements outside SVG are omitted.

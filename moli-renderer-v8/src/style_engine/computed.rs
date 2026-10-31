@@ -4,6 +4,7 @@ use dom::ElementState as StyloElementState;
 use style::{
     Atom,
     animation::DocumentAnimationSet,
+    computed_value_flags::ComputedValueFlags,
     context::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
@@ -282,6 +283,16 @@ impl StyloComputedStyleSnapshot {
         }
         let property_id = PropertyId::parse_enabled_for_all_content(property).ok()?;
         serialize_raw_computed_property(&self.primary, property_id)
+    }
+
+    pub(crate) fn original_display(&self) -> String {
+        style_traits::ToCss::to_css_string(&self.primary.get_box().original_display)
+    }
+
+    pub(crate) fn has_own_visibility_value(&self) -> bool {
+        self.primary
+            .flags
+            .contains(ComputedValueFlags::HAS_OWN_VISIBILITY)
     }
 
     pub(crate) fn resolved_property_value(&self, property: &str) -> Option<String> {

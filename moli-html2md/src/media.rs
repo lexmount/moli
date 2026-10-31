@@ -3,6 +3,28 @@ use crate::{Dom, NodeKind};
 /// Private lazy-loading conventions, used only when standard sources are absent.
 const LAZY_SOURCE_ATTRIBUTES: [&str; 3] = ["data-src", "data-lazy-src", "data-original"];
 
+/// URL-bearing inputs consumed by Markdown conversion. Browser adapters use
+/// this inventory to resolve the same inputs against the document base URL.
+#[doc(hidden)]
+pub fn resource_url_attributes(tag: &str) -> impl Iterator<Item = &'static str> {
+    let (standard, lazy): (&[&str], bool) = match tag {
+        "a" => (&["href"], false),
+        "img" => (&["src", "srcset", "data-srcset"], true),
+        "source" | "audio" | "iframe" => (&["src"], true),
+        "video" => (&["src", "poster"], true),
+        _ => (&[], false),
+    };
+    let lazy_count = if lazy {
+        LAZY_SOURCE_ATTRIBUTES.len()
+    } else {
+        0
+    };
+    standard
+        .iter()
+        .copied()
+        .chain(LAZY_SOURCE_ATTRIBUTES.into_iter().take(lazy_count))
+}
+
 /// Frozen DOMs can still carry lazy-loading placeholders. These conventional
 /// attributes declare the resource the page intends to load, not the spacer.
 pub(crate) fn source<D: Dom + ?Sized>(dom: &D, node: D::NodeId) -> Option<&str> {
