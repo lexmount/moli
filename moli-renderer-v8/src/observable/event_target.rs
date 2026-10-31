@@ -116,7 +116,7 @@ pub(crate) fn event_target_when<'s>(
         },
         window_identity,
     };
-    if let Some(observable) = state::new_event_observable(scope, source) {
+    if let Some(observable) = state::new_native_observable(scope, Some(source)) {
         rv.set(observable.into());
     }
 }
