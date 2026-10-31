@@ -18,7 +18,7 @@ use time::OffsetDateTime;
 
 use crate::{ChromeCryptoKey, sqlite::SqliteSnapshot, storage::LocalStorage};
 
-const CHROME_EPOCH_OFFSET_MICROS: i64 = 11_644_473_600_000_000;
+pub(super) const CHROME_EPOCH_OFFSET_MICROS: i64 = 11_644_473_600_000_000;
 
 pub(crate) fn import_cookies(
     profile: &Path,
@@ -43,8 +43,13 @@ pub(crate) fn import_cookies(
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(0);
     let (partition_key_column, cross_site_column) = cookie_partition_columns(connection)?;
+    let creation_column = if connection.column_exists(None, "cookies", "creation_utc")? {
+        "creation_utc"
+    } else {
+        "NULL"
+    };
     let sql = format!(
-        "SELECT host_key,name,value,encrypted_value,path,expires_utc,is_secure,is_httponly,samesite,priority,source_scheme,source_port,{partition_key_column},{cross_site_column} FROM cookies"
+        "SELECT host_key,name,value,encrypted_value,path,expires_utc,is_secure,is_httponly,samesite,priority,source_scheme,source_port,{partition_key_column},{cross_site_column},{creation_column} FROM cookies"
     );
     let mut statement = connection
         .prepare(&sql)
@@ -65,6 +70,10 @@ pub(crate) fn import_cookies(
             source_port: row.get(11)?,
             partition_key: row.get(12)?,
             has_cross_site_ancestor: row.get::<_, i64>(13)? != 0,
+            creation_time: crate::creation_time::from_browser_micros(
+                row.get_ref(14)?.as_i64().ok(),
+                CHROME_EPOCH_OFFSET_MICROS,
+            ),
         })
     })?;
     let mut cookies = Vec::new();
@@ -110,6 +119,7 @@ struct ChromeCookieRow {
     source_port: i32,
     partition_key: Option<String>,
     has_cross_site_ancestor: bool,
+    creation_time: Option<OffsetDateTime>,
 }
 
 impl ChromeCookieRow {
@@ -145,7 +155,7 @@ impl ChromeCookieRow {
             },
             source_port: self.source_port,
             creation_index: 0,
-            creation_time: None,
+            creation_time: self.creation_time,
             last_access_index: 0,
         }
     }
@@ -441,6 +451,7 @@ mod tests {
             assert!(cookie.secure);
             assert!(cookie.http_only);
             assert_eq!(cookie.expires, None);
+            assert_eq!(cookie.creation_time, None);
             assert_eq!(cookie.same_site, StoredCookieSameSite::Lax);
             assert_eq!(cookie.priority, Some(CookiePriority::High));
             assert_eq!(cookie.source_scheme, StoredCookieSourceScheme::Secure);
