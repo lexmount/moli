@@ -984,8 +984,8 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             let host = unsafe { &mut *host_ptr };
             let initiator_url =
                 explicit_initiator_url.or_else(|| location_navigation_initiator_url(scope, host));
+            let initiator = location_navigation_initiator_scope(scope, host);
             let queued = if is_javascript_url {
-                let initiator = location_navigation_initiator_scope(scope, host);
                 host.queue_child_browsing_context_navigation_without_seed_update(
                     scope,
                     handle,
@@ -1012,6 +1012,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                         navigation_source
                             .as_ref()
                             .map(|(initiator, _)| initiator.clone()),
+                        Some(initiator),
                     )
                 } else {
                     false

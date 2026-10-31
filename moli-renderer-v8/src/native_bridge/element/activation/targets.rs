@@ -176,11 +176,18 @@ fn navigate_element_popup_target(
     resolved_url: &str,
     disposition: RendererPopupDisposition,
 ) -> bool {
-    let relations = element_popup_relations(unsafe { &*runtime_ptr }, source_handle, target_name);
     let Some(dispatch_scope) =
         browsing_context_dispatch_scope_for_node(scope, runtime_ptr, source_handle)
     else {
         return false;
+    };
+    let destination = url::Url::parse(resolved_url).expect("resolved hyperlink URL");
+    let relations = element_popup_relations(unsafe { &*runtime_ptr }, source_handle, target_name);
+    let relations = ElementPopupRelations {
+        suppress_opener: relations.suppress_opener
+            || unsafe { &mut *runtime_ptr }
+                .blob_navigation_requires_noopener(dispatch_scope, &destination),
+        suppress_referrer: relations.suppress_referrer,
     };
     let Some((_, root_document, source)) =
         unsafe { &*runtime_ptr }.renderer_window_document_source_for_dispatch_scope(dispatch_scope)

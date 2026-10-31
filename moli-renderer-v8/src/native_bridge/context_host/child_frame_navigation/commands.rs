@@ -59,6 +59,7 @@ impl PageScriptHost {
                 entry_seed,
                 None,
                 request_initiator,
+                initiator,
             );
         }
         self.reject_replaced_service_worker_child_client_navigation(
@@ -69,6 +70,7 @@ impl PageScriptHost {
             entry.replace_navigation_entry_seed(entry_seed);
         }
         let url = request.url.clone();
+        let blob_resource = self.capture_child_blob_resource(&url, initiator);
         if self
             .set_child_browsing_context_pending_navigation(
                 handle,
@@ -77,6 +79,7 @@ impl PageScriptHost {
                     None,
                     ChildDocumentNavigationInitiator::BrowsingContext(None),
                     self.snapshot_child_navigation_target(handle, &url),
+                    blob_resource,
                 ),
                 false,
                 initiator,
@@ -223,6 +226,7 @@ impl PageScriptHost {
         entry_seed: NavigationHistoryEntrySeed,
         initiator_url: Option<Url>,
         request_initiator: Option<crate::runtime::RendererNavigationInitiator>,
+        initiator: Option<super::super::OwnerDispatchScope>,
     ) -> bool {
         let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         if !self.child_browsing_contexts.contains_key(&handle) {
@@ -236,6 +240,7 @@ impl PageScriptHost {
             .get(&handle)
             .and_then(|entry| entry.local_history_bootstrap(&entry_seed))
             .unwrap_or_else(|| ChildBrowsingContextBootstrap::Url(url.clone()));
+        let blob_resource = self.capture_child_blob_resource(&url, initiator);
         let source_policy = request_initiator
             .as_ref()
             .and_then(|source| source.document_policy(&url));
@@ -254,6 +259,7 @@ impl PageScriptHost {
                     initiator_url,
                     ChildDocumentNavigationInitiator::BrowsingContext(None),
                     self.snapshot_child_navigation_target(handle, &url),
+                    blob_resource,
                 )
                 .with_source_policy(source_policy)
                 .with_request_initiator(request_initiator),

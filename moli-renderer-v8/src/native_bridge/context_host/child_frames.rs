@@ -128,11 +128,10 @@ impl PendingChildFrameNavigation {
         initiator_url: Option<Url>,
         initiator: ChildDocumentNavigationInitiator,
         target_snapshot: ChildNavigationTargetSnapshot,
+        blob_resource: Option<crate::network_host::CapturedBlobResource>,
     ) -> Self {
         Self {
-            blob_resource: PageScriptHost::child_browsing_context_bootstrap_url(&bootstrap)
-                .as_ref()
-                .and_then(crate::network_host::CapturedBlobResource::capture),
+            blob_resource,
             bootstrap,
             initiator_url,
             initiator,
@@ -147,14 +146,6 @@ impl PendingChildFrameNavigation {
         policy: Option<crate::runtime::RendererNavigationPolicy>,
     ) -> Self {
         self.source_policy = policy;
-        self
-    }
-
-    pub(super) fn with_blob_resource(
-        mut self,
-        resource: Option<crate::network_host::CapturedBlobResource>,
-    ) -> Self {
-        self.blob_resource = resource;
         self
     }
 
