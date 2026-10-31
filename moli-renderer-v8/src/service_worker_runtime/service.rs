@@ -935,6 +935,7 @@ mod tests {
             cancel_handle,
             navigation_preload_cancel_handle: None,
             streaming_body_source_id: None,
+            response_timing_info: None,
             direct_completion_tx: None,
         }
     }

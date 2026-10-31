@@ -2408,3 +2408,5 @@ mod hyperlink_audit_owner;
 
 mod fetch_integrity;
 mod fetch_referrer;
+
+mod fetch_resource_timing;

@@ -265,6 +265,7 @@ fn pending_unregistration_deletion_clears_owner_state() {
                     cancel_handle: moli_fetch::FetchCancelHandle::new(),
                     navigation_preload_cancel_handle: None,
                     streaming_body_source_id: None,
+                    response_timing_info: None,
                     direct_completion_tx: None,
                 },
             );

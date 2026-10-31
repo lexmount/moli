@@ -278,6 +278,7 @@ impl ServiceWorkerRuntimeService {
             cancel_handle: dispatch.cancel_handle,
             navigation_preload_cancel_handle: None,
             streaming_body_source_id: None,
+            response_timing_info: None,
             direct_completion_tx: dispatch.direct_completion_tx,
         };
         self.dispatch_controlled_fetch_job(fetch_job, request)
