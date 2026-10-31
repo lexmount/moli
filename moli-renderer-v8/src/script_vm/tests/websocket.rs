@@ -2251,3 +2251,19 @@ fn readable_stream_async_iterator_declared_shape_keeps_symbol_and_tag() {
         r#"{"toString":"[object ReadableStream AsyncIterator]","asyncIteratorReturnsSelf":true,"globalNamesBefore":"","globalNamesAfterCache":"","globalNamesAfterSpoof":"__moliReadableStreamAsyncIteratorPrototype","ownNames":[],"ownSymbols":[],"leaksReader":false,"leaksClosed":false,"leaksPreventCancel":false,"asyncDescriptor":"false,true,true,0","prototypeParentIsIntrinsic":true,"prototypeStableAfterSpoof":true,"prototypeNames":["next","return"],"prototypeHasConstructor":false,"tagDescriptor":"false,false,true,ReadableStream AsyncIterator"}"#
     );
 }
+
+#[test]
+fn websocket_error_messages_preserve_utf16_code_units() {
+    let mut vm = new_parsed_test_vm(
+        "https://websocket-conversion.test/",
+        "<html><body></body></html>",
+    );
+    let probe = include_str!("../../../tests/fixtures/websocket-error-message-utf16.js");
+    assert_eq!(
+        vm.eval(&format!(
+            "{probe}\ndocument.body.innerHTML = '<iframe></iframe>';\n\
+             JSON.stringify([websocketErrorMessageUtf16Probe(window), websocketErrorMessageUtf16Probe(document.querySelector('iframe').contentWindow)])"
+        )).unwrap(),
+        r#"["ok","ok"]"#
+    );
+}

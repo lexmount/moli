@@ -13,3 +13,15 @@ async fn worker_exception_data_has_no_invented_failure_stack() {
     assert_eq!(result["failures"], serde_json::json!([]), "{result}");
     assert_eq!(result["rows"].as_array().unwrap().len(), 24, "{result}");
 }
+
+#[tokio::test]
+async fn websocket_error_messages_preserve_utf16_code_units_in_workers() {
+    ensure_v8();
+    let probe = include_str!("../../../../tests/fixtures/websocket-error-message-utf16.js");
+    let mut handle = spawn_worker(
+        format!("{probe}\npostMessage(websocketErrorMessageUtf16Probe(globalThis));close();"),
+        "https://websocket-conversion.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    assert_eq!(expect_post_json(message), r#""ok""#);
+}
