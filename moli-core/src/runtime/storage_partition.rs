@@ -137,14 +137,14 @@ impl StoragePartitionState {
                     .path()
             });
         let mode = moli_sqlite::OpenMode::Create;
-        let (cookie_store, cookie_database) = moli_cookie_db::CookieDatabase::open(
+        let (cookie_store, cookie_database) = moli_cookie_db::CookieDatabase::deferred(
             root.join(COOKIE_DATABASE_RELATIVE_PATH),
             mode,
             sqlite_runtime.handle(),
         )
         .context("failed to initialize partition Cookie database")?;
         let (web_storage_store, local_storage_database) =
-            moli_web_storage::new_sqlite_web_storage_store(
+            moli_web_storage::new_lazy_sqlite_web_storage_store(
                 root.join(LOCAL_STORAGE_DATABASE_RELATIVE_PATH),
                 mode,
                 sqlite_runtime.handle(),
@@ -430,7 +430,7 @@ impl Drop for StoragePartitionState {
 pub(crate) fn snapshot_cookie_store(
     cookie_store: &SharedBrowserCookieStore,
 ) -> Result<Vec<StoredCookie>> {
-    let mut cookie_store = cookie_store.lock();
+    let mut cookie_store = cookie_store.lock()?;
     Ok(cookie_store.cookies())
 }
 
@@ -438,7 +438,11 @@ pub(crate) fn import_cookies_into_store(
     cookie_store: &SharedBrowserCookieStore,
     cookies: impl IntoIterator<Item = StoredCookie>,
 ) -> Result<usize> {
-    let mut cookie_store = cookie_store.lock();
+    let mut cookies = cookies.into_iter().peekable();
+    if cookies.peek().is_none() {
+        return Ok(0);
+    }
+    let mut cookie_store = cookie_store.lock()?;
     let mut accepted = 0usize;
     for cookie in cookies {
         let report = cookie_store.upsert_with_request_url_report(cookie, None, CookieSource::Cdp);
@@ -548,8 +552,11 @@ mod tests {
         );
         assert_eq!(partition.id(), "default");
         assert!(partition.http_cache_root().is_none());
-        assert!(partition.cookie_database_path().is_file());
-        assert!(partition.local_storage_database_path().is_file());
+        assert!(!partition.cookie_database_path().exists());
+        assert!(!partition.local_storage_database_path().exists());
+        partition.flush_open_services()?;
+        assert!(!partition.cookie_database_path().exists());
+        assert!(!partition.local_storage_database_path().exists());
         let service = partition.storage_service.clone();
         let facade_service = partition.storage_bucket_store().lock().storage_service();
         assert!(Arc::ptr_eq(&service, &facade_service));
@@ -746,7 +753,7 @@ mod tests {
         partition.import_cookies([stored_cookie("sid", "old"), stored_cookie("theme", "dark")])?;
         partition
             .cookie_store()
-            .lock()
+            .lock()?
             .delete_cookies(Some("sid"), None, None, None);
         partition.flush()?;
         drop(partition);
@@ -767,7 +774,7 @@ mod tests {
         ])?;
         partition
             .cookie_store()
-            .lock()
+            .lock()?
             .delete_cookies_matching(|cookie| {
                 cookie.name == "sid" && cookie.domain == "example.com" && cookie.path == "/"
             });
@@ -795,7 +802,7 @@ mod tests {
         let shared = handles.cookie_store();
         assert!(Arc::ptr_eq(&shared, &partition.cookie_store()));
         partition.import_cookies([stored_cookie("sid", "old")])?;
-        shared.lock().upsert_with_request_url_report(
+        shared.lock()?.upsert_with_request_url_report(
             stored_cookie("sid", "newer"),
             None,
             CookieSource::Cdp,

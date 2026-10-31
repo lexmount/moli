@@ -1317,7 +1317,7 @@ fetch('/api')
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let mut jar = bc.cookie_store_for_test().lock().unwrap();
         jar.store_response_headers(
             &Url::parse(&api_url).unwrap(),
             &[("set-cookie".to_owned(), b"sid=1; Path=/api".to_vec())],
@@ -3108,7 +3108,7 @@ fetch('{start_url}', {{ credentials: 'include' }})
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let mut jar = bc.cookie_store_for_test().lock().unwrap();
         jar.store_response_headers(
             &Url::parse(&final_url).unwrap(),
             &[(
@@ -3347,7 +3347,7 @@ fetch('{target_url}', {{ credentials: 'include' }})
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let mut jar = bc.cookie_store_for_test().lock().unwrap();
         jar.store_response_headers(
             &Url::parse("http://127.0.0.1:8443/").unwrap(),
             &[("set-cookie".to_owned(), b"sid=1; Path=/".to_vec())],
@@ -3440,7 +3440,7 @@ fetch('{target_url}')
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let mut jar = bc.cookie_store_for_test().lock().unwrap();
         jar.store_response_headers(
             &Url::parse(&format!("http://localhost:{}/", addr.port())).unwrap(),
             &[("set-cookie".to_owned(), b"sid=1; Path=/; Secure".to_vec())],

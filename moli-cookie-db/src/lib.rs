@@ -1,9 +1,9 @@
 //! SQLite persistence for the canonical browser cookie jar. Matching, quota
 //! and eviction remain in moli-cookie-store; this crate only records deltas.
 use moli_cookie_jar::{
-    BrowserCookieObserver, BrowserCookieStore, CookiePriority, SharedBrowserCookieStore,
-    StoredCookie, StoredCookieIdentity, StoredCookieMutation, StoredCookiePartitionKey,
-    StoredCookieSameSite, StoredCookieSourceScheme,
+    BrowserCookieObserver, BrowserCookieStore, BrowserCookieStoreHandle, CookiePriority,
+    CookieStoreError, SharedBrowserCookieStore, StoredCookie, StoredCookieIdentity,
+    StoredCookieMutation, StoredCookiePartitionKey, StoredCookieSameSite, StoredCookieSourceScheme,
 };
 use moli_sqlite::{
     OpenMode, RuntimeHandle,
@@ -12,7 +12,6 @@ use moli_sqlite::{
         WritebackPolicy,
     },
 };
-use parking_lot::Mutex;
 use rusqlite::{Connection, params};
 use std::{collections::BTreeMap, fmt, path::PathBuf, sync::Arc, time::Duration};
 mod codec;
@@ -169,14 +168,24 @@ pub struct CookieDatabase {
     owner: WritebackOwner<Batch>,
 }
 impl CookieDatabase {
-    /// Native partition initialization. The live jar has exactly one writer;
-    /// cloning its data never clones this persistence attachment.
+    /// Open and restore immediately, for explicit imports and validation.
     pub fn open(
         path: PathBuf,
         mode: OpenMode,
         runtime: RuntimeHandle,
     ) -> Result<(SharedBrowserCookieStore, Self), WritebackError> {
-        let owner = WritebackOwner::open(
+        let (store, database) = Self::deferred(path, mode, runtime)?;
+        drop(store.lock().map_err(WritebackError::new)?);
+        Ok((store, database))
+    }
+    /// Attach the live jar without touching disk. Its first access restores
+    /// persisted cookies and attaches exactly one persistence observer.
+    pub fn deferred(
+        path: PathBuf,
+        mode: OpenMode,
+        runtime: RuntimeHandle,
+    ) -> Result<(SharedBrowserCookieStore, Self), WritebackError> {
+        let owner = WritebackOwner::deferred(
             path,
             mode,
             runtime,
@@ -186,23 +195,11 @@ impl CookieDatabase {
             },
             codec::initialize,
         )?;
-        let rows = owner.client().query(codec::read)?;
-        let (obsolete, live): (Vec<_>, Vec<_>) = rows.into_iter().partition(|cookie| {
-            cookie.is_expired()
-                || matches!(
-                    cookie.partition_key,
-                    Some(StoredCookiePartitionKey::Opaque { .. })
-                )
+        let client = owner.client();
+        let store = BrowserCookieStoreHandle::deferred(move || {
+            restore(client).map_err(CookieStoreError::new)
         });
-        let mut jar = BrowserCookieStore::from_persisted(live).map_err(WritebackError::new)?;
-        let writer = Arc::new(Writer(owner.client()));
-        jar.set_persistence_observer(writer);
-        let mut cleanup = Batch::default();
-        for cookie in obsolete {
-            cleanup.changes.insert(Key::from(&cookie), Change::Delete);
-        }
-        owner.client().record(cleanup, FailureAdmission::Retain)?;
-        Ok((Arc::new(Mutex::new(jar)), Self { owner }))
+        Ok((store, Self { owner }))
     }
     pub fn flush(&self) -> Result<(), WritebackError> {
         self.owner.client().flush()
@@ -210,6 +207,25 @@ impl CookieDatabase {
     pub fn close(&self) -> Result<(), WritebackError> {
         self.owner.close()
     }
+}
+
+fn restore(client: WritebackClient<Batch>) -> Result<BrowserCookieStore, WritebackError> {
+    let rows = client.query(codec::read)?;
+    let (obsolete, live): (Vec<_>, Vec<_>) = rows.into_iter().partition(|cookie| {
+        cookie.is_expired()
+            || matches!(
+                cookie.partition_key,
+                Some(StoredCookiePartitionKey::Opaque { .. })
+            )
+    });
+    let mut jar = BrowserCookieStore::from_persisted(live).map_err(WritebackError::new)?;
+    jar.set_persistence_observer(Arc::new(Writer(client.clone())));
+    let mut cleanup = Batch::default();
+    for cookie in obsolete {
+        cleanup.changes.insert(Key::from(&cookie), Change::Delete);
+    }
+    client.record(cleanup, FailureAdmission::Retain)?;
+    Ok(jar)
 }
 
 #[cfg(test)]

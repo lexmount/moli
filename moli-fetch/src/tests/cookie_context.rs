@@ -154,7 +154,7 @@ fn request_cookie_header_respects_explicit_top_level_lax_navigation_context() {
         );
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[
@@ -188,7 +188,7 @@ fn request_cookie_header_respects_explicit_cross_site_context_without_lax_upgrad
         );
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[
@@ -226,7 +226,7 @@ fn request_with_initiator_url_marks_cross_site_subresource_requests() {
         ));
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[
@@ -264,7 +264,7 @@ fn request_with_initiator_url_treats_same_scheme_subdomains_as_same_site() {
         ));
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[(
@@ -292,7 +292,7 @@ fn request_with_initiator_url_treats_same_scheme_sibling_subdomains_as_same_site
         ));
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[(
@@ -328,7 +328,7 @@ fn request_with_initiator_url_respects_public_suffix_boundaries() {
         ));
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[
@@ -370,7 +370,7 @@ fn request_with_initiator_url_treats_multi_label_registrable_domains_as_same_sit
         ));
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[(
@@ -418,7 +418,7 @@ fn request_with_site_for_cookies_url_uses_explicit_browser_context_for_same_site
         .with_site_for_cookies_url(&Url::parse("https://other.test/frame.html").unwrap());
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[
@@ -467,7 +467,7 @@ fn request_with_top_frame_origin_url_falls_back_when_site_for_cookies_is_absent(
         .with_top_frame_origin_url(&Url::parse("https://example.com/root").unwrap());
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[
@@ -527,7 +527,7 @@ fn request_with_cross_scheme_initiator_uses_schemeful_cross_site_semantics() {
         ));
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[
@@ -571,7 +571,7 @@ fn request_effective_cookie_context_recomputes_same_site_for_redirect_targets() 
         ));
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[
@@ -771,7 +771,7 @@ fn redirect_chain_cookie_context_preserves_cross_site_downgrade_across_later_sam
         ));
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &final_url,
             &[
@@ -817,7 +817,7 @@ fn top_level_request_with_initiator_url_uses_cross_site_lax_navigation_semantics
         ));
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[

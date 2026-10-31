@@ -605,7 +605,7 @@ async fn navigation_auth_required_includes_synthesized_cookie_header() {
         .enable_primary_network_events();
     let url = format!("http://{addr}/auth");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let mut jar = bc.cookie_store_for_test().lock().unwrap();
         jar.store_response_headers(
             &Url::parse(&url).unwrap(),
             &[(

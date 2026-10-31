@@ -86,6 +86,135 @@ fn value(client: &WritebackClient<Batch>, key: i64) -> i64 {
 }
 
 #[test]
+fn an_unused_deferred_store_never_opens_even_when_flushed_or_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("unused/store.sqlite");
+    let runtime = Runtime::new().unwrap();
+    let owner = WritebackOwner::<Batch>::deferred(
+        path.clone(),
+        OpenMode::Create,
+        runtime.handle(),
+        long_policy(),
+        |_| panic!("unused store must not initialize"),
+    )
+    .unwrap();
+    let client = owner.client();
+    client.ensure_open().unwrap();
+    client.request_flush();
+    client.flush().unwrap();
+    owner.close().unwrap();
+    assert!(client.query(|_| Ok(())).is_err());
+    assert!(!path.parent().unwrap().exists());
+}
+
+#[test]
+fn concurrent_first_queries_initialize_one_reused_connection() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let initialized = Arc::new(AtomicUsize::new(0));
+    let count = initialized.clone();
+    let owner = WritebackOwner::<Batch>::deferred(
+        root.path().join("first.sqlite"),
+        OpenMode::Create,
+        runtime.handle(),
+        long_policy(),
+        move |connection| {
+            count.fetch_add(1, Ordering::SeqCst);
+            initialize(connection)?;
+            // A temporary table identifies this connection, not just the file.
+            connection.execute_batch(
+                "CREATE TEMP TABLE session(value); INSERT INTO session VALUES (42)",
+            )?;
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(initialized.load(Ordering::SeqCst), 0);
+    thread::scope(|scope| {
+        for _ in 0..8 {
+            let client = owner.client();
+            scope.spawn(move || {
+                assert_eq!(
+                    client
+                        .query(|connection| Ok(connection.query_row(
+                            "SELECT value FROM session",
+                            [],
+                            |r| r.get::<_, i64>(0)
+                        )?))
+                        .unwrap(),
+                    42
+                );
+            });
+        }
+    });
+    assert_eq!(initialized.load(Ordering::SeqCst), 1);
+    owner.close().unwrap();
+}
+
+#[test]
+fn deferred_initialization_errors_reach_queries_flush_and_close() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let owner = WritebackOwner::<Batch>::deferred(
+        root.path().join("broken.sqlite"),
+        OpenMode::Create,
+        runtime.handle(),
+        long_policy(),
+        |_| Err(WritebackError::new("injected schema failure")),
+    )
+    .unwrap();
+    let client = owner.client();
+    client.flush().unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            client
+                .query::<()>(|_| panic!("query must not run"))
+                .unwrap_err()
+                .to_string(),
+            "injected schema failure"
+        );
+    }
+    assert_eq!(
+        client.flush().unwrap_err().to_string(),
+        "injected schema failure"
+    );
+    assert_eq!(
+        owner.close().unwrap_err().to_string(),
+        "injected schema failure"
+    );
+}
+
+#[test]
+fn a_first_write_opens_and_close_commits_without_a_query() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("write.sqlite");
+    let runtime = Runtime::new().unwrap();
+    let owner = WritebackOwner::<Batch>::deferred(
+        path.clone(),
+        OpenMode::Create,
+        runtime.handle(),
+        long_policy(),
+        initialize,
+    )
+    .unwrap();
+    let control = Arc::new(Control::default());
+    owner
+        .client()
+        .record(Batch::put(1, 42, &control), FailureAdmission::Retain)
+        .unwrap();
+    assert!(!path.exists());
+    owner.close().unwrap();
+    let connection = Connection::open(path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT value FROM data WHERE key=1", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        42
+    );
+}
+
+#[test]
 fn an_in_flight_acknowledgement_cannot_clear_a_newer_batch_and_another_file_can_progress() {
     let root = tempfile::tempdir().unwrap();
     let runtime = Runtime::new().unwrap();
@@ -191,7 +320,13 @@ fn virtual_client(
         sender,
         runtime: runtime.handle(),
     };
-    let task = tokio::spawn(run(connection, receiver, shared, runtime.handle(), policy));
+    let task = tokio::spawn(run(
+        LazyConnection::Open(connection),
+        receiver,
+        shared,
+        runtime.handle(),
+        policy,
+    ));
     (client, task)
 }
 #[tokio::test(start_paused = true)]

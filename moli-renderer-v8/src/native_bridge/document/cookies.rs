@@ -15,7 +15,15 @@ pub(crate) fn document_cookie_for_receiver<'s>(
     let Some(url) = document_cookie_url_for_handle(runtime, handle) else {
         return Some(String::new());
     };
-    Some(runtime.host_document().cookie_for_url(&url))
+    match runtime.host_document().cookie_for_url(&url) {
+        Ok(cookie) => Some(cookie),
+        Err(error) => {
+            let message = v8::String::new(scope, &error.to_string())?;
+            let exception = v8::Exception::error(scope, message);
+            scope.throw_exception(exception);
+            None
+        }
+    }
 }
 
 pub(crate) fn set_document_cookie_for_receiver<'s>(
@@ -35,8 +43,16 @@ pub(crate) fn set_document_cookie_for_receiver<'s>(
     let Some(url) = document_cookie_url_for_handle(runtime, handle) else {
         return true;
     };
-    runtime.host_document_mut().set_cookie_for_url(&url, cookie);
-    true
+    match runtime.host_document_mut().set_cookie_for_url(&url, cookie) {
+        Ok(()) => true,
+        Err(error) => {
+            if let Some(message) = v8::String::new(scope, &error.to_string()) {
+                let exception = v8::Exception::error(scope, message);
+                scope.throw_exception(exception);
+            }
+            false
+        }
+    }
 }
 
 fn document_cookie_url_for_handle(runtime: &JsContextHost, handle: DomHandle) -> Option<Url> {

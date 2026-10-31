@@ -50,7 +50,7 @@ async fn devtools_browser_context_create_uses_ephemeral_storage_partition() {
                 .expect("created browser context")
         };
         assert!(!created_context.is_profile_backed_storage_partition());
-        assert!(created_context.snapshot_cookies().is_empty());
+        assert!(created_context.snapshot_cookies().unwrap().is_empty());
         assert_eq!(
             created_context
                 .web_storage_store_for_test()
@@ -58,7 +58,7 @@ async fn devtools_browser_context_create_uses_ephemeral_storage_partition() {
             None
         );
     });
-    ctx.with_fixture(|conn| assert!(conn.snapshot_profile_backed_cookies().is_none()));
+    ctx.with_fixture(|conn| assert!(conn.snapshot_profile_backed_cookies().unwrap().is_none()));
 }
 
 #[tokio::test]

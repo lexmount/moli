@@ -63,6 +63,84 @@ fn resident(store: &WebStorageStore) -> usize {
 }
 
 #[test]
+fn acquiring_an_unused_store_and_area_lease_does_not_open_the_database() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("ls-lite/localstorage.sqlite");
+    let runtime = Runtime::new().unwrap();
+    let (store, owner) =
+        new_lazy_sqlite_web_storage_store(path.clone(), OpenMode::Create, runtime.handle())
+            .unwrap();
+    let lease = store.lease_area("https://unused.test").unwrap();
+    drop(lease);
+    owner.flush().unwrap();
+    owner.close().unwrap();
+    assert!(!path.parent().unwrap().exists());
+    assert!(store.try_len("https://unused.test").is_err());
+    assert!(!path.parent().unwrap().exists());
+}
+
+#[test]
+fn the_first_local_storage_read_restores_persisted_values() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = Runtime::new().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    store
+        .try_set_item("https://restore.test", "key", "saved")
+        .unwrap();
+    owner.close().unwrap();
+    let (store, owner) = new_lazy_sqlite_web_storage_store(
+        root.path().join("localstorage.sqlite"),
+        OpenMode::Create,
+        runtime.handle(),
+    )
+    .unwrap();
+    assert_eq!(resident(&store), 0);
+    assert_eq!(
+        store
+            .try_get_item_utf16(
+                "https://restore.test",
+                &"key".encode_utf16().collect::<Vec<_>>()
+            )
+            .unwrap(),
+        Some("saved".encode_utf16().collect())
+    );
+    store
+        .try_set_item("https://restore.test", "key", "changed")
+        .unwrap();
+    owner.close().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    assert_eq!(
+        store.get_item("https://restore.test", "key").as_deref(),
+        Some("changed")
+    );
+    owner.close().unwrap();
+}
+
+#[test]
+fn local_storage_open_failure_is_reported_on_first_access() {
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().join("not-a-directory");
+    std::fs::write(&parent, b"keep").unwrap();
+    let runtime = Runtime::new().unwrap();
+    let (store, owner) = new_lazy_sqlite_web_storage_store(
+        parent.join("localstorage.sqlite"),
+        OpenMode::Create,
+        runtime.handle(),
+    )
+    .unwrap();
+    owner.flush().unwrap();
+    assert!(store.try_len("https://failure.test").is_err());
+    assert!(
+        store
+            .try_set_item("https://failure.test", "key", "value")
+            .is_err()
+    );
+    assert!(owner.flush().is_err());
+    assert!(owner.close().is_err());
+    assert_eq!(std::fs::read(parent).unwrap(), b"keep");
+}
+
+#[test]
 fn utf16_blobs_empty_strings_and_partitioned_areas_survive_close_and_reopen() {
     let root = tempfile::tempdir().unwrap();
     let mut runtime = Runtime::new().unwrap();

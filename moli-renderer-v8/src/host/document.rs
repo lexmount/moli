@@ -540,26 +540,32 @@ impl HostDocumentState {
         self.active_element = handle;
     }
 
-    pub(crate) fn cookie_for_url(&self, url: &Url) -> String {
-        self.cookie_read_result_for_url(url).value
+    pub(crate) fn cookie_for_url(
+        &self,
+        url: &Url,
+    ) -> Result<String, moli_cookie_jar::CookieStoreError> {
+        Ok(self.cookie_read_result_for_url(url)?.value)
     }
 
-    fn cookie_read_result_for_url(&self, url: &Url) -> DocumentCookieReadResult {
+    fn cookie_read_result_for_url(
+        &self,
+        url: &Url,
+    ) -> Result<DocumentCookieReadResult, moli_cookie_jar::CookieStoreError> {
         if let Some(block_reason) = self.document_cookie_policy_block_reason_for_url(url) {
             self.cookie_facade.telemetry.record_blocked_read();
-            return DocumentCookieReadResult {
+            return Ok(DocumentCookieReadResult {
                 value: String::new(),
                 source: block_reason.read_source(),
-            };
+            });
         }
         let Some(cookie_store) = self.cookie_store.as_ref() else {
             self.cookie_facade.telemetry.record_unavailable_read();
-            return DocumentCookieReadResult {
+            return Ok(DocumentCookieReadResult {
                 value: String::new(),
                 source: DocumentCookieReadSource::StoreUnavailable,
-            };
+            });
         };
-        let mut cookie_store = cookie_store.lock();
+        let mut cookie_store = cookie_store.lock()?;
         cookie_store.purge_expired();
         let generation = cookie_store.document_cookie_generation();
         if let Some(cache) = self.document_cookie_cache.borrow().as_ref()
@@ -568,10 +574,10 @@ impl HostDocumentState {
             && cache.facade_generation == self.cookie_facade.view_generation()
         {
             self.cookie_facade.telemetry.record_cache_hit();
-            return DocumentCookieReadResult {
+            return Ok(DocumentCookieReadResult {
                 value: cache.cookie_string.clone(),
                 source: DocumentCookieReadSource::Cache,
-            };
+            });
         }
         let cookie_string =
             cookie_store.document_cookie_with_context(url, &self.cookie_browser_context());
@@ -582,10 +588,10 @@ impl HostDocumentState {
             facade_generation: self.cookie_facade.view_generation(),
         });
         self.cookie_facade.telemetry.record_store_read();
-        DocumentCookieReadResult {
+        Ok(DocumentCookieReadResult {
             value: cookie_string,
             source: DocumentCookieReadSource::Store,
-        }
+        })
     }
 
     pub(super) fn cookies_enabled(&self) -> bool {
@@ -599,20 +605,25 @@ impl HostDocumentState {
             .cookie_access_enabled
     }
 
-    pub(crate) fn set_cookie_for_url(&mut self, url: &Url, cookie: &str) {
-        let _ = self.set_cookie_with_result_for_url(url, cookie);
+    pub(crate) fn set_cookie_for_url(
+        &mut self,
+        url: &Url,
+        cookie: &str,
+    ) -> Result<(), moli_cookie_jar::CookieStoreError> {
+        self.set_cookie_with_result_for_url(url, cookie)?;
+        Ok(())
     }
 
     fn set_cookie_with_result_for_url(
         &mut self,
         url: &Url,
         cookie: &str,
-    ) -> DocumentCookieSetResult {
+    ) -> Result<DocumentCookieSetResult, moli_cookie_jar::CookieStoreError> {
         let owner = self.document_cookie_owner_snapshot_for_url(url);
         if let Some(rejection_reason) = owner.write_capability.primary_rejection_reason {
             self.cookie_facade.telemetry.record_rejected_write();
             self.cookie_facade.telemetry.record_facade_blocked_write();
-            return DocumentCookieSetResult {
+            return Ok(DocumentCookieSetResult {
                 outcome: match rejection_reason {
                     StoredCookieSetRejectionReason::CookiesDisabled => {
                         DocumentCookieSetOutcome::Disabled
@@ -626,7 +637,7 @@ impl HostDocumentState {
                     _ => DocumentCookieSetOutcome::Rejected,
                 },
                 report: Some(rejected_document_cookie_set_report(rejection_reason)),
-            };
+            });
         }
         let Some(cookie_store) = self.cookie_store.as_ref() else {
             unreachable!(
@@ -634,7 +645,7 @@ impl HostDocumentState {
             );
         };
         let report = {
-            let mut cookie_store = cookie_store.lock();
+            let mut cookie_store = cookie_store.lock()?;
             cookie_store.set_document_cookie_with_context_report(
                 url,
                 cookie,
@@ -647,14 +658,14 @@ impl HostDocumentState {
         } else {
             self.cookie_facade.telemetry.record_rejected_write();
         }
-        DocumentCookieSetResult {
+        Ok(DocumentCookieSetResult {
             outcome: if report.is_accepted() {
                 DocumentCookieSetOutcome::Applied
             } else {
                 DocumentCookieSetOutcome::Rejected
             },
             report: Some(report),
-        }
+        })
     }
 
     pub fn document_cookie_capability_snapshot(&self) -> DocumentCookieCapabilitySnapshot {
@@ -710,7 +721,9 @@ impl HostDocumentState {
                 current_store_generation: self
                     .cookie_store
                     .as_ref()
-                    .map(|store| store.lock().document_cookie_generation()),
+                    .and_then(|store| store.lock_if_initialized())
+                    .and_then(Result::ok)
+                    .map(|store| store.document_cookie_generation()),
                 cached_facade_generation,
                 current_facade_generation,
             };
@@ -726,7 +739,22 @@ impl HostDocumentState {
                 current_facade_generation,
             };
         };
-        let mut cookie_store = cookie_store.lock();
+        let initialized = cookie_store.lock_if_initialized();
+        let missing_status = if initialized.is_none() {
+            DocumentCookieCacheStatus::NoEntry
+        } else {
+            DocumentCookieCacheStatus::StoreUnavailable
+        };
+        let Some(Ok(mut cookie_store)) = initialized else {
+            return DocumentCookieCacheSnapshot {
+                status: missing_status,
+                cached_url,
+                cached_store_generation,
+                current_store_generation: None,
+                cached_facade_generation,
+                current_facade_generation,
+            };
+        };
         cookie_store.purge_expired();
         let current_store_generation = Some(cookie_store.document_cookie_generation());
 

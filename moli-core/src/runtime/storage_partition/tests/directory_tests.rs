@@ -2,6 +2,51 @@ use super::*;
 use moli_browser_profile::{BrowserProfileManifest, ProfileBackendKind, ProfileBackendManifest};
 
 #[test]
+fn cookie_and_local_storage_open_independently_on_first_data_access() -> Result<()> {
+    for cookie_first in [true, false] {
+        let profile = TempProfileDir::new(if cookie_first {
+            "cookie-first"
+        } else {
+            "local-first"
+        });
+        let partition = StoragePartitionState::open(Some(&profile.path))?;
+        let handles = partition.shared_storage_handles();
+        let cookies = handles.cookie_store();
+        let local = handles.web_storage_store();
+        let cookie_path = partition.cookie_database_path();
+        let local_path = partition.local_storage_database_path();
+        assert!(!cookie_path.exists());
+        assert!(!local_path.exists());
+        partition.flush()?;
+        assert!(!cookie_path.exists());
+        assert!(!local_path.exists());
+        if cookie_first {
+            assert!(cookies.lock()?.cookies().is_empty());
+            assert!(cookie_path.is_file());
+            assert!(!local_path.exists());
+        } else {
+            assert_eq!(local.try_len("https://first.test")?, 0);
+            assert!(local_path.is_file());
+            assert!(!cookie_path.exists());
+        }
+        partition.import_cookies([stored_cookie("saved", "cookie")])?;
+        local.try_set_item("https://first.test", "saved", "local")?;
+        partition.shutdown()?;
+        drop(partition);
+        let reopened = StoragePartitionState::open(Some(&profile.path))?;
+        assert_eq!(reopened.cookies()?[0].name, "saved");
+        assert_eq!(
+            reopened
+                .web_storage_store()
+                .get_item("https://first.test", "saved")
+                .as_deref(),
+            Some("local")
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn profile_switches_directories_without_importing_old_json() -> Result<()> {
     let profile = TempProfileDir::new("ignore-old-json");
     let paths = BrowserProfilePaths::new(&profile.path);
@@ -120,13 +165,22 @@ fn corrupt_current_databases_fail_without_falling_back_to_old_data() -> Result<(
         } else {
             &paths.local_storage_path
         };
+        fs::create_dir_all(path.parent().unwrap())?;
         fs::write(path, b"corrupt current database")?;
-        let error = StoragePartitionState::open(Some(&profile.path)).unwrap_err();
-        assert!(format!("{error:#}").contains(if cookie {
-            "Cookie database"
+        let partition = StoragePartitionState::open(Some(&profile.path))?;
+        if cookie {
+            assert!(partition.cookies().is_err());
+            assert!(!paths.local_storage_path.exists());
         } else {
-            "localStorage database"
-        }));
+            assert!(
+                partition
+                    .web_storage_store()
+                    .try_len("https://failure.test")
+                    .is_err()
+            );
+            assert!(!paths.cookies_path.exists());
+        }
+        assert!(partition.shutdown().is_err());
         assert_eq!(fs::read(path)?, b"corrupt current database");
     }
     Ok(())

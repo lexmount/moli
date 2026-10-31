@@ -702,16 +702,24 @@ impl BrowserContext {
 
     #[cfg(test)]
     pub(crate) fn with_cookie_store<R>(&self, f: impl FnOnce(&BrowserCookieStore) -> R) -> R {
-        let cookie_store = self.storage_partition.cookie_store().lock();
+        let cookie_store = self.storage_partition.cookie_store().lock().unwrap();
         f(&cookie_store)
     }
 
+    #[cfg(test)]
     pub(crate) fn with_cookie_store_mut<R>(
         &self,
         f: impl FnOnce(&mut BrowserCookieStore) -> R,
     ) -> R {
-        let mut cookie_store = self.storage_partition.cookie_store().lock();
-        f(&mut cookie_store)
+        self.try_with_cookie_store_mut(f).unwrap()
+    }
+
+    pub(crate) fn try_with_cookie_store_mut<R>(
+        &self,
+        f: impl FnOnce(&mut BrowserCookieStore) -> R,
+    ) -> Result<R, moli_cookie_jar::CookieStoreError> {
+        let mut cookie_store = self.storage_partition.cookie_store().lock()?;
+        Ok(f(&mut cookie_store))
     }
 
     #[cfg(test)]
@@ -723,12 +731,21 @@ impl BrowserContext {
         &self,
         request_url: &url::Url,
         request_context: NetworkCookieRequestContext,
-    ) -> Option<StoredCookieQueryReport> {
-        let mut cookie_store = self.storage_partition.cookie_store().lock();
+    ) -> Result<Option<StoredCookieQueryReport>, String> {
+        if !matches!(request_url.scheme(), "http" | "https") {
+            return Ok(None);
+        }
+        let mut cookie_store = self
+            .storage_partition
+            .cookie_store()
+            .lock()
+            .map_err(|error| error.to_string())?;
         let report =
             cookie_store.observe_cookie_access_report_for_request(request_url, request_context);
-        (!report.included_cookies.is_empty() || !report.excluded_cookies.is_empty())
-            .then_some(report)
+        Ok(
+            (!report.included_cookies.is_empty() || !report.excluded_cookies.is_empty())
+                .then_some(report),
+        )
     }
 
     pub(crate) fn storage_quota_for_origin(&self, origin: &str) -> (f64, bool) {
@@ -1367,7 +1384,11 @@ impl BrowserContext {
         if options.cookies
             && let Some(host) = origin.host_str().map(str::to_ascii_lowercase)
         {
-            let mut cookie_store = self.storage_partition.cookie_store().lock();
+            let mut cookie_store = self
+                .storage_partition
+                .cookie_store()
+                .lock()
+                .map_err(|error| error.to_string())?;
             cookie_store.delete_cookies(None, None, None, Some(host.as_str()));
         }
 
@@ -1417,7 +1438,11 @@ impl BrowserContext {
         if options.cookies
             && let Some(host) = origin.host_str().map(str::to_ascii_lowercase)
         {
-            let mut cookie_store = self.storage_partition.cookie_store().lock();
+            let mut cookie_store = self
+                .storage_partition
+                .cookie_store()
+                .lock()
+                .map_err(|error| error.to_string())?;
             cookie_store.delete_cookies(None, None, None, Some(host.as_str()));
         }
 
@@ -1466,8 +1491,10 @@ impl BrowserContext {
             .map_err(|error| format!("FailedToClearHttpCache: {error}"))
     }
 
-    pub(crate) fn snapshot_cookies(&self) -> Vec<StoredCookie> {
-        self.storage_partition.cookie_store().lock().cookies()
+    pub(crate) fn snapshot_cookies(
+        &self,
+    ) -> Result<Vec<StoredCookie>, moli_cookie_jar::CookieStoreError> {
+        Ok(self.storage_partition.cookie_store().lock()?.cookies())
     }
 
     #[cfg(test)]
@@ -1550,7 +1577,8 @@ impl BrowserContext {
             url_host,
             &moli_cookie_jar::StoredCookiePartitionFilter::All,
             moli_cookie_jar::StoredCookieDomainMatch::Canonical,
-        );
+        )
+        .unwrap();
     }
 
     pub(crate) fn delete_cookies_with_filters(
@@ -1561,8 +1589,12 @@ impl BrowserContext {
         url_host: Option<&str>,
         partition_filter: &moli_cookie_jar::StoredCookiePartitionFilter,
         domain_match: moli_cookie_jar::StoredCookieDomainMatch,
-    ) {
-        let mut cookie_store = self.storage_partition.cookie_store().lock();
+    ) -> Result<(), String> {
+        let mut cookie_store = self
+            .storage_partition
+            .cookie_store()
+            .lock()
+            .map_err(|error| error.to_string())?;
         cookie_store.delete_cookies_with_filters(
             name,
             domain,
@@ -1571,6 +1603,7 @@ impl BrowserContext {
             partition_filter,
             domain_match,
         );
+        Ok(())
     }
 
     pub(crate) fn active_target_id(&self) -> Option<&str> {
@@ -1817,8 +1850,14 @@ pub(crate) fn seed_initial_cookies(
     cookie_store: &SharedBrowserCookieStore,
     initial_cookies: impl IntoIterator<Item = StoredCookie>,
 ) {
-    let mut store = cookie_store.lock();
-    for cookie in initial_cookies {
+    let mut cookies = initial_cookies.into_iter().peekable();
+    if cookies.peek().is_none() {
+        return;
+    }
+    let mut store = cookie_store
+        .lock()
+        .expect("initial cookie store should initialize");
+    for cookie in cookies {
         let _ = store.upsert_with_request_url_report(cookie, None, CookieSource::Cdp);
     }
 }

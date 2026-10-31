@@ -113,7 +113,7 @@ pub(crate) fn cookie_access_report_for_request(
     request_url: &Url,
     request_context: NetworkCookieRequestContext,
 ) -> Result<Option<StoredCookieQueryReport>> {
-    let mut cookie_store = cookie_store.lock();
+    let mut cookie_store = cookie_store.lock()?;
     let report = cookie_store.cookie_access_report_for_request(request_url, request_context);
     Ok(
         (!report.included_cookies.is_empty() || !report.excluded_cookies.is_empty())
@@ -126,7 +126,7 @@ pub fn observe_cookie_access_report_for_request(
     request_url: &Url,
     request_context: NetworkCookieRequestContext,
 ) -> Result<Option<StoredCookieQueryReport>> {
-    let mut cookie_store = cookie_store.lock();
+    let mut cookie_store = cookie_store.lock()?;
     let report =
         cookie_store.observe_cookie_access_report_for_request(request_url, request_context);
     Ok(
@@ -551,7 +551,7 @@ pub(crate) fn store_response_cookies(
     headers: &[(String, Vec<u8>)],
     request_context: &NetworkCookieRequestContext,
 ) -> Result<Vec<StoredCookieSetReport>> {
-    let mut cookie_store = cookie_store.lock();
+    let mut cookie_store = cookie_store.lock()?;
     Ok(cookie_store.store_response_headers_with_context_reports(
         response_url,
         headers,

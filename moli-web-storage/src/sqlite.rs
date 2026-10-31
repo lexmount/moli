@@ -137,7 +137,19 @@ pub fn new_sqlite_web_storage_store(
     mode: OpenMode,
     runtime: RuntimeHandle,
 ) -> Result<(SharedWebStorageStore, SqliteWebStorageOwner)> {
-    let owner = WritebackOwner::open(
+    let (store, owner) = new_lazy_sqlite_web_storage_store(path, mode, runtime)?;
+    owner.owner.client().query(|_| Ok(()))?;
+    Ok((store, owner))
+}
+
+/// First data access opens the shared connection; acquiring a store or area
+/// lease alone performs no filesystem work.
+pub fn new_lazy_sqlite_web_storage_store(
+    path: PathBuf,
+    mode: OpenMode,
+    runtime: RuntimeHandle,
+) -> Result<(SharedWebStorageStore, SqliteWebStorageOwner)> {
+    let owner = WritebackOwner::deferred(
         path,
         mode,
         runtime,

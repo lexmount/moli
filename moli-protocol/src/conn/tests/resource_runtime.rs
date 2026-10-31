@@ -199,7 +199,7 @@ fn connection_initial_cookies_seed_new_browser_contexts() {
         assert!(bc.is_profile_backed_storage_partition());
         assert_eq!(bc.storage_partition_kind_label(), "profile-backed");
         assert_eq!(bc.storage_partition_id(), "default");
-        let cookies = bc.snapshot_cookies();
+        let cookies = bc.snapshot_cookies().unwrap();
         assert_eq!(cookies.len(), 1);
         assert_eq!(cookies[0].name, "sid");
         assert_eq!(cookies[0].value, "seeded");
@@ -240,7 +240,7 @@ fn initial_storage_partition_derives_store_handles_from_core_owner() {
         browser_context.storage_bucket_store_for_test(),
         &expected_storage_bucket_store
     ));
-    let cookies = browser_context.snapshot_cookies();
+    let cookies = browser_context.snapshot_cookies().unwrap();
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "sid");
     assert_eq!(cookies[0].value, "seeded");
@@ -258,11 +258,11 @@ fn connections_share_live_partition_cookies_without_reseeding_stale_snapshots() 
     );
     let first = first.new_browser_context("BID-first".into());
     let second = second.new_browser_context("BID-second".into());
-    first.cookie_store_for_test().lock().clear();
-    assert!(second.snapshot_cookies().is_empty());
+    first.cookie_store_for_test().lock().unwrap().clear();
+    assert!(second.snapshot_cookies().unwrap().is_empty());
     owner.import_cookies([stored_cookie("sid", "new")]).unwrap();
-    assert_eq!(first.snapshot_cookies()[0].value, "new");
-    assert_eq!(second.snapshot_cookies()[0].value, "new");
+    assert_eq!(first.snapshot_cookies().unwrap()[0].value, "new");
+    assert_eq!(second.snapshot_cookies().unwrap()[0].value, "new");
     drop(first);
     assert_eq!(owner.cookies().unwrap()[0].value, "new");
 }
@@ -320,7 +320,7 @@ fn connection_ephemeral_browser_context_uses_isolated_storage_partition() {
     assert!(!bc.is_profile_backed_storage_partition());
     assert_eq!(bc.storage_partition_kind_label(), "ephemeral");
     assert_eq!(bc.storage_partition_id(), "BID-ephemeral");
-    assert!(bc.snapshot_cookies().is_empty());
+    assert!(bc.snapshot_cookies().unwrap().is_empty());
 }
 
 #[test]
@@ -392,7 +392,7 @@ fn browser_context_request_cookie_report_reads_storage_partition_cookie_handle()
     let browser_context = BrowserContext::new("BID-cookie-report".to_owned());
     let request_url = Url::parse("https://example.com/app/index.html").unwrap();
     {
-        let mut cookie_store = browser_context.cookie_store_for_test().lock();
+        let mut cookie_store = browser_context.cookie_store_for_test().lock().unwrap();
         cookie_store.store_response_headers(
             &request_url,
             &[(
@@ -407,6 +407,7 @@ fn browser_context_request_cookie_report_reads_storage_partition_cookie_handle()
             &request_url,
             moli_cookie_jar::NetworkCookieRequestContext::top_level_navigation("GET"),
         )
+        .unwrap()
         .expect("partition cookie should produce a request access report");
 
     assert_eq!(report.included_cookies.len(), 1);
@@ -420,7 +421,7 @@ fn browser_context_cookie_snapshot_and_delete_use_storage_partition_cookie_handl
     let mut browser_context = BrowserContext::new("BID-cookie-snapshot".to_owned());
     let request_url = Url::parse("https://example.com/app/index.html").unwrap();
     {
-        let mut cookie_store = browser_context.cookie_store_for_test().lock();
+        let mut cookie_store = browser_context.cookie_store_for_test().lock().unwrap();
         cookie_store.store_response_headers(
             &request_url,
             &[(
@@ -430,18 +431,19 @@ fn browser_context_cookie_snapshot_and_delete_use_storage_partition_cookie_handl
         );
     }
 
-    let snapshot = browser_context.snapshot_cookies();
+    let snapshot = browser_context.snapshot_cookies().unwrap();
     assert_eq!(snapshot.len(), 1);
     assert_eq!(snapshot[0].name, "sid");
     assert_eq!(snapshot[0].value, "partition");
 
     browser_context.delete_cookies(Some("sid"), Some("example.com"), Some("/app"), None);
 
-    assert!(browser_context.snapshot_cookies().is_empty());
+    assert!(browser_context.snapshot_cookies().unwrap().is_empty());
     assert!(
         browser_context
             .cookie_store_for_test()
             .lock()
+            .unwrap()
             .cookies()
             .is_empty()
     );
@@ -478,18 +480,21 @@ fn navigation_load_inputs_own_cookie_request_and_response_reports() {
     let response_url = Url::parse("https://example.com/app/index.html").unwrap();
     let load_inputs = conn.navigation_load_inputs_for_session_owner(None);
 
-    let set_reports = load_inputs.store_response_cookie_reports(
-        &response_url,
-        &[(
-            "set-cookie".to_owned(),
-            b"sid=load-input; Path=/app".to_vec(),
-        )],
-    );
+    let set_reports = load_inputs
+        .store_response_cookie_reports(
+            &response_url,
+            &[(
+                "set-cookie".to_owned(),
+                b"sid=load-input; Path=/app".to_vec(),
+            )],
+        )
+        .unwrap();
     assert_eq!(set_reports.len(), 1);
     assert!(set_reports[0].is_accepted());
 
     let report = load_inputs
         .request_cookie_report_for_navigation(&response_url, "GET", false)
+        .unwrap()
         .expect("load input cookie store should produce a request report");
     assert_eq!(report.included_cookies.len(), 1);
     assert_eq!(report.included_cookies[0].cookie.name, "sid");
@@ -591,6 +596,7 @@ fn connection_snapshot_cookies_collects_active_and_inactive_contexts() {
 
     let mut names = conn
         .snapshot_cookies()
+        .unwrap()
         .into_iter()
         .map(|cookie| cookie.name)
         .collect::<Vec<_>>();
@@ -613,6 +619,7 @@ fn connection_profile_backed_cookie_snapshot_ignores_ephemeral_contexts() {
 
     let cookies = conn
         .snapshot_profile_backed_cookies()
+        .unwrap()
         .expect("profile-backed snapshot");
 
     assert_eq!(cookies.len(), 1);
@@ -625,10 +632,10 @@ fn connection_profile_backed_cookie_snapshot_is_none_without_profile_backed_cont
     let ephemeral = conn
         .new_ephemeral_browser_context("BID-ephemeral".to_owned())
         .expect("temporary context");
-    assert!(ephemeral.snapshot_cookies().is_empty());
+    assert!(ephemeral.snapshot_cookies().unwrap().is_empty());
     conn.install_browser_context_fixture_for_test(ephemeral);
 
-    assert!(conn.snapshot_profile_backed_cookies().is_none());
+    assert!(conn.snapshot_profile_backed_cookies().unwrap().is_none());
 }
 
 #[tokio::test]
@@ -3718,6 +3725,7 @@ async fn streaming_navigation_collect_transition_preserves_redirect_cookie_and_b
         .as_ref()
         .unwrap()
         .snapshot_cookies()
+        .unwrap()
         .into_iter()
         .map(|cookie| cookie.name)
         .collect::<Vec<_>>();

@@ -33,7 +33,7 @@ mod sqlite;
 mod store;
 pub use sqlite::{
     SqliteWebStorageOwner, WebStorageAreaLease, import_sqlite_web_storage,
-    new_sqlite_web_storage_store,
+    new_lazy_sqlite_web_storage_store, new_sqlite_web_storage_store,
 };
 pub use store::{
     deep_clone_shared_web_storage_store, new_shared_json_web_storage_store,

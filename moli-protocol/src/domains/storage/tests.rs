@@ -1708,7 +1708,7 @@ async fn storage_set_cookies_keeps_cookie_store_available_after_lock_holder_pani
             .clone()
     });
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = cookie_store.lock();
+        let _guard = cookie_store.lock().unwrap();
         panic!("panic while holding cookie store lock");
     }));
 

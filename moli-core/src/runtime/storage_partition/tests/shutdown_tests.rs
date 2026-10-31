@@ -327,7 +327,7 @@ fn temporary_cookie_and_local_storage_clients_do_not_retain_or_recreate_files() 
             .is_err()
     );
     // A retained canonical jar is only a data client after its owner closes.
-    cookies.lock().clear();
+    cookies.lock().unwrap().clear();
     assert!(
         !root.exists(),
         "retained clients cannot reopen a retired partition"

@@ -1141,7 +1141,7 @@ async fn network_set_cookie_keeps_cookie_store_available_after_lock_holder_panic
             .clone()
     });
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = cookie_store.lock();
+        let _guard = cookie_store.lock().unwrap();
         panic!("panic while holding cookie store lock");
     }));
 

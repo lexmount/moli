@@ -4302,6 +4302,7 @@ async fn network_metadata_failure_preserves_request_sent_before_empty_response()
     let cookie_store = new_shared_browser_cookie_store();
     cookie_store
         .lock()
+        .unwrap()
         .set_document_cookie(&url, "failedRequestCookie=present; Path=/");
     let client = FetchClient::new(&FetchConfig::default(), cookie_store);
 

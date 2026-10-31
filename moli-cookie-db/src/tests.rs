@@ -35,9 +35,84 @@ fn put(store: &SharedBrowserCookieStore, cookie: StoredCookie) {
     assert!(
         store
             .lock()
+            .unwrap()
             .upsert_with_request_url_report(cookie, None, CookieSource::Cdp)
             .is_accepted()
     );
+}
+
+#[test]
+fn unused_cookie_handles_flush_and_close_without_creating_files() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("ck-lite/cookies.sqlite");
+    let runtime = Runtime::new().unwrap();
+    let (store, owner) =
+        CookieDatabase::deferred(path.clone(), OpenMode::Create, runtime.handle()).unwrap();
+    let clone = store.clone();
+    assert!(clone.lock_if_initialized().is_none());
+    owner.flush().unwrap();
+    owner.close().unwrap();
+    assert!(!path.parent().unwrap().exists());
+    assert!(
+        clone.lock().is_err(),
+        "closed handles must not reopen or restore the jar"
+    );
+    assert!(!path.parent().unwrap().exists());
+}
+
+#[test]
+fn concurrent_first_cookie_access_restores_once_before_accepting_mutations() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("cookies.sqlite");
+    let runtime = Runtime::new().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    put(&store, cookie("restored"));
+    owner.close().unwrap();
+    let (store, owner) =
+        CookieDatabase::deferred(path, OpenMode::Create, runtime.handle()).unwrap();
+    assert!(store.lock_if_initialized().is_none());
+    std::thread::scope(|scope| {
+        for index in 0..8 {
+            let store = store.clone();
+            scope.spawn(move || {
+                let mut jar = store.lock().unwrap();
+                assert!(jar.cookies().iter().any(|row| row.name == "restored"));
+                assert!(
+                    jar.upsert_with_request_url_report(
+                        cookie(&format!("writer{index}")),
+                        None,
+                        CookieSource::Cdp
+                    )
+                    .is_accepted()
+                );
+            });
+        }
+    });
+    assert_eq!(store.lock().unwrap().cookies().len(), 9);
+    owner.close().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    assert_eq!(store.lock().unwrap().cookies().len(), 9);
+    owner.close().unwrap();
+}
+
+#[test]
+fn cookie_open_failure_is_deferred_and_never_becomes_an_empty_jar() {
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().join("not-a-directory");
+    std::fs::write(&parent, b"keep").unwrap();
+    let runtime = Runtime::new().unwrap();
+    let (store, owner) = CookieDatabase::deferred(
+        parent.join("cookies.sqlite"),
+        OpenMode::Create,
+        runtime.handle(),
+    )
+    .unwrap();
+    owner.flush().unwrap();
+    let error = store.lock().unwrap_err().to_string();
+    assert_eq!(store.lock().unwrap_err().to_string(), error);
+    assert!(owner.flush().is_err());
+    assert!(owner.close().is_err());
+    assert_eq!(std::fs::read(parent).unwrap(), b"keep");
 }
 
 #[test]
@@ -69,7 +144,7 @@ fn complete_metadata_and_unsigned_ordering_indices_survive_reopen() {
     drop(store);
     drop(owner);
     let (store, owner) = open(root.path(), &runtime);
-    assert_eq!(store.lock().cookies(), vec![expected.clone()]);
+    assert_eq!(store.lock().unwrap().cookies(), vec![expected.clone()]);
     assert_eq!(
         owner.owner.client().query(codec::read).unwrap(),
         vec![expected]
@@ -77,6 +152,7 @@ fn complete_metadata_and_unsigned_ordering_indices_survive_reopen() {
     put(&store, cookie("next"));
     let next = store
         .lock()
+        .unwrap()
         .cookies()
         .into_iter()
         .find(|c| c.name == "next")
@@ -100,7 +176,7 @@ fn session_cookies_restore_but_opaque_partition_cookies_do_not() {
     drop(store);
     drop(owner);
     let (store, owner) = open(root.path(), &runtime);
-    let rows = store.lock().cookies();
+    let rows = store.lock().unwrap().cookies();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].name, "session");
     assert_eq!(rows[0].expires, None);
@@ -128,7 +204,7 @@ fn complete_partition_keys_and_paths_have_distinct_rows() {
     owner.close().unwrap();
     drop(owner);
     let (store, owner) = open(root.path(), &runtime);
-    assert_eq!(store.lock().cookies().len(), 4);
+    assert_eq!(store.lock().unwrap().cookies().len(), 4);
     owner.close().unwrap();
 }
 #[test]
@@ -139,10 +215,11 @@ fn access_metadata_is_incremental_and_a_data_clone_has_no_writer() {
     put(&store, cookie("live"));
     owner.flush().unwrap();
     let before = owner.owner.client().query(codec::read).unwrap()[0].last_access_index;
-    let mut snapshot = store.lock().clone();
+    let mut snapshot = store.lock().unwrap().clone();
     snapshot.upsert(cookie("snapshot-only"), CookieSource::Cdp);
     store
         .lock()
+        .unwrap()
         .cookie_header(&Url::parse("https://cookie.test/").unwrap());
     owner.flush().unwrap();
     let rows = owner.owner.client().query(codec::read).unwrap();
@@ -159,10 +236,12 @@ fn document_expiry_and_quota_eviction_remove_persisted_rows() {
     let url = Url::parse("https://cookie.test/").unwrap();
     store
         .lock()
+        .unwrap()
         .set_document_cookie(&url, "expire=live; Secure; Path=/");
     owner.flush().unwrap();
     store
         .lock()
+        .unwrap()
         .set_document_cookie(&url, "expire=gone; Secure; Path=/; Max-Age=0");
     owner.flush().unwrap();
     assert!(owner.owner.client().query(codec::read).unwrap().is_empty());
@@ -215,7 +294,7 @@ fn source_metadata_and_host_only_changes_replace_the_same_canonical_identity() {
     let (store, owner) = open(root.path(), &runtime);
     put(&store, cookie("same"));
     owner.flush().unwrap();
-    let first = store.lock().cookies()[0].creation_index;
+    let first = store.lock().unwrap().cookies()[0].creation_index;
     let mut next = cookie("same");
     next.value = "replaced".into();
     next.host_only = false;
@@ -226,6 +305,7 @@ fn source_metadata_and_host_only_changes_replace_the_same_canonical_identity() {
     assert!(
         store
             .lock()
+            .unwrap()
             .upsert_with_request_url_report(next, Some(&request), CookieSource::Cdp)
             .is_accepted()
     );

@@ -65,8 +65,49 @@ struct Shared<B> {
     pending: Mutex<Pending<B>>,
     changed: Notify,
 }
+/// Opening is part of the first database operation, on the SQL worker.
+/// Merely flushing or closing an unused store must not create a database.
+enum LazyConnection {
+    Unopened(Box<dyn FnOnce() -> Result<Connection> + Send>),
+    Open(Connection),
+    Failed(WritebackError),
+}
+impl LazyConnection {
+    fn get(&mut self) -> Result<&mut Connection> {
+        if matches!(self, Self::Unopened(_)) {
+            let Self::Unopened(open) = std::mem::replace(
+                self,
+                Self::Failed(WritebackError::new("database initialization interrupted")),
+            ) else {
+                unreachable!();
+            };
+            *self = match open() {
+                Ok(connection) => Self::Open(connection),
+                Err(error) => Self::Failed(error),
+            };
+        }
+        match self {
+            Self::Open(connection) => Ok(connection),
+            Self::Failed(error) => Err(error.clone()),
+            Self::Unopened(_) => unreachable!(),
+        }
+    }
+    fn failure(&self) -> Option<WritebackError> {
+        match self {
+            Self::Failed(error) => Some(error.clone()),
+            _ => None,
+        }
+    }
+    fn close(self) -> Result<()> {
+        match self {
+            Self::Open(connection) => connection.close().map_err(|(_, error)| error.into()),
+            Self::Unopened(_) => Ok(()),
+            Self::Failed(error) => Err(error),
+        }
+    }
+}
 trait Query: Send {
-    fn run(self: Box<Self>, connection: &mut Connection);
+    fn run(self: Box<Self>, connection: &mut LazyConnection);
 }
 struct QueryJob<F, T> {
     query: F,
@@ -77,8 +118,9 @@ where
     F: FnOnce(&mut Connection) -> Result<T> + Send,
     T: Send,
 {
-    fn run(self: Box<Self>, connection: &mut Connection) {
-        let _ = self.reply.send((self.query)(connection));
+    fn run(self: Box<Self>, connection: &mut LazyConnection) {
+        let result = connection.get().and_then(self.query);
+        let _ = self.reply.send(result);
     }
 }
 enum Message {
@@ -113,9 +155,21 @@ pub struct WritebackOwner<B> {
     finished: Mutex<CloseReceipt>,
 }
 impl<B: WriteBatch> WritebackOwner<B> {
-    /// Native initialization, before opening V8. Every connection operation,
-    /// including schema initialization and final close, runs in blocking work.
+    /// Open and validate immediately, for callers such as explicit imports.
     pub fn open(
+        path: PathBuf,
+        mode: OpenMode,
+        runtime: RuntimeHandle,
+        policy: WritebackPolicy,
+        initialize: impl FnOnce(&mut Connection) -> Result<()> + Send + 'static,
+    ) -> Result<Self> {
+        let owner = Self::deferred(path, mode, runtime, policy, initialize)?;
+        owner.client.query(|_| Ok(()))?;
+        Ok(owner)
+    }
+    /// Prepare a store without filesystem access. The first query or nonempty
+    /// commit opens it; schema initialization and close also run in blocking work.
+    pub fn deferred(
         path: PathBuf,
         mode: OpenMode,
         runtime: RuntimeHandle,
@@ -145,38 +199,22 @@ impl<B: WriteBatch> WritebackOwner<B> {
             sender,
             runtime: runtime.clone(),
         };
-        let (ready_tx, ready_rx) = mpsc::channel();
+        let connection = LazyConnection::Unopened(Box::new(move || {
+            if matches!(mode, OpenMode::Create)
+                && let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty())
+            {
+                std::fs::create_dir_all(parent).map_err(WritebackError::new)?;
+            }
+            let mut connection = crate::open_disk(&path, mode, ConnectionOptions::default())
+                .map_err(WritebackError::new)?;
+            initialize(&mut connection)?;
+            Ok(connection)
+        }));
         let (done_tx, done_rx) = mpsc::channel();
         let worker = runtime.clone();
         runtime
             .spawn(async move {
-                let opened = worker
-                    .blocking(move || {
-                        if matches!(mode, OpenMode::Create)
-                            && let Some(parent) =
-                                path.parent().filter(|p| !p.as_os_str().is_empty())
-                        {
-                            std::fs::create_dir_all(parent).map_err(WritebackError::new)?;
-                        }
-                        let mut connection =
-                            crate::open_disk(&path, mode, ConnectionOptions::default())
-                                .map_err(WritebackError::new)?;
-                        initialize(&mut connection)?;
-                        Ok(connection)
-                    })
-                    .await
-                    .map_err(WritebackError::new)
-                    .and_then(|r| r);
-                let result = match opened {
-                    Ok(connection) => {
-                        let _ = ready_tx.send(Ok(()));
-                        run(connection, receiver, shared.clone(), worker, policy).await
-                    }
-                    Err(error) => {
-                        let _ = ready_tx.send(Err(error.clone()));
-                        Err(error)
-                    }
-                };
+                let result = run(connection, receiver, shared.clone(), worker, policy).await;
                 let mut pending = shared.pending.lock();
                 pending.closed = true;
                 if let Err(error) = &result {
@@ -186,9 +224,6 @@ impl<B: WriteBatch> WritebackOwner<B> {
                 let _ = done_tx.send(result);
             })
             .map_err(WritebackError::new)?;
-        ready_rx
-            .recv()
-            .map_err(|_| WritebackError::new("database initialization stopped"))??;
         Ok(Self {
             client,
             finished: Mutex::new(CloseReceipt {
@@ -340,17 +375,17 @@ impl<B: WriteBatch> WritebackClient<B> {
 }
 
 async fn commit<B: WriteBatch>(
-    connection: Connection,
+    connection: LazyConnection,
     shared: &Shared<B>,
     runtime: &RuntimeHandle,
-) -> Result<Connection> {
+) -> Result<LazyConnection> {
     let taken = {
         let mut pending = shared.pending.lock();
         if pending.batch.is_empty() {
             pending.committed = pending.accepted;
             pending.operations = 0;
             pending.first_dirty = None;
-            pending.failure = None;
+            pending.failure = connection.failure();
             return Ok(connection);
         }
         let batch = std::mem::take(&mut pending.batch);
@@ -362,7 +397,9 @@ async fn commit<B: WriteBatch>(
     let (connection, batch, result) = runtime
         .blocking(move || {
             let mut connection = connection;
-            let result = batch.write(&mut connection);
+            let result = connection
+                .get()
+                .and_then(|connection| batch.write(connection));
             (connection, batch, result)
         })
         .await
@@ -386,7 +423,7 @@ async fn commit<B: WriteBatch>(
     Ok(connection)
 }
 async fn run<B: WriteBatch>(
-    mut connection: Connection,
+    mut connection: LazyConnection,
     mut receiver: async_mpsc::UnboundedReceiver<Message>,
     shared: Arc<Shared<B>>,
     runtime: RuntimeHandle,
@@ -410,6 +447,9 @@ async fn run<B: WriteBatch>(
             message = receiver.recv() => match message {
                 Some(Message::Query(query)) => {
                     connection = runtime.blocking(move || { query.run(&mut connection); connection }).await.map_err(WritebackError::new)?;
+                    if let Some(error) = connection.failure() {
+                        shared.pending.lock().failure = Some(error);
+                    }
                 }
                 Some(Message::Flush {through, reply}) => {
                     if shared.pending.lock().committed < through {
@@ -417,15 +457,16 @@ async fn run<B: WriteBatch>(
                     }
                     let result = {
                         let pending=shared.pending.lock();
-                        if pending.committed>=through {Ok(())}
-                        else {Err(pending.failure.clone().unwrap_or_else(||WritebackError::new("flush did not cover its accepted sequence")))}
+                        if let Some(error) = &pending.failure {Err(error.clone())}
+                        else if pending.committed>=through {Ok(())}
+                        else {Err(WritebackError::new("flush did not cover its accepted sequence"))}
                     };
                     let _ = reply.send(result);
                 }
                 Some(Message::Close) | None => {
                     connection = commit(connection, &shared, &runtime).await?;
                     let result = shared.pending.lock().failure.clone().map_or(Ok(()), Err);
-                    let closed = runtime.blocking(move || connection.close().map_err(|(_, error)| WritebackError::new(error))).await.map_err(WritebackError::new)?;
+                    let closed = runtime.blocking(move || connection.close()).await.map_err(WritebackError::new)?;
                     return result.and(closed);
                 }
             },

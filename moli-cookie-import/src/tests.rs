@@ -374,7 +374,7 @@ fn imports_a_netscape_cookie_jar() -> Result<()> {
         moli_sqlite::OpenMode::Existing,
         runtime.handle(),
     )?;
-    let cookies = cookies.lock().cookies();
+    let cookies = cookies.lock().unwrap().cookies();
     owner.close()?;
     runtime.shutdown()?;
     assert_eq!(summary.cookies, 1);

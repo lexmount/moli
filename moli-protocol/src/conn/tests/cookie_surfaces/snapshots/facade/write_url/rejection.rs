@@ -7,7 +7,7 @@ fn browser_context_document_cookie_facade_snapshot_keeps_backend_available_after
 
     let cookie_store = bc.cookie_store_for_test().clone();
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = cookie_store.lock();
+        let _guard = cookie_store.lock().unwrap();
         panic!("panic while holding cookie store lock");
     }));
 

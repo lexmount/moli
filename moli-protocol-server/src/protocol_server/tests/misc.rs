@@ -179,6 +179,7 @@ fn shared_cookie_profile_partition_backing_ignores_stale_snapshots() -> anyhow::
         .shared_storage_handles()
         .cookie_store()
         .lock()
+        .unwrap()
         .clear();
     profile.commit_and_save(CookieProfileCommit::new(initial.clone(), initial))?;
     assert!(
@@ -215,9 +216,9 @@ fn app_state_storage_partition_backing_derives_initial_partition_from_owner() ->
     let mut conn =
         moli_protocol::CdpConnection::new_with_initial_storage_partition(initial_storage_partition);
 
-    assert!(conn.snapshot_profile_backed_cookies().is_none());
+    assert!(conn.snapshot_profile_backed_cookies().unwrap().is_none());
     conn.install_default_browser_target();
-    let cookies = conn.snapshot_profile_backed_cookies().unwrap();
+    let cookies = conn.snapshot_profile_backed_cookies().unwrap().unwrap();
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "owner-cookie");
     assert_eq!(cookies[0].value, "owner-value");

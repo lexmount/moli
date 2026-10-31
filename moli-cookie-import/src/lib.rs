@@ -171,7 +171,7 @@ pub fn import_session_state(request: &ImportRequest<'_>) -> Result<ImportSummary
     }
     if let Some((store, owner)) = cookies {
         {
-            let mut store = store.lock();
+            let mut store = store.lock()?;
             for cookie in imported_cookies {
                 store.upsert_with_request_url_report(
                     cookie,

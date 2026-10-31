@@ -235,7 +235,7 @@ fn request_cookie_header_reads_from_canonical_cookie_core() {
     let request_url = Url::parse("https://example.com/app/panel").unwrap();
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[(
@@ -1463,7 +1463,7 @@ fn request_cookie_header_includes_document_cookie_mutations() {
     let request_url = Url::parse("https://example.com/app/panel").unwrap();
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[(

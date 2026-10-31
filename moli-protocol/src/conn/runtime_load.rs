@@ -1556,7 +1556,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
         response.headers.clone()
     };
     let response_cookie_reports = if has_header_override {
-        load_inputs.store_response_cookie_reports(&response.final_url, &response_headers)
+        load_inputs.store_response_cookie_reports(&response.final_url, &response_headers)?
     } else {
         response.cookie_set_reports.clone()
     };
@@ -2406,7 +2406,7 @@ impl CdpConnection {
         let owner = CommandOwnerScope::capture(self, session_id);
         let load_inputs = self.navigation_fixture_load_inputs_for_session_owner(session_id)?;
         let request_cookie_report =
-            load_inputs.request_cookie_report_for_navigation(&requested_url, "GET", true);
+            load_inputs.request_cookie_report_for_navigation(&requested_url, "GET", true)?;
         let head = ResponseHead {
             final_url: requested_url.clone(),
             status: 200,
@@ -2992,8 +2992,11 @@ impl CdpConnection {
         response_body: String,
     ) -> Result<LoadedNavigation> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
-        let initial_request_cookie_report =
-            load_inputs.request_cookie_report_for_navigation(&requested_url, &request_method, true);
+        let initial_request_cookie_report = load_inputs.request_cookie_report_for_navigation(
+            &requested_url,
+            &request_method,
+            true,
+        )?;
         self.build_loaded_navigation_from_buffered_response_with_request_cookie_report_async(
             &load_inputs,
             requested_url,
@@ -3073,7 +3076,7 @@ impl CdpConnection {
         initial_request_cookie_report: Option<StoredCookieQueryReport>,
     ) -> Result<LoadedNavigation> {
         let response_cookie_reports =
-            load_inputs.store_response_cookie_reports(&requested_url, &response_headers);
+            load_inputs.store_response_cookie_reports(&requested_url, &response_headers)?;
         let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
             load_inputs.fetch_subresource_interception;
         let page_storage = load_inputs.page_storage_handles();

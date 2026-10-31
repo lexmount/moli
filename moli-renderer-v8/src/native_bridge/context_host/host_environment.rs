@@ -716,14 +716,17 @@ impl JsContextHost {
     }
 
     #[cfg(feature = "wpt-extensions")]
-    pub(crate) fn delete_all_cookies_for_wpt(&mut self) {
+    pub(crate) fn delete_all_cookies_for_wpt(
+        &mut self,
+    ) -> Result<(), moli_cookie_jar::CookieStoreError> {
         if let Some(resource_loader) = self.current_main_document_resource_loader() {
             resource_loader
                 .request_client()
                 .cookie_store()
-                .lock()
+                .lock()?
                 .clear();
         }
+        Ok(())
     }
 
     pub(crate) fn set_extra_http_headers(&mut self, headers: &moli_fetch::RequestHeaders) {
