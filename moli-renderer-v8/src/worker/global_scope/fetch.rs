@@ -521,7 +521,7 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
     redirect_headers: Option<moli_fetch::RequestHeaders>,
     redirect_chain: Vec<moli_fetch::RedirectInfo>,
 ) {
-    tokio::task::spawn_local(async move {
+    load.task_runner().spawn(async move {
         let loader = load.request_client();
         let cors_preflight_request_headers = headers.to_byte_strings();
         let request = Request::new_browser_bytes(

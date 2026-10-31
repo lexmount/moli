@@ -1,0 +1,44 @@
+<!doctype html>
+<body>
+<script>
+function probe(scope, base) {
+  return new Promise(resolve => {
+    const xhr = new XMLHttpRequest();
+    let observed = 'missing';
+    let taskFinished = false;
+    xhr.onloadend = () => resolve([
+      scope, observed, xhr.status, xhr.responseText, taskFinished
+    ].join(':'));
+    xhr.open('GET', base + '/body/' + scope);
+    xhr.send();
+    const until = performance.now() + 800;
+    while (performance.now() < until) {}
+
+    // Sample the independent HTTP server before returning to the event loop.
+    // An async producer on this JS executor cannot have submitted its request.
+    const snapshot = new XMLHttpRequest();
+    snapshot.open('GET', base + '/observed/' + scope, false);
+    snapshot.send();
+    observed = snapshot.responseText;
+    taskFinished = true;
+  });
+}
+(async () => {
+  const base = location.origin;
+  const windowResult = await probe('window', base);
+  const worker = new Worker(URL.createObjectURL(new Blob([
+    probe.toString(),
+    '\nonmessage = async event => postMessage(await probe("worker", event.data));'
+  ], {type: 'text/javascript'})));
+  try {
+    const workerResult = await new Promise((resolve, reject) => {
+      worker.onmessage = event => resolve(event.data);
+      worker.onerror = event => reject(new Error(event.message));
+      worker.postMessage(base);
+    });
+    document.body.dataset.resourceIo = windowResult + '|' + workerResult;
+  } finally {
+    worker.terminate();
+  }
+})().catch(error => { document.body.dataset.resourceIo = 'error:' + error; });
+</script>
