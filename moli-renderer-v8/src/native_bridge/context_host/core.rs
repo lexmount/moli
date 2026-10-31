@@ -398,6 +398,7 @@ impl JsContextHost {
             pending_child_document_navigations: HashMap::new(),
             document_resource_loaders: DocumentResourceLoaderRegistry::default(),
             web_storage_store: new_shared_web_storage_store(),
+            local_storage_areas: HashMap::new(),
             session_storage_store: new_shared_web_storage_store(),
             indexed_db_manager: None,
             storage_bucket_store: new_shared_storage_bucket_store(),

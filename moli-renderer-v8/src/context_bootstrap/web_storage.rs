@@ -47,5 +47,3 @@ pub use store::{
     new_shared_web_storage_store, web_storage_area_key_for_storage_key,
     web_storage_partitioned_area_key,
 };
-
-mod leases;

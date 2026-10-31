@@ -171,7 +171,19 @@ pub(super) fn with_storage_store<'s, R>(
     let is_session = this_storage_kind(scope, storage);
     let owner = storage_owner(scope, storage);
     let (_, area_key, host_ptr) = current_storage_host_for_owner(scope, owner)?;
-    let host = unsafe { &*host_ptr };
+    let host = unsafe { &mut *host_ptr };
+    if !is_session {
+        let dispatch_scope = match owner {
+            WebStorageOwner::ActiveDocument => OwnerDispatchScope::Top,
+            WebStorageOwner::Child(handle) => OwnerDispatchScope::Child(handle),
+            WebStorageOwner::LightweightPopup(id) => OwnerDispatchScope::LightweightPopup(id),
+        };
+        let window_owner = host.current_window_execution_context_owner(dispatch_scope)?;
+        if let Err(error) = host.ensure_local_storage_area(window_owner, &area_key) {
+            throw_storage_persistence_error(scope, &error.to_string());
+            return None;
+        }
+    }
     let store = if is_session {
         match owner {
             WebStorageOwner::ActiveDocument | WebStorageOwner::Child(_) => {
@@ -184,7 +196,6 @@ pub(super) fn with_storage_store<'s, R>(
     } else {
         host.web_storage_store()
     };
-    super::leases::ensure_storage_area_lease(scope, storage, &store, &area_key)?;
     Some(f(&store, &area_key))
 }
 

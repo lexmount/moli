@@ -441,7 +441,11 @@ impl JsContextHost {
     /// backend replacement must leave a live Document's storage identity
     /// untouched.
     pub(crate) fn set_web_storage_handles(&mut self, handles: &RendererWebStorageHandles) {
-        self.web_storage_store = handles.local_storage();
+        let local = handles.local_storage();
+        if !std::sync::Arc::ptr_eq(&self.web_storage_store, &local) {
+            self.local_storage_areas.clear();
+            self.web_storage_store = local;
+        }
         self.session_storage_store = handles.session_storage();
     }
 

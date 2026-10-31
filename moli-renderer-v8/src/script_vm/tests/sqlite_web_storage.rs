@@ -94,3 +94,91 @@ fn retired_sqlite_storage_reports_unknown_error_through_all_read_surfaces() {
     );
     assert_eq!(vm.eval("typeof storage.key").unwrap(), "function");
 }
+
+#[test]
+fn sqlite_areas_follow_window_lifetime_without_storage_wrapper_finalizers() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = moli_sqlite::Runtime::new().unwrap();
+    let (local, owner) = moli_web_storage::new_lazy_sqlite_web_storage_store(
+        directory.path().join("localstorage.sqlite"),
+        moli_sqlite::OpenMode::Create,
+        runtime.handle(),
+    )
+    .unwrap();
+    let handles =
+        crate::RendererWebStorageHandles::new(local, crate::new_shared_web_storage_store());
+    let mut vm = new_storage_test_vm("https://window-storage-lifetime.test/");
+    vm.set_web_storage_handles(&handles);
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    assert_eq!(host.borrow().local_storage_area_count_for_test(), 0);
+    vm.eval("sessionStorage.setItem('session', 'only')")
+        .unwrap();
+    assert_eq!(host.borrow().local_storage_area_count_for_test(), 0);
+    vm.eval("localStorage.setItem('key','saved'); globalThis.retainedStorage = localStorage;")
+        .unwrap();
+    assert_eq!(host.borrow().local_storage_area_count_for_test(), 1);
+    vm.eval("document.open(); document.write('<body>replacement</body>'); document.close();")
+        .unwrap();
+    assert_eq!(vm.eval("retainedStorage.getItem('key')").unwrap(), "saved");
+    assert_eq!(host.borrow().local_storage_area_count_for_test(), 1);
+
+    vm.eval("globalThis.storagePopup = open('about:blank'); globalThis.retainedPopupStorage = storagePopup.localStorage; retainedPopupStorage.getItem('key');").unwrap();
+    assert_eq!(host.borrow().local_storage_area_count_for_test(), 2);
+    vm.eval("storagePopup.close()").unwrap();
+    assert_eq!(
+        host.borrow().local_storage_area_count_for_test(),
+        1,
+        "a closed Window releases its area even while its Storage wrapper is retained"
+    );
+
+    vm.eval("globalThis.storageFrame = document.createElement('iframe'); document.body.appendChild(storageFrame);").unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "storage lifetime child");
+    vm.eval("globalThis.retainedChildStorage = storageFrame.contentWindow.localStorage; retainedChildStorage.getItem('key');").unwrap();
+    assert_eq!(host.borrow().local_storage_area_count_for_test(), 2);
+    vm.eval("storageFrame.remove()").unwrap();
+    assert_eq!(host.borrow().local_storage_area_count_for_test(), 1);
+    drop(vm);
+    assert_eq!(
+        host.borrow().local_storage_area_count_for_test(),
+        0,
+        "page teardown must release areas without waiting for host GC"
+    );
+    owner.close().unwrap();
+}
+
+#[test]
+fn replacing_partition_handles_releases_old_window_area_and_rebinds_storage() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = moli_sqlite::Runtime::new().unwrap();
+    let mut vm = new_storage_test_vm("https://window-storage-rebind.test/");
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let mut owners = Vec::new();
+    for name in ["first", "second"] {
+        let (local, owner) = moli_web_storage::new_lazy_sqlite_web_storage_store(
+            directory.path().join(format!("{name}.sqlite")),
+            moli_sqlite::OpenMode::Create,
+            runtime.handle(),
+        )
+        .unwrap();
+        owners.push(owner);
+        let handles =
+            crate::RendererWebStorageHandles::new(local, crate::new_shared_web_storage_store());
+        vm.set_web_storage_handles(&handles);
+        assert_eq!(host.borrow().local_storage_area_count_for_test(), 0);
+        assert_eq!(
+            vm.eval("String(localStorage.getItem('key'))").unwrap(),
+            "null"
+        );
+        vm.eval(&format!("localStorage.setItem('key','{name}')"))
+            .unwrap();
+        assert_eq!(vm.eval("localStorage.getItem('key')").unwrap(), name);
+        assert_eq!(host.borrow().local_storage_area_count_for_test(), 1);
+        vm.set_web_storage_handles(&handles);
+        assert_eq!(host.borrow().local_storage_area_count_for_test(), 1);
+    }
+    drop(vm);
+    assert_eq!(host.borrow().local_storage_area_count_for_test(), 0);
+    for owner in owners {
+        owner.close().unwrap();
+    }
+}

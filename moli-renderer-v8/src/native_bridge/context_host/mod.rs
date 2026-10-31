@@ -156,6 +156,7 @@ mod traversal_state;
 mod user_interaction_tasks;
 mod view_transition_updates;
 pub(crate) mod visual_resource_generation;
+mod web_storage;
 mod webcrypto_tasks;
 mod websockets;
 mod window_document_tasks;
@@ -873,6 +874,7 @@ pub(crate) struct JsContextHost {
     pending_child_document_navigations: HashMap<u64, PendingChildDocumentNavigation>,
     document_resource_loaders: DocumentResourceLoaderRegistry,
     web_storage_store: SharedWebStorageStore,
+    local_storage_areas: HashMap<WindowExecutionContextOwner, web_storage::WindowStorageArea>,
     session_storage_store: SharedWebStorageStore,
     indexed_db_manager: Option<WeakIndexedDbManager>,
     storage_bucket_store: SharedStorageBucketStore,
