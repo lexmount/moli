@@ -32,7 +32,6 @@ pub(super) fn prepare<'s>(
                 ..Default::default()
             };
             let descriptor = Rc::new(SqlCursorQuery {
-                store: operation.store_name,
                 query: query.clone(),
             });
             (
@@ -58,6 +57,18 @@ pub(super) fn prepare<'s>(
                     IndexedDbError::InvalidState("SQL cursor has no current record".into())
                 })?;
             let mut query = page.query.query.clone();
+            // The source handle survives renames. Capture its current label now,
+            // before later schema operations can enter the same FIFO.
+            if matches!(query.source, QuerySource::Index(_)) {
+                let source = crate::context_bootstrap::indexed_db::cursor_source(scope, local)
+                    .ok_or_else(|| {
+                        IndexedDbError::InvalidState("SQL cursor lost its source".into())
+                    })?;
+                let index = indexed_db_index_info(scope, source).ok_or_else(|| {
+                    IndexedDbError::InvalidState("SQL cursor lost its index".into())
+                })?;
+                query.source = QuerySource::Index(index.name);
+            }
             let source_is_index = matches!(query.source, QuerySource::Index(_));
             let default_seek = || Seek {
                 key: current.key.clone(),
@@ -93,7 +104,7 @@ pub(super) fn prepare<'s>(
     };
     let command = Command::Query {
         transaction: operation.handle,
-        store: descriptor.store.clone(),
+        store: operation.store_name,
         query,
     };
     let client = client.clone();
