@@ -1,0 +1,11 @@
+{
+  "name": "moli-webdriver-smoke",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke:webdriverio": "node webdriverio-smoke.mjs"
+  },
+  "dependencies": {
+    "webdriverio": "9.32.0"
+  }
+}

@@ -599,7 +599,7 @@ async fn resolve_classic_remote_object(
     object_group: &str,
     label: &str,
 ) -> Result<ClassicPageBoundRemoteObject, ClassicError> {
-    let reference = resolve_classic_element_dom_reference(state, binding, element_id)?;
+    let reference = resolve_classic_element_dom_reference(state, binding, element_id).await?;
     resolve_classic_element_remote_object_from_reference(
         binding,
         context,
@@ -823,7 +823,7 @@ async fn prepare_classic_script_argument_handles(
         let reference = match reference {
             ClassicScriptArgumentReference::Element(element_id) => {
                 ClassicResolvedScriptArgumentReference::Element(
-                    resolve_classic_element_dom_reference(state, binding, element_id)?,
+                    resolve_classic_element_dom_reference(state, binding, element_id).await?,
                 )
             }
             ClassicScriptArgumentReference::ShadowRoot(shadow_root_id) => {
@@ -1634,6 +1634,16 @@ pub(super) async fn webdriver_classic_new_session(
         Ok(enabled) => enabled,
         Err(error) => return classic_error_into_response(error),
     };
+    let bidi_requested = match matched_capabilities.get("webSocketUrl") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(requested)) => *requested,
+        Some(_) => {
+            return classic_error_into_response(ClassicError::new(
+                ClassicErrorCode::InvalidArgument,
+                "webSocketUrl must be a boolean",
+            ));
+        }
+    };
     let session = state
         .classic_session_registry
         .lock()
@@ -1759,6 +1769,7 @@ pub(super) async fn webdriver_classic_new_session(
         page_load_strategy,
         &unhandled_prompt_behavior,
         downloads_enabled,
+        bidi_requested,
     );
     classic_webdriver_json_response(
         StatusCode::OK,
@@ -2412,10 +2423,11 @@ pub(super) async fn webdriver_classic_switch_frame(
         if let Err(error) = ensure_classic_current_browsing_context_exists(&binding).await {
             return classic_error_into_response(error);
         }
-        let reference = match resolve_classic_element_dom_reference(&state, &binding, element_id) {
-            Ok(reference) => reference,
-            Err(error) => return classic_error_into_response(error),
-        };
+        let reference =
+            match resolve_classic_element_dom_reference(&state, &binding, element_id).await {
+                Ok(reference) => reference,
+                Err(error) => return classic_error_into_response(error),
+            };
         let frame_id = match binding
             .runtime
             .frame_id_for_element(
@@ -2885,7 +2897,8 @@ pub(super) async fn webdriver_classic_get_element_shadow_root(
         Err(error) => return classic_error_into_response(error),
     };
     let context = classic_browsing_context(&binding);
-    let reference = match resolve_classic_element_dom_reference(&state, &binding, &element_id) {
+    let reference = match resolve_classic_element_dom_reference(&state, &binding, &element_id).await
+    {
         Ok(reference) => reference,
         Err(error) => return classic_error_into_response(error),
     };
@@ -3112,10 +3125,11 @@ async fn webdriver_classic_find_element_with_mode_and_root(
     };
     let context = classic_browsing_context(&binding);
     let (command, expected_page) = if let Some(root_element_id) = root_element_id {
-        let root = match resolve_classic_element_dom_reference(&state, &binding, &root_element_id) {
-            Ok(reference) => reference,
-            Err(error) => return classic_error_into_response(error),
-        };
+        let root =
+            match resolve_classic_element_dom_reference(&state, &binding, &root_element_id).await {
+                Ok(reference) => reference,
+                Err(error) => return classic_error_into_response(error),
+            };
         let expected_page = root.page_residence.clone();
         match find_element_command_with_root(&context, &params, multiple, Some(root.reference)) {
             Ok(command) => (command, Some(expected_page)),
@@ -3510,7 +3524,8 @@ pub(super) async fn webdriver_classic_get_element_attribute(
         Err(error) => return classic_error_into_response(error),
     };
     let context = classic_browsing_context(&binding);
-    let reference = match resolve_classic_element_dom_reference(&state, &binding, &element_id) {
+    let reference = match resolve_classic_element_dom_reference(&state, &binding, &element_id).await
+    {
         Ok(reference) => reference,
         Err(error) => return classic_error_into_response(error),
     };
@@ -3594,7 +3609,7 @@ async fn webdriver_classic_get_element_text_from_dom(
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
 ) -> Response {
-    let reference = match resolve_classic_element_dom_reference(state, binding, element_id) {
+    let reference = match resolve_classic_element_dom_reference(state, binding, element_id).await {
         Ok(reference) => reference,
         Err(error) => return classic_error_into_response(error),
     };
@@ -3631,7 +3646,8 @@ pub(super) async fn webdriver_classic_get_element_tag_name(
         Err(error) => return classic_error_into_response(error),
     };
     let context = classic_browsing_context(&binding);
-    let reference = match resolve_classic_element_dom_reference(&state, &binding, &element_id) {
+    let reference = match resolve_classic_element_dom_reference(&state, &binding, &element_id).await
+    {
         Ok(reference) => reference,
         Err(error) => return classic_error_into_response(error),
     };
@@ -3738,7 +3754,7 @@ async fn classic_element_live_identity(
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
 ) -> Result<ClassicElementLiveIdentity, ClassicError> {
-    let reference = resolve_classic_element_dom_reference(state, binding, element_id)?;
+    let reference = resolve_classic_element_dom_reference(state, binding, element_id).await?;
     let command = describe_node_reference_command(context, reference.reference, 0, false);
     match binding
         .runtime
@@ -3908,7 +3924,8 @@ pub(super) async fn webdriver_classic_get_element_rect(
         Err(error) => return classic_error_into_response(error),
     };
     let context = classic_browsing_context(&binding);
-    let reference = match resolve_classic_element_dom_reference(&state, &binding, &element_id) {
+    let reference = match resolve_classic_element_dom_reference(&state, &binding, &element_id).await
+    {
         Ok(reference) => reference,
         Err(error) => return classic_error_into_response(error),
     };
@@ -4184,7 +4201,7 @@ async fn webdriver_classic_element_property_value(
     name: impl Into<String>,
     label: &'static str,
 ) -> Result<Value, ClassicError> {
-    let reference = resolve_classic_element_dom_reference(state, binding, element_id)?;
+    let reference = resolve_classic_element_dom_reference(state, binding, element_id).await?;
     let command = get_element_property_reference_command(context, reference.reference, name);
     match binding
         .runtime
@@ -4830,7 +4847,7 @@ async fn webdriver_classic_element_geometry(
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
 ) -> Result<DevToolsDomGeometryResult, ClassicError> {
-    let reference = resolve_classic_element_dom_reference(state, binding, element_id)?;
+    let reference = resolve_classic_element_dom_reference(state, binding, element_id).await?;
     let page_residence = reference.page_residence;
     let commands = element_geometry_prepare_commands(context, reference.reference);
     let mut geometry = None;
@@ -5017,8 +5034,8 @@ fn webdriver_classic_capabilities(
     page_load_strategy: ClassicPageLoadStrategy,
     unhandled_prompt_behavior: &ClassicUnhandledPromptBehavior,
     downloads_enabled: bool,
+    bidi_requested: bool,
 ) -> serde_json::Value {
-    let web_socket_url = format!("{}/{}", state.bidi_ws_url.trim_end_matches('/'), session_id);
     let mut capabilities = json!({
         "browserName": "moli",
         "browserVersion": version::PRODUCT,
@@ -5027,8 +5044,11 @@ fn webdriver_classic_capabilities(
         "pageLoadStrategy": page_load_strategy.as_str(),
         "unhandledPromptBehavior": unhandled_prompt_behavior.returned_capability(),
         "setWindowRect": false,
-        "webSocketUrl": web_socket_url,
     });
+    if bidi_requested && let Some(object) = capabilities.as_object_mut() {
+        let web_socket_url = format!("{}/{}", state.bidi_ws_url.trim_end_matches('/'), session_id);
+        object.insert("webSocketUrl".to_owned(), json!(web_socket_url));
+    }
     if downloads_enabled && let Some(object) = capabilities.as_object_mut() {
         object.insert("se:downloadsEnabled".to_owned(), json!(true));
     }

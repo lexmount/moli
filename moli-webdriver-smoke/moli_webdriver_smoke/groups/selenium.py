@@ -78,6 +78,7 @@ def _run_selenium_group_sync(
         return
 
     options = create_selenium_options(target, enable_downloads=True)
+    options.enable_bidi = True
     driver = webdriver.Remote(command_executor=target.endpoint, options=options)
     record(results, "selenium_session_new", {"sessionId": driver.session_id})
     try:
@@ -134,6 +135,7 @@ def _run_selenium_isolated_scenario_sync(
     scenario: SeleniumScenario,
 ) -> None:
     options = create_selenium_options(target, enable_downloads=True)
+    options.enable_bidi = True
     driver = webdriver.Remote(command_executor=target.endpoint, options=options)
     record(results, "selenium_session_new", {"sessionId": driver.session_id})
     scenario_error: BaseException | None = None

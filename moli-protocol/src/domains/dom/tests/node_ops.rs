@@ -2676,7 +2676,7 @@ async fn push_nodes_by_backend_ids_to_frontend_supports_renderer_backend_node_id
             "live describeNode should use renderer backend id namespace: {described}"
         );
     }
-    let missing_renderer_backend_node_id = moli_core::page::RENDERER_BACKEND_NODE_ID_START + 50_000;
+    let missing_renderer_backend_node_id = u32::MAX;
     ctx.process_async(json!({
         "id": 121,
         "method": "DOM.getDocument",
