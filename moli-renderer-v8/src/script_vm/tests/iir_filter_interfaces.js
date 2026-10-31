@@ -11,6 +11,7 @@
   const realms = [['main', window], ['child', document.getElementById('child').contentWindow], ['popup', popup]];
   try {
     for (const [label, w] of realms) {
+      const SharedBuffer = new w.WebAssembly.Memory({shared:true,initial:1,maximum:1}).buffer.constructor;
       const context = new w.OfflineAudioContext(1, 16, 48000);
       const options = {feedforward: [1], feedback: [1, -.9]};
       const make = (b = options.feedforward, a = options.feedback) => new w.IIRFilterNode(context, {feedforward: b, feedback: a});
@@ -99,8 +100,8 @@
         structuredClone(b.buffer, {transfer: [b.buffer]}); structuredClone(a.buffer, {transfer: [a.buffer]});
         node.feedforward = [100]; node.feedback = [1]; node.__moliIirFeedforward = [100]; node.__moliIirFeedback = [1];
         closeTo(curve(node, [0])[0][0], 4, 'private copy survives author mutation and transfer');
-        if (typeof w.SharedArrayBuffer === 'function') {
-          const shared = new w.Float64Array(new w.SharedArrayBuffer(8)); shared[0] = 2;
+        {
+          const shared = new w.Float64Array(new SharedBuffer(8)); shared[0] = 2;
           closeTo(curve(context.createIIRFilter(shared, [1]), [0])[0][0], 2, 'sequence is not a BufferSource shared-memory restriction');
         }
       });
@@ -143,7 +144,7 @@
       });
       await check(label + '/IIR/typed array argument conversion', () => {
         const node = make(), output = new w.Float32Array(2).fill(57);
-        for (const invalid of [undefined, null, [], {}, new w.Float64Array(2), new w.Int32Array(2), new w.DataView(new w.ArrayBuffer(8)), new Proxy(output, {}), ...(typeof w.SharedArrayBuffer === 'function' ? [new w.Float32Array(new w.SharedArrayBuffer(8))] : []), new w.Float32Array(new w.ArrayBuffer(8, {maxByteLength: 16}))]) {
+        for (const invalid of [undefined, null, [], {}, new w.Float64Array(2), new w.Int32Array(2), new w.DataView(new w.ArrayBuffer(8)), new Proxy(output, {}), new w.Float32Array(new SharedBuffer(8)), new w.Float32Array(new w.ArrayBuffer(8, {maxByteLength: 16}))]) {
           for (let index = 0; index < 3; index++) {
             const args = [output, output, output]; args[index] = invalid;
             assert(thrown(() => node.getFrequencyResponse(...args)) instanceof w.TypeError && output.every(value => value === 57), 'strict fixed non-shared Float32Array before writes');

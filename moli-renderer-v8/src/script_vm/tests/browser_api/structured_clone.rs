@@ -933,11 +933,14 @@ async fn shared_memory_isolation_inherits_for_coep_frames_and_honors_container_d
             const enabled = crossOriginIsolated;
             Object.defineProperty(globalThis, 'crossOriginIsolated', {value:true, configurable:true});
             const buffer = new WebAssembly.Memory({shared:true,initial:1,maximum:1}).buffer;
-            try {return [enabled, structuredClone(buffer) !== buffer];}
-            catch(error){return [enabled,error.name];}
+            try {return [enabled, typeof SharedArrayBuffer, structuredClone(buffer) !== buffer];}
+            catch(error){return [enabled,typeof SharedArrayBuffer,error.name];}
         })()`);
     }))"#).unwrap();
-    assert_eq!(result, r#"[[true,true],[false,"DataCloneError"]]"#);
+    assert_eq!(
+        result,
+        r#"[[true,"function",true],[false,"undefined","DataCloneError"]]"#
+    );
     assert_eq!(server.finish().await.len(), 2);
 }
 
@@ -976,6 +979,29 @@ fn enable_shared_memory_for_test(vm: &mut ScriptVm, url: &str) {
             &Url::parse(url).unwrap(),
         ),
     );
+}
+
+#[test]
+fn shared_array_buffer_constructor_is_hidden_from_unisolated_window_realms() {
+    for url in [
+        "https://shared-buffer-exposure.test/",
+        "http://shared-buffer-exposure.test/",
+    ] {
+        let mut vm = new_storage_test_vm(url);
+        assert_eq!(vm.eval(r#"(() => {
+            const before = [typeof SharedArrayBuffer, 'SharedArrayBuffer' in globalThis,
+                Object.getOwnPropertyDescriptor(globalThis, 'SharedArrayBuffer') === undefined];
+            Object.defineProperty(globalThis, 'crossOriginIsolated', {
+                configurable: true, get() { throw new Error('author getter must not be consulted'); }
+            });
+            const shared = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer;
+            const Shared = Object.getPrototypeOf(shared).constructor;
+            let errorName;
+            try { structuredClone(shared); } catch (error) { errorName = error.name; }
+            return [...before, typeof SharedArrayBuffer,
+                Object.prototype.toString.call(shared), new Shared(8).byteLength, errorName].join('|');
+        })()"#).unwrap(), "undefined|false|true|undefined|[object SharedArrayBuffer]|8|DataCloneError", "{url}");
+    }
 }
 
 #[test]
@@ -1087,7 +1113,7 @@ fn shared_array_buffers_fail_consistently_at_root_and_inside_message_graphs() {
     let mut vm = new_storage_test_vm("https://shared-buffer-clone.test/");
     let result = vm.eval(r#"
       (() => {
-        const shared = new SharedArrayBuffer(8);
+        const shared = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer.slice(0,8);
         const channel = new MessageChannel();
         const probe = fn => { try { fn(); return 'accepted'; } catch (error) { return error.name; } };
         return [

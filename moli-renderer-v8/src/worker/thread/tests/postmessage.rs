@@ -1,6 +1,44 @@
 use super::*;
 
 #[tokio::test]
+async fn shared_array_buffer_constructor_matches_native_worker_isolation() {
+    ensure_v8();
+    for isolated in [false, true] {
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(
+                r#"
+                const result = [crossOriginIsolated, typeof SharedArrayBuffer,
+                    'SharedArrayBuffer' in globalThis];
+                Object.defineProperty(globalThis, 'crossOriginIsolated', {
+                    configurable:true, get() { throw new Error('author getter must not be consulted'); }
+                });
+                const buffer = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer;
+                const Shared = Object.getPrototypeOf(buffer).constructor;
+                result.push(typeof SharedArrayBuffer, new Shared(8).byteLength);
+                try { result.push(structuredClone(buffer).byteLength); }
+                catch (error) { result.push(error.name); }
+                postMessage(result); close();
+                "#.into(),
+                "https://shared-memory-worker.test/exposure.js".into(),
+            )
+            .with_policy_context(crate::types::SubresourcePolicyContext {
+                cross_origin_isolated: isolated,
+                ..Default::default()
+            }),
+        );
+        let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+        assert_eq!(
+            expect_post_json(message),
+            if isolated {
+                r#"[true,"function",true,"function",8,65536]"#
+            } else {
+                r#"[false,"undefined",false,"undefined",8,"DataCloneError"]"#
+            }
+        );
+    }
+}
+
+#[tokio::test]
 async fn shared_array_buffer_worker_graphs_and_ports_inherit_the_creator_agent_cluster() {
     ensure_v8();
     let mut handle = spawn_test_worker_with_options(

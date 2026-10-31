@@ -569,9 +569,9 @@ pub(crate) use self::shared::{
 pub(crate) use self::shared::{
     RuntimeMessageSourceSecurity, current_shared_memory_agent_cluster,
     prepare_value_for_window_post_message, runtime_message_allowed_for_current_target,
-    runtime_message_allowed_for_target, structured_clone_value,
-    structured_clone_value_with_options, structured_deserialize_value_for_message_event,
-    structured_serialize_value_for_post_message,
+    runtime_message_allowed_for_target, shared_array_buffer_constructor_enabled_callback,
+    structured_clone_value, structured_clone_value_with_options,
+    structured_deserialize_value_for_message_event, structured_serialize_value_for_post_message,
 };
 pub(crate) use self::shared::{
     console_arg_remote_object_json, console_label_arguments, current_console_stack,
@@ -614,8 +614,8 @@ pub(crate) use self::time_ranges::new_time_ranges_value;
 pub(crate) use self::trusted_types::trusted_types_lazy_state_materialized;
 pub(crate) use self::trusted_types::{
     TrustedTypeKind, TrustedTypesCodeGenerationCheck, check_javascript_url_trusted_types,
-    install_trusted_types_eval_runtime_state, install_trusted_types_runtime_state,
-    trusted_html_dom_string_or_throw, trusted_html_string_or_throw, trusted_html_value_string,
+    install_trusted_types_runtime_state, trusted_html_dom_string_or_throw,
+    trusted_html_string_or_throw, trusted_html_value_string,
     trusted_script_string_for_script_element_execution, trusted_script_string_or_type_error,
     trusted_script_url_string_or_throw, trusted_type_kind, trusted_type_string_or_throw,
     trusted_type_string16, trusted_type_string16_or_throw, trusted_types_code_generation_check,

@@ -119,6 +119,8 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
         scope.get_current_context(),
         &state,
     );
+    let context = scope.get_current_context();
+    scope.install_conditional_features(context);
     let global_kind = state.borrow().global_kind.clone();
 
     let (secure_context, cross_origin_isolated) = {
@@ -161,7 +163,7 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
             .set_allow_generation_from_strings(false);
     }
     if require_trusted_types_for_script {
-        crate::context_bootstrap::install_trusted_types_eval_runtime_state(scope, global)?;
+        crate::context_bootstrap::install_trusted_types_runtime_state(scope, global)?;
     }
     crate::context_bootstrap::install_webassembly_runtime_state(scope, global)?;
     if matches!(

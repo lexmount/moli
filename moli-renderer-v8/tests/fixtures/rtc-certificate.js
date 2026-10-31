@@ -8,6 +8,7 @@
   const rsa=(w,extra={})=>({name:'RSASSA-PKCS1-v1_5',modulusLength:2048,publicExponent:new w.Uint8Array([1,0,1]),hash:'SHA-256',...extra});
   const fingerprint=cert=>cert.getFingerprints()[0];
   for(const [index,w] of realms.entries()) {
+    const SharedBuffer=new w.WebAssembly.Memory({shared:true,initial:1,maximum:1}).buffer.constructor;
     const C=w.RTCCertificate,P=w.RTCPeerConnection,p=C.prototype,generate=P.generateCertificate;
     const check=async(name,action)=>{
       const key=index+':'+name;globalThis.__codecCurrentCheck=key;
@@ -63,7 +64,7 @@
     });
     for(const [name,value] of [['array',[1,0,1]],['ArrayBuffer',new w.ArrayBuffer(3)],['Uint16Array',new w.Uint16Array([1,0,1])],['author Proxy',new Proxy(new w.Uint8Array([1,0,1]),{})],['resizable',new w.Uint8Array(new w.ArrayBuffer(3,{maxByteLength:8}))]])
       await check('RSA exponent native Uint8Array '+name,()=>rejects(()=>generate(rsa(w,{publicExponent:value})),w.TypeError));
-    if(typeof w.SharedArrayBuffer==='function')await check('RSA shared exponent rejects',()=>rejects(()=>generate(rsa(w,{publicExponent:new w.Uint8Array(new w.SharedArrayBuffer(3))})),w.TypeError));
+    await check('RSA shared exponent rejects',()=>rejects(()=>generate(rsa(w,{publicExponent:new w.Uint8Array(new SharedBuffer(3))})),w.TypeError));
     for(const [name,extra] of [['SHA-1',{hash:'SHA-1'}],['unknown hash',{hash:'unknown'}],['large modulus',{modulusLength:0xffffffff}],['zero exponent',{publicExponent:new w.Uint8Array([0])}],['overflow exponent',{publicExponent:new w.Uint8Array([1,0,0,0,1])}]])
       await check('unsupported RSA parameters '+name,()=>rejects(()=>generate(rsa(w,extra)),w.DOMException,'NotSupportedError'));
     await check('RSA exponent subview and leading zeroes',async()=>{

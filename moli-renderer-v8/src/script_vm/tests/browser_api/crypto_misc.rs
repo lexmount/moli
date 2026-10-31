@@ -268,13 +268,12 @@ fn crypto_get_random_values_matches_chromium_type_boundaries() {
                 }
               }
 
-              if (typeof SharedArrayBuffer === "function") {
-                expect(
-                  "shared-buffer",
-                  thrown(() => crypto.getRandomValues(new Uint8Array(new SharedArrayBuffer(8)))),
-                  "TypeError:undefined"
-                );
-              }
+              const shared = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer.slice(0,8);
+              expect(
+                "shared-buffer",
+                thrown(() => crypto.getRandomValues(new Uint8Array(shared))),
+                "TypeError:undefined"
+              );
 
               return JSON.stringify(failures);
             })()
