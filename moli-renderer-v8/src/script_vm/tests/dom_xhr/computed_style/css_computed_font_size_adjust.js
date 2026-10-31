@@ -17,21 +17,27 @@
     parent.style.cssText = 'font:20px serif;font-size-adjust:0.75;--font:16px serif';
     parent.append(child); document.body.append(parent);
     const computed = getComputedStyle(child);
+    const map = child.computedStyleMap();
     function adjusted(expected) {
         check(getComputedStyle(child).fontSizeAdjust === expected, 'computed size adjustment: ' + expected);
         check(computed.fontSizeAdjust === expected, 'live computed size adjustment: ' + expected);
+        check(String(map.get('font-size-adjust')) === expected, 'Typed OM size adjustment: ' + expected);
     }
     child.style.font = '16px serif';
     adjusted('none');
     const retained = computed.font;
+    const snapshot = Object.freeze(map.get('font'));
     child.style.fontSizeAdjust = '0';
     adjusted('0');
     check(child.style.font === '' && getComputedStyle(child).font === '', 'font cannot express size adjustment');
     check(computed.font === '', 'unrepresentable computed shorthand');
+    check(map.get('font') === undefined && map.getAll('font').length === 0, 'unrepresentable Typed OM shorthand');
     child.style.font = '12px sans-serif';
     adjusted('none');
     check(String(retained) === '16px serif', 'retained font value');
     check(computed.font === '12px sans-serif', 'live declaration observes font reset');
+    check(String(snapshot) === '16px serif', 'retained Typed OM value');
+    check(String(map.get('font')) === '12px sans-serif', 'map observes font reset');
     for (const keyword of ['initial', 'inherit', 'unset', 'revert', 'revert-layer']) {
         child.style.cssText = 'font:16px serif;font-size-adjust:0';
         child.style.font = keyword;
