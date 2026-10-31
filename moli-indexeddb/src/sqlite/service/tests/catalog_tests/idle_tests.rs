@@ -1,13 +1,66 @@
 use super::*;
 
 fn physical_connections(service: &Service) -> usize {
-    service
+    // Maintenance needs this registry on the single SQL scheduler. Release
+    // its guard before waiting for owner callbacks on that same scheduler.
+    let clients = service
         .registry
         .lock()
         .entries
         .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    clients
+        .iter()
         .map(|client| usize::from(physical_connection(client)))
         .sum()
+}
+
+#[test]
+fn physical_connection_inventory_progresses_during_registry_maintenance() {
+    let directory = Directory::new();
+    let service = Service::on_disk(directory.0.join("idb-lite"), config()).unwrap();
+    for name in ["first", "second"] {
+        let client = resolve(&service, OWNER, name);
+        seed(&client);
+    }
+    reap_idle(&service);
+
+    let registry = service.registry.clone();
+    let (stop, mut stopping) = tokio::sync::oneshot::channel::<()>();
+    let (ready, started) = mpsc::channel();
+    let (finished, completion) = mpsc::channel();
+    service
+        .client
+        .runtime
+        .spawn(async move {
+            let mut pending = maintenance::PendingChecks::new();
+            maintenance::submit_round(&registry, Instant::now(), &mut pending);
+            let _ = ready.send(());
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut stopping => break,
+                    _ = tokio::task::yield_now() => {
+                        maintenance::submit_round(&registry, Instant::now(), &mut pending);
+                    }
+                }
+            }
+            let _ = finished.send(());
+        })
+        .unwrap();
+    started
+        .recv_timeout(Duration::from_secs(10))
+        .expect("maintenance must start before querying database owners");
+    // Force overlap with maintenance without relying on disk speed or the
+    // production timer. Queries must let the single SQL scheduler progress.
+    for _ in 0..100 {
+        assert_eq!(physical_connections(&service), 0);
+    }
+    drop(stop);
+    completion
+        .recv_timeout(Duration::from_secs(10))
+        .expect("maintenance must stop after the inventory completes");
 }
 
 fn close(connection: &DatabaseConnection) -> Result<(), IndexedDbError> {
