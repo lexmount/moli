@@ -47,7 +47,7 @@ pub(super) fn from<'s>(
     }
 }
 
-fn convert<'s>(
+pub(super) fn convert<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Object>> {
