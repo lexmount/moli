@@ -20,11 +20,13 @@ pub(in crate::context_bootstrap::indexed_db::stores) mod cursor_open_parse;
 mod index;
 mod key_range;
 mod object_store;
+mod rename;
 
 pub(super) use self::attributes::*;
 pub(super) use self::index::*;
 pub(super) use self::key_range::*;
 pub(super) use self::object_store::*;
+pub(super) use self::rename::*;
 
 // Allocate and admit only after key conversion has succeeded. Conversion can
 // run author code, so a transaction aborted by a getter must be checked again.

@@ -2,7 +2,6 @@ use super::*;
 use moli_indexeddb::sqlite::Query;
 
 pub(in crate::context_bootstrap::indexed_db) struct SqlCursorQuery {
-    pub(in crate::context_bootstrap::indexed_db) store: moli_indexeddb::IndexedDbName,
     pub(in crate::context_bootstrap::indexed_db) query: Query,
 }
 

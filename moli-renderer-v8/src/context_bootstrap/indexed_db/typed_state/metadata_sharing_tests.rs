@@ -61,8 +61,8 @@ impl IndexedDbMetadataSharingProbe {
             return;
         }
         self.stores.push(Rc::downgrade(&metadata.data));
-        for info in metadata.indexes.values() {
-            self.index(info);
+        for index in metadata.indexes.values() {
+            self.index(&index.info);
         }
     }
 
