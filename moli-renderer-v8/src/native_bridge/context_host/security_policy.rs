@@ -119,6 +119,24 @@ impl JsContextHost {
         unsafe { &*self.runtime }.document_policy_container()
     }
 
+    /// Snapshot the creator's currently delivered referrer policy for a new
+    /// local Document without making later creator mutations observable there.
+    pub(crate) fn document_policy_container_for_inheritance(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<DocumentPolicyContainer> {
+        let snapshot = self.owner_document_policy_snapshot(owner)?;
+        let mut policy = snapshot.policy_container;
+        if let Some(document) = snapshot.document_handle {
+            policy.referrer_policy =
+                crate::context_bootstrap::document_referrer_policy_for_native_document(
+                    self, document,
+                )
+                .or(policy.referrer_policy);
+        }
+        Some(policy)
+    }
+
     pub(crate) fn document_connect_policy_snapshot_for_owner(
         &self,
         owner: OwnerDispatchScope,

@@ -32,10 +32,15 @@ pub(super) fn fixture_response(
         ),
         _ => ("application/json", serde_json::to_string(&referer).unwrap(), "unsafe-url".to_owned()),
     };
+    let cache_control = if path == "/cached-client-referrer" {
+        "max-age=60"
+    } else {
+        "no-store"
+    };
     (
         "200 OK",
         format!(
-            "Content-Type: {content_type}\r\nCache-Control: no-store\r\nReferrer-Policy: {policy}\r\nAccess-Control-Allow-Origin: *\r\n"
+            "Content-Type: {content_type}\r\nCache-Control: {cache_control}\r\nReferrer-Policy: {policy}\r\nAccess-Control-Allow-Origin: *\r\n"
         ),
         body,
     )

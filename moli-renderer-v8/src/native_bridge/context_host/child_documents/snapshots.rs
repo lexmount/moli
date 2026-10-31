@@ -102,13 +102,18 @@ impl JsContextHost {
                     ),
                 )
             }
-            ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => Some(
-                self.apply_page_csp_bypass_to_child_snapshot(ChildBrowsingContextSnapshot::srcdoc(
+            ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => {
+                let mut snapshot = ChildBrowsingContextSnapshot::srcdoc(
                     base_url.clone(),
                     markup.clone(),
                     self.document_character_set().to_owned(),
-                )),
-            ),
+                );
+                snapshot.policy_container.referrer_policy = self
+                    .owner_dispatch_scope_for_node(handle)
+                    .and_then(|owner| self.document_policy_container_for_inheritance(owner))
+                    .and_then(|policy| policy.referrer_policy);
+                Some(self.apply_page_csp_bypass_to_child_snapshot(snapshot))
+            }
             ChildBrowsingContextBootstrap::Url(url) => {
                 self.materialize_local_child_snapshot_for_navigation_url(handle, url)
             }
