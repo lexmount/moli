@@ -13,6 +13,8 @@ mod cursor;
 use collection::*;
 pub(super) use collection::{INDEX_OBJECT_STORE, OBJECT_STORE_DATABASE, OBJECT_STORE_TRANSACTION};
 pub(in crate::context_bootstrap::indexed_db) use cursor::*;
+mod rename;
+pub(super) use rename::*;
 mod upgrade;
 pub(super) use upgrade::*;
 pub(super) mod factory;
@@ -480,6 +482,7 @@ impl IndexedDbObjectStoreLifecycleState {
 }
 
 struct IndexedDbIndexLifecycleState {
+    identity: Rc<()>,
     object_store: v8::Weak<v8::Object>,
     info: Rc<IndexInfo>,
     marker: bool,
@@ -493,10 +496,12 @@ impl IndexedDbIndexLifecycleState {
         index: v8::Local<'_, v8::Object>,
         object_store: v8::Local<'_, v8::Object>,
         info: Rc<IndexInfo>,
+        identity: Rc<()>,
         created_in_upgrade: bool,
     ) -> Self {
         set_private_value(scope, index, INDEX_OBJECT_STORE, object_store.into());
         Self {
+            identity,
             object_store: v8::Weak::new(scope, object_store),
             info,
             marker: true,
@@ -1381,11 +1386,18 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
     let id = indexed_db_typed_state_id(scope, index)?;
     let metadata = indexed_db_object_store_metadata(scope, object_store)?;
     let created_in_upgrade = metadata.index_created_in_upgrade(&info.name);
+    let identity = Rc::clone(&metadata.indexes.get(&info.name)?.identity);
     let info = metadata.shared_index(&info.name)?;
     let database = indexed_db_object_store_database(scope, object_store);
     let table = indexed_db_runtime_state_table_for_object(scope, index);
-    let state =
-        IndexedDbIndexLifecycleState::new(scope, index, object_store, info, created_in_upgrade);
+    let state = IndexedDbIndexLifecycleState::new(
+        scope,
+        index,
+        object_store,
+        info,
+        identity,
+        created_in_upgrade,
+    );
     let state = Rc::new(RefCell::new(state));
     table.borrow_mut().indexes.insert(id, Rc::downgrade(&state));
     track_collectible_wrapper(scope, index, id, &table, state);
@@ -1984,6 +1996,12 @@ pub(super) fn indexed_db_index_object_store<'s>(
         .borrow()
         .object_store
         .to_local(scope)
+}
+pub(super) fn indexed_db_index_name(
+    scope: &mut v8::PinScope<'_, '_>,
+    index: v8::Local<'_, v8::Object>,
+) -> Option<moli_indexeddb::IndexedDbName> {
+    Some(index_native_state(scope, index)?.borrow().info.name.clone())
 }
 pub(super) fn indexed_db_index_info(
     scope: &mut v8::PinScope<'_, '_>,

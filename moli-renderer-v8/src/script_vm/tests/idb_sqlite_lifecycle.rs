@@ -12,6 +12,7 @@ mod cursor_tests;
 mod fatal_tests;
 mod index_tests;
 mod metadata_tests;
+mod rename_tests;
 mod sharing_tests;
 
 struct SqlBackend {
