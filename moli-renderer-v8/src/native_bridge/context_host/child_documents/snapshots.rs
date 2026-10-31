@@ -27,7 +27,22 @@ impl PageScriptHost {
         handle: DomHandle,
         url: &Url,
     ) -> LocalChildDocumentPreparation {
-        let mut snapshot = match self.materialize_local_child_snapshot_for_url(url, Some(handle)) {
+        self.materialize_local_child_snapshot_for_navigation_url_with_blob_resource(
+            handle, url, None,
+        )
+    }
+
+    fn materialize_local_child_snapshot_for_navigation_url_with_blob_resource(
+        &self,
+        handle: DomHandle,
+        url: &Url,
+        blob_resource: Option<&crate::network_host::CapturedBlobResource>,
+    ) -> LocalChildDocumentPreparation {
+        let mut snapshot = match self.materialize_local_child_snapshot_for_url_with_blob_resource(
+            url,
+            Some(handle),
+            blob_resource,
+        ) {
             LocalChildDocumentPreparation::Ready(snapshot) => *snapshot,
             other => return other,
         };
@@ -50,6 +65,15 @@ impl PageScriptHost {
         url: &Url,
         owner: Option<DomHandle>,
     ) -> LocalChildDocumentPreparation {
+        self.materialize_local_child_snapshot_for_url_with_blob_resource(url, owner, None)
+    }
+
+    fn materialize_local_child_snapshot_for_url_with_blob_resource(
+        &self,
+        url: &Url,
+        owner: Option<DomHandle>,
+        blob_resource: Option<&crate::network_host::CapturedBlobResource>,
+    ) -> LocalChildDocumentPreparation {
         match url.scheme() {
             "about" if url.path() == "blank" => {
                 LocalChildDocumentPreparation::Ready(Box::new(ChildBrowsingContextSnapshot::html(
@@ -59,7 +83,12 @@ impl PageScriptHost {
             }
             "http" | "https" => LocalChildDocumentPreparation::Unavailable,
             "blob" | "data" => {
-                let Some(response) = crate::network_host::local_url_response(url) else {
+                let response =
+                    match blob_resource.and_then(|resource| resource.response_blocking(url)) {
+                        Some(response) => response.ok(),
+                        None => crate::network_host::local_url_response(url),
+                    };
+                let Some(response) = response else {
                     return LocalChildDocumentPreparation::Unavailable;
                 };
                 let head = response.head();
@@ -110,6 +139,7 @@ impl PageScriptHost {
         &self,
         handle: DomHandle,
         bootstrap: &ChildBrowsingContextBootstrap,
+        blob_resource: Option<&crate::network_host::CapturedBlobResource>,
     ) -> LocalChildDocumentPreparation {
         if let Some(snapshot) = self
             .child_browsing_contexts
@@ -128,7 +158,12 @@ impl PageScriptHost {
                 ChildBrowsingContextSnapshot::srcdoc(base_url.clone(), markup.clone())
             }
             ChildBrowsingContextBootstrap::Url(url) => {
-                return self.materialize_local_child_snapshot_for_navigation_url(handle, url);
+                return self
+                    .materialize_local_child_snapshot_for_navigation_url_with_blob_resource(
+                        handle,
+                        url,
+                        blob_resource,
+                    );
             }
             ChildBrowsingContextBootstrap::Request(_) => {
                 return LocalChildDocumentPreparation::Unavailable;

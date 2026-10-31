@@ -253,7 +253,7 @@ pub use runtime::{
     RendererActivityDiagnostics, RendererAgentAttachmentId, RendererAutofillAddressField,
     RendererAutofillCreditCard, RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
     RendererAuxiliaryDocumentResponse, RendererAuxiliaryNavigationKind, RendererAuxiliaryWindow,
-    RendererBrowserContextRuntime, RendererBrowserContextRuntimeId,
+    RendererBlobUrlResource, RendererBrowserContextRuntime, RendererBrowserContextRuntimeId,
     RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
     RendererBrowsingContextGroup, RendererBrowsingContextName, RendererCaptureScreencastFrameReply,
     RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,

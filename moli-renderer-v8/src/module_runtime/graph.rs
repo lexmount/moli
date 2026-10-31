@@ -63,6 +63,7 @@ pub(crate) struct ModuleGraphHandle {
 pub(crate) struct NativeModuleGraphJob {
     tree_job: Option<NativeModuleTreeJob>,
     kind: NativeModuleGraphJobKind,
+    blob_resource: Option<crate::network_host::CapturedBlobResource>,
 }
 
 enum NativeModuleGraphJobKind {
@@ -101,6 +102,7 @@ pub(crate) struct NativeModuleGraphFetchRequest {
     dependency: Option<NativeModuleGraphDependencyRequest>,
     csp_context: Option<crate::content_security_policy::ModuleFetchCspContext>,
     fetch_context: Option<std::sync::Arc<super::NativeModuleFetchContext>>,
+    blob_resource: Option<crate::network_host::CapturedBlobResource>,
     csp_source_location:
         Option<crate::content_security_policy::ContentSecurityPolicySourceLocation>,
 }
@@ -235,6 +237,7 @@ impl NativeModuleGraphFetchRequest {
             dependency: None,
             csp_context: None,
             fetch_context: None,
+            blob_resource: None,
             csp_source_location: None,
         }
     }
@@ -392,6 +395,10 @@ impl NativeModuleGraphFetchRequest {
 
     pub(crate) fn fetch_context(&self) -> Option<&std::sync::Arc<super::NativeModuleFetchContext>> {
         self.fetch_context.as_ref()
+    }
+
+    pub(crate) fn blob_resource(&self) -> Option<&crate::network_host::CapturedBlobResource> {
+        self.blob_resource.as_ref()
     }
 
     pub(crate) fn with_csp_source_location(
@@ -666,7 +673,21 @@ impl NativeModuleGraphFetchRequest {
                 completion(Err(anyhow::anyhow!(error)), None);
                 return Ok(());
             }
-            context.fetch(load, request, completion);
+            context.fetch(load, request, self.blob_resource.clone(), completion);
+            Ok(())
+        } else if let Some(resource) = self.blob_resource.clone() {
+            let url = self.source_url.clone();
+            load.task_runner().spawn(async move {
+                let response = resource
+                    .response(&url, "GET", &[])
+                    .await
+                    .unwrap_or_else(|| Err(anyhow::anyhow!("captured Blob URL does not match")));
+                load.finish();
+                completion(
+                    response.map(|response| (response.into(), None, false)),
+                    None,
+                );
+            });
             Ok(())
         } else {
             loader.fetch_cacheable_script_text_callback_with_load(request, load, move |response| {
@@ -680,6 +701,14 @@ impl NativeModuleGraphFetchRequest {
 }
 
 impl NativeModuleGraphJob {
+    pub(crate) fn with_blob_resource(
+        mut self,
+        resource: Option<crate::network_host::CapturedBlobResource>,
+    ) -> Self {
+        self.blob_resource = resource;
+        self
+    }
+
     fn module_script(root: ModuleRootInput, owner: ModuleScriptCompletionOwner) -> Self {
         let (label, chromium_tree, kind) = match owner {
             ModuleScriptCompletionOwner::Parser => (
@@ -703,6 +732,7 @@ impl NativeModuleGraphJob {
         Self {
             tree_job: Some(NativeModuleTreeJob::new(chromium_tree)),
             kind,
+            blob_resource: None,
         }
     }
 
@@ -748,6 +778,7 @@ impl NativeModuleGraphJob {
         Self {
             tree_job: None,
             kind: NativeModuleGraphJobKind::DynamicImport(Box::new(request)),
+            blob_resource: None,
         }
     }
 
@@ -776,7 +807,7 @@ impl NativeModuleGraphJob {
         &mut self,
         vm: &mut ScriptVm,
     ) -> std::result::Result<NativeModuleGraphJobAdvance, ModuleLoadError> {
-        match self.kind {
+        let mut advance = match self.kind {
             NativeModuleGraphJobKind::ParserOwned => {
                 self.advance_owner_lane(vm, NATIVE_PARSER_MODULE_GRAPH_JOB)
             }
@@ -786,7 +817,19 @@ impl NativeModuleGraphJob {
             NativeModuleGraphJobKind::DynamicImport(_) => {
                 self.advance_owner_lane(vm, NATIVE_DYNAMIC_IMPORT_GRAPH_JOB)
             }
+        }?;
+        if let NativeModuleGraphJobAdvance::NeedFetches(requests) = &mut advance {
+            for request in requests {
+                if self
+                    .blob_resource
+                    .as_ref()
+                    .is_some_and(|resource| resource.matches(&request.source_url))
+                {
+                    request.blob_resource = self.blob_resource.take();
+                }
+            }
         }
+        Ok(advance)
     }
 
     pub(crate) fn advance_dynamic_import_owner_lane(
@@ -2658,6 +2701,7 @@ fn native_module_graph_job_for_inline_entry(
     NativeModuleGraphJob {
         tree_job: Some(NativeModuleTreeJob::new(chromium_tree)),
         kind,
+        blob_resource: None,
     }
 }
 
@@ -3487,6 +3531,7 @@ import "./c.mjs";
             dependency: None,
             csp_context: None,
             fetch_context: None,
+            blob_resource: None,
             csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
@@ -3566,6 +3611,7 @@ import "./c.mjs";
             dependency: None,
             csp_context: None,
             fetch_context: None,
+            blob_resource: None,
             csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
@@ -3620,6 +3666,7 @@ import "./c.mjs";
             dependency: None,
             csp_context: None,
             fetch_context: None,
+            blob_resource: None,
             csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
@@ -3661,6 +3708,7 @@ import "./c.mjs";
             dependency: None,
             csp_context: None,
             fetch_context: None,
+            blob_resource: None,
             csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
@@ -3721,6 +3769,7 @@ import "./c.mjs";
             dependency: None,
             csp_context: None,
             fetch_context: None,
+            blob_resource: None,
             csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
@@ -3773,6 +3822,7 @@ import "./c.mjs";
             dependency: None,
             csp_context: None,
             fetch_context: None,
+            blob_resource: None,
             csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
@@ -3814,6 +3864,7 @@ import "./c.mjs";
             dependency: None,
             csp_context: None,
             fetch_context: None,
+            blob_resource: None,
             csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
@@ -3848,6 +3899,7 @@ import "./c.mjs";
             dependency: None,
             csp_context: None,
             fetch_context: None,
+            blob_resource: None,
             csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
@@ -4635,6 +4687,7 @@ import "./c.mjs";
             dependency: None,
             csp_context: None,
             fetch_context: None,
+            blob_resource: None,
             csp_source_location: None,
         };
         let (tx, rx) = oneshot::channel();
@@ -4710,6 +4763,7 @@ import "./c.mjs";
             dependency: None,
             csp_context: None,
             fetch_context: None,
+            blob_resource: None,
             csp_source_location: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(

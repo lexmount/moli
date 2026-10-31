@@ -130,6 +130,7 @@ impl PageScriptHost {
     ) -> Option<u64> {
         let PendingChildFrameNavigation {
             bootstrap,
+            blob_resource,
             initiator,
             initiator_url,
             target_snapshot,
@@ -244,6 +245,7 @@ impl PageScriptHost {
         let fetch = ChildDocumentFetch {
             response_body: None,
             download_policy,
+            blob_resource,
             target_snapshot: target_snapshot.clone(),
             timing_origin: initiating_loader.fetch_context().request_origin(),
             target,
@@ -1183,6 +1185,7 @@ impl PageScriptHost {
 pub(crate) struct ChildDocumentFetch {
     response_body: Option<crate::network::ResourceInterceptionBody>,
     download_policy: ChildNavigationDownloadPolicy,
+    blob_resource: Option<crate::RendererBlobUrlResource>,
     source_policy: Option<crate::runtime::RendererNavigationPolicy>,
     target_snapshot: ChildNavigationTargetSnapshot,
     timing_origin: moli_url::WebOrigin,
@@ -1289,6 +1292,11 @@ impl ChildDocumentFetch {
                 .as_ref()
                 .map(|request| (client_id, request.request().clone()))
         });
+        let blob_request = self.request.as_ref().and_then(|request| {
+            self.blob_resource
+                .as_ref()
+                .map(|resource| (resource.clone(), request.request().clone()))
+        });
         let runtime = self.browser_context_runtime.clone();
         let loader = self.resource_loader.clone();
         let completion_tx = self.completion_tx.clone();
@@ -1297,6 +1305,17 @@ impl ChildDocumentFetch {
             let result = async move {
                 if response.is_none() && buffered.is_none() {
                     return Err(UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP.to_owned());
+                }
+                if let Some((resource, request)) = blob_request
+                    && let Some(response) = resource
+                        .response(
+                            &request.url,
+                            &request.method,
+                            &request.request_headers.to_byte_strings(),
+                        )
+                        .await
+                {
+                    return response.map(Into::into).map(AsyncSubresourceFetchResult::Response).map_err(|error| error.to_string());
                 }
                 if let Some((client_id, request)) = service_worker_request
                     && let Some(response) = runtime

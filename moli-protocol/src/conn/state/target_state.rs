@@ -498,6 +498,7 @@ pub(crate) struct PendingPopupNavigation {
     pub(crate) response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     pub(crate) environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
     pub(crate) initiator: Option<moli_core::page::RendererNavigationInitiator>,
+    pub(crate) blob_resource: Option<moli_core::page::RendererBlobUrlResource>,
 }
 
 #[derive(Debug, Clone, Default)]

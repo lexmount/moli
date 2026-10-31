@@ -105,6 +105,7 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
         web_mcp_invocation: None,
         navigation_initiator: None,
         initial_document_environment: None,
+        blob_resource: None,
         auxiliary_document_response: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,

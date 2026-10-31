@@ -1261,6 +1261,7 @@ pub(in crate::domains) fn prepare_renderer_navigation_request(
     document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
     navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
+    blob_resource: Option<moli_core::page::RendererBlobUrlResource>,
 ) -> PreparedRendererNavigation {
     let start = navigation::start_session_owner_navigation_from_renderer(
         conn,
@@ -1276,6 +1277,7 @@ pub(in crate::domains) fn prepare_renderer_navigation_request(
         document_response,
         initial_document_environment,
         navigation_initiator,
+        blob_resource,
     );
     let step = navigation::finish_started_navigation_command_for_parts(
         conn,

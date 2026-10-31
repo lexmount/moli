@@ -3,6 +3,7 @@ pub(crate) use async_fetch::next_redirect_url;
 mod async_fetch;
 mod beacon;
 mod bindings;
+mod blob_resource;
 mod blob_url_entry;
 mod body;
 mod body_source;
@@ -41,6 +42,8 @@ use moli_fetch::{Request, Response, observe_cookie_access_report_for_request};
 
 pub(crate) use self::redirect_owner::{RedirectAdmission, RedirectOwner};
 use crate::network::ResourceRequestClient;
+
+pub use self::blob_resource::CapturedBlobResource;
 
 pub(in crate::network_host) use self::blob_url_entry::BLOB_URL_ENTRY_SLOT;
 pub(crate) use self::blob_url_entry::{
