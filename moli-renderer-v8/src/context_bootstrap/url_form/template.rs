@@ -4,6 +4,7 @@ use super::callbacks::{
     url_parse_callback, url_revoke_object_url_callback, url_to_json_callback,
     url_to_string_callback,
 };
+use crate::context_bootstrap::exposed_interfaces::TemplateBuildProfile;
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, v8};
 
@@ -21,6 +22,16 @@ struct UrlTemplateDeclaration {
     #[webapi(static_method, length = 1, callback = url_can_parse_callback)]
     can_parse: (),
 
+    #[webapi(method, length = 0, callback = url_to_string_callback)]
+    to_string: (),
+
+    #[webapi(method = "toJSON", length = 0, callback = url_to_json_callback)]
+    to_json: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::URL, enumerable)]
+struct UrlObjectUrlStaticsDeclaration {
     #[webapi(
         static_method = "createObjectURL",
         length = 1,
@@ -34,18 +45,21 @@ struct UrlTemplateDeclaration {
         callback = url_revoke_object_url_callback
     )]
     revoke_object_url: (),
-
-    #[webapi(method, length = 0, callback = url_to_string_callback)]
-    to_string: (),
-
-    #[webapi(method = "toJSON", length = 0, callback = url_to_json_callback)]
-    to_json: (),
 }
 
 pub(in crate::context_bootstrap) fn build_url_constructor_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
+    profile: TemplateBuildProfile,
 ) -> v8::Local<'s, v8::FunctionTemplate> {
     let template = UrlTemplateDeclaration::build(scope);
+    if matches!(
+        profile,
+        TemplateBuildProfile::Window
+            | TemplateBuildProfile::DedicatedWorker
+            | TemplateBuildProfile::SharedWorker
+    ) {
+        UrlObjectUrlStaticsDeclaration::initialize_template(scope, template);
+    }
     initialize_url_prototype_accessors(scope, template.prototype_template(scope));
     template
 }
