@@ -86,7 +86,6 @@ pub(in crate::native_bridge) fn install_detached_bridge_methods(scope: &mut v8::
     .flatten()
     .collect();
     let detached_parent_node_prototypes: Vec<v8::Local<'_, v8::Object>> = [
-        bridge_prototype_object(scope, "__detachedDocumentFragmentPrototype"),
         bridge_prototype_object(scope, "__detachedShadowRootPrototype"),
         Some(element_prototype),
         Some(html_document_prototype),
