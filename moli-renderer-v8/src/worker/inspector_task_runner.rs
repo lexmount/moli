@@ -81,6 +81,8 @@ unsafe extern "C" fn dispatch_worker_inspector_interrupt(
 pub(crate) type WorkerInspectorTaskMode = CdpInspectorTaskMode;
 
 pub(crate) enum WorkerInspectorTask {
+    #[cfg(test)]
+    CollectGarbageForTest(oneshot::Sender<()>),
     EnvironmentInvalidation(moli_v8_platform::ProcessEnvironmentInvalidation),
     DispatchProtocolMessage {
         inspector_session_id: Option<String>,
@@ -272,6 +274,14 @@ impl WorkerInspectorTaskRunner {
             WorkerInspectorTask::AttachSession {
                 inspector_session_id,
             },
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn collect_garbage_for_test(&self, response_tx: oneshot::Sender<()>) -> bool {
+        self.append(
+            WorkerInspectorTaskMode::DontInterrupt,
+            WorkerInspectorTask::CollectGarbageForTest(response_tx),
         )
     }
 

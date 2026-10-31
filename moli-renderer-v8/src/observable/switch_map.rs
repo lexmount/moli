@@ -150,7 +150,7 @@ fn process_next<'s>(
             callbacks::report(scope, observer, error);
         }
     }
-    let Some(initial_signal) = ResolvedAbortSignal::new(scope) else {
+    let Some(initial_signal) = ResolvedAbortSignal::new_for_subscription(scope) else {
         return;
     };
     set_private_value(
@@ -191,7 +191,9 @@ fn process_next<'s>(
     // safely initializes this superseded inner as inactive instead.
     let current = signal_slot(scope, observer, CURRENT_SIGNAL).unwrap_or(initial_signal);
     let downstream_signal = signal_slot(scope, downstream, SIGNAL).expect("switchMap signal");
-    let Some(signal) = ResolvedAbortSignal::dependent(scope, &[current, downstream_signal]) else {
+    let Some(signal) =
+        ResolvedAbortSignal::dependent_for_subscription(scope, &[current, downstream_signal])
+    else {
         return;
     };
     let Some(inner_observer) =

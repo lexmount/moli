@@ -706,6 +706,13 @@ impl WorkerRuntimeInspector {
             invalidation.notify_isolate(isolate);
         }
         match task {
+            #[cfg(test)]
+            WorkerInspectorTask::CollectGarbageForTest(response_tx) => {
+                // DontInterrupt tasks run between JS jobs on the isolate owner.
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                let _ = response_tx.send(());
+            }
             WorkerInspectorTask::EnvironmentInvalidation(invalidation) => {
                 invalidation.notify_isolate(isolate)
             }
