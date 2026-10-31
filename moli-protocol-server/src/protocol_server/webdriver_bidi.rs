@@ -13,7 +13,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::SinkExt;
-use moli_cookie_jar::StoredCookie;
 use moli_core::{RendererOutputTransportMessage, runtime::NavigationRuntimeConfig};
 use moli_protocol::{
     BackgroundCommandResponsePayload, BackgroundProtocolEvent, CdpInitialStoragePartition,
@@ -56,7 +55,7 @@ use crate::cdp_scheduler::{
 
 use super::webdriver_files::selected_files_from_paths;
 use super::{
-    AppState, BrowserInstanceControl, CookieProfileCommit, SharedCookieProfile,
+    AppState, BrowserInstanceControl, SharedCookieProfile,
     protocol_local_executor::spawn_protocol_local_task,
 };
 
@@ -64,12 +63,11 @@ pub(super) async fn ws_bidi_session_upgrade_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> Response {
-    let initial_cookies = state.cookie_profile.snapshot();
-    let initial_cookie_snapshot = initial_cookies.clone();
-    let initial_storage_partition = state.initial_storage_partition(initial_cookies);
+    let initial_storage_partition = state.initial_storage_partition();
     let web_socket_url = state.bidi_ws_url;
     let session_registry = state.bidi_session_registry;
     let cookie_profile = state.cookie_profile;
+    let storage_partition = state.storage_partition;
     let control = state.control;
     let navigation_runtime_config = NavigationRuntimeConfig::new_with_layout_configuration(
         state.fetch_config,
@@ -84,7 +82,7 @@ pub(super) async fn ws_bidi_session_upgrade_handler(
             web_socket_url,
             session_registry,
             cookie_profile,
-            initial_cookie_snapshot,
+            storage_partition,
             initial_storage_partition,
             navigation_runtime_config,
             control,
@@ -139,7 +137,7 @@ async fn handle_bidi_session_socket(
     web_socket_url: String,
     session_registry: SharedBidiSessionRegistry,
     cookie_profile: SharedCookieProfile,
-    initial_cookie_snapshot: Vec<StoredCookie>,
+    storage_partition: Arc<moli_core::runtime::storage_partition::StoragePartitionState>,
     initial_storage_partition: CdpInitialStoragePartition,
     navigation_runtime_config: NavigationRuntimeConfig,
     control: BrowserInstanceControl,
@@ -147,28 +145,24 @@ async fn handle_bidi_session_socket(
     let Some(_connection) = control.connection() else {
         return;
     };
-    let cookie_commit = spawn_protocol_local_task("bidi-socket", move || {
+    let completion = spawn_protocol_local_task("bidi-socket", move || {
         handle_bidi_session_socket_local(
             socket,
             web_socket_url,
             session_registry,
-            initial_cookie_snapshot,
             initial_storage_partition,
             navigation_runtime_config,
             control,
         )
     })
     .await;
-    match cookie_commit {
-        Ok(cookie_commit) => {
-            if let Err(error) = cookie_profile.commit_and_save(cookie_commit) {
+    match completion {
+        Ok(()) => {
+            if let Err(error) = cookie_profile.flush(&storage_partition).await {
                 warn!(?error, "failed to persist BiDi cookie profile");
             }
         }
-        Err(error) => warn!(
-            ?error,
-            "BiDi socket worker failed before cookie profile writeback"
-        ),
+        Err(error) => warn!(?error, "BiDi socket worker failed before storage flush"),
     }
 }
 
@@ -176,11 +170,10 @@ async fn handle_bidi_session_socket_local(
     socket: WebSocket,
     web_socket_url: String,
     session_registry: SharedBidiSessionRegistry,
-    initial_cookie_snapshot: Vec<StoredCookie>,
     initial_storage_partition: CdpInitialStoragePartition,
     navigation_runtime_config: NavigationRuntimeConfig,
     control: BrowserInstanceControl,
-) -> CookieProfileCommit {
+) {
     let mut actor = BidiSocketActor::new(socket, web_socket_url);
     let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
         initial_storage_partition,
@@ -279,10 +272,6 @@ async fn handle_bidi_session_socket_local(
         .release_event_sources(&mut scheduler, &mut receivers)
         .await;
     actor.release_session(&mut session_registry.lock());
-    CookieProfileCommit::from_optional_profile_backed_snapshot(
-        initial_cookie_snapshot,
-        scheduler.snapshot_profile_backed_cookies(),
-    )
 }
 
 pub(in crate::protocol_server) struct BidiSocketActor {

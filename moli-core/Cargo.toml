@@ -22,10 +22,13 @@ moli-parser = { path = "../moli-parser" }
 moli-page-types = { path = "../moli-page-types" }
 moli-renderer-v8 = { path = "../moli-renderer-v8" }
 moli-selector = { path = "../moli-selector" }
+moli-sqlite = { path = "../moli-sqlite" }
 moli-storage-key = { path = "../moli-storage-key" }
 moli-storage-service = { path = "../moli-storage-service" }
 moli-url = { path = "../moli-url" }
 moli-web-mime = { path = "../moli-web-mime" }
+moli-cookie-db = { path = "../moli-cookie-db" }
+moli-web-storage = { path = "../moli-web-storage" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-fetch = { path = "../moli-fetch" }
 parking_lot = "0.12"

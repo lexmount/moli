@@ -1708,7 +1708,7 @@ async fn storage_set_cookies_keeps_cookie_store_available_after_lock_holder_pani
             .clone()
     });
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = cookie_store.lock();
+        let _guard = cookie_store.lock().unwrap();
         panic!("panic while holding cookie store lock");
     }));
 
@@ -2218,10 +2218,10 @@ async fn storage_clear_data_for_origin_clears_local_storage_area() {
     );
     {
         ctx.with_fixture(|conn| {
-            let mut store = {
+            let store = {
                 let bc = conn.browser_context.as_ref().unwrap();
 
-                bc.web_storage_store_for_test().lock()
+                bc.web_storage_store_for_test()
             };
             assert!(store.set_item(&first_party_key, "local", "1"));
             assert!(store.set_item(&partitioned_origin_top_a, "local", "1a"));
@@ -2243,10 +2243,10 @@ async fn storage_clear_data_for_origin_clears_local_storage_area() {
     ctx.expect_result(12_525, json!({}), None);
 
     ctx.with_fixture(|conn| {
-        let mut store = {
+        let store = {
             let bc = conn.browser_context.as_ref().unwrap();
 
-            bc.web_storage_store_for_test().lock()
+            bc.web_storage_store_for_test()
         };
         assert_eq!(store.len(&first_party_key), 0);
         assert_eq!(store.get_item(&first_party_key, "local"), None);
@@ -2285,10 +2285,10 @@ async fn storage_clear_data_for_storage_key_clears_site_data_for_matching_origin
     let sibling_storage_key = first_party_storage_key_for_origin(&sibling_origin);
     {
         ctx.with_fixture(|conn| {
-            let mut store = {
+            let store = {
                 let bc = conn.browser_context.as_ref().unwrap();
 
-                bc.web_storage_store_for_test().lock()
+                bc.web_storage_store_for_test()
             };
             assert!(store.set_item(&storage_key, "local", "1"));
             assert!(store.set_item(&sibling_storage_key, "local", "2"));
@@ -2348,7 +2348,7 @@ async fn storage_clear_data_for_storage_key_clears_site_data_for_matching_origin
     ctx.with_fixture(|conn| {
         let bc = conn.browser_context.as_ref().unwrap();
         {
-            let mut store = bc.web_storage_store_for_test().lock();
+            let store = bc.web_storage_store_for_test();
             assert_eq!(store.get_item(&storage_key, "local"), None);
             assert_eq!(
                 store.get_item(&sibling_storage_key, "local"),
@@ -2400,10 +2400,10 @@ async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_o
     );
     {
         ctx.with_fixture(|conn| {
-            let mut store = {
+            let store = {
                 let bc = conn.browser_context.as_ref().unwrap();
 
-                bc.web_storage_store_for_test().lock()
+                bc.web_storage_store_for_test()
             };
             assert!(store.set_item(&first_party_key, "local", "must-stay"));
             assert!(store.set_item(&partitioned_key, "local", "must-clear"));
@@ -2458,7 +2458,7 @@ async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_o
     ctx.with_fixture(|conn| {
         let bc = conn.browser_context.as_ref().unwrap();
         {
-            let mut store = bc.web_storage_store_for_test().lock();
+            let store = bc.web_storage_store_for_test();
             assert_eq!(
                 store.get_item(&first_party_key, "local"),
                 Some("must-stay".to_owned())
@@ -2510,7 +2510,7 @@ async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_o
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn storage_get_usage_and_quota_reports_local_storage_usage_for_origin() {
+async fn storage_get_usage_and_quota_excludes_web_storage_for_origin() {
     let mut ctx = TestContext::new();
     {
         let fixture_value = Some(BrowserContext::new_with_page_for_test(
@@ -2535,14 +2535,14 @@ async fn storage_get_usage_and_quota_reports_local_storage_usage_for_origin() {
     );
     {
         ctx.with_fixture(|conn| {
-            let mut session_store = {
+            let session_store = {
                 let bc = conn.browser_context.as_ref().unwrap();
-                let mut store = bc.web_storage_store_for_test().lock();
+                let store = bc.web_storage_store_for_test();
                 assert!(store.set_item(&first_party_key, "local", "abc"));
                 assert!(store.set_item(&partitioned_origin, "partitioned", "de"));
                 assert!(store.set_item(&partitioned_sibling, "sibling", "ignored"));
 
-                bc.session_storage_store_for_test().lock()
+                bc.session_storage_store_for_test()
             };
             assert!(session_store.set_item(&first_party_key, "session", "session-only"));
             assert!(session_store.set_item(&partitioned_origin, "session", "also-ignored"));
@@ -2559,22 +2559,29 @@ async fn storage_get_usage_and_quota_reports_local_storage_usage_for_origin() {
     .await;
 
     let result = take_result_by_id(&mut ctx, 12_528);
-    assert_eq!(json_number_as_u64(&result["usage"]), 5);
+    assert_eq!(json_number_as_u64(&result["usage"]), 0);
     assert_eq!(
         json_number_as_u64(&result["quota"]),
         moli_core::storage::DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES
     );
     assert_eq!(result["overrideActive"], json!(false));
-    assert_eq!(usage_breakdown_value(&result, "local_storage"), 5);
     assert_eq!(usage_breakdown_value(&result, "indexeddb"), 0);
-    assert_eq!(usage_breakdown_value(&result, "storage_buckets"), 0);
-    assert!(
+    assert_eq!(usage_breakdown_value(&result, "cache_storage"), 0);
+    assert_eq!(usage_breakdown_value(&result, "file_systems"), 0);
+    assert_eq!(usage_breakdown_value(&result, "service_workers"), 0);
+    assert_eq!(
         result["usageBreakdown"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|entry| entry["storageType"].as_str() != Some("session_storage")),
-        "CDP StorageType has no session_storage token"
+            .map(|entry| entry["storageType"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "file_systems",
+            "indexeddb",
+            "cache_storage",
+            "service_workers"
+        ]
     );
 }
 
@@ -2649,7 +2656,8 @@ async fn storage_get_usage_and_quota_reports_indexed_db_usage_for_origin() {
         indexed_db_usage > 0,
         "IndexedDB metadata and record bytes should be reported"
     );
-    assert_eq!(usage_breakdown_value(&result, "local_storage"), 0);
+    assert_eq!(usage_breakdown_value(&result, "cache_storage"), 0);
+    assert_eq!(usage_breakdown_value(&result, "file_systems"), 0);
     assert_eq!(json_number_as_u64(&result["usage"]), indexed_db_usage);
 }
 
@@ -2764,21 +2772,28 @@ async fn storage_get_usage_and_quota_reports_storage_bucket_usage_for_origin() {
     };
     let opfs_usage = {
         let storage_service = storage_bucket_store.lock().storage_service();
-        let locator = bucket_a_identity.locator();
-        let bucket_key = moli_storage_service::StorageService::opfs_bucket_key(&locator)
-            .expect("bucket OPFS key should derive");
-        let root = storage_service
-            .ensure_opfs_root(&locator)
-            .expect("bucket OPFS root should open");
-        let file = storage_service
-            .with_opfs(|opfs| opfs.get_file(&bucket_key, &root, "usage.txt", true))
-            .expect("bucket OPFS file should open");
-        storage_service
-            .with_opfs(|opfs| opfs.write_file(&bucket_key, &file, b"opfs usage", None))
-            .expect("bucket OPFS file should write");
-        storage_service
-            .opfs_usage(&locator)
-            .expect("bucket OPFS usage should load")
+        [
+            bucket_a_identity.locator(),
+            moli_storage_service::StorageBucketLocator::default_bucket(&storage_key),
+        ]
+        .iter()
+        .map(|locator| {
+            let bucket_key = moli_storage_service::StorageService::opfs_bucket_key(locator)
+                .expect("bucket OPFS key should derive");
+            let root = storage_service
+                .ensure_opfs_root(locator)
+                .expect("bucket OPFS root should open");
+            let file = storage_service
+                .with_opfs(|opfs| opfs.get_file(&bucket_key, &root, "usage.txt", true))
+                .expect("bucket OPFS file should open");
+            storage_service
+                .with_opfs(|opfs| opfs.write_file(&bucket_key, &file, b"opfs usage", None))
+                .expect("bucket OPFS file should write");
+            storage_service
+                .opfs_usage(locator)
+                .expect("bucket OPFS usage should load")
+        })
+        .sum::<u64>()
     };
 
     {
@@ -2801,7 +2816,6 @@ async fn storage_get_usage_and_quota_reports_storage_bucket_usage_for_origin() {
     .await;
 
     let result = take_result_by_id(&mut ctx, 12_533);
-    let bucket_usage = usage_breakdown_value(&result, "storage_buckets");
     let (bucket_a_usage, bucket_b_usage) = ctx.with_fixture(|conn| {
         let bc = conn.browser_context.as_ref().unwrap();
         let bucket_a_usage = moli_core::storage::indexed_db_origin_usage_bytes(
@@ -2817,15 +2831,59 @@ async fn storage_get_usage_and_quota_reports_storage_bucket_usage_for_origin() {
         (bucket_a_usage, bucket_b_usage)
     });
     assert_eq!(
-        bucket_usage,
+        json_number_as_u64(&result["usage"]),
         bucket_a_usage
             .saturating_add(bucket_b_usage)
             .saturating_add(cache_usage)
             .saturating_add(opfs_usage)
     );
-    assert_eq!(usage_breakdown_value(&result, "local_storage"), 0);
+    assert_eq!(
+        usage_breakdown_value(&result, "indexeddb"),
+        bucket_a_usage.saturating_add(bucket_b_usage)
+    );
+    assert_eq!(usage_breakdown_value(&result, "cache_storage"), cache_usage);
+    assert_eq!(usage_breakdown_value(&result, "file_systems"), opfs_usage);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn storage_get_usage_and_quota_reports_default_opfs_without_bucket_registry_entries() {
+    let mut ctx = TestContext::new();
+    let origin = "https://opfs-only-usage.test";
+    let key = first_party_storage_key_for_origin(origin);
+    let expected = ctx.with_fixture(|conn| {
+        conn.browser_context = Some(BrowserContext::new("BID-usage-opfs-only".into()));
+        let store = conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .storage_bucket_store_for_test()
+            .lock();
+        assert!(store.keys_for_origin_areas(origin).is_empty());
+        let service = store.storage_service();
+        drop(store);
+        let locator = moli_core::storage::StorageBucketLocator::default_bucket(key);
+        let bucket_key = moli_storage_service::StorageService::opfs_bucket_key(&locator).unwrap();
+        let root = service.ensure_opfs_root(&locator).unwrap();
+        let file = service
+            .with_opfs(|opfs| opfs.get_file(&bucket_key, &root, "only-opfs.txt", true))
+            .unwrap();
+        service
+            .with_opfs(|opfs| opfs.write_file(&bucket_key, &file, b"quota-managed bytes", None))
+            .unwrap();
+        service.opfs_usage(&locator).unwrap()
+    });
+    assert!(expected > 0);
+    ctx.process_async(json!({
+        "id": 12_534,
+        "method": "Storage.getUsageAndQuota",
+        "params": {"origin": origin}
+    }))
+    .await;
+    let result = take_result_by_id(&mut ctx, 12_534);
+    assert_eq!(usage_breakdown_value(&result, "file_systems"), expected);
+    assert_eq!(usage_breakdown_value(&result, "cache_storage"), 0);
     assert_eq!(usage_breakdown_value(&result, "indexeddb"), 0);
-    assert_eq!(json_number_as_u64(&result["usage"]), bucket_usage);
+    assert_eq!(json_number_as_u64(&result["usage"]), expected);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2840,7 +2898,7 @@ async fn storage_get_usage_and_quota_targets_command_session_browser_context() {
     let mut active = BrowserContext::new_with_page_for_test("BID-usage-active", "TID-usage-active");
     active.attach_active_session("SID-usage-active");
     {
-        let mut store = active.web_storage_store_for_test().lock();
+        let store = active.web_storage_store_for_test();
         assert!(store.set_item(&storage_key, "local", "aa"));
     }
 
@@ -2848,9 +2906,16 @@ async fn storage_get_usage_and_quota_targets_command_session_browser_context() {
         BrowserContext::new_with_page_for_test("BID-usage-inactive", "TID-usage-inactive");
     inactive.attach_active_session("SID-usage-inactive");
     {
-        let mut store = inactive.web_storage_store_for_test().lock();
+        let store = inactive.web_storage_store_for_test();
         assert!(store.set_item(&storage_key, "local", "bbbb"));
     }
+    seed_indexed_db_usage(inactive.indexed_db_manager_for_test(), &storage_key);
+    let expected_usage = moli_core::storage::indexed_db_origin_usage_bytes(
+        inactive.indexed_db_manager_for_test(),
+        &storage_key,
+    )
+    .expect("inactive context IndexedDB usage");
+    assert!(expected_usage > 0);
 
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(active));
     ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
@@ -2870,8 +2935,8 @@ async fn storage_get_usage_and_quota_targets_command_session_browser_context() {
     let result = response
         .get("result")
         .expect("response should include result");
-    assert_eq!(json_number_as_u64(&result["usage"]), 4);
-    assert_eq!(usage_breakdown_value(result, "local_storage"), 4);
+    assert_eq!(json_number_as_u64(&result["usage"]), expected_usage);
+    assert_eq!(usage_breakdown_value(result, "indexeddb"), expected_usage);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3101,7 +3166,7 @@ async fn storage_clear_data_for_origin_targets_command_session_browser_context()
     );
     active.attach_active_session("SID-session-clear-active");
     {
-        let mut store = active.web_storage_store_for_test().lock();
+        let store = active.web_storage_store_for_test();
         assert!(store.set_item(&storage_key, "local", "active"));
     }
 
@@ -3111,7 +3176,7 @@ async fn storage_clear_data_for_origin_targets_command_session_browser_context()
     );
     inactive.attach_active_session("SID-session-clear-inactive");
     {
-        let mut store = inactive.web_storage_store_for_test().lock();
+        let store = inactive.web_storage_store_for_test();
         assert!(store.set_item(&storage_key, "local", "inactive"));
     }
 
@@ -3131,26 +3196,20 @@ async fn storage_clear_data_for_origin_targets_command_session_browser_context()
     ctx.expect_result(12_527, json!({}), Some("SID-session-clear-inactive"));
 
     ctx.with_fixture(|conn| {
-        let mut active_store = {
+        let active_store = {
             conn.browser_context
                 .as_ref()
                 .unwrap()
                 .web_storage_store_for_test()
-                .lock()
         };
         assert_eq!(
             active_store.get_item(&storage_key, "local"),
             Some("active".to_owned())
         );
-        drop(active_store);
     });
 
     ctx.with_fixture(|conn| {
-        let mut inactive_store = {
-            conn.inactive_browser_contexts[0]
-                .web_storage_store_for_test()
-                .lock()
-        };
+        let inactive_store = { conn.inactive_browser_contexts[0].web_storage_store_for_test() };
         assert_eq!(inactive_store.get_item(&storage_key, "local"), None);
     });
 }
@@ -3172,10 +3231,10 @@ async fn storage_clear_data_for_origin_clears_cookies_and_local_storage_together
     let storage_key = first_party_storage_key_for_origin(&origin);
     {
         ctx.with_fixture(|conn| {
-            let mut store = {
+            let store = {
                 let bc = conn.browser_context.as_ref().unwrap();
 
-                bc.web_storage_store_for_test().lock()
+                bc.web_storage_store_for_test()
             };
             assert!(store.set_item(&storage_key, "local", "1"));
         });
@@ -3207,10 +3266,10 @@ async fn storage_clear_data_for_origin_clears_cookies_and_local_storage_together
 
     {
         ctx.with_fixture(|conn| {
-            let mut store = {
+            let store = {
                 let bc = conn.browser_context.as_ref().unwrap();
 
-                bc.web_storage_store_for_test().lock()
+                bc.web_storage_store_for_test()
             };
             assert_eq!(store.len(&storage_key), 0);
             assert_eq!(store.get_item(&storage_key, "local"), None);

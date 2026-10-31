@@ -92,7 +92,7 @@ async fn websocket_handshake_inherits_browser_cookie_store() {
         let ws_url = Url::parse(&url).expect("websocket url");
         let cookie_url = moli_websocket::websocket_cookie_url(&ws_url);
         {
-            let mut store = cookie_store.lock();
+            let mut store = cookie_store.lock().unwrap();
             let reports = store.store_response_headers_with_reports(
                 &cookie_url,
                 &[(

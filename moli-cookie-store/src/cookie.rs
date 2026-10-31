@@ -305,6 +305,13 @@ impl<'a> Cookie<'a> {
         self.partition_key.as_ref()
     }
 
+    /// Trusted persistence restore only; ordinary insertion owns its counters.
+    pub fn with_persistent_ordering(mut self, creation: u64, access: u64) -> Self {
+        self.creation_index = creation;
+        self.last_access_index = access;
+        self
+    }
+
     pub(crate) fn set_creation_index(&mut self, creation_index: u64) {
         self.creation_index = creation_index;
     }

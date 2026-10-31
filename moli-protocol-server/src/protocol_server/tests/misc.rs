@@ -163,25 +163,40 @@ fn shared_cookie_profile_merge_and_save_writes_cache_file() -> anyhow::Result<()
 }
 
 #[test]
-fn shared_cookie_profile_partition_backing_uses_storage_partition() -> anyhow::Result<()> {
-    let profile = TempDir::new("shared-cookie-profile-partition");
-    let paths = BrowserProfilePaths::new(&profile.path);
-    let partition = Arc::new(StoragePartitionState::open(Some(&profile.path))?);
+fn shared_cookie_profile_partition_backing_ignores_stale_snapshots() -> anyhow::Result<()> {
+    let directory = TempDir::new("shared-cookie-profile-partition");
+    let paths = BrowserProfilePaths::new(&directory.path);
+    let partition = Arc::new(StoragePartitionState::open(Some(&directory.path))?);
     partition.import_cookies(vec![stored_cookie("sid", "old")])?;
     let profile = SharedCookieProfile::from_storage_partition(partition.clone());
+    let initial = profile.snapshot();
 
-    let initial_cookies = profile.snapshot();
-    profile.commit_and_save(CookieProfileCommit::new(
-        initial_cookies,
-        vec![stored_cookie("sid", "new")],
-    ))?;
-
-    let partition_cookies = partition.cookies()?;
-    assert_eq!(partition_cookies.len(), 1);
-    assert_eq!(partition_cookies[0].value, "new");
-    let persisted = cookie_cache::load_cookie_cache(&paths.cookies_path)?;
-    assert_eq!(persisted.len(), 1);
-    assert_eq!(persisted[0].value, "new");
+    // A live protocol mutation wins over an older connection's final snapshot.
+    partition.import_cookies(vec![stored_cookie("sid", "newer")])?;
+    profile.commit_and_save(CookieProfileCommit::new(initial.clone(), initial.clone()))?;
+    assert_eq!(partition.cookies()?[0].value, "newer");
+    partition
+        .shared_storage_handles()
+        .cookie_store()
+        .lock()
+        .unwrap()
+        .clear();
+    profile.commit_and_save(CookieProfileCommit::new(initial.clone(), initial))?;
+    assert!(
+        partition.cookies()?.is_empty(),
+        "stale close must not resurrect a cookie"
+    );
+    assert!(
+        !paths.partition_root.join("cookies.json").exists(),
+        "active writes never create JSON"
+    );
+    drop(profile);
+    drop(partition);
+    assert!(
+        StoragePartitionState::open(Some(&directory.path))?
+            .cookies()?
+            .is_empty()
+    );
     Ok(())
 }
 
@@ -196,14 +211,14 @@ fn app_state_storage_partition_backing_derives_initial_partition_from_owner() ->
         OptionalResourceFetchMask::NONE,
         true,
     )?;
-    let initial_storage_partition =
-        state.initial_storage_partition(vec![stored_cookie("owner-cookie", "owner-value")]);
+    partition.import_cookies(vec![stored_cookie("owner-cookie", "owner-value")])?;
+    let initial_storage_partition = state.initial_storage_partition();
     let mut conn =
         moli_protocol::CdpConnection::new_with_initial_storage_partition(initial_storage_partition);
 
-    assert!(conn.snapshot_profile_backed_cookies().is_none());
+    assert!(conn.snapshot_profile_backed_cookies().unwrap().is_none());
     conn.install_default_browser_target();
-    let cookies = conn.snapshot_profile_backed_cookies().unwrap();
+    let cookies = conn.snapshot_profile_backed_cookies().unwrap().unwrap();
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "owner-cookie");
     assert_eq!(cookies[0].value, "owner-value");

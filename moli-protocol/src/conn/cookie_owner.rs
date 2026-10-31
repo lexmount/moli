@@ -384,8 +384,12 @@ impl BrowserContext {
             return report;
         }
 
-        self.with_cookie_store_mut(|store| {
+        self.try_with_cookie_store_mut(|store| {
             store.upsert_with_request_url_report(cookie, request_url.as_ref(), CookieSource::Cdp)
+        })
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "structured cookie write could not access storage");
+            StoredCookieSetReport::store_unavailable()
         })
     }
 

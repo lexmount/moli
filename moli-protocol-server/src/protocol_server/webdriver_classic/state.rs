@@ -7,7 +7,6 @@ use std::{
 };
 
 use axum::extract::ws::WebSocket;
-use moli_cookie_jar::StoredCookie;
 use moli_core::{page::RendererDocumentLifecycleMilestone, runtime::NavigationRuntimeConfig};
 use moli_protocol::{
     CdpInitialStoragePartition, DevToolsDocumentResidenceIdentity,
@@ -38,8 +37,7 @@ use super::super::webdriver_bidi::{
     BidiSocketActor, BidiSocketActorInput, SharedBidiSessionRegistry,
 };
 use super::super::{
-    CookieProfileCommit, SharedCookieProfile, instance_shutdown::InstanceConnection,
-    protocol_local_executor::spawn_protocol_local_task,
+    instance_shutdown::InstanceConnection, protocol_local_executor::spawn_protocol_local_task,
 };
 
 const CLASSIC_SCRIPT_TERMINATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -50,10 +48,7 @@ pub(in crate::protocol_server) struct SharedClassicSessionRegistry {
 }
 
 impl SharedClassicSessionRegistry {
-    pub(in crate::protocol_server) async fn shutdown(
-        &self,
-        cookie_profile: &SharedCookieProfile,
-    ) -> anyhow::Result<()> {
+    pub(in crate::protocol_server) async fn shutdown(&self) -> anyhow::Result<()> {
         let runtimes = {
             let mut manager = self.inner.lock();
             let session_ids = manager.runtimes.keys().cloned().collect::<Vec<_>>();
@@ -62,15 +57,15 @@ impl SharedClassicSessionRegistry {
                 .filter_map(|id| manager.release_session(id))
                 .collect::<Vec<_>>()
         };
-        let commits = futures_util::future::join_all(
+        let completions = futures_util::future::join_all(
             runtimes
                 .into_iter()
                 .map(ClassicSessionRuntimeHandle::shutdown_and_join),
         )
         .await;
         let mut result = Ok(());
-        for commit in commits {
-            if let Err(error) = commit.and_then(|commit| cookie_profile.commit_and_save(commit))
+        for completion in completions {
+            if let Err(error) = completion
                 && result.is_ok()
             {
                 result = Err(error);
@@ -505,12 +500,11 @@ impl ClassicSessionBinding {
 #[derive(Debug, Clone)]
 pub(in crate::protocol_server) struct ClassicSessionRuntimeHandle {
     tx: mpsc::UnboundedSender<ClassicSessionRuntimeRequest>,
-    completion: Arc<tokio::sync::Mutex<Option<oneshot::Receiver<CookieProfileCommit>>>>,
+    completion: Arc<tokio::sync::Mutex<Option<oneshot::Receiver<()>>>>,
 }
 
 impl ClassicSessionRuntimeHandle {
     pub(super) fn spawn(
-        initial_cookie_snapshot: Vec<StoredCookie>,
         initial_storage_partition: CdpInitialStoragePartition,
         navigation_runtime_config: NavigationRuntimeConfig,
         instance_connection: InstanceConnection,
@@ -521,7 +515,6 @@ impl ClassicSessionRuntimeHandle {
                 let _instance_connection = instance_connection;
                 classic_session_runtime_loop(
                     rx,
-                    initial_cookie_snapshot,
                     initial_storage_partition,
                     navigation_runtime_config,
                 )
@@ -837,21 +830,19 @@ impl ClassicSessionRuntimeHandle {
         })?
     }
 
-    pub(super) async fn shutdown(self) -> CookieProfileCommit {
+    pub(super) async fn shutdown(self) {
         let (response_tx, response_rx) = oneshot::channel();
         if self
             .tx
             .send(ClassicSessionRuntimeRequest::Shutdown { response_tx })
             .is_err()
         {
-            return CookieProfileCommit::unchanged();
+            return;
         }
-        response_rx
-            .await
-            .unwrap_or_else(|_| CookieProfileCommit::unchanged())
+        let _ = response_rx.await;
     }
 
-    async fn shutdown_and_join(self) -> anyhow::Result<CookieProfileCommit> {
+    pub(super) async fn shutdown_and_join(self) -> anyhow::Result<()> {
         let completion = self.completion.clone();
         let _ = self.shutdown().await;
         let receiver = completion
@@ -861,7 +852,7 @@ impl ClassicSessionRuntimeHandle {
             .ok_or_else(|| anyhow::anyhow!("Classic runtime completion already consumed"))?;
         receiver
             .await
-            .map_err(|_| anyhow::anyhow!("Classic runtime stopped before checkpoint completion"))
+            .map_err(|_| anyhow::anyhow!("Classic runtime stopped before shutdown completion"))
     }
 
     pub(in crate::protocol_server) async fn attach_bidi_socket(
@@ -960,7 +951,7 @@ enum ClassicSessionRuntimeRequest {
         response_tx: oneshot::Sender<Result<(), DevToolsError>>,
     },
     Shutdown {
-        response_tx: oneshot::Sender<CookieProfileCommit>,
+        response_tx: oneshot::Sender<()>,
     },
 }
 
@@ -985,13 +976,12 @@ enum ClassicSessionRuntimeRequestOutcome {
     Continue,
     AttachedBidi(Box<ClassicAttachedBidiSocket>),
     DetachBidi,
-    Shutdown(CookieProfileCommit),
+    Shutdown,
 }
 
 async fn handle_classic_session_runtime_request(
     scheduler: &mut CdpScheduler,
     receivers: &mut CdpSchedulerEventReceivers,
-    initial_cookie_snapshot: &[StoredCookie],
     request: ClassicSessionRuntimeRequest,
     mut attached_bidi: Option<&mut ClassicAttachedBidiSocket>,
 ) -> ClassicSessionRuntimeRequestOutcome {
@@ -1232,12 +1222,8 @@ async fn handle_classic_session_runtime_request(
             ClassicSessionRuntimeRequestOutcome::Continue
         }
         ClassicSessionRuntimeRequest::Shutdown { response_tx } => {
-            let cookie_commit = CookieProfileCommit::from_optional_profile_backed_snapshot(
-                initial_cookie_snapshot.to_vec(),
-                scheduler.snapshot_profile_backed_cookies(),
-            );
-            let _ = response_tx.send(cookie_commit.clone());
-            ClassicSessionRuntimeRequestOutcome::Shutdown(cookie_commit)
+            let _ = response_tx.send(());
+            ClassicSessionRuntimeRequestOutcome::Shutdown
         }
     }
 }
@@ -1380,10 +1366,9 @@ fn classic_pending_navigation_timeout_error() -> DevToolsError {
 
 async fn classic_session_runtime_loop(
     mut rx: mpsc::UnboundedReceiver<ClassicSessionRuntimeRequest>,
-    initial_cookie_snapshot: Vec<StoredCookie>,
     initial_storage_partition: CdpInitialStoragePartition,
     navigation_runtime_config: NavigationRuntimeConfig,
-) -> CookieProfileCommit {
+) {
     let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
         initial_storage_partition,
         navigation_runtime_config,
@@ -1396,7 +1381,7 @@ async fn classic_session_runtime_loop(
         }
         if attached_bidi.is_some() {
             let mut detach_bidi = false;
-            let mut shutdown_cookies = None;
+            let mut shutdown_requested = false;
             {
                 let attached = attached_bidi.as_mut().expect("attached BiDi socket");
                 let page_javascript_blocked = scheduler.has_pending_javascript_dialog();
@@ -1513,7 +1498,6 @@ async fn classic_session_runtime_loop(
                         match handle_classic_session_runtime_request(
                             &mut scheduler,
                             &mut receivers,
-                            &initial_cookie_snapshot,
                             request,
                             Some(attached),
                         )
@@ -1528,18 +1512,18 @@ async fn classic_session_runtime_loop(
                             ClassicSessionRuntimeRequestOutcome::DetachBidi => {
                                 detach_bidi = true;
                             }
-                            ClassicSessionRuntimeRequestOutcome::Shutdown(cookies) => {
+                            ClassicSessionRuntimeRequestOutcome::Shutdown => {
                                 attached
                                     .release_session(&mut scheduler, &mut receivers)
                                     .await;
-                                shutdown_cookies = Some(cookies);
+                                shutdown_requested = true;
                             }
                         }
                     }
                 }
             }
-            if let Some(cookies) = shutdown_cookies {
-                return cookies;
+            if shutdown_requested {
+                return;
             }
             if detach_bidi && let Some(mut attached) = attached_bidi.take() {
                 attached
@@ -1601,7 +1585,6 @@ async fn classic_session_runtime_loop(
                     match handle_classic_session_runtime_request(
                         &mut scheduler,
                         &mut receivers,
-                        &initial_cookie_snapshot,
                         request,
                         None,
                     )
@@ -1612,7 +1595,7 @@ async fn classic_session_runtime_loop(
                             attached_bidi = Some(*attached);
                         }
                         ClassicSessionRuntimeRequestOutcome::DetachBidi => {}
-                        ClassicSessionRuntimeRequestOutcome::Shutdown(cookies) => return cookies,
+                        ClassicSessionRuntimeRequestOutcome::Shutdown => return,
                     }
                     if attached_bidi.is_none() {
                         classic_session_ingest_ready_renderer_publications(
@@ -1626,10 +1609,6 @@ async fn classic_session_runtime_loop(
             }
         }
     }
-    CookieProfileCommit::from_optional_profile_backed_snapshot(
-        initial_cookie_snapshot,
-        scheduler.snapshot_profile_backed_cookies(),
-    )
 }
 
 async fn resolve_classic_frame_id_for_index(

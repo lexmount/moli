@@ -698,7 +698,12 @@ fn navigation_cookie_access_report_for_context(
     request_context: NetworkCookieRequestContext,
 ) -> Option<StoredCookieQueryReport> {
     let browser_context = conn.browser_context.as_ref()?;
-    browser_context.observe_request_cookie_access_report(request_url, request_context)
+    browser_context
+        .observe_request_cookie_access_report(request_url, request_context)
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "navigation cookie diagnostics unavailable");
+            None
+        })
 }
 
 pub(super) fn try_start_navigate_command_dispatch(

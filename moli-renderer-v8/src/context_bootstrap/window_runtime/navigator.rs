@@ -483,9 +483,6 @@ enum StorageBucketCachedResponseMaterialization<'scope> {
 
 struct StorageManagerOwnerContext {
     storage_key: String,
-    area_key: Option<String>,
-    host_ptr: Option<*mut crate::native_bridge::JsContextHost>,
-    popup_id: Option<u64>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -819,9 +816,6 @@ fn storage_manager_owner_context<'s>(
                 let storage_context = host.storage_context_for_lightweight_popup(popup_id)?;
                 return Some(StorageManagerOwnerContext {
                     storage_key: storage_context.storage_key().serialized_storage_key(),
-                    area_key: Some(storage_context.web_storage_area_key().to_owned()),
-                    host_ptr: Some(host_ptr),
-                    popup_id: Some(popup_id),
                 });
             } else {
                 host.top_document_storage_context()
@@ -829,19 +823,11 @@ fn storage_manager_owner_context<'s>(
         };
         return Some(StorageManagerOwnerContext {
             storage_key: context.storage_key().serialized_storage_key(),
-            area_key: Some(context.web_storage_area_key().to_owned()),
-            host_ptr: Some(host_ptr),
-            popup_id: None,
         });
     }
     let storage_key = crate::worker::worker_storage_key(scope)?;
     let storage_key = storage_key.serialized_storage_key();
-    Some(StorageManagerOwnerContext {
-        storage_key,
-        area_key: None,
-        host_ptr: None,
-        popup_id: None,
-    })
+    Some(StorageManagerOwnerContext { storage_key })
 }
 
 fn storage_manager_child_handle<'s>(
@@ -865,26 +851,6 @@ fn storage_manager_usage_bytes(
     scope: &mut v8::PinScope<'_, '_>,
     context: &StorageManagerOwnerContext,
 ) -> StorageUsageSnapshot {
-    let web_storage_usage = context
-        .host_ptr
-        .zip(context.area_key.as_deref())
-        .map(|(host_ptr, area_key)| {
-            let host = unsafe { &*host_ptr };
-            let local_usage = {
-                let store = host.web_storage_store();
-                store.lock().usage_bytes(area_key)
-            };
-            let session_usage = if let Some(popup_id) = context.popup_id {
-                host.lightweight_popup_session_storage_store(popup_id)
-                    .map(|store| store.lock().usage_bytes(area_key))
-                    .unwrap_or(0)
-            } else {
-                let store = host.session_storage_store();
-                store.lock().usage_bytes(area_key)
-            };
-            local_usage.saturating_add(session_usage) as u64
-        })
-        .unwrap_or(0);
     let locator = moli_storage_service::StorageBucketLocator::default_bucket(&context.storage_key);
     let bucket_usage = storage_bucket_quota_owner_for_locator(scope, &locator)
         .and_then(|owner| owner.usage_snapshot().ok());
@@ -906,8 +872,7 @@ fn storage_manager_usage_bytes(
             )
         });
     StorageUsageSnapshot {
-        total: web_storage_usage
-            .saturating_add(indexed_db_usage)
+        total: indexed_db_usage
             .saturating_add(cache_storage_usage)
             .saturating_add(opfs_usage),
         quota,

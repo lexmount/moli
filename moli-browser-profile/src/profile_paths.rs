@@ -2,6 +2,9 @@ use std::path::{Path, PathBuf};
 
 use crate::ProfilePartitionId;
 
+pub const COOKIE_DATABASE_RELATIVE_PATH: &str = "cookies.sqlite";
+pub const LOCAL_STORAGE_DATABASE_RELATIVE_PATH: &str = "localstorage.sqlite";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserProfilePaths {
     pub root: PathBuf,
@@ -66,8 +69,8 @@ impl BrowserProfilePartitionPaths {
     fn new(root: &Path, id: ProfilePartitionId) -> Self {
         let partition_root = root.join("partitions").join(id.as_str());
         Self {
-            cookies_path: partition_root.join("cookies.json"),
-            local_storage_path: partition_root.join("localstorage.json"),
+            cookies_path: partition_root.join(COOKIE_DATABASE_RELATIVE_PATH),
+            local_storage_path: partition_root.join(LOCAL_STORAGE_DATABASE_RELATIVE_PATH),
             storage_buckets_path: partition_root.join("storage-buckets.json"),
             service_worker_resources_path: partition_root.join("service-worker-resources.json"),
             cache_storage_root: partition_root.join("cache-storage"),
@@ -104,11 +107,11 @@ mod tests {
         );
         assert_eq!(
             paths.cookies_path,
-            PathBuf::from("/tmp/moli-profile/partitions/default/cookies.json")
+            PathBuf::from("/tmp/moli-profile/partitions/default/cookies.sqlite")
         );
         assert_eq!(
             paths.local_storage_path,
-            PathBuf::from("/tmp/moli-profile/partitions/default/localstorage.json")
+            PathBuf::from("/tmp/moli-profile/partitions/default/localstorage.sqlite")
         );
         assert_eq!(
             paths.storage_buckets_path,
@@ -149,11 +152,11 @@ mod tests {
         );
         assert_eq!(
             partition.cookies_path,
-            PathBuf::from("/tmp/moli-profile/partitions/tenant-a/cookies.json")
+            PathBuf::from("/tmp/moli-profile/partitions/tenant-a/cookies.sqlite")
         );
         assert_eq!(
             partition.local_storage_path,
-            PathBuf::from("/tmp/moli-profile/partitions/tenant-a/localstorage.json")
+            PathBuf::from("/tmp/moli-profile/partitions/tenant-a/localstorage.sqlite")
         );
         assert_eq!(
             partition.storage_buckets_path,
@@ -182,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_profile_default_partition_paths_match_legacy_fields() {
+    fn browser_profile_default_partition_paths_match_root_fields() {
         let paths = BrowserProfilePaths::new("/tmp/moli-profile");
 
         let partition = paths.default_partition_paths();

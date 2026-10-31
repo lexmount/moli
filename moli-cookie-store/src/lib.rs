@@ -31,10 +31,11 @@ pub use crate::cookie_store::{
     CookieAccessSource, CookieDeleteFilter, CookieEffectiveSameSite, CookieExclusionReason,
     CookieInclusionStatus, CookiePartitionMatch, CookieQueryResult, CookieScopeSemantics,
     CookieSetAccessResult, CookieSetRejectionReason, CookieSetResult, CookieSetWarningReason,
-    CookieStore, CookieStoreLimits, CookieWarningReason, CookieWithAccessResult, ExcludedCookie,
-    HttpRequestType, InsertContext, QueryContext, SameSiteContext, SameSiteContextDowngradeType,
-    SameSiteContextHttpMethod, SameSiteContextMetadata, SameSiteContextRedirectType,
-    SameSiteContextTrackMetadata, SameSiteRequestContext, StorageAccessStatus, StoreAction,
+    CookieStore, CookieStoreKey, CookieStoreLimits, CookieStoreMutation, CookieStoreObserver,
+    CookieWarningReason, CookieWithAccessResult, ExcludedCookie, HttpRequestType, InsertContext,
+    QueryContext, SameSiteContext, SameSiteContextDowngradeType, SameSiteContextHttpMethod,
+    SameSiteContextMetadata, SameSiteContextRedirectType, SameSiteContextTrackMetadata,
+    SameSiteRequestContext, StorageAccessStatus, StoreAction,
 };
 #[cfg(feature = "public_suffix")]
 mod public_suffix;

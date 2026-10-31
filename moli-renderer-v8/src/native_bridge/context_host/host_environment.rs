@@ -441,7 +441,11 @@ impl JsContextHost {
     /// backend replacement must leave a live Document's storage identity
     /// untouched.
     pub(crate) fn set_web_storage_handles(&mut self, handles: &RendererWebStorageHandles) {
-        self.web_storage_store = handles.local_storage();
+        let local = handles.local_storage();
+        if !std::sync::Arc::ptr_eq(&self.web_storage_store, &local) {
+            self.local_storage_areas.clear();
+            self.web_storage_store = local;
+        }
         self.session_storage_store = handles.session_storage();
     }
 
@@ -716,14 +720,17 @@ impl JsContextHost {
     }
 
     #[cfg(feature = "wpt-extensions")]
-    pub(crate) fn delete_all_cookies_for_wpt(&mut self) {
+    pub(crate) fn delete_all_cookies_for_wpt(
+        &mut self,
+    ) -> Result<(), moli_cookie_jar::CookieStoreError> {
         if let Some(resource_loader) = self.current_main_document_resource_loader() {
             resource_loader
                 .request_client()
                 .cookie_store()
-                .lock()
+                .lock()?
                 .clear();
         }
+        Ok(())
     }
 
     pub(crate) fn set_extra_http_headers(&mut self, headers: &moli_fetch::RequestHeaders) {

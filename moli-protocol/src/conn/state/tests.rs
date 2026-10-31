@@ -1422,7 +1422,7 @@ fn seed_initial_cookies_keeps_store_available_after_lock_holder_panic() {
         vec![stored_cookie("sid", "seeded")],
     );
 
-    let cookies = cookie_store.lock().cookies();
+    let cookies = cookie_store.lock().unwrap().cookies();
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "sid");
 }
@@ -1452,9 +1452,9 @@ fn browser_context_clears_origin_site_data_through_partition_owner() {
             b"sibling=1; Path=/; Secure".to_vec(),
         )],
     );
-    assert_eq!(context.snapshot_cookies().len(), 2);
+    assert_eq!(context.snapshot_cookies().unwrap().len(), 2);
     {
-        let mut store = context.web_storage_store_for_test().lock();
+        let store = context.web_storage_store_for_test();
         assert!(store.set_item(&storage_key, "local", "1"));
         assert!(store.set_item(&sibling_storage_key, "local", "2"));
     }
@@ -1472,10 +1472,10 @@ fn browser_context_clears_origin_site_data_through_partition_owner() {
         )
         .expect("site data clear should succeed");
 
-    let cookies = context.snapshot_cookies();
+    let cookies = context.snapshot_cookies().unwrap();
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "sibling");
-    let mut store = context.web_storage_store_for_test().lock();
+    let store = context.web_storage_store_for_test();
     assert_eq!(store.get_item(&storage_key, "local"), None);
     assert_eq!(
         store.get_item(&sibling_storage_key, "local"),

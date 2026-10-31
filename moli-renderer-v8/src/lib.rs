@@ -196,6 +196,7 @@ pub use context_bootstrap::{
     clear_indexed_db_origin, clear_indexed_db_origins_with_prefix, downgrade_indexed_db_manager,
     indexed_db_origin_usage_bytes, indexed_db_origins_with_prefix_usage_bytes,
     new_indexed_db_manager, new_sqlite_indexed_db_manager,
+    new_sqlite_indexed_db_manager_with_runtime,
 };
 pub use context_bootstrap::{
     SharedStorageBucketStore, StorageBucketIdentity, new_shared_json_storage_bucket_store,
@@ -210,8 +211,7 @@ pub use context_bootstrap::{
 pub use context_bootstrap::{
     SharedWebStorageStore, WebStorageAreaKind, WebStorageMutation, WebStorageMutationRecord,
     WebStorageMutationSubscription, WebStorageString, deep_clone_shared_web_storage_store,
-    new_shared_json_web_storage_store, new_shared_web_storage_store,
-    web_storage_partitioned_area_key,
+    new_shared_web_storage_store, web_storage_partitioned_area_key,
 };
 pub(crate) use context_bootstrap::{
     construct_form_data_entries_for_form, form_data_entries_multipart_body,

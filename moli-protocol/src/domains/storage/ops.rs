@@ -422,16 +422,20 @@ fn get_usage_and_quota_command_output_plan(
         "overrideActive": override_active,
         "usageBreakdown": [
             {
-                "storageType": "local_storage",
-                "usage": usage.local_storage_usage as f64,
+                "storageType": "file_systems",
+                "usage": usage.file_system_usage as f64,
             },
             {
                 "storageType": "indexeddb",
                 "usage": usage.indexed_db_usage as f64,
             },
             {
-                "storageType": "storage_buckets",
-                "usage": usage.storage_buckets_usage as f64,
+                "storageType": "cache_storage",
+                "usage": usage.cache_storage_usage as f64,
+            },
+            {
+                "storageType": "service_workers",
+                "usage": 0,
             }
         ]
     }))
@@ -1319,7 +1323,7 @@ fn delete_cookies_for_browser_context_by_filter(
     };
     // Keep selection and removal under one store lock. Reconstructing a broad
     // name/domain/path filter loses the selected cookie's partition identity.
-    bc.with_cookie_store_mut(|store| {
+    bc.try_with_cookie_store_mut(|store| {
         if filter == &Default::default() {
             return store.delete_cookies_with_filters(
                 None,
@@ -1334,7 +1338,8 @@ fn delete_cookies_for_browser_context_by_filter(
             partition_filter.matches(cookie.partition_key.as_ref())
                 && cookie_matches_devtools_filter(&storage_cookie_to_json(cookie), filter)
         })
-    });
+    })
+    .map_err(|_| (-31998, "CookieStoreUnavailable"))?;
     Ok(())
 }
 
@@ -1367,6 +1372,7 @@ fn get_cookies_for_browser_context(
 
     Ok(bc
         .snapshot_cookies()
+        .map_err(|_| (-31998, "CookieStoreUnavailable"))?
         .iter()
         .filter(|cookie| partition_filter.matches(cookie.partition_key.as_ref()))
         .map(storage_cookie_to_json)
@@ -1543,7 +1549,8 @@ fn delete_cookies_for_browser_context_with_partition_filter(
         normalized_url_host.as_deref(),
         &partition_filter,
         domain_match,
-    );
+    )
+    .map_err(|_| (-31998, "CookieStoreUnavailable"))?;
 
     Ok(())
 }

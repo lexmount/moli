@@ -2563,8 +2563,13 @@ async fn create_target_seeds_browser_context_from_connection_cookie_profile() {
     });
     ctx.expect_result(11, json!({ "targetId": tid }), None);
 
-    let cookies =
-        ctx.with_fixture(|conn| conn.browser_context.as_ref().unwrap().snapshot_cookies());
+    let cookies = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .unwrap()
+            .snapshot_cookies()
+            .unwrap()
+    });
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "sid");
     assert_eq!(cookies[0].value, "seeded");

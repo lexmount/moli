@@ -76,7 +76,7 @@ async fn request_stage_navigation_request_paused_includes_synthesized_cookie_hea
         .enable_primary_network_events();
     let url = format!("http://{addr}/page");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let mut jar = bc.cookie_store_for_test().lock().unwrap();
         jar.store_response_headers(
             &Url::parse(&url).unwrap(),
             &[("set-cookie".to_owned(), b"sid=req-nav; Path=/page".to_vec())],

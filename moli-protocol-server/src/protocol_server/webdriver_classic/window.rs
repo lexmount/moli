@@ -280,8 +280,10 @@ pub(in crate::protocol_server) async fn webdriver_classic_close_window(
             .lock()
             .release_session(&session_id);
         if let Some(runtime) = runtime {
-            let cookie_commit = runtime.shutdown().await;
-            if let Err(error) = state.cookie_profile.commit_and_save(cookie_commit) {
+            if let Err(error) = runtime.shutdown_and_join().await {
+                warn!(?error, "Classic session shutdown failed");
+            }
+            if let Err(error) = state.cookie_profile.flush(&state.storage_partition).await {
                 warn!(?error, "failed to persist Classic cookie profile");
             }
         }

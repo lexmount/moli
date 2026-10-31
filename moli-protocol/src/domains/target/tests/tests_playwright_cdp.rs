@@ -5533,7 +5533,7 @@ async fn playwright_over_cdp_inactive_context_seeded_cookies_apply_to_navigation
                 .cookie_store_for_test()
                 .clone()
         });
-        let mut cookie_store = cookie_store.lock();
+        let mut cookie_store = cookie_store.lock().unwrap();
         cookie_store.cookie_access_report_for_request(
             &page_url,
             NetworkCookieRequestContext::top_level_navigation("GET")

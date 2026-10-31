@@ -23,7 +23,10 @@ pub use profile_manifest::{
 pub use profile_partition_id::{
     DEFAULT_PROFILE_PARTITION_ID, ProfilePartitionId, ProfilePartitionIdError,
 };
-pub use profile_paths::{BrowserProfilePartitionPaths, BrowserProfilePaths};
+pub use profile_paths::{
+    BrowserProfilePartitionPaths, BrowserProfilePaths, COOKIE_DATABASE_RELATIVE_PATH,
+    LOCAL_STORAGE_DATABASE_RELATIVE_PATH,
+};
 pub use user_agent_override::UserAgentOverride;
 pub use window_surface::{
     DEFAULT_ACCEPT_LANGUAGE, DEFAULT_CDP_PRODUCT, DEFAULT_CONNECTION_DOWNLINK,

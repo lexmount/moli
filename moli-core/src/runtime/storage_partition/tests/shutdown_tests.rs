@@ -284,6 +284,57 @@ fn temporary_partition_stores_sql_on_disk_and_retires_retained_clients_before_cl
 }
 
 #[test]
+fn temporary_cookie_and_local_storage_clients_do_not_retain_or_recreate_files() {
+    let first = StoragePartitionState::open(None).unwrap();
+    let second = StoragePartitionState::open(None).unwrap();
+    let root = first
+        .temporary_directory
+        .as_ref()
+        .unwrap()
+        .path()
+        .to_owned();
+    let local = first.web_storage_store();
+    let cookies = first.cookie_store();
+    first
+        .import_cookies([stored_cookie("sid", "temporary")])
+        .unwrap();
+    local
+        .try_set_item("https://temporary-storage.test", "key", "value")
+        .unwrap();
+    first.flush().unwrap();
+    assert!(second.cookies().unwrap().is_empty());
+    assert_eq!(
+        second
+            .web_storage_store()
+            .get_item("https://temporary-storage.test", "key"),
+        None
+    );
+    for name in [
+        moli_browser_profile::COOKIE_DATABASE_RELATIVE_PATH,
+        moli_browser_profile::LOCAL_STORAGE_DATABASE_RELATIVE_PATH,
+    ] {
+        assert!(
+            fs::read(root.join(name))
+                .unwrap()
+                .starts_with(b"SQLite format 3\0")
+        );
+    }
+    drop(first);
+    assert!(!root.exists());
+    assert!(
+        local
+            .try_set_item("https://temporary-storage.test", "key", "late")
+            .is_err()
+    );
+    // A retained canonical jar is only a data client after its owner closes.
+    cookies.lock().unwrap().clear();
+    assert!(
+        !root.exists(),
+        "retained clients cannot reopen a retired partition"
+    );
+}
+
+#[test]
 fn default_profile_rejects_corrupt_sql_without_reading_or_replacing_legacy_data() {
     let root = TempProfileDir::new("sql-corruption");
     let partition = StoragePartitionState::open(Some(&root.path)).unwrap();

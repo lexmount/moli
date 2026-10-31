@@ -2740,7 +2740,7 @@ fn navigator_storage_estimate_usage_tracks_current_origin_storage() {
 
     assert_eq!(
         result,
-        "0||7||true|number|true|true|true|true|true|true|indexedDB,caches,fileSystem|1073741824"
+        "0||0||true|number|true|true|true|true|true|true|indexedDB,caches,fileSystem|1073741824"
     );
 
     let other_page_url = format!("https://storage-estimate-other-{nonce}.test/");

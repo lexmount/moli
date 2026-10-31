@@ -76,6 +76,8 @@ moli-site = { path = "../moli-site" }
 moli-session-history = { path = "../moli-session-history" }
 moli-history = { path = "../moli-history" }
 moli-stylesheet-blocking = { path = "../moli-stylesheet-blocking" }
+moli-sqlite = { path = "../moli-sqlite" }
+moli-web-storage = { path = "../moli-web-storage" }
 moli-storage-key = { path = "../moli-storage-key" }
 moli-streams = { path = "../moli-streams" }
 moli-structured-clone = { path = "../moli-structured-clone" }
@@ -137,6 +139,7 @@ v8 = { version = "152.2.0", features = ["v8_enable_pointer_compression"] }
 v8 = "152.2.0"
 
 [dev-dependencies]
+tempfile = "3.23.0"
 lopdf = { version = "0.45.0", default-features = false }
 fastrand = "2.3.0"
 moli-fetch = { path = "../moli-fetch", features = ["test-support"] }

@@ -508,7 +508,7 @@ async fn main_document_navigation_events_include_synthesized_cookie_header() {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let mut jar = bc.cookie_store_for_test().lock().unwrap();
         jar.store_response_headers(
             &Url::parse(&page_url).unwrap(),
             &[("set-cookie".to_owned(), b"sid=1; Path=/page".to_vec())],
@@ -604,7 +604,7 @@ async fn main_document_navigation_deduplicates_manual_cookie_header_when_store_s
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let mut jar = bc.cookie_store_for_test().lock().unwrap();
         jar.store_response_headers(
             &Url::parse(&page_url).unwrap(),
             &[("set-cookie".to_owned(), b"sid=store; Path=/page".to_vec())],
@@ -703,7 +703,7 @@ async fn main_document_navigation_redirect_emits_second_request_with_redirect_re
     bc.attach_active_session("SID-1");
     bc.set_target_url(format!("http://localhost:{}/origin", addr.port()));
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let mut jar = bc.cookie_store_for_test().lock().unwrap();
         jar.store_response_headers(
             &Url::parse(&final_url).unwrap(),
             &[(
@@ -1151,7 +1151,7 @@ async fn main_document_multi_hop_redirect_preserves_cookie_downgrade_report() {
     bc.attach_active_session("SID-1");
     bc.set_target_url(format!("http://localhost:{}/origin", addr.port()));
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let mut jar = bc.cookie_store_for_test().lock().unwrap();
         jar.store_response_headers(
             &Url::parse(&final_url).unwrap(),
             &[(

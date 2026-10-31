@@ -276,14 +276,16 @@ mod tests {
         assert_eq!(cookies[0].name, "session");
         assert_eq!(cookies[0].value, "value");
         assert_eq!(cookies[0].same_site, StoredCookieSameSite::Lax);
-        let destination = temp.path().join("localstorage.json");
-        let origins = read_local_storage(&profile)?;
+        let mut origins = read_local_storage(&profile)?;
         assert_eq!(origins["https://example.com"].len(), 1);
-        let bytes = crate::storage::prepare(&destination, origins)?.unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&bytes)?;
         assert_eq!(
-            json["origins"]["https://example.com"]["entries"][0]["value"],
-            "stored-value"
+            origins
+                .remove("https://example.com")
+                .unwrap()
+                .remove(&"stored-key".encode_utf16().collect::<Vec<_>>())
+                .unwrap()
+                .into_units(),
+            "stored-value".encode_utf16().collect::<Vec<_>>()
         );
         Ok(())
     }

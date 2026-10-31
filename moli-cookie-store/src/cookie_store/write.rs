@@ -257,6 +257,7 @@ impl CookieStore {
                 .domain
                 .as_cow()
                 .ok_or(CookieError::UnspecifiedDomain)?;
+            let observed = self.observer.is_some();
             if let Some(old_cookie) = self.get_mut_with_partition_key(
                 &cookie_domain,
                 &cookie.path,
@@ -268,7 +269,11 @@ impl CookieStore {
                 {
                     return Err(CookieError::NonHttpScheme);
                 } else if cookie.is_expired() {
+                    let key = observed.then(|| CookieStoreKey::for_cookie(old_cookie));
                     old_cookie.expire();
+                    if let Some(key) = key {
+                        self.notify(CookieStoreMutation::Delete(key));
+                    }
                     return Ok(StoreAction::ExpiredExisting);
                 }
             }
@@ -313,21 +318,23 @@ impl CookieStore {
             };
             cookie.set_creation_index(creation_index);
             cookie.touch_with_access_index(self.bump_access_index());
-            Ok(
-                if self
-                    .cookies
-                    .entry(cookie_domain)
-                    .or_default()
-                    .entry(cookie_path)
-                    .or_default()
-                    .insert(cookie_key, cookie)
-                    .is_none()
-                {
-                    StoreAction::Inserted
-                } else {
-                    StoreAction::UpdatedExisting
-                },
-            )
+            let observed = self.observer.is_some().then(|| cookie.clone());
+            let replaced = self
+                .cookies
+                .entry(cookie_domain)
+                .or_default()
+                .entry(cookie_path)
+                .or_default()
+                .insert(cookie_key, cookie)
+                .is_some();
+            if let Some(cookie) = observed {
+                self.notify(CookieStoreMutation::Upsert { cookie });
+            }
+            Ok(if replaced {
+                StoreAction::UpdatedExisting
+            } else {
+                StoreAction::Inserted
+            })
         } else {
             Err(CookieError::Expired)
         }

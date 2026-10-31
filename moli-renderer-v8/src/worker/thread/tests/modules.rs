@@ -1421,7 +1421,7 @@ async fn worker_module_same_origin_dependency_fetch_sends_cookies() {
 
     let cookie_store = moli_cookie_jar::new_shared_browser_cookie_store();
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &url::Url::parse(&format!("{base_url}/worker/main.js")).unwrap(),
             &[(

@@ -1665,11 +1665,8 @@ pub(super) async fn webdriver_classic_new_session(
     } else {
         None
     };
-    let initial_cookies = state.cookie_profile.snapshot();
-    let initial_cookie_snapshot = initial_cookies.clone();
-    let initial_storage_partition = state.initial_storage_partition(initial_cookies);
+    let initial_storage_partition = state.initial_storage_partition();
     let runtime = ClassicSessionRuntimeHandle::spawn(
-        initial_cookie_snapshot,
         initial_storage_partition,
         moli_core::runtime::NavigationRuntimeConfig::new_with_layout_configuration(
             state.fetch_config.clone(),
@@ -1775,8 +1772,10 @@ pub(super) async fn webdriver_classic_delete_session(
         .lock()
         .release_session(&session_id);
     if let Some(runtime) = runtime {
-        let cookie_commit = runtime.shutdown().await;
-        if let Err(error) = state.cookie_profile.commit_and_save(cookie_commit) {
+        if let Err(error) = runtime.shutdown_and_join().await {
+            warn!(?error, "Classic session shutdown failed");
+        }
+        if let Err(error) = state.cookie_profile.flush(&state.storage_partition).await {
             warn!(?error, "failed to persist Classic cookie profile");
         }
         return classic_webdriver_json_response(StatusCode::OK, delete_session_response());

@@ -183,7 +183,7 @@ mod tests {
                         .owner_state
                         .window_document_hidden()
                 );
-                assert_eq!(context.snapshot_cookies().len(), 1);
+                assert_eq!(context.snapshot_cookies().unwrap().len(), 1);
             })
             .unwrap();
     }
@@ -303,7 +303,7 @@ mod tests {
         });
         context.with_fixture(|conn| {
             let browser = conn.browser_context.as_ref().unwrap();
-            let cookies = browser.snapshot_cookies();
+            let cookies = browser.snapshot_cookies().unwrap();
             assert_eq!(cookies.len(), 1);
             assert_eq!(cookies[0].domain, "cookie-original.example");
             assert_eq!(browser.active_target_id(), Some("TID-selected-later"));
@@ -334,6 +334,7 @@ mod tests {
                     .as_ref()
                     .unwrap()
                     .snapshot_cookies()
+                    .unwrap()
                     .is_empty()
             })
         });

@@ -70,6 +70,18 @@ pub struct StoredCookieSetReport {
 }
 
 impl StoredCookieSetReport {
+    /// A failure before parsing or policy evaluation reached canonical storage.
+    pub fn store_unavailable() -> Self {
+        Self {
+            status: StoredCookieSetStatus::Rejected(
+                StoredCookieSetRejectionReason::StoreUnavailable,
+            ),
+            rejection_reasons: vec![StoredCookieSetRejectionReason::StoreUnavailable],
+            warning_reasons: Vec::new(),
+            effective_same_site: None,
+        }
+    }
+
     /// Returns true when the write changed or confirmed canonical store state.
     pub fn is_accepted(&self) -> bool {
         matches!(self.status, StoredCookieSetStatus::Accepted(_))

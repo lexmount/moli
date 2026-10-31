@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::{BrowserProfilePaths, DEFAULT_PROFILE_PARTITION_ID, write_profile_file_durable};
 
-pub const PROFILE_MANIFEST_VERSION: u32 = 6;
+pub const PROFILE_MANIFEST_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,8 +56,8 @@ impl BrowserProfileManifest {
             partitions: vec![BrowserProfilePartitionManifest {
                 id: DEFAULT_PROFILE_PARTITION_ID.to_owned(),
                 root: partition_root,
-                cookies: json_backend(&paths.root, &paths.cookies_path),
-                local_storage: json_backend(&paths.root, &paths.local_storage_path),
+                cookies: sqlite_backend(&paths.root, &paths.cookies_path),
+                local_storage: sqlite_backend(&paths.root, &paths.local_storage_path),
                 session_storage: ProfileBackendManifest {
                     backend: ProfileBackendKind::Memory,
                     path: None,
@@ -69,10 +69,7 @@ impl BrowserProfileManifest {
                 ),
                 cache_storage: disk_backend(&paths.root, &paths.cache_storage_root),
                 opfs: disk_backend(&paths.root, &paths.opfs_root),
-                indexed_db: ProfileBackendManifest {
-                    backend: ProfileBackendKind::Sqlite,
-                    path: Some(relative_profile_path(&paths.root, &paths.indexeddb_root)),
-                },
+                indexed_db: sqlite_backend(&paths.root, &paths.indexeddb_root),
                 http_cache: disk_backend(&paths.root, &paths.http_cache_root),
             }],
         }
@@ -155,30 +152,30 @@ fn migrate_profile_manifest(
 ) -> Result<BrowserProfileManifest> {
     match version {
         0..=4 => Ok(BrowserProfileManifest::default_for_paths(paths)),
-        5 => {
+        5 | 6 => {
             let mut manifest: BrowserProfileManifest = serde_json::from_value(value)
-                .context("failed to parse version 5 profile manifest")?;
-            // Only IndexedDB changes backend; preserve every other backend.
+                .with_context(|| format!("failed to parse version {version} profile manifest"))?;
+            // Switch namespace metadata only. Old JSON and IndexedDB files
+            // are neither read nor copied into the new SQLite directories.
             let expected = BrowserProfileManifest::default_for_paths(paths);
             manifest.version = PROFILE_MANIFEST_VERSION;
             let partition = manifest
                 .partitions
                 .iter_mut()
                 .find(|partition| partition.id == DEFAULT_PROFILE_PARTITION_ID)
-                .context("version 5 profile has no default partition")?;
-            partition.indexed_db = expected.partitions[0].indexed_db.clone();
+                .with_context(|| format!("version {version} profile has no default partition"))?;
+            if version == 5 {
+                partition.indexed_db = expected.partitions[0].indexed_db.clone();
+            }
+            partition.cookies = expected.partitions[0].cookies.clone();
+            partition.local_storage = expected.partitions[0].local_storage.clone();
             Ok(manifest)
         }
-        _ => bail!(
-            "unsupported profile manifest version {} in `{}`; this Moli supports version {}",
-            version,
-            paths.manifest_path.display(),
-            PROFILE_MANIFEST_VERSION
-        ),
+        _ => bail!("unsupported profile manifest version {version}"),
     }
 }
 
-fn save_profile_manifest(
+pub(crate) fn save_profile_manifest(
     paths: &BrowserProfilePaths,
     manifest: &BrowserProfileManifest,
 ) -> Result<()> {
@@ -209,6 +206,9 @@ fn validate_profile_manifest(
         );
     }
 
+    if manifest.version != PROFILE_MANIFEST_VERSION {
+        bail!("unsupported validated profile version {}", manifest.version);
+    }
     let expected = BrowserProfileManifest::default_for_paths(paths);
     let expected_default = &expected.partitions[0];
     if default_partition != expected_default {
@@ -218,6 +218,13 @@ fn validate_profile_manifest(
         );
     }
     Ok(())
+}
+
+fn sqlite_backend(root: &Path, path: &Path) -> ProfileBackendManifest {
+    ProfileBackendManifest {
+        backend: ProfileBackendKind::Sqlite,
+        path: Some(relative_profile_path(root, path)),
+    }
 }
 
 fn json_backend(root: &Path, path: &Path) -> ProfileBackendManifest {
@@ -254,6 +261,41 @@ mod tests {
 
     use super::{BrowserProfileManifest, PROFILE_MANIFEST_VERSION, ensure_profile_manifest};
     use crate::BrowserProfilePaths;
+
+    fn json_backend_for_test(path: &str) -> super::ProfileBackendManifest {
+        super::ProfileBackendManifest {
+            backend: super::ProfileBackendKind::Json,
+            path: Some(path.to_owned()),
+        }
+    }
+
+    #[test]
+    fn version_six_switches_cookie_and_local_storage_to_sqlite_without_opening_old_data()
+    -> Result<()> {
+        let profile = TempProfileDir::new("v6-sqlite-files");
+        let paths = BrowserProfilePaths::new(&profile.path);
+        fs::create_dir_all(&paths.partition_root)?;
+        let mut previous = BrowserProfileManifest::default_for_paths(&paths);
+        previous.version = 6;
+        previous.partitions[0].cookies = json_backend_for_test("partitions/default/cookies.json");
+        previous.partitions[0].local_storage =
+            json_backend_for_test("partitions/default/localstorage.json");
+        fs::write(&paths.manifest_path, serde_json::to_vec(&previous)?)?;
+        let cookie = paths.partition_root.join("cookies.json");
+        let local = paths.partition_root.join("localstorage.json");
+        fs::write(&cookie, b"invalid cookie JSON stays untouched")?;
+        fs::create_dir(&local)?;
+        let current = ensure_profile_manifest(&paths)?;
+        assert_eq!(current, BrowserProfileManifest::default_for_paths(&paths));
+        assert_eq!(fs::read(&cookie)?, b"invalid cookie JSON stays untouched");
+        assert!(local.is_dir());
+        assert!(
+            !paths.cookies_path.exists() && !paths.local_storage_path.exists(),
+            "metadata does not create or import databases"
+        );
+        assert_eq!(ensure_profile_manifest(&paths)?, current);
+        Ok(())
+    }
 
     struct TempProfileDir {
         path: PathBuf,
@@ -628,18 +670,22 @@ mod tests {
     }
 
     #[test]
-    fn version_five_switches_only_indexeddb_and_preserves_other_backends() -> Result<()> {
+    fn version_five_switches_sqlite_namespaces_and_preserves_other_backends() -> Result<()> {
         let profile = TempProfileDir::new("v5-sqlite");
         let paths = BrowserProfilePaths::new(&profile.path);
         fs::create_dir_all(&paths.root)?;
         let mut previous = serde_json::to_value(BrowserProfileManifest::default_for_paths(&paths))?;
         previous["version"] = json!(5);
+        previous["partitions"][0]["cookies"] =
+            json!({"backend":"json","path":"partitions/default/cookies.json"});
+        previous["partitions"][0]["localStorage"] =
+            json!({"backend":"json","path":"partitions/default/localstorage.json"});
         previous["partitions"][0]["indexedDb"] = json!({
             "backend":"disk", "path":"partitions/default/indexeddb"
         });
         fs::write(&paths.manifest_path, serde_json::to_vec(&previous)?)?;
         let current = ensure_profile_manifest(&paths)?;
-        assert_eq!(current.version, 6);
+        assert_eq!(current.version, PROFILE_MANIFEST_VERSION);
         assert_eq!(
             current.partitions[0].indexed_db.backend,
             super::ProfileBackendKind::Sqlite
@@ -650,7 +696,9 @@ mod tests {
         );
         let mut actual = serde_json::to_value(current)?;
         actual["version"] = previous["version"].clone();
-        actual["partitions"][0]["indexedDb"] = previous["partitions"][0]["indexedDb"].clone();
+        for backend in ["indexedDb", "cookies", "localStorage"] {
+            actual["partitions"][0][backend] = previous["partitions"][0][backend].clone();
+        }
         assert_eq!(actual, previous);
         assert_eq!(
             ensure_profile_manifest(&paths)?,
@@ -665,11 +713,34 @@ mod tests {
         let paths = BrowserProfilePaths::new(&profile.path);
         fs::create_dir_all(&paths.root)?;
         let mut manifest = BrowserProfileManifest::default_for_paths(&paths);
+        manifest.version = 6;
         manifest.partitions[0].indexed_db.backend = super::ProfileBackendKind::Disk;
         let bytes = serde_json::to_vec(&manifest)?;
         fs::write(&paths.manifest_path, &bytes)?;
         assert!(ensure_profile_manifest(&paths).is_err());
         assert_eq!(fs::read(&paths.manifest_path)?, bytes);
         Ok(())
+    }
+    #[test]
+    fn sqlite_manifest_requires_both_backends_and_keeps_session_storage_in_memory() {
+        let paths = crate::BrowserProfilePaths::new("profile-v7-layout");
+        let mut manifest = BrowserProfileManifest::default_for_paths(&paths);
+        assert_eq!(manifest.version, PROFILE_MANIFEST_VERSION);
+        assert_eq!(
+            manifest.partitions[0].cookies.backend,
+            super::ProfileBackendKind::Sqlite
+        );
+        assert_eq!(
+            manifest.partitions[0].local_storage.backend,
+            super::ProfileBackendKind::Sqlite
+        );
+        assert_eq!(
+            manifest.partitions[0].session_storage.backend,
+            super::ProfileBackendKind::Memory
+        );
+        super::validate_profile_manifest(&paths, &manifest).unwrap();
+        manifest.partitions[0].local_storage =
+            json_backend_for_test("partitions/default/localstorage.json");
+        assert!(super::validate_profile_manifest(&paths, &manifest).is_err());
     }
 }

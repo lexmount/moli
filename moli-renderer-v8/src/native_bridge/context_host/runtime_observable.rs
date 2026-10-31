@@ -144,6 +144,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn retire_all_window_execution_context_resources_for_teardown(&mut self) {
+        self.local_storage_areas.clear();
         let owners = self
             .window_execution_contexts
             .keys()
@@ -515,6 +516,7 @@ impl JsContextHost {
         &mut self,
         owner: WindowExecutionContextOwner,
     ) -> bool {
+        self.local_storage_areas.remove(&owner);
         self.retire_font_face_loads_for_execution_context_owner(owner);
         self.retire_event_callbacks_for_execution_context(owner);
         crate::observer_runtime::retire_execution_context_owner(self, owner);
@@ -557,6 +559,7 @@ impl JsContextHost {
             .collect::<Vec<_>>();
         let retired_count = owners.len();
         for owner in owners {
+            self.local_storage_areas.remove(&owner);
             self.window_execution_contexts.remove(&owner);
         }
         self.bridge

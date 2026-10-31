@@ -46,12 +46,25 @@ async fn websocket_cdp_browser_close_releases_lock_and_persists_profile() {
 
     close_profiled_server(&mut socket, server).await;
     wait_for_profile_lock_release(&paths).await;
-    let persisted = fs::read_to_string(&paths.local_storage_path)
-        .expect("localStorage checkpoint exists before shutdown completes");
-    assert!(
-        persisted.contains("\"persisted\"") && persisted.contains("\"yes\""),
-        "localStorage checkpoint contains the saved entry: {persisted}"
-    );
+    assert!(paths.local_storage_path.is_file());
+    assert!(!paths.partition_root.join("localstorage.json").exists());
+    {
+        let partition = StoragePartitionState::open(Some(&profile.path)).unwrap();
+        assert_eq!(
+            partition
+                .shared_storage_handles()
+                .web_storage_store()
+                .get_item(
+                    &moli_core::network::web_storage_partitioned_area_key(
+                        &format!("http://{fixture_addr}"),
+                        &format!("http://{}", fixture_addr.ip()),
+                    ),
+                    "persisted",
+                )
+                .as_deref(),
+            Some("yes")
+        );
+    }
 
     let (addr, server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
     let (mut socket, _) =

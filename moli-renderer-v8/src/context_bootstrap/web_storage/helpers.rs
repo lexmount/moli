@@ -163,15 +163,27 @@ pub(super) fn this_storage_kind(
         .is_some_and(|s| s.to_rust_string_lossy(scope) == "session")
 }
 
-pub(super) fn with_storage_store<R>(
-    scope: &mut v8::PinScope<'_, '_>,
-    storage: v8::Local<'_, v8::Object>,
-    f: impl FnOnce(&mut WebStorageStore, &str) -> R,
+pub(super) fn with_storage_store<'s, R>(
+    scope: &mut v8::PinScope<'s, '_>,
+    storage: v8::Local<'s, v8::Object>,
+    f: impl FnOnce(&WebStorageStore, &str) -> R,
 ) -> Option<R> {
     let is_session = this_storage_kind(scope, storage);
     let owner = storage_owner(scope, storage);
     let (_, area_key, host_ptr) = current_storage_host_for_owner(scope, owner)?;
-    let host = unsafe { &*host_ptr };
+    let host = unsafe { &mut *host_ptr };
+    if !is_session {
+        let dispatch_scope = match owner {
+            WebStorageOwner::ActiveDocument => OwnerDispatchScope::Top,
+            WebStorageOwner::Child(handle) => OwnerDispatchScope::Child(handle),
+            WebStorageOwner::LightweightPopup(id) => OwnerDispatchScope::LightweightPopup(id),
+        };
+        let window_owner = host.current_window_execution_context_owner(dispatch_scope)?;
+        if let Err(error) = host.ensure_local_storage_area(window_owner, &area_key) {
+            throw_storage_persistence_error(scope, &error.to_string());
+            return None;
+        }
+    }
     let store = if is_session {
         match owner {
             WebStorageOwner::ActiveDocument | WebStorageOwner::Child(_) => {
@@ -184,13 +196,63 @@ pub(super) fn with_storage_store<R>(
     } else {
         host.web_storage_store()
     };
-    let mut guard = store.lock();
-    Some(f(&mut guard, &area_key))
+    Some(f(&store, &area_key))
 }
 
-pub(super) fn storage_put_utf16(
+pub(super) fn with_storage_result<'s, R>(
+    scope: &mut v8::PinScope<'s, '_>,
+    storage: v8::Local<'s, v8::Object>,
+    f: impl FnOnce(&WebStorageStore, &str) -> Result<R, WebStorageMutationError>,
+) -> Option<R> {
+    match with_storage_store(scope, storage, f)? {
+        Ok(value) => Some(value),
+        Err(WebStorageMutationError::QuotaExceeded) => {
+            throw_storage_quota_exceeded(scope);
+            None
+        }
+        Err(WebStorageMutationError::Persistence(message)) => {
+            throw_storage_persistence_error(scope, &message);
+            None
+        }
+    }
+}
+
+fn queue_storage_change(
     scope: &mut v8::PinScope<'_, '_>,
-    storage: v8::Local<'_, v8::Object>,
+    owner: WebStorageOwner,
+    is_session: bool,
+    change: super::store::WebStorageMutation,
+) {
+    use super::store::WebStorageMutation;
+    let (key, old, new) = match change {
+        WebStorageMutation::ItemAdded { key, value, .. } => (
+            Some(key.as_units().to_vec()),
+            None,
+            Some(value.as_units().to_vec()),
+        ),
+        WebStorageMutation::ItemUpdated {
+            key,
+            old_value,
+            new_value,
+            ..
+        } => (
+            Some(key.as_units().to_vec()),
+            Some(old_value.as_units().to_vec()),
+            Some(new_value.as_units().to_vec()),
+        ),
+        WebStorageMutation::ItemRemoved { key, old_value, .. } => (
+            Some(key.as_units().to_vec()),
+            Some(old_value.as_units().to_vec()),
+            None,
+        ),
+        WebStorageMutation::ItemsCleared { .. } => (None, None, None),
+    };
+    queue_storage_event(scope, owner, is_session, key, old, new);
+}
+
+pub(super) fn storage_put_utf16<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    storage: v8::Local<'s, v8::Object>,
     key: &[u16],
     value: &[u16],
 ) -> bool {
@@ -199,44 +261,19 @@ pub(super) fn storage_put_utf16(
     }
     let is_session = this_storage_kind(scope, storage);
     let owner = storage_owner(scope, storage);
-    let previous = with_storage_store(scope, storage, |store, origin| {
-        store.get_item_utf16(origin, key)
-    })
-    .flatten();
-    if previous.as_deref() == Some(value) {
-        return true;
-    }
-    let result = with_storage_store(scope, storage, |store, origin| {
-        store.try_set_item_utf16(origin, key, value)
-    });
-    let Some(result) = result else {
+    let Some(change) = with_storage_result(scope, storage, |store, origin| {
+        store.try_set_change_utf16(origin, key, value)
+    }) else {
         return false;
     };
-    let inserted = match result {
-        Ok(inserted) => inserted,
-        Err(WebStorageMutationError::QuotaExceeded) => {
-            throw_storage_quota_exceeded(scope);
-            return false;
-        }
-        Err(WebStorageMutationError::Persistence(message)) => {
-            throw_storage_persistence_error(scope, &message);
-            return false;
-        }
-    };
-    queue_storage_event(
-        scope,
-        owner,
-        is_session,
-        Some(key.to_vec()),
-        previous,
-        Some(value.to_vec()),
-    );
-    inserted
+    if let Some(change) = change {
+        queue_storage_change(scope, owner, is_session, change);
+    }
+    true
 }
-
-pub(super) fn storage_remove_utf16(
-    scope: &mut v8::PinScope<'_, '_>,
-    storage: v8::Local<'_, v8::Object>,
+pub(super) fn storage_remove_utf16<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    storage: v8::Local<'s, v8::Object>,
     key: &[u16],
 ) -> bool {
     if storage_internal_name_utf16(key) {
@@ -244,52 +281,24 @@ pub(super) fn storage_remove_utf16(
     }
     let is_session = this_storage_kind(scope, storage);
     let owner = storage_owner(scope, storage);
-    let previous = with_storage_store(scope, storage, |store, origin| {
-        store.get_item_utf16(origin, key)
-    })
-    .flatten();
-    if previous.is_none() {
-        return false;
-    }
-    let result = with_storage_store(scope, storage, |store, origin| {
-        store.try_remove_item_utf16(origin, key)
-    });
-    let Some(result) = result else {
+    let Some(Some(change)) = with_storage_result(scope, storage, |store, origin| {
+        store.try_remove_change_utf16(origin, key)
+    }) else {
         return false;
     };
-    let removed = match result {
-        Ok(removed) => removed,
-        Err(WebStorageMutationError::QuotaExceeded) => false,
-        Err(WebStorageMutationError::Persistence(message)) => {
-            throw_storage_persistence_error(scope, &message);
-            return false;
-        }
-    };
-    if removed {
-        queue_storage_event(scope, owner, is_session, Some(key.to_vec()), previous, None);
-    }
-    removed
+    queue_storage_change(scope, owner, is_session, change);
+    true
 }
-
-pub(super) fn storage_clear(scope: &mut v8::PinScope<'_, '_>, storage: v8::Local<'_, v8::Object>) {
+pub(super) fn storage_clear<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    storage: v8::Local<'s, v8::Object>,
+) {
     let is_session = this_storage_kind(scope, storage);
     let owner = storage_owner(scope, storage);
-    let had_items =
-        with_storage_store(scope, storage, |store, origin| store.len(origin)).unwrap_or(0) > 0;
-    let result = with_storage_store(scope, storage, |store, origin| store.try_clear(origin));
-    let Some(result) = result else {
-        return;
-    };
-    let cleared = match result {
-        Ok(cleared) => cleared,
-        Err(WebStorageMutationError::QuotaExceeded) => false,
-        Err(WebStorageMutationError::Persistence(message)) => {
-            throw_storage_persistence_error(scope, &message);
-            return;
-        }
-    };
-    if had_items && cleared {
-        queue_storage_event(scope, owner, is_session, None, None, None);
+    if let Some(Some(change)) = with_storage_result(scope, storage, |store, origin| {
+        store.try_clear_change(origin)
+    }) {
+        queue_storage_change(scope, owner, is_session, change);
     }
 }
 
@@ -471,7 +480,7 @@ fn throw_storage_quota_exceeded(scope: &mut v8::PinScope<'_, '_>) {
     scope.throw_exception(exception);
 }
 
-fn throw_storage_persistence_error(scope: &mut v8::PinScope<'_, '_>, message: &str) {
+pub(super) fn throw_storage_persistence_error(scope: &mut v8::PinScope<'_, '_>, message: &str) {
     let message = format!("Failed to persist localStorage data: {message}");
     crate::context_bootstrap::throw_dom_exception_value(scope, &message, "UnknownError");
 }

@@ -191,3 +191,39 @@ fn shutdown_orders_its_stop_after_every_accepted_concurrent_submission() {
     );
     assert!(client.owner.submit(|_| Ok(()), |_| {}).is_err());
 }
+
+#[test]
+fn closing_one_service_on_a_shared_runtime_preserves_the_other_namespace() {
+    let mut runtime = Runtime::new().unwrap();
+    let mut first = Service::with_runtime(config(), runtime.handle()).unwrap();
+    let mut second = Service::with_runtime(config(), runtime.handle()).unwrap();
+    let retired = open(&first, "same-name", Location::Memory);
+    let live = open(&second, "same-name", Location::Memory);
+    let held = hold_database(&retired);
+    with_database(&live, |database| {
+        assert_eq!(
+            database
+                .connection
+                .query_row("SELECT 42", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            42
+        );
+    });
+    drop(held);
+    first.shutdown().unwrap();
+    assert!(retired.is_closed());
+    assert!(first.client().is_closed());
+    assert!(!second.client().is_closed());
+    with_database(&live, |database| {
+        assert_eq!(
+            database
+                .connection
+                .query_row("SELECT 43", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            43
+        );
+    });
+    second.shutdown().unwrap();
+    assert!(live.is_closed());
+    runtime.shutdown().unwrap();
+}

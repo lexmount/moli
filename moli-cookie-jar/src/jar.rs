@@ -1,9 +1,15 @@
 //! Browser cookie store wrapper and cross-crate entry points.
 
+mod persistence;
+mod shared;
 mod site_data;
+pub use persistence::{BrowserCookieObserver, StoredCookieIdentity, StoredCookieMutation};
+pub use shared::{
+    BrowserCookieStoreHandle, CookieStoreError, SharedBrowserCookieStore,
+    new_shared_browser_cookie_store,
+};
 
 use std::borrow::Cow;
-use std::sync::Arc;
 
 use cookie_store::{
     CanonicalCookieInput, CookieDeleteFilter, CookieExpiration, CookiePartitionMatch, CookieStore,
@@ -11,7 +17,6 @@ use cookie_store::{
     SameSiteRequestContext,
 };
 use moli_site::{public_suffix_list, same_site_urls};
-use parking_lot::Mutex;
 use url::Url;
 
 use super::model::{
@@ -25,14 +30,6 @@ use super::model::{
     core_same_site_context_metadata_from_stored, core_source_scheme_from_stored,
     has_invalid_cookie_octets, stored_query_report_from_core, stored_set_report_from_core,
 };
-
-/// Thread-shareable cookie store used by browser/runtime components.
-pub type SharedBrowserCookieStore = Arc<Mutex<BrowserCookieStore>>;
-
-/// Builds a shared cookie store with browser-grade defaults.
-pub fn new_shared_browser_cookie_store() -> SharedBrowserCookieStore {
-    Arc::new(Mutex::new(BrowserCookieStore::default()))
-}
 
 const DEFAULT_PER_DOMAIN_MAX_COOKIES: usize = 180;
 const DEFAULT_GLOBAL_MAX_COOKIES: usize = 3300;

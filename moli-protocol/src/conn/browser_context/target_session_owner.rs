@@ -263,9 +263,15 @@ impl TargetNavigationLoadInputs {
         &self,
         response_url: &Url,
         response_headers: &[(String, Vec<u8>)],
-    ) -> Vec<StoredCookieSetReport> {
-        let mut cookie_store = self.storage_handles.page_handles.cookie_store.lock();
-        cookie_store.store_response_headers_with_reports(response_url, response_headers)
+    ) -> anyhow::Result<Vec<StoredCookieSetReport>> {
+        if !response_headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("set-cookie"))
+        {
+            return Ok(Vec::new());
+        }
+        let mut cookie_store = self.storage_handles.page_handles.cookie_store.lock()?;
+        Ok(cookie_store.store_response_headers_with_reports(response_url, response_headers))
     }
 
     pub(crate) fn request_cookie_report_for_navigation(
@@ -273,21 +279,26 @@ impl TargetNavigationLoadInputs {
         requested_url: &Url,
         request_method: &str,
         update_access_time: bool,
-    ) -> Option<StoredCookieQueryReport> {
+    ) -> anyhow::Result<Option<StoredCookieQueryReport>> {
+        if !matches!(requested_url.scheme(), "http" | "https") {
+            return Ok(None);
+        }
         let request_context = crate::domains::network::navigation_cookie_request_context(
             requested_url,
             request_method,
             None,
             self.navigation_initiator_url.as_ref(),
         );
-        let mut cookie_store = self.storage_handles.page_handles.cookie_store.lock();
+        let mut cookie_store = self.storage_handles.page_handles.cookie_store.lock()?;
         let report = if update_access_time {
             cookie_store.cookie_access_report_for_request(requested_url, request_context)
         } else {
             cookie_store.observe_cookie_access_report_for_request(requested_url, request_context)
         };
-        (!report.included_cookies.is_empty() || !report.excluded_cookies.is_empty())
-            .then_some(report)
+        Ok(
+            (!report.included_cookies.is_empty() || !report.excluded_cookies.is_empty())
+                .then_some(report),
+        )
     }
 
     fn from_browser_context_target(browser_context: &BrowserContext, target_id: &str) -> Self {

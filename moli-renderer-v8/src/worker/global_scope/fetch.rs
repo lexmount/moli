@@ -1758,7 +1758,19 @@ pub(in crate::worker) fn store_worker_websocket_response_cookies(
     }
     let response_cookie_url = websocket_cookie_url(socket_url);
     let cookie_store = request_client.request_client().cookie_store();
-    let mut store = cookie_store.lock();
+    let mut store = match cookie_store.lock() {
+        Ok(store) => store,
+        Err(error) => {
+            tracing::warn!(%error, "WebSocket response cookies could not access storage");
+            return response_headers
+                .iter()
+                .filter(|(name, _)| {
+                    response_header_name_is(name, &HeaderName::from_static("set-cookie"))
+                })
+                .map(|_| StoredCookieSetReport::store_unavailable())
+                .collect();
+        }
+    };
     store.store_response_headers_with_reports(&response_cookie_url, response_headers)
 }
 

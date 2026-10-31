@@ -4,7 +4,7 @@ use super::*;
 fn browser_context_cookie_sites_and_clear_for_sites_use_site_keys() {
     let bc = BrowserContext::new("BID-sites".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let mut store = bc.cookie_store_for_test().lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"a=1; Path=/app".to_vec())],
@@ -31,7 +31,7 @@ fn browser_context_cookie_sites_and_clear_for_sites_use_site_keys() {
 fn browser_context_clear_cookies_for_sites_report_projects_replaced_and_remaining_state() {
     let bc = BrowserContext::new("BID-site-clear-report".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let mut store = bc.cookie_store_for_test().lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -68,7 +68,7 @@ fn browser_context_clear_cookies_for_sites_report_projects_replaced_and_remainin
 fn browser_context_cookie_site_data_summarizes_counts_by_site() {
     let bc = BrowserContext::new("BID-site-data".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let mut store = bc.cookie_store_for_test().lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"a=1; Path=/app".to_vec())],
@@ -99,7 +99,7 @@ fn browser_context_cookie_site_data_summarizes_counts_by_site() {
 fn browser_context_preview_clear_cookies_for_sites_reports_targeted_removal_without_mutation() {
     let bc = BrowserContext::new("BID-site-clear-preview".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let mut store = bc.cookie_store_for_test().lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -142,7 +142,7 @@ fn browser_context_preview_clear_cookies_for_sites_reports_targeted_removal_with
 fn browser_context_preview_clear_cookies_for_sites_with_persistent_scope_keeps_session_slice() {
     let bc = BrowserContext::new("BID-site-clear-preview-persistent".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let mut store = bc.cookie_store_for_test().lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -179,7 +179,7 @@ fn browser_context_preview_clear_cookies_for_sites_with_persistent_scope_keeps_s
 fn browser_context_preview_clear_cookie_store_defaults_to_all_scope() {
     let bc = BrowserContext::new("BID-store-clear-preview-all".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let mut store = bc.cookie_store_for_test().lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -270,7 +270,7 @@ async fn connection_preview_clear_cookie_store_with_persistent_scope_does_not_in
 fn browser_context_preview_clear_cookie_storage_with_site_target_projects_target() {
     let bc = BrowserContext::new("BID-store-clear-target-preview".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let mut store = bc.cookie_store_for_test().lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -369,7 +369,8 @@ fn connection_clear_cookie_storage_with_site_target_projects_targeted_report() {
             .as_ref()
             .unwrap()
             .cookie_store_for_test()
-            .lock();
+            .lock()
+            .unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -414,7 +415,7 @@ fn connection_clear_cookie_storage_with_site_target_projects_targeted_report() {
 fn browser_context_preview_cookie_site_data_operation_clear_projects_generic_owner_seam() {
     let bc = BrowserContext::new("BID-op-preview-clear".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let mut store = bc.cookie_store_for_test().lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -447,7 +448,7 @@ fn browser_context_preview_cookie_site_data_operation_clear_projects_generic_own
 fn browser_context_cookie_storage_state_snapshot_distinguishes_live_and_persistent_views() {
     let bc = BrowserContext::new("BID-site-state".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let mut store = bc.cookie_store_for_test().lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -486,7 +487,7 @@ fn browser_context_cookie_storage_state_snapshot_distinguishes_live_and_persiste
 fn browser_context_cookie_storage_state_snapshot_for_sites_filters_views() {
     let bc = BrowserContext::new("BID-site-state-scoped".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let mut store = bc.cookie_store_for_test().lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -564,7 +565,7 @@ fn connection_clear_cookies_for_sites_report_projects_targeted_state() {
     conn.browser_context = Some(BrowserContext::new("BID-live-site-clear-report".into()));
     {
         let cookie_store = conn.ensure_cookie_store().unwrap();
-        let mut store = cookie_store.lock();
+        let mut store = cookie_store.lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -631,7 +632,7 @@ async fn connection_preview_clear_cookies_for_sites_does_not_invalidate_live_doc
 
     {
         let cookie_store = conn.ensure_cookie_store().unwrap();
-        let mut store = cookie_store.lock();
+        let mut store = cookie_store.lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
             &[(
@@ -669,7 +670,7 @@ fn connection_cookie_sites_reflect_active_browser_store() {
     conn.browser_context = Some(BrowserContext::new("BID-live-sites".into()));
     {
         let cookie_store = conn.ensure_cookie_store().unwrap();
-        let mut store = cookie_store.lock();
+        let mut store = cookie_store.lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"a=1; Path=/app".to_vec())],
@@ -692,7 +693,7 @@ fn connection_cookie_site_data_reflects_active_browser_store() {
     conn.browser_context = Some(BrowserContext::new("BID-live-site-data".into()));
     {
         let cookie_store = conn.ensure_cookie_store().unwrap();
-        let mut store = cookie_store.lock();
+        let mut store = cookie_store.lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"a=1; Path=/app".to_vec())],
@@ -722,7 +723,7 @@ fn connection_cookie_storage_state_snapshot_reflects_active_browser_store() {
     conn.browser_context = Some(BrowserContext::new("BID-live-site-state".into()));
     {
         let cookie_store = conn.ensure_cookie_store().unwrap();
-        let mut store = cookie_store.lock();
+        let mut store = cookie_store.lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -749,7 +750,7 @@ fn connection_cookie_storage_state_snapshot_for_sites_filters_active_store() {
     conn.browser_context = Some(BrowserContext::new("BID-live-site-state-scoped".into()));
     {
         let cookie_store = conn.ensure_cookie_store().unwrap();
-        let mut store = cookie_store.lock();
+        let mut store = cookie_store.lock().unwrap();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],

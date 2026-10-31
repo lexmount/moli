@@ -8,6 +8,5 @@ pub use moli_renderer_v8::network::{
         DocumentFetchContextSeed, NavigationResourceLoader, NavigationResourceLoaderDiagnostics,
         NavigationResourceLoaderState,
     },
-    new_shared_json_web_storage_store, new_shared_web_storage_store,
-    web_storage_partitioned_area_key,
+    new_shared_web_storage_store, web_storage_partitioned_area_key,
 };

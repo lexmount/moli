@@ -1,4 +1,4 @@
-use super::helpers::{storage_clear, storage_put_utf16, storage_remove_utf16, with_storage_store};
+use super::helpers::{storage_clear, storage_put_utf16, storage_remove_utf16, with_storage_result};
 use crate::util::{v8_string_from_utf16_units, v8_value_to_dom_string_u16};
 use crate::webidl;
 
@@ -39,8 +39,8 @@ pub(super) fn storage_get_item_callback<'s>(
         rv.set(v8::null(scope).into());
         return;
     };
-    let value = with_storage_store(scope, args.this(), |store, origin| {
-        store.get_item_utf16(origin, &key)
+    let value = with_storage_result(scope, args.this(), |store, origin| {
+        store.try_get_item_utf16(origin, &key)
     })
     .flatten();
     match value {
@@ -94,9 +94,9 @@ pub(super) fn storage_remove_item_callback<'s>(
     storage_remove_utf16(scope, args.this(), &key);
 }
 
-pub(super) fn storage_clear_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn storage_clear_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     storage_clear(scope, args.this());
@@ -111,8 +111,8 @@ pub(super) fn storage_key_callback<'s>(
         rv.set(v8::null(scope).into());
         return;
     };
-    let value = with_storage_store(scope, args.this(), |store, origin| {
-        store.key_utf16(origin, parsed.index as usize)
+    let value = with_storage_result(scope, args.this(), |store, origin| {
+        store.try_key_utf16(origin, parsed.index as usize)
     })
     .flatten();
     match value {
@@ -125,12 +125,12 @@ pub(super) fn storage_key_callback<'s>(
     }
 }
 
-pub(super) fn storage_length_getter_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn storage_length_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let len =
-        with_storage_store(scope, args.this(), |store, origin| store.len(origin)).unwrap_or(0);
+        with_storage_result(scope, args.this(), |store, origin| store.try_len(origin)).unwrap_or(0);
     rv.set(v8::Integer::new_from_unsigned(scope, len as u32).into());
 }

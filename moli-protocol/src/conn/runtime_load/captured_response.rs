@@ -158,7 +158,7 @@ impl CdpConnection {
         let head = ResponseHead {
             status_text: None,
             cookie_set_reports: load_inputs
-                .store_response_cookie_reports(&final_url, &response_headers),
+                .store_response_cookie_reports(&final_url, &response_headers)?,
             final_url,
             status: response_status,
             headers: response_headers,

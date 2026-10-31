@@ -1317,7 +1317,9 @@ fn document_cookie_runtime_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = args.this();
-    let cookie = document_cookie_for_receiver(scope, receiver).unwrap_or_default();
+    let Some(cookie) = document_cookie_for_receiver(scope, receiver) else {
+        return;
+    };
     let value = v8_string(scope, &cookie).unwrap_or_else(|| v8::String::empty(scope));
     rv.set(value.into());
 }
@@ -1462,8 +1464,14 @@ fn webdriver_delete_all_cookies_callback(
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        unsafe { &mut *host_ptr }.delete_all_cookies_for_wpt();
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        && let Err(error) = unsafe { &mut *host_ptr }.delete_all_cookies_for_wpt()
+    {
+        let Some(message) = v8::String::new(scope, &error.to_string()) else {
+            return;
+        };
+        let exception = v8::Exception::error(scope, message);
+        scope.throw_exception(exception);
     }
     rv.set(v8::undefined(scope).into());
 }

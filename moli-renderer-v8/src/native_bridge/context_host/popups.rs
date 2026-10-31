@@ -1252,7 +1252,7 @@ impl JsContextHost {
             return target_store;
         }
         let entries = {
-            let mut source = source_store.lock();
+            let source = &source_store;
             source
                 .sorted_keys_utf16(source_scope.area_key())
                 .into_iter()
@@ -1264,7 +1264,7 @@ impl JsContextHost {
                 .collect::<Vec<_>>()
         };
         {
-            let mut target = target_store.lock();
+            let target = &target_store;
             for (key, value) in entries {
                 let _ = target.set_item_utf16(target_scope.area_key(), &key, &value);
             }

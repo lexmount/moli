@@ -2709,6 +2709,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-cookie-db"
+version = "0.1.0"
+dependencies = [
+ "moli-cookie-jar",
+ "moli-sqlite",
+ "parking_lot",
+ "rusqlite",
+ "tempfile",
+ "time",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "moli-cookie-import"
 version = "0.1.0"
 dependencies = [
@@ -2716,9 +2730,12 @@ dependencies = [
  "base64 0.22.1",
  "moli-browser-profile",
  "moli-cookie-cache",
+ "moli-cookie-db",
  "moli-cookie-jar",
  "moli-crypto",
  "moli-leveldb-parser",
+ "moli-sqlite",
+ "moli-web-storage",
  "rusqlite",
  "rusty-leveldb",
  "serde",
@@ -2762,6 +2779,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "moli-browser-profile",
+ "moli-cookie-db",
  "moli-cookie-jar",
  "moli-dom",
  "moli-fetch",
@@ -2770,11 +2788,13 @@ dependencies = [
  "moli-parser",
  "moli-renderer-v8",
  "moli-selector",
+ "moli-sqlite",
  "moli-storage-key",
  "moli-storage-service",
  "moli-test-support",
  "moli-url",
  "moli-web-mime",
+ "moli-web-storage",
  "moli-wpt-compat",
  "parking_lot",
  "serde",
@@ -3402,6 +3422,7 @@ dependencies = [
  "moli-session-history",
  "moli-shared-worker",
  "moli-site",
+ "moli-sqlite",
  "moli-storage-key",
  "moli-storage-service",
  "moli-streams",
@@ -3418,6 +3439,7 @@ dependencies = [
  "moli-v8-util",
  "moli-web-errors",
  "moli-web-mime",
+ "moli-web-storage",
  "moli-webapi-declare",
  "moli-webcrypto",
  "moli-webidl",
@@ -3441,6 +3463,7 @@ dependencies = [
  "stylo_dom",
  "stylo_static_prefs",
  "stylo_traits",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",
@@ -3518,6 +3541,7 @@ version = "0.1.0"
 dependencies = [
  "parking_lot",
  "rusqlite",
+ "tempfile",
  "tokio",
 ]
 
@@ -3691,6 +3715,18 @@ dependencies = [
  "mime",
  "moli-content-type",
  "moli-header-field",
+]
+
+[[package]]
+name = "moli-web-storage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "moli-sqlite",
+ "moli-storage-key",
+ "parking_lot",
+ "rusqlite",
+ "tempfile",
 ]
 
 [[package]]

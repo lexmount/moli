@@ -451,7 +451,7 @@ pub fn stored_cookie_from_core(cookie: &StoreCookie<'_>) -> StoredCookie {
     }
 }
 
-pub(super) fn stored_partition_key_from_core(
+pub(crate) fn stored_partition_key_from_core(
     key: &cookie_store::CookiePartitionKey,
 ) -> super::StoredCookiePartitionKey {
     match key {

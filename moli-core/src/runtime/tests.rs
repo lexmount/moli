@@ -400,6 +400,14 @@ async fn browser_version_five_profile_starts_sql_and_reopens_new_data_without_re
     fs::create_dir_all(&paths.partition_root)?;
     let mut previous = moli_browser_profile::BrowserProfileManifest::default_for_paths(&paths);
     previous.version = 5;
+    previous.partitions[0].cookies = moli_browser_profile::ProfileBackendManifest {
+        backend: moli_browser_profile::ProfileBackendKind::Json,
+        path: Some("partitions/default/cookies.json".into()),
+    };
+    previous.partitions[0].local_storage = moli_browser_profile::ProfileBackendManifest {
+        backend: moli_browser_profile::ProfileBackendKind::Json,
+        path: Some("partitions/default/localstorage.json".into()),
+    };
     previous.partitions[0].indexed_db = moli_browser_profile::ProfileBackendManifest {
         backend: moli_browser_profile::ProfileBackendKind::Disk,
         path: Some("partitions/default/indexeddb".into()),
@@ -462,7 +470,10 @@ async fn browser_version_five_profile_starts_sql_and_reopens_new_data_without_re
         b"this is deliberately not readable IDB JSON"
     );
     let current = load_profile_manifest(&paths)?;
-    assert_eq!(current.version, 6);
+    assert_eq!(
+        current.version,
+        moli_browser_profile::PROFILE_MANIFEST_VERSION
+    );
     assert_eq!(
         current.partitions[0].indexed_db.backend,
         moli_browser_profile::ProfileBackendKind::Sqlite
@@ -1093,11 +1104,12 @@ async fn browser_profile_dir_persists_local_storage_but_not_session_storage() ->
     }
 
     let profile_paths = BrowserProfilePaths::new(&profile.path);
-    let profile_json = fs::read_to_string(&profile_paths.local_storage_path)
-        .context("expected localStorage profile json to be written")?;
+    assert!(fs::read(&profile_paths.local_storage_path)?.starts_with(b"SQLite format 3\0"));
     assert!(
-        profile_json.contains("\"persisted\"") && profile_json.contains("\"yes\""),
-        "profile localStorage file should contain persisted key: {profile_json}"
+        !profile_paths
+            .partition_root
+            .join("localstorage.json")
+            .exists()
     );
 
     let browser = Browser::new(config)?;
@@ -1482,11 +1494,11 @@ async fn browser_profile_dir_initializes_profile_manifest() -> Result<()> {
     assert_eq!(partition.root, "partitions/default");
     assert_eq!(
         partition.cookies.path.as_deref(),
-        Some("partitions/default/cookies.json")
+        Some("partitions/default/cookies.sqlite")
     );
     assert_eq!(
         partition.local_storage.path.as_deref(),
-        Some("partitions/default/localstorage.json")
+        Some("partitions/default/localstorage.sqlite")
     );
     assert_eq!(partition.session_storage.path, None);
     assert_eq!(

@@ -4,7 +4,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use moli_cookie_jar::StoredCookie;
 use moli_core::page::RendererVisualStateToken;
 use moli_core::{
     RendererOutputTransportMessage, page::RendererDocumentLifecycleMilestone,
@@ -50,7 +49,9 @@ pub(crate) use automation_dispatch::{
     AutomationCommandProgress, AutomationWorkflowReady, PendingAutomationExecution,
 };
 pub(crate) use command_dispatch::CommandTurnOutput;
-pub(crate) use frontend_control::{CdpCookieSnapshot, CdpOwnerActorLifecycle};
+#[cfg(test)]
+pub(crate) use frontend_control::CdpCookieSnapshot;
+pub(crate) use frontend_control::CdpOwnerActorLifecycle;
 use protocol_residence::{ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues};
 use runtime_command_barrier::CommandOutputReleasePermit;
 
@@ -1012,12 +1013,6 @@ impl CdpScheduler {
                 ))
             }
         }
-    }
-
-    pub(crate) fn snapshot_profile_backed_cookies(&mut self) -> Option<Vec<StoredCookie>> {
-        self.state
-            .with_state(|state| state.snapshot_profile_backed_cookies())
-            .expect("live protocol actor state")
     }
 
     pub(crate) async fn execute_automation_command_with_protocol_messages(

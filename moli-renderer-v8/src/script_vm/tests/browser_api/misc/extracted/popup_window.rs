@@ -140,6 +140,29 @@ async fn retained_popup_storage_managers_use_bound_popup_owner() {
         "https://popup-storage-owner.test/page.html",
         &loader,
     );
+    // Seed quota-managed bytes for the popup's origin independently of the
+    // retained JS receiver. Reading through the opener's owner would report 0.
+    {
+        let host = vm.context_host_weak_for_test().upgrade().unwrap();
+        let store = host.borrow().storage_bucket_store();
+        let service = store.lock().storage_service();
+        let key = moli_storage_key::MoliStorageKey::first_party_from_url(
+            &url::Url::parse("https://popup-storage-owner-child.test").unwrap(),
+            None,
+        )
+        .serialized_storage_key();
+        let locator = moli_storage_service::StorageBucketLocator::default_bucket(key);
+        let bucket_key = moli_storage_service::StorageService::opfs_bucket_key(&locator).unwrap();
+        let root = service.ensure_opfs_root(&locator).unwrap();
+        let file = service
+            .with_opfs(|opfs| opfs.get_file(&bucket_key, &root, "popup-usage.txt", true))
+            .unwrap();
+        service
+            .with_opfs(|opfs| {
+                opfs.write_file(&bucket_key, &file, b"popup quota-managed data", None)
+            })
+            .unwrap();
+    }
 
     vm.exec(
         r#"
@@ -647,7 +670,7 @@ fn window_open_lightweight_popup_clones_and_isolates_session_storage() {
     );
 }
 #[tokio::test]
-async fn storage_manager_estimate_uses_lightweight_popup_session_storage_owner() {
+async fn storage_manager_estimate_excludes_lightweight_popup_session_storage() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_page_task_executor_test_vm_with_loader("https://example.com/", &loader);
 
@@ -698,7 +721,7 @@ async fn storage_manager_estimate_uses_lightweight_popup_session_storage_owner()
     assert_eq!(
         vm.eval("__popupStorageEstimateMessages[0]")
             .expect("popup StorageManager estimate message should evaluate"),
-        r#"{"usage":16,"indexedDB":null,"topValue":"AAAAA","popupValue":"BBBBBBBBBBB"}"#
+        r#"{"usage":0,"indexedDB":null,"topValue":"AAAAA","popupValue":"BBBBBBBBBBB"}"#
     );
 }
 #[test]

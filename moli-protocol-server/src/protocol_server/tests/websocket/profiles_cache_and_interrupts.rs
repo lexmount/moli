@@ -130,12 +130,28 @@ async fn websocket_cdp_localstorage_profile_persists_across_server_restart() {
     abort_test_cdp_server(cdp_server).await;
     wait_for_profile_lock_release(&paths).await;
 
-    let persisted = std::fs::read_to_string(&paths.local_storage_path)
-        .expect("profiled localStorage json should be written");
+    assert!(paths.local_storage_path.is_file());
     assert!(
-        persisted.contains("\"persisted\"") && persisted.contains("\"yes\""),
-        "profile file should contain persisted localStorage entry: {persisted}"
+        !paths.partition_root.join("localstorage.json").exists(),
+        "active localStorage never writes JSON"
     );
+    {
+        let partition = StoragePartitionState::open(Some(&profile.path)).unwrap();
+        assert_eq!(
+            partition
+                .shared_storage_handles()
+                .web_storage_store()
+                .get_item(
+                    &moli_core::network::web_storage_partitioned_area_key(
+                        &format!("http://{fixture_addr}"),
+                        &format!("http://{}", fixture_addr.ip()),
+                    ),
+                    "persisted",
+                )
+                .as_deref(),
+            Some("yes")
+        );
+    }
 
     let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
     let (mut socket, _) = connect_async(format!(
@@ -187,14 +203,12 @@ async fn websocket_cdp_imported_cookies_with_profile_dir_persist_across_server_r
         "default context should see imported cookie: {read_imported}"
     );
     let _ = socket.close(None).await;
-    let persisted = wait_for_cookie_profile(&paths.cookies_path, |cookies| {
-        cookies
-            .iter()
-            .any(|cookie| cookie.name == "session" && cookie.value == "fixture")
-    })
-    .await;
     abort_test_cdp_server(cdp_server).await;
     wait_for_profile_lock_release(&paths).await;
+    let persisted = StoragePartitionState::open(Some(&profile.path))
+        .expect("reopen cookie SQLite after shutdown")
+        .cookies()
+        .unwrap();
     assert!(
         persisted
             .iter()
@@ -491,8 +505,13 @@ async fn websocket_cdp_cookie_profile_delete_commands_persist_across_server_rest
 async fn websocket_cdp_ephemeral_context_cookie_changes_do_not_clear_cookie_profile() {
     let profile = TempDir::new("ephemeral-cookie-profile");
     let paths = BrowserProfilePaths::new(&profile.path);
-    cookie_cache::save_cookie_cache(&paths.cookies_path, vec![stored_cookie("sid", "profile")])
-        .expect("seed cookie profile");
+    {
+        let partition = StoragePartitionState::open(Some(&profile.path)).unwrap();
+        partition
+            .import_cookies([stored_cookie("sid", "profile")])
+            .unwrap();
+        partition.flush().unwrap();
+    }
 
     let (cdp_addr, cdp_server) =
         spawn_profiled_test_protocol_server_with_cookie_profile(profile.path.clone(), Vec::new())
@@ -524,8 +543,11 @@ async fn websocket_cdp_ephemeral_context_cookie_changes_do_not_clear_cookie_prof
     abort_test_cdp_server(cdp_server).await;
     wait_for_profile_lock_release(&paths).await;
 
-    let persisted = cookie_cache::load_cookie_cache(&paths.cookies_path)
-        .expect("profile cookie cache should survive ephemeral-only connection");
+    assert!(!paths.partition_root.join("cookies.json").exists());
+    let persisted = StoragePartitionState::open(Some(&profile.path))
+        .expect("profile SQLite should survive ephemeral-only connection")
+        .cookies()
+        .unwrap();
     assert_eq!(persisted.len(), 1);
     assert_eq!(persisted[0].name, "sid");
     assert_eq!(persisted[0].value, "profile");

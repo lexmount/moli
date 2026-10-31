@@ -1,5 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
+#[cfg(test)]
 use moli_cookie_jar::StoredCookie;
 use tokio::sync::mpsc;
 
@@ -10,15 +11,16 @@ use crate::{
 };
 
 use self::target_control::CdpFrontendTargetControl;
-use super::CdpScheduler;
 
 mod target_control;
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CdpCookieSnapshot {
     profile_backed_cookies: Option<Vec<StoredCookie>>,
 }
 
+#[cfg(test)]
 impl CdpCookieSnapshot {
     pub(crate) fn from_profile_backed_cookies(cookies: Option<Vec<StoredCookie>>) -> Self {
         Self {
@@ -32,7 +34,6 @@ impl CdpCookieSnapshot {
 }
 
 pub(crate) struct CdpOwnerActorLifecycle {
-    pub(crate) checkpoint_tx: mpsc::UnboundedSender<CdpCookieSnapshot>,
     pub(crate) instance_control: BrowserInstanceControl,
 }
 
@@ -168,18 +169,6 @@ impl CdpFrontendControlState {
         self.next_frontend_id.set(next);
         next
     }
-}
-
-pub(super) fn send_cookie_checkpoint(
-    scheduler: &mut CdpScheduler,
-    owner_lifecycle: Option<&CdpOwnerActorLifecycle>,
-) {
-    let Some(owner_lifecycle) = owner_lifecycle else {
-        return;
-    };
-    let snapshot =
-        CdpCookieSnapshot::from_profile_backed_cookies(scheduler.snapshot_profile_backed_cookies());
-    let _ = owner_lifecycle.checkpoint_tx.send(snapshot);
 }
 
 #[cfg(test)]
