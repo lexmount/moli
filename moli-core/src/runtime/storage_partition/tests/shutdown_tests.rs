@@ -50,6 +50,7 @@ fn upgrade(client: &DatabaseClient, version: u64, store: &str) {
         Command::Begin {
             transaction: TX,
             mode: TransactionMode::VersionChange,
+            durability: moli_indexeddb::TransactionDurability::Strict,
             stores: BTreeSet::new(),
             version: Some(version),
             admission: None,

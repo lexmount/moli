@@ -75,6 +75,7 @@ fn seed_partial_blob_collection(vm: &mut ScriptVm, backend: &SqlBackend, blob_si
     backend.execute(Command::Begin {
         transaction,
         mode: TransactionMode::ReadWrite,
+        durability: moli_indexeddb::TransactionDurability::Relaxed,
         stores: BTreeSet::from(["records".into()]),
         version: None,
         admission: Some(admission.handle().clone()),

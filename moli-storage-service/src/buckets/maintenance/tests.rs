@@ -105,6 +105,7 @@ impl Fixture {
             Command::Begin {
                 transaction: TX,
                 mode: TransactionMode::VersionChange,
+                durability: moli_indexeddb::TransactionDurability::Strict,
                 stores: BTreeSet::new(),
                 version: Some(1),
                 admission: None,

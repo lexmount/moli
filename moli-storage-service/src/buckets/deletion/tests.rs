@@ -53,6 +53,7 @@ impl Fixture {
             Command::Begin {
                 transaction: TX,
                 mode: TransactionMode::VersionChange,
+                durability: moli_indexeddb::TransactionDurability::Strict,
                 stores: BTreeSet::new(),
                 version: Some(1),
                 admission: None,
@@ -190,6 +191,7 @@ fn deletion_waits_for_quota_without_blocking_sql_and_releases_results_after_deli
         Command::Begin {
             transaction: TX,
             mode: TransactionMode::ReadOnly,
+            durability: moli_indexeddb::TransactionDurability::Relaxed,
             stores: BTreeSet::from(["records".into()]),
             version: None,
             admission: Some(admission.handle().clone()),

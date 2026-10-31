@@ -23,7 +23,8 @@ use std::{
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::{
-    IndexOptions, IndexedDbError, Key, ObjectStoreOptions, TransactionHandle, TransactionMode,
+    IndexOptions, IndexedDbError, Key, ObjectStoreOptions, TransactionDurability,
+    TransactionHandle, TransactionMode,
 };
 
 pub use query::{Query, QuerySource, RecordPage, Seek};
@@ -136,6 +137,8 @@ pub struct Database {
     readers: BTreeMap<TransactionHandle, ActiveTransaction>,
     next_request: u64,
     blobs: Option<Arc<blobs::BlobSnapshots>>,
+    disk: bool,
+    write_durability: Option<TransactionDurability>,
 }
 
 impl Database {
@@ -219,6 +222,7 @@ impl Database {
             names::migrate_legacy(&mut connection, &identity.name, version)?;
         }
         let committed = schema::read_metadata(&connection)?;
+        let disk = connection.path().is_some_and(|path| !path.is_empty());
         Ok(Self {
             connection,
             identity,
@@ -227,6 +231,8 @@ impl Database {
             readers: BTreeMap::new(),
             next_request: 1,
             blobs: None,
+            disk,
+            write_durability: None,
         })
     }
 
@@ -272,6 +278,23 @@ impl Database {
         mode: TransactionMode,
         stores: BTreeSet<crate::IndexedDbName>,
         upgrade_version: Option<u64>,
+    ) -> Result<(), IndexedDbError> {
+        self.begin_with_durability(
+            handle,
+            mode,
+            stores,
+            upgrade_version,
+            TransactionDurability::Relaxed,
+        )
+    }
+
+    pub fn begin_with_durability(
+        &mut self,
+        handle: TransactionHandle,
+        mode: TransactionMode,
+        stores: BTreeSet<crate::IndexedDbName>,
+        upgrade_version: Option<u64>,
+        durability: TransactionDurability,
     ) -> Result<(), IndexedDbError> {
         if self.active.is_none() && !self.connection.is_autocommit() {
             return Err(IndexedDbError::InvalidState(
@@ -330,6 +353,25 @@ impl Database {
                 },
             );
             return Ok(());
+        }
+        // SQLite cannot change synchronous inside BEGIN. Only the sole writer
+        // reaches this point; readonly owners do not alter its connection policy.
+        // Keep the shared SQLite defaults and private-memory fast path intact.
+        if self.disk && self.write_durability != Some(durability) {
+            let level = match durability {
+                TransactionDurability::Relaxed => 1,
+                TransactionDurability::Strict => 2,
+            };
+            self.connection.pragma_update(None, "synchronous", level)?;
+            let actual: i64 = self
+                .connection
+                .pragma_query_value(None, "synchronous", |row| row.get(0))?;
+            if actual != level {
+                return Err(IndexedDbError::Io(
+                    "SQLite did not apply IndexedDB transaction durability".into(),
+                ));
+            }
+            self.write_durability = Some(durability);
         }
         let first_object_id = self.connection.query_row(
             "SELECT next_object_id FROM database_metadata WHERE singleton=1",

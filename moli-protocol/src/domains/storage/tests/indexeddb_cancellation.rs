@@ -50,6 +50,7 @@ async fn storage_clear_finishes_window_and_worker_admissions_and_closes_idle_con
             moli_indexeddb::sqlite::service::Command::Begin {
                 transaction: backend,
                 mode: moli_indexeddb::TransactionMode::ReadWrite,
+                durability: moli_indexeddb::TransactionDurability::Relaxed,
                 stores: std::collections::BTreeSet::from(["items".into()]),
                 version: None,
                 admission: Some(blocker.handle().clone()),
