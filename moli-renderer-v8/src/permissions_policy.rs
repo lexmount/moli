@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use url::Url;
 
+mod cross_origin_isolation;
 mod sensors;
+use cross_origin_isolation::CrossOriginIsolationPermission;
 pub(crate) use sensors::SensorPermission;
 use sensors::SensorPermissionsPolicy;
 
@@ -23,6 +25,7 @@ pub(crate) struct DocumentPermissionsPolicy {
     synchronous_xhr: bool,
     focus_without_user_activation: bool,
     sensors: SensorPermissionsPolicy,
+    cross_origin_isolation: CrossOriginIsolationPermission,
 }
 
 impl Default for DocumentPermissionsPolicy {
@@ -40,11 +43,16 @@ impl Default for DocumentPermissionsPolicy {
             synchronous_xhr: true,
             focus_without_user_activation: true,
             sensors: SensorPermissionsPolicy::default(),
+            cross_origin_isolation: CrossOriginIsolationPermission::default(),
         }
     }
 }
 
 impl DocumentPermissionsPolicy {
+    pub(crate) fn cross_origin_isolated_enabled(&self) -> bool {
+        self.cross_origin_isolation.enabled()
+    }
+
     pub(crate) fn sensor_enabled(&self, sensor: SensorPermission) -> bool {
         self.sensors.enabled(sensor)
     }
@@ -106,6 +114,9 @@ impl DocumentPermissionsPolicy {
             focus_without_user_activation: self.focus_without_user_activation
                 && other.focus_without_user_activation,
             sensors: self.sensors.intersect(&other.sensors),
+            cross_origin_isolation: self
+                .cross_origin_isolation
+                .intersect(&other.cross_origin_isolation),
         }
     }
 
@@ -158,6 +169,11 @@ impl DocumentPermissionsPolicy {
                     policy.tools_allowlist = response_origin_allowlist(allowlist);
                     policy.tools =
                         policy.tools_allows_origin(&document_url.origin(), &document_url.origin());
+                }
+                if feature.trim().eq_ignore_ascii_case("cross-origin-isolated") {
+                    policy
+                        .cross_origin_isolation
+                        .declare(allowlist, document_url);
                 }
             }
         }
@@ -261,6 +277,12 @@ impl DocumentPermissionsPolicy {
                 source_origin,
                 allow_attribute,
             ),
+            cross_origin_isolation: self.cross_origin_isolation.delegated_to_child(
+                parent_origin,
+                child_origin,
+                source_origin,
+                allow_attribute,
+            ),
         }
     }
 
@@ -270,6 +292,7 @@ impl DocumentPermissionsPolicy {
             payment: self.payment && self.payment_allows_origin(origin),
             encrypted_media: self.encrypted_media && self.encrypted_media_allows_origin(origin),
             sensors: self.sensors.for_document_origin(origin),
+            cross_origin_isolation: self.cross_origin_isolation.for_document_origin(origin),
             ..self.clone()
         }
     }

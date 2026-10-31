@@ -400,6 +400,13 @@ impl DocumentRequestPolicySnapshot {
 }
 
 impl DocumentPolicyContainer {
+    /// Chromium's DIP isolation does not depend on the COOP+COEP permission.
+    pub(crate) fn allows_cross_origin_isolation(&self) -> bool {
+        self.document_isolation_policy
+            .enables_cross_origin_isolation()
+            || self.permissions_policy.cross_origin_isolated_enabled()
+    }
+
     pub(crate) fn for_navigation_response(
         headers: &[(String, Vec<u8>)],
         final_url: &Url,
@@ -444,6 +451,10 @@ impl DocumentPolicyContainer {
                 crate::cross_origin_isolation::document_isolation_policy_from_headers(headers),
             cross_origin_isolated:
                 crate::cross_origin_isolation::response_headers_enable_cross_origin_isolation(
+                    final_url, headers,
+                ),
+            coop_coep_isolation:
+                crate::cross_origin_isolation::response_headers_enable_coop_coep_isolation(
                     final_url, headers,
                 ),
             document_content_security_policies: response_content_security_policies.clone(),
@@ -1186,6 +1197,7 @@ impl DocumentRuntime {
 
     pub(crate) fn cross_origin_isolated(&self) -> bool {
         self.policy_container.cross_origin_isolated
+            && self.policy_container.allows_cross_origin_isolation()
     }
 
     pub(crate) fn ensure_credentialless_storage_nonce(

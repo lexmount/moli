@@ -738,33 +738,72 @@ impl JsContextHost {
         unsafe { &*self.runtime }.cross_origin_isolated()
     }
 
+    pub(crate) fn window_cross_origin_isolated(&self, owner: OwnerDispatchScope) -> bool {
+        use std::borrow::Cow;
+
+        let policy = match owner {
+            OwnerDispatchScope::Top => Cow::Borrowed(self.document_policy_container()),
+            OwnerDispatchScope::LightweightPopup(id) => {
+                let Some(policy) = self.lightweight_popup_policy_container(id) else {
+                    return false;
+                };
+                Cow::Borrowed(policy)
+            }
+            OwnerDispatchScope::Child(handle) => {
+                let Some(policy) = self.child_browsing_context_policy_container_snapshot(handle)
+                else {
+                    return false;
+                };
+                Cow::Owned(policy)
+            }
+        };
+        if !policy.allows_cross_origin_isolation() {
+            return false;
+        }
+        if policy
+            .document_isolation_policy
+            .enables_cross_origin_isolation()
+        {
+            return policy.cross_origin_isolated;
+        }
+        let OwnerDispatchScope::Child(handle) = owner else {
+            return policy.cross_origin_isolated;
+        };
+        if !policy
+            .cross_origin_embedder_policy
+            .enables_cross_origin_isolation()
+        {
+            return false;
+        }
+        // COOP chooses the top-level group's mode. A COEP-only child joins it;
+        // a child's own COOP header cannot isolate an otherwise ordinary group.
+        match self.child_browsing_context_root_scope(handle) {
+            Some(OwnerDispatchScope::Top) => self.document_policy_container().coop_coep_isolation,
+            Some(OwnerDispatchScope::LightweightPopup(id)) => self
+                .lightweight_popup_policy_container(id)
+                .is_some_and(|root| root.coop_coep_isolation),
+            _ => false,
+        }
+    }
+
     pub(crate) fn window_shared_memory_agent_cluster(
         &self,
         owner: OwnerDispatchScope,
     ) -> Option<crate::structured_clone::SharedMemoryAgentCluster> {
-        let (isolated, dip) = match owner {
-            OwnerDispatchScope::Top => (
-                self.cross_origin_isolated(),
-                self.document_isolation_policy(),
-            ),
+        if !self.window_cross_origin_isolated(owner) {
+            return None;
+        }
+        let dip = match owner {
+            OwnerDispatchScope::Top => self.document_isolation_policy(),
             OwnerDispatchScope::Child(handle) => {
                 let policy = self.child_browsing_context_policy_container_snapshot(handle)?;
-                (
-                    policy.cross_origin_isolated,
-                    policy.document_isolation_policy,
-                )
+                policy.document_isolation_policy
             }
             OwnerDispatchScope::LightweightPopup(id) => {
                 let policy = self.lightweight_popup_policy_container(id)?;
-                (
-                    policy.cross_origin_isolated,
-                    policy.document_isolation_policy,
-                )
+                policy.document_isolation_policy
             }
         };
-        if !isolated {
-            return None;
-        }
         let origin = self.window_document_origin(owner)?;
         // DIP supplies its own isolation origin; otherwise the top-level
         // isolation origin is inherited, independently from the document origin.
