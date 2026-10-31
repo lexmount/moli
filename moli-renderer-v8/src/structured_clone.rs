@@ -1860,23 +1860,6 @@ impl<'s> PreparedStructuredClone<'s> {
                         return None;
                     }
                 }
-                WireTransfer::VideoFrame(frame) => {
-                    crate::context_bootstrap::video_frame::close_object(scope, frame);
-                }
-                WireTransfer::ImageBitmap(bitmap) => {
-                    let Some(payload) = image_bitmap_clone_payload_from_object(scope, bitmap) else {
-                        throw_data_clone_exception(
-                            scope,
-                            "A closed or non-origin-clean ImageBitmap cannot be transferred.",
-                        );
-                        return None;
-                    };
-                    self.payload.image_bitmaps.push(payload);
-                    detach_image_bitmap(scope, bitmap);
-                }
-                WireTransfer::OffscreenCanvas(canvas) => {
-                    self.payload.offscreen_canvases.push(transfer_offscreen_canvas(scope, canvas)?);
-                }
                 WireTransfer::MessagePort(_) => {}
                 WireTransfer::ReadableStream(stream) => {
                     let prepared = prepare_readable_stream_transfer(scope, stream)?;
@@ -1898,6 +1881,26 @@ impl<'s> PreparedStructuredClone<'s> {
                         clone_id: self.payload.transform_streams.len() as u32,
                         payload: prepared.commit(scope),
                     });
+                }
+                WireTransfer::VideoFrame(frame) => {
+                    crate::context_bootstrap::video_frame::close_object(scope, frame);
+                }
+                WireTransfer::ImageBitmap(bitmap) => {
+                    let Some(payload) = image_bitmap_clone_payload_from_object(scope, bitmap)
+                    else {
+                        throw_data_clone_exception(
+                            scope,
+                            "A closed or non-origin-clean ImageBitmap cannot be transferred.",
+                        );
+                        return None;
+                    };
+                    self.payload.image_bitmaps.push(payload);
+                    detach_image_bitmap(scope, bitmap);
+                }
+                WireTransfer::OffscreenCanvas(canvas) => {
+                    self.payload
+                        .offscreen_canvases
+                        .push(transfer_offscreen_canvas(scope, canvas)?);
                 }
             }
         }
