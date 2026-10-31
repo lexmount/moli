@@ -19,3 +19,20 @@ async fn indexed_db_store_names_follow_upgrade_commit_abort_and_utf16_identity()
     server.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_store_requests_capture_names_after_argument_conversion() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("../fixtures/indexeddb-store-conversion.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nstoreConversionProbe('store-conversion-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: storeConversionChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(result["checks"].as_array().unwrap().len(), 170);
+    }
+    server.shutdown().await;
+    Ok(())
+}
