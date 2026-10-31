@@ -1494,11 +1494,11 @@ async fn browser_profile_dir_initializes_profile_manifest() -> Result<()> {
     assert_eq!(partition.root, "partitions/default");
     assert_eq!(
         partition.cookies.path.as_deref(),
-        Some("partitions/default/ck-lite/cookies.sqlite")
+        Some("partitions/default/cookies.sqlite")
     );
     assert_eq!(
         partition.local_storage.path.as_deref(),
-        Some("partitions/default/ls-lite/localstorage.sqlite")
+        Some("partitions/default/localstorage.sqlite")
     );
     assert_eq!(partition.session_storage.path, None);
     assert_eq!(

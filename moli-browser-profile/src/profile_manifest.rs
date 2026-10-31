@@ -270,9 +270,9 @@ mod tests {
     }
 
     #[test]
-    fn version_six_switches_cookie_and_local_storage_directories_without_opening_old_data()
+    fn version_six_switches_cookie_and_local_storage_to_sqlite_without_opening_old_data()
     -> Result<()> {
-        let profile = TempProfileDir::new("v6-new-directories");
+        let profile = TempProfileDir::new("v6-sqlite-files");
         let paths = BrowserProfilePaths::new(&profile.path);
         fs::create_dir_all(&paths.partition_root)?;
         let mut previous = BrowserProfileManifest::default_for_paths(&paths);

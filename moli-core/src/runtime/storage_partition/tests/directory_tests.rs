@@ -47,7 +47,7 @@ fn cookie_and_local_storage_open_independently_on_first_data_access() -> Result<
 }
 
 #[test]
-fn profile_switches_directories_without_importing_old_json() -> Result<()> {
+fn profile_switches_to_sqlite_without_importing_old_json() -> Result<()> {
     let profile = TempProfileDir::new("ignore-old-json");
     let paths = BrowserProfilePaths::new(&profile.path);
     fs::create_dir_all(&paths.partition_root)?;
@@ -118,12 +118,7 @@ fn invalid_old_storage_files_do_not_block_new_databases() -> Result<()> {
     let profile = TempProfileDir::new("invalid-old-files");
     let paths = BrowserProfilePaths::new(&profile.path);
     fs::create_dir_all(paths.partition_root.join("localstorage.json"))?;
-    let ignored = [
-        "cookies.json",
-        "cookies.sqlite",
-        "localstorage.sqlite",
-        ".storage-sqlite-v7.json",
-    ];
+    let ignored = ["cookies.json", ".storage-sqlite-v7.json"];
     for name in ignored {
         fs::write(paths.partition_root.join(name), b"not valid JSON or SQLite")?;
     }

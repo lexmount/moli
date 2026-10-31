@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use crate::ProfilePartitionId;
 
-pub const COOKIE_DATABASE_RELATIVE_PATH: &str = "ck-lite/cookies.sqlite";
-pub const LOCAL_STORAGE_DATABASE_RELATIVE_PATH: &str = "ls-lite/localstorage.sqlite";
+pub const COOKIE_DATABASE_RELATIVE_PATH: &str = "cookies.sqlite";
+pub const LOCAL_STORAGE_DATABASE_RELATIVE_PATH: &str = "localstorage.sqlite";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserProfilePaths {
@@ -107,11 +107,11 @@ mod tests {
         );
         assert_eq!(
             paths.cookies_path,
-            PathBuf::from("/tmp/moli-profile/partitions/default/ck-lite/cookies.sqlite")
+            PathBuf::from("/tmp/moli-profile/partitions/default/cookies.sqlite")
         );
         assert_eq!(
             paths.local_storage_path,
-            PathBuf::from("/tmp/moli-profile/partitions/default/ls-lite/localstorage.sqlite")
+            PathBuf::from("/tmp/moli-profile/partitions/default/localstorage.sqlite")
         );
         assert_eq!(
             paths.storage_buckets_path,
@@ -152,11 +152,11 @@ mod tests {
         );
         assert_eq!(
             partition.cookies_path,
-            PathBuf::from("/tmp/moli-profile/partitions/tenant-a/ck-lite/cookies.sqlite")
+            PathBuf::from("/tmp/moli-profile/partitions/tenant-a/cookies.sqlite")
         );
         assert_eq!(
             partition.local_storage_path,
-            PathBuf::from("/tmp/moli-profile/partitions/tenant-a/ls-lite/localstorage.sqlite")
+            PathBuf::from("/tmp/moli-profile/partitions/tenant-a/localstorage.sqlite")
         );
         assert_eq!(
             partition.storage_buckets_path,

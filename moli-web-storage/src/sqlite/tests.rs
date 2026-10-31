@@ -65,7 +65,7 @@ fn resident(store: &WebStorageStore) -> usize {
 #[test]
 fn acquiring_an_unused_store_and_area_lease_does_not_open_the_database() {
     let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("ls-lite/localstorage.sqlite");
+    let path = root.path().join("localstorage.sqlite");
     let runtime = Runtime::new().unwrap();
     let (store, owner) =
         new_lazy_sqlite_web_storage_store(path.clone(), OpenMode::Create, runtime.handle())
@@ -74,9 +74,9 @@ fn acquiring_an_unused_store_and_area_lease_does_not_open_the_database() {
     drop(lease);
     owner.flush().unwrap();
     owner.close().unwrap();
-    assert!(!path.parent().unwrap().exists());
+    assert!(root.path().read_dir().unwrap().next().is_none());
     assert!(store.try_len("https://unused.test").is_err());
-    assert!(!path.parent().unwrap().exists());
+    assert!(root.path().read_dir().unwrap().next().is_none());
 }
 
 #[test]

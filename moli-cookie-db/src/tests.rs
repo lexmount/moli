@@ -44,7 +44,7 @@ fn put(store: &SharedBrowserCookieStore, cookie: StoredCookie) {
 #[test]
 fn unused_cookie_handles_flush_and_close_without_creating_files() {
     let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("ck-lite/cookies.sqlite");
+    let path = root.path().join("cookies.sqlite");
     let runtime = Runtime::new().unwrap();
     let (store, owner) =
         CookieDatabase::deferred(path.clone(), OpenMode::Create, runtime.handle()).unwrap();
@@ -52,12 +52,12 @@ fn unused_cookie_handles_flush_and_close_without_creating_files() {
     assert!(clone.lock_if_initialized().is_none());
     owner.flush().unwrap();
     owner.close().unwrap();
-    assert!(!path.parent().unwrap().exists());
+    assert!(root.path().read_dir().unwrap().next().is_none());
     assert!(
         clone.lock().is_err(),
         "closed handles must not reopen or restore the jar"
     );
-    assert!(!path.parent().unwrap().exists());
+    assert!(root.path().read_dir().unwrap().next().is_none());
 }
 
 #[test]
