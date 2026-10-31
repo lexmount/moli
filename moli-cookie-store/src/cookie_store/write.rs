@@ -151,9 +151,28 @@ impl CookieStore {
     /// continuing an existing rich set result.
     pub fn set_with_access_result_chain(
         &mut self,
+        cookie: Cookie<'static>,
+        context: &InsertContext<'_>,
+        prior_result: CookieSetAccessResult,
+    ) -> CookieSetAccessResult {
+        self.set_with_ordering(cookie, context, prior_result, false)
+    }
+
+    /// Restore through canonical policy while retaining persisted ordering.
+    pub fn restore_with_context(
+        &mut self,
+        cookie: Cookie<'static>,
+        context: &InsertContext<'_>,
+    ) -> CookieSetAccessResult {
+        self.set_with_ordering(cookie, context, provisional_set_access_result(), true)
+    }
+
+    fn set_with_ordering(
+        &mut self,
         mut cookie: Cookie<'static>,
         context: &InsertContext<'_>,
         mut prior_result: CookieSetAccessResult,
+        preserve_ordering: bool,
     ) -> CookieSetAccessResult {
         if matches!(prior_result.status, CookieSetResult::Rejected(_)) {
             return prior_result;
@@ -179,7 +198,7 @@ impl CookieStore {
             return prior_result;
         }
 
-        match self.insert_with_context_impl(cookie, context) {
+        match self.insert_with_context_impl(cookie, context, preserve_ordering) {
             Ok(action) => {
                 prior_result.status = CookieSetResult::Accepted(action);
                 prior_result
@@ -205,6 +224,7 @@ impl CookieStore {
         &mut self,
         cookie: Cookie<'static>,
         context: &InsertContext<'_>,
+        preserve_ordering: bool,
     ) -> InsertResult {
         let request_url = context.url;
         let cookie = canonicalize_cookie_for_store_checks(self, cookie, request_url)?;
@@ -302,22 +322,31 @@ impl CookieStore {
             ) {
                 return Err(CookieError::StorageFull);
             }
-            let creation_index = if let Some(creation_index) = existing_creation_index {
-                creation_index
+            if preserve_ordering {
+                self.next_creation_index = self
+                    .next_creation_index
+                    .max(cookie.creation_index().saturating_add(1));
+                self.next_access_index = self
+                    .next_access_index
+                    .max(cookie.last_access_index().saturating_add(1));
             } else {
-                // Expired tombstones should not count as an in-place replacement. Remove any
-                // stale entry for this key before inserting so quota checks and store actions
-                // treat the new cookie as a fresh live entry.
-                let _ = self.remove_with_partition_key(
-                    &cookie_domain,
-                    &cookie_path,
-                    &cookie_name,
-                    cookie.partition_key(),
-                );
-                self.bump_creation_index()
-            };
-            cookie.set_creation_index(creation_index);
-            cookie.touch_with_access_index(self.bump_access_index());
+                let creation_index = if let Some(creation_index) = existing_creation_index {
+                    creation_index
+                } else {
+                    // Expired tombstones should not count as an in-place replacement. Remove any
+                    // stale entry for this key before inserting so quota checks and store actions
+                    // treat the new cookie as a fresh live entry.
+                    let _ = self.remove_with_partition_key(
+                        &cookie_domain,
+                        &cookie_path,
+                        &cookie_name,
+                        cookie.partition_key(),
+                    );
+                    self.bump_creation_index()
+                };
+                cookie.set_creation_index(creation_index);
+                cookie.touch_with_access_index(self.bump_access_index());
+            }
             let observed = self.observer.is_some().then(|| cookie.clone());
             let replaced = self
                 .cookies
