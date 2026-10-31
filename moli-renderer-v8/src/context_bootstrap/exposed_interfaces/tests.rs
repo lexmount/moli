@@ -6,6 +6,7 @@ use crate::context_bootstrap::specs::{ConstructorKind, ConstructorSpec};
 use crate::util::v8str;
 
 mod finalization;
+mod url_exposure;
 
 thread_local! {
     static LAZY_GETTER_CALLS: Cell<u32> = const { Cell::new(0) };
