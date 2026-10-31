@@ -210,6 +210,31 @@ mod tests {
     }
 
     #[test]
+    fn multipart_x_user_defined_encodes_parameters_without_changing_file_bytes() {
+        let parts = [
+            text_part("\u{F780}\n", "\u{F7FF}€😂\r"),
+            blob_part(
+                "file\u{F780}",
+                "raw\u{F7FF}€😂\n.bin",
+                "application/octet-stream",
+                b"\0\x80\xff\r\n",
+            ),
+        ];
+        let original = parts.clone();
+        let body =
+            serialize_multipart_form_data_body(&parts, "boundary", encoding_rs::X_USER_DEFINED);
+        let expected = b"--boundary\r\n\
+            Content-Disposition: form-data; name=\"\x80%0D%0A\"\r\n\r\n\
+            \xff&#8364;&#128514;\r\n\r\n\
+            --boundary\r\n\
+            Content-Disposition: form-data; name=\"file\x80\"; filename=\"raw\xff&#8364;&#128514;%0A.bin\"\r\n\
+            Content-Type: application/octet-stream\r\n\r\n\
+            \0\x80\xff\r\n\r\n--boundary--\r\n";
+        assert_eq!(body, expected);
+        assert_eq!(parts, original);
+    }
+
+    #[test]
     fn multipart_boundary_selection_checks_encoded_text_and_escaped_parameters() {
         let parts = [text_part("field", "一")];
         assert!(multipart_boundary_collides(
