@@ -205,8 +205,9 @@ impl CookieStore {
         }
 
         match self.insert_with_context_impl(cookie, context, preserve_ordering) {
-            Ok(action) => {
+            Ok((action, effective_same_site)) => {
                 prior_result.status = CookieSetResult::Accepted(action);
+                prior_result.effective_same_site = Some(effective_same_site);
                 prior_result
             }
             Err(error) => {
@@ -231,7 +232,7 @@ impl CookieStore {
         cookie: Cookie<'static>,
         context: &InsertContext<'_>,
         preserve_ordering: bool,
-    ) -> InsertResult {
+    ) -> Result<(StoreAction, CookieEffectiveSameSite), CookieError> {
         let request_url = context.url;
         let cookie = canonicalize_cookie_for_store_checks(self, cookie, request_url)?;
 
@@ -300,7 +301,7 @@ impl CookieStore {
                     if let Some(key) = key {
                         self.notify(CookieStoreMutation::Delete(key));
                     }
-                    return Ok(StoreAction::ExpiredExisting);
+                    return Ok((StoreAction::ExpiredExisting, effective_same_site(&cookie)));
                 }
             }
         }
@@ -355,6 +356,8 @@ impl CookieStore {
                 cookie.set_creation_index(creation_index);
                 cookie.touch_with_access_index(self.bump_access_index());
             }
+            // Report the canonical cookie after replacement inherits its original age.
+            let effective_same_site = effective_same_site(&cookie);
             let observed = self.observer.is_some().then(|| Box::new(cookie.clone()));
             let replaced = self
                 .cookies
@@ -367,11 +370,14 @@ impl CookieStore {
             if let Some(cookie) = observed {
                 self.notify(CookieStoreMutation::Upsert { cookie });
             }
-            Ok(if replaced {
-                StoreAction::UpdatedExisting
-            } else {
-                StoreAction::Inserted
-            })
+            Ok((
+                if replaced {
+                    StoreAction::UpdatedExisting
+                } else {
+                    StoreAction::Inserted
+                },
+                effective_same_site,
+            ))
         } else {
             Err(CookieError::Expired)
         }
