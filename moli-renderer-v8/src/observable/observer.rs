@@ -1,0 +1,77 @@
+//! Internal observer steps share notification ordering with script observers,
+//! while script callbacks keep their typed Web IDL invocation boundary.
+
+use super::{callbacks, first, invoke_and_report, state::*};
+use crate::util::get_private_value;
+
+pub(super) const NATIVE_KIND: &str = "__moliObservableNativeObserver";
+pub(super) const FIRST: i32 = 1;
+
+#[derive(Clone, Copy)]
+pub(super) enum Notification<'s> {
+    Next(v8::Local<'s, v8::Value>),
+    Error(v8::Local<'s, v8::Value>),
+    Complete,
+}
+
+pub(super) fn is_native<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, observer, NATIVE_KIND).is_some_and(|value| value.is_int32())
+}
+
+pub(super) fn notify<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
+    notification: Notification<'s>,
+) {
+    if let Some(kind) = get_private_value(scope, observer, NATIVE_KIND)
+        .filter(|value| value.is_int32())
+        .and_then(|value| value.int32_value(scope))
+    {
+        if !callbacks::is_current(scope, observer) {
+            return;
+        }
+        let Some(context) = observer.get_creation_context(scope) else {
+            return;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let exception = {
+            v8::tc_scope!(let scope, scope);
+            match kind {
+                FIRST => first::notify(scope, observer, notification),
+                _ => unreachable!("unknown native Observable observer"),
+            }
+            let exception = scope.exception();
+            scope.reset();
+            exception
+        };
+        // Internal observer steps cannot throw through Subscriber.next/error/
+        // complete. In particular, first() has already resolved its Promise
+        // before a throwing iterator return() is encountered during cancellation.
+        if let Some(exception) = exception {
+            callbacks::report(scope, observer, exception);
+        }
+        return;
+    }
+    match notification {
+        Notification::Next(value) => {
+            if let Some(callback) = object_slot(scope, observer, NEXT) {
+                invoke_and_report(scope, callback, &[value]);
+            }
+        }
+        Notification::Error(error) => {
+            if let Some(callback) = object_slot(scope, observer, ERROR) {
+                invoke_and_report(scope, callback, &[error]);
+            } else {
+                callbacks::report_default_error(scope, error);
+            }
+        }
+        Notification::Complete => {
+            if let Some(callback) = object_slot(scope, observer, COMPLETE) {
+                invoke_and_report(scope, callback, &[]);
+            }
+        }
+    }
+}
