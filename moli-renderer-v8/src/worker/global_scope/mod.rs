@@ -192,11 +192,10 @@ pub(crate) use messaging::{
     worker_message_port_wake_sender, worker_message_port_wrapper,
 };
 pub(crate) use nested_workers::{
-    NestedWorkerContext, check_and_queue_nested_worker_constructor_csp,
-    forget_nested_worker_context,
-    forward_nested_worker_error_after_owner_close, reserve_nested_worker_context,
+    NestedWorkerContext, check_and_queue_nested_worker_constructor_csp, forward_nested_worker_error_after_owner_close, queue_nested_worker_task,
+    register_nested_worker_handle, reserve_nested_worker_context, terminate_nested_worker,
 };
-pub(super) use nested_workers::{close_worker_owned_nested_workers, dispatch_nested_worker_event};
+pub(super) use nested_workers::{dispatch_nested_worker_event, retire_nested_workers};
 pub(super) use network_state::{
     PendingWorkerFetch, PendingWorkerXhr, WorkerWebSocketState, WorkerXhrCompletion, WorkerXhrEvent,
 };

@@ -1,0 +1,97 @@
+{
+  "browser": {
+    "protocolVersion": "1.3",
+    "product": "Chrome/152.0.7977.82",
+    "revision": "@d04cdb24d67b081f6cf80200ffc5233f44b61109",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+    "jsVersion": "15.2.124.21"
+  },
+  "experimental_features": false,
+  "fixture_sha256": "aa54657e4f7de104906d648906579d0b1b46991ae4ca7b2655305fdcc525cfc2",
+  "expected": {
+    "cases": [
+      {
+        "scriptType": "classic",
+        "depth": 0,
+        "mode": "terminate",
+        "heldBefore": true,
+        "released": true,
+        "controlRetained": true
+      },
+      {
+        "scriptType": "classic",
+        "depth": 1,
+        "mode": "terminate",
+        "heldBefore": true,
+        "released": true,
+        "controlRetained": true
+      },
+      {
+        "scriptType": "classic",
+        "depth": 2,
+        "mode": "terminate",
+        "heldBefore": true,
+        "released": true,
+        "controlRetained": true
+      },
+      {
+        "scriptType": "classic",
+        "depth": 1,
+        "mode": "close",
+        "heldBefore": true,
+        "released": true,
+        "controlRetained": true
+      },
+      {
+        "scriptType": "classic",
+        "depth": 1,
+        "mode": "terminate-child",
+        "heldBefore": true,
+        "released": true,
+        "controlRetained": true
+      },
+      {
+        "scriptType": "module",
+        "depth": 0,
+        "mode": "terminate",
+        "heldBefore": true,
+        "released": true,
+        "controlRetained": true
+      },
+      {
+        "scriptType": "module",
+        "depth": 1,
+        "mode": "terminate",
+        "heldBefore": true,
+        "released": true,
+        "controlRetained": true
+      },
+      {
+        "scriptType": "module",
+        "depth": 2,
+        "mode": "terminate",
+        "heldBefore": true,
+        "released": true,
+        "controlRetained": true
+      },
+      {
+        "scriptType": "module",
+        "depth": 1,
+        "mode": "close",
+        "heldBefore": true,
+        "released": true,
+        "controlRetained": true
+      },
+      {
+        "scriptType": "module",
+        "depth": 1,
+        "mode": "terminate-child",
+        "heldBefore": true,
+        "released": true,
+        "controlRetained": true
+      }
+    ],
+    "controlReleased": true,
+    "remainingNames": []
+  }
+}

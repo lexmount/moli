@@ -22,17 +22,26 @@ pub(in crate::context_bootstrap) fn worker_post_message_callback<'s>(
     ) else {
         return;
     };
-    if let Some(worker_id) = super::constructor::worker_id(scope, worker)
-        && let Some(host_ptr) = super::context_host_ptr_from_global_bridge(scope)
-    {
-        let _ = unsafe { &mut *host_ptr }.post_worker_message(worker_id, data);
-        return;
-    }
-    let Some(handle_ptr) = super::constructor::get_worker_handle(scope, worker) else {
+    let Some(worker_id) = super::constructor::worker_id(scope, worker) else {
+        #[cfg(test)]
+        {
+            let Some(handle_ptr) = super::constructor::get_worker_handle(scope, worker) else {
+                return;
+            };
+            let handle = unsafe { &*handle_ptr };
+            handle.post_message(data);
+        }
         return;
     };
-    let handle = unsafe { &*handle_ptr };
-    handle.post_message(data);
+    if let Some(host_ptr) = super::context_host_ptr_from_global_bridge(scope) {
+        let _ = unsafe { &mut *host_ptr }.post_worker_message(worker_id, data);
+    } else {
+        let _ = crate::worker::queue_nested_worker_task(
+            scope,
+            worker_id,
+            crate::worker::WorkerMessage::Post(data),
+        );
+    }
 }
 
 /// `Worker.prototype.terminate()`
@@ -42,40 +51,28 @@ pub(in crate::context_bootstrap) fn worker_terminate_callback<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let worker = args.this();
-    if let Some(worker_id) = super::constructor::worker_id(scope, worker)
-        && let Some(host_ptr) = super::context_host_ptr_from_global_bridge(scope)
-        && unsafe { &mut *host_ptr }.terminate_worker(worker_id)
-    {
-        unsafe { &mut *host_ptr }.forget_worker(worker_id);
+    let Some(worker_id) = super::constructor::worker_id(scope, worker) else {
+        #[cfg(test)]
+        {
+            let Some(handle_ptr) = super::constructor::get_worker_handle(scope, worker) else {
+                return;
+            };
+            let handle = unsafe { Box::from_raw(handle_ptr) };
+            handle.terminate();
+            super::set_private_value(
+                scope,
+                worker,
+                super::WORKER_HANDLE_SLOT,
+                v8::null(scope).into(),
+            );
+        }
         return;
-    }
-    if !terminate_worker_handle(scope, worker) {
-        return;
-    }
-    if let Some(worker_id) = super::constructor::worker_id(scope, worker) {
-        let _ = crate::worker::forget_nested_worker_context(scope, worker_id);
-    }
-    if let Some(worker_id) = super::constructor::worker_id(scope, worker)
-        && let Some(host_ptr) = super::context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.forget_worker(worker_id);
-    }
-}
-
-pub(crate) fn terminate_worker_handle<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    worker: v8::Local<'s, v8::Object>,
-) -> bool {
-    let Some(handle_ptr) = super::constructor::get_worker_handle(scope, worker) else {
-        return false;
     };
-    super::set_private_value(
-        scope,
-        worker,
-        super::WORKER_HANDLE_SLOT,
-        v8::null(scope).into(),
-    );
-    // Clear the slot before dropping the handle so termination can be repeated.
-    drop(unsafe { Box::from_raw(handle_ptr) });
-    true
+    if let Some(host_ptr) = super::context_host_ptr_from_global_bridge(scope) {
+        if unsafe { &mut *host_ptr }.terminate_worker(worker_id) {
+            unsafe { &mut *host_ptr }.forget_worker(worker_id);
+        }
+    } else {
+        let _ = crate::worker::terminate_nested_worker(scope, worker_id);
+    }
 }

@@ -77,7 +77,7 @@ use runtime_inspector::WorkerRuntimeInspector;
 use super::global_scope::{
     WorkerFetchEvent, WorkerGlobalState, WorkerIsolateTimerQueues, WorkerOpfsCompletion,
     WorkerWebCryptoCompletion, WorkerXhrEvent, close_worker_owned_broadcast_channels,
-    close_worker_owned_message_ports, close_worker_owned_nested_workers,
+    close_worker_owned_message_ports,
     dispatch_nested_worker_event, dispatch_worker_csp_violation_event,
     dispatch_worker_csp_violation_event_for_state,
     dispatch_worker_websocket_event, drain_service_worker_client_focus_result,
@@ -93,6 +93,8 @@ use super::global_scope::{
     drain_worker_fetch_completion, drain_worker_opfs_completion, drain_worker_webcrypto_completion,
     drain_worker_xhr_event, install_worker_global_scope,
     prepare_worker_global_scope_templates, service_worker_fetch_handler_type,
+    retire_nested_workers,
+
 };
 #[cfg(test)]
 use super::handle::WorkerErrorReport;
@@ -1953,7 +1955,7 @@ async fn worker_main(
         websocket_event_tx,
         websockets: std::collections::HashMap::new(),
         next_nested_worker_id: 1,
-        nested_worker_wrappers: std::collections::HashMap::new(),
+        nested_workers: std::collections::HashMap::new(),
         webcrypto_completion_tx,
         pending_webcrypto: std::collections::HashMap::new(),
         next_webcrypto_task_id: 1,
@@ -3715,6 +3717,7 @@ async fn worker_main(
     module_evaluation_rx.close();
     while module_evaluation_rx.try_recv().is_ok() {}
     inspector_task_runner.dispose(crate::runtime::WorkerInspectorError::Exited);
+    retire_nested_workers(&state);
     let resource_loader = state.borrow().loader.clone();
     resource_loader.begin_detach();
     if matches!(state.borrow().global_kind, WorkerGlobalKind::Shared { .. }) {
@@ -3725,8 +3728,7 @@ async fn worker_main(
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, &context);
-        let scope = &mut v8::ContextScope::new(scope, ctx);
-        close_worker_owned_nested_workers(scope, &state);
+        let _scope = &mut v8::ContextScope::new(scope, ctx);
         retire_worker_module_runtime(ctx);
         crate::context_bootstrap::retire_indexed_db_context(ctx);
         runtime_inspector.context_destroyed(ctx);
