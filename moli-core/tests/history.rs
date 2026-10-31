@@ -2547,7 +2547,7 @@ async fn navigation_activation_cross_document_back_destination_surface() -> Resu
     let dest_url =
         server.url("/compat/navigation-activation-cross-document-back-destination-surface-dest");
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &source_url,
             RenderedDomWaitUntil::DomStable,
@@ -2555,6 +2555,7 @@ async fn navigation_activation_cross_document_back_destination_surface() -> Resu
         )
         .await?;
 
+    wait_for_body_attribute(&browser, &mut page, "data-navigation-type", "traverse").await?;
     assert_eq!(page.final_url().as_str(), source_url);
     assert_cross_document_traversal_activation_destination_surface(
         &page.serialize_html_async().await.unwrap(),

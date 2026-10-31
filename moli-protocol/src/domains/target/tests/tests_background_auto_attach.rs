@@ -294,6 +294,11 @@ async fn runtime_add_binding_then_navigation_on_auto_attached_background_target_
     consume_main_document_navigation_start(&mut ctx);
     let navigation = take_response_by_id(&mut ctx, 10353);
     assert_eq!(navigation["result"]["frameId"], json!(second_target_id));
+    ctx.wait_for_scheduler_message("background target load after navigation", |message| {
+        message["method"] == json!("Page.loadEventFired")
+            && message["sessionId"].as_str() == Some(session_id.as_str())
+    })
+    .await;
     ctx.take_all();
 
     ctx.process_async(json!({
