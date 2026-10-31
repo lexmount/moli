@@ -1,6 +1,120 @@
 use super::*;
 
 #[test]
+fn observable_callback_consumers_conversion_reentrancy_cancellation_and_exception_identity() {
+    let mut vm = new_storage_test_vm("https://observable-consumers.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.consumerResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-callback-consumers.js")
+    ))
+    .expect("Observable callback consumers fixture should evaluate");
+    let result = vm
+        .eval("consumerResult")
+        .expect("Observable consumers fixture should settle");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 132, "{result}");
+}
+
+#[test]
+fn observable_callback_consumers_preserve_callback_realms_and_callee_promises() {
+    let mut vm = new_storage_test_vm("https://observable-consumers-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable callback consumers realm");
+    vm.eval(r#"
+(async () => {
+  const child = document.querySelector('iframe').contentWindow, checks = [];
+  const callback = child.Function('a', 'b', 'globalThis.consumerThis = this; return a + b;');
+  for (const name of ['forEach', 'reduce']) {
+    const method = child.Observable.prototype[name];
+    const call = (method, source, cb) => Reflect.apply(method, source, name === 'reduce' ? [cb, 10] : [cb]);
+    const promise = call(method, Observable.from([5]), callback);
+    checks.push(promise instanceof child.Promise, !(promise instanceof Promise));
+    checks.push(await promise === (name === 'reduce' ? 15 : undefined), child.consumerThis === child);
+    const local = call(Observable.prototype[name], child.Observable.from([7]), (a, b) => a + b);
+    checks.push(local instanceof Promise, !(local instanceof child.Promise), await local === (name === 'reduce' ? 17 : undefined));
+    const invalid = call(method, {}, () => {});
+    checks.push(invalid instanceof child.Promise);
+    await invalid.catch(e => checks.push(e instanceof child.TypeError, !(e instanceof TypeError)));
+    const marker = new child.Error('callback error');
+    await call(method, Observable.from([1]), () => { throw marker; }).catch(e => checks.push(e === marker, e instanceof child.Error));
+  }
+  await child.Observable.prototype.reduce.call(Observable.from([]), () => {}).catch(e => checks.push(e instanceof child.TypeError, !(e instanceof TypeError)));
+  globalThis.consumerRealms = JSON.stringify(checks);
+})();
+"#).unwrap();
+    let result: Vec<bool> = serde_json::from_str(&vm.eval("consumerRealms").unwrap()).unwrap();
+    assert_eq!(result.len(), 26);
+    assert!(result.iter().all(|value| *value), "{result:?}");
+}
+
+#[test]
+fn observable_callback_consumers_trace_callbacks_and_release_abandoned_and_cancelled_state() {
+    let mut vm = new_storage_test_vm("https://observable-consumers-gc.test/");
+    vm.eval(r#"
+globalThis.consumerCases = [];
+globalThis.abandonedConsumers = [];
+for (const name of ['forEach', 'reduce']) {
+  for (const kept of [false, true]) (() => {
+    let subscriber;
+    const source = new Observable(s => { subscriber = s; });
+    const token = {}, seed = {}, callback = () => token;
+    const promise = name === 'reduce' ? source.reduce(callback, seed) : source.forEach(callback);
+    const refs = {source: new WeakRef(source), subscriber: new WeakRef(subscriber), callback: new WeakRef(callback), token: new WeakRef(token), seed: new WeakRef(seed)};
+    if (kept) consumerCases.push({name, promise, refs});
+    else abandonedConsumers.push(refs);
+  })();
+}
+"#).unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(vm.eval(r#"JSON.stringify([
+abandonedConsumers.every(refs => Object.values(refs).every(ref => ref.deref() === undefined)),
+consumerCases.every(c => c.refs.source.deref() === undefined && c.refs.subscriber.deref() !== undefined && c.refs.callback.deref() !== undefined && c.refs.token.deref() !== undefined),
+consumerCases[0].refs.seed.deref() === undefined, consumerCases[1].refs.seed.deref() !== undefined
+])"#).unwrap(), "[true,true,true,true]");
+    vm.eval(r#"
+for (const c of consumerCases) {
+  c.promise.then(value => { c.correct = value === (c.name === 'reduce' ? c.refs.seed.deref() : undefined); });
+  c.refs.subscriber.deref().complete(); delete c.promise;
+}
+"#).unwrap();
+    assert_eq!(
+        vm.eval("consumerCases.every(c => c.correct)").unwrap(),
+        "true"
+    );
+    collect(&mut vm);
+    assert_eq!(vm.eval("consumerCases.every(c => Object.values(c.refs).every(ref => ref.deref() === undefined))").unwrap(), "true");
+    vm.eval(r#"
+globalThis.cancelledConsumers = [];
+for (const name of ['forEach', 'reduce']) (() => {
+  const ac = new AbortController(), token = {}, seed = {}, callback = () => token;
+  let subscriber;
+  const source = new Observable(s => { subscriber = s; });
+  const promise = name === 'reduce' ? source.reduce(callback, seed, {signal: ac.signal}) : source.forEach(callback, {signal: ac.signal});
+  promise.catch(() => {}); ac.abort('cancelled');
+  cancelledConsumers.push({promise, signal: ac.signal, refs: [new WeakRef(token), new WeakRef(seed), new WeakRef(callback), new WeakRef(subscriber)]});
+})();
+"#).unwrap();
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval("cancelledConsumers.every(c => c.refs.every(ref => ref.deref() === undefined))")
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn observable_collect_values_abort_order_and_native_promise_observers() {
     let mut vm = new_storage_test_vm("https://observable-collect.test/");
     vm.eval(&format!(
