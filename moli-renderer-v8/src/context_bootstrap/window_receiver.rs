@@ -1,7 +1,5 @@
-use super::shared::WINDOW_NAVIGATOR_SLOT;
 use crate::util::{
-    callback_data_index_value, context_host_ptr_from_context_slot, get_private_value,
-    throw_type_error,
+    callback_data_index_value, context_host_ptr_from_context_slot, throw_type_error,
 };
 
 /// Recognizes a native Window receiver for WebIDL brand checks.
@@ -106,17 +104,9 @@ fn is_live_window_receiver<'s>(
     {
         return true;
     }
-    // A host pointer recovered through the public __moliNativeBridge property
-    // is not a brand: an author can copy that property to an ordinary object.
-    // Native bridge Window wrappers already carry the shared Web IDL brand.
-    if crate::web_api_interfaces::Window::is_instance(scope, receiver) {
-        return true;
-    }
-    // The shared helper maps an `undefined` rollback marker to `None`.
-    if get_private_value(scope, receiver, WINDOW_NAVIGATOR_SLOT).is_some() {
-        return true;
-    }
-    false
+    // Native bridge Window wrappers carry the shared Web IDL brand. The
+    // navigator cache is also used by workers and cannot identify a Window.
+    crate::web_api_interfaces::Window::is_instance(scope, receiver)
 }
 
 pub(in crate::context_bootstrap) fn bound_callback_data<'s>(
