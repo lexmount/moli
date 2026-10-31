@@ -64,6 +64,7 @@ pub(crate) fn start_stylesheet_subresource_fetch(
                         &identity,
                         descriptor,
                         encoded.clone(),
+                        &response,
                     );
                 }
                 host.record_get_subresource_network_result_with_body_and_initiator(

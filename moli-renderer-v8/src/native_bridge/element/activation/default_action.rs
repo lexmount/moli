@@ -486,6 +486,12 @@ pub(crate) fn replace_contenteditable_selection(
     replacement_text: &str,
     input_type: TextEditInputType,
 ) -> bool {
+    let Some(context) =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)
+    else {
+        return false;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(document) = unsafe { &*runtime_ptr }
         .dom_host()
         .owner_document_handle(handle)
@@ -548,8 +554,15 @@ pub(crate) fn replace_contenteditable_selection(
 
 pub(crate) fn select_contenteditable_contents(
     scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) -> bool {
+    let Some(context) =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)
+    else {
+        return false;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(target) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };
@@ -577,6 +590,7 @@ fn perform_contenteditable_drop_default_action<'s>(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     data_transfer: v8::Local<'s, v8::Object>,
+    smart_copy: bool,
 ) -> bool {
     let text =
         crate::context_bootstrap::native_data_transfer_get_data(scope, data_transfer, "text/plain");
@@ -612,12 +626,14 @@ fn perform_contenteditable_drop_default_action<'s>(
     };
     let _ = dispatch_public_event(scope, runtime_ptr, handle, before_input);
     if event_default_prevented(scope, before_input) {
-        return false;
+        // The editor accepted the drop. Canceling its edit consumes the
+        // operation without inserting content; dragend keeps that operation.
+        return true;
     }
     let Some(handle) =
         contenteditable_editing_host_in_document(unsafe { &*runtime_ptr }, handle, document)
     else {
-        return false;
+        return true;
     };
     let Some(target) = node_wrapper_from_handle(scope, handle) else {
         return false;
@@ -625,6 +641,23 @@ fn perform_contenteditable_drop_default_action<'s>(
     // beforeinput can also change the editing host and its inherited mode.
     let plaintext_only = element_attribute(unsafe { &*runtime_ptr }, handle, "contenteditable")
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("plaintext-only"));
+    let (leading, trailing) = if smart_copy {
+        crate::context_bootstrap::drag_copy_spacing(scope, unsafe { &*runtime_ptr }, handle)
+    } else {
+        (false, false)
+    };
+    let leading = if leading && !text.starts_with(char::is_whitespace) {
+        " "
+    } else {
+        ""
+    };
+    let trailing = if trailing && !text.ends_with(char::is_whitespace) {
+        " "
+    } else {
+        ""
+    };
+    let text = format!("{leading}{text}{trailing}");
+    let html = html.map(|html| format!("{leading}{html}{trailing}"));
     let inserted = if let Some(selection) = window_selection(scope) {
         if !plaintext_only
             && let Some(html) = html
@@ -2254,7 +2287,15 @@ pub(crate) fn perform_drop_default_action<'s>(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     data_transfer: v8::Local<'s, v8::Object>,
+    caret: Option<&crate::context_bootstrap::DragEditingRange>,
+    source: Option<&crate::context_bootstrap::DragEditingRange>,
 ) -> bool {
+    let Some(context) =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)
+    else {
+        return false;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let (is_file_input, allow_multiple, is_text_target, editing_host, focus_handle) = {
         let runtime = unsafe { &*runtime_ptr };
         if is_disabled_form_control(runtime, handle) {
@@ -2303,11 +2344,33 @@ pub(crate) fn perform_drop_default_action<'s>(
         return perform_text_drop_default_action(scope, runtime_ptr, handle, data_transfer);
     }
     if let Some(editing_host) = editing_host {
+        let effect =
+            crate::context_bootstrap::native_data_transfer_drop_effect(scope, data_transfer);
+        if let Some(caret) = caret {
+            if caret.host != editing_host || !caret.is_valid(scope, unsafe { &*runtime_ptr }) {
+                return false;
+            }
+            if effect == "move"
+                && let Some(source) = source.filter(|source| source.document == caret.document)
+                && (!source.delete_by_drag(scope, runtime_ptr)
+                    || !caret.is_connected(scope, unsafe { &*runtime_ptr }))
+            {
+                // A deleteByDrag callback may detach the accepted editor.
+                // Abort further edits while retaining the negotiated result.
+                return true;
+            }
+            if !caret.select(scope) {
+                return false;
+            }
+        } else if source.is_some() && unsafe { &*runtime_ptr }.layout_policy().uses_real_layout() {
+            return false;
+        }
         return perform_contenteditable_drop_default_action(
             scope,
             runtime_ptr,
             editing_host,
             data_transfer,
+            source.is_some() && effect == "copy",
         );
     }
     false

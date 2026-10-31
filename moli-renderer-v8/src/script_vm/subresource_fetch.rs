@@ -325,6 +325,7 @@ fn apply_image_subresource_terminal(
                     internal_id,
                     descriptor,
                     (*encoded).clone(),
+                    response,
                 );
             (completion.accepted(), completion.followup())
         }

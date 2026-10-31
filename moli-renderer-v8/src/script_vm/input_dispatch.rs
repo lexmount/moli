@@ -263,6 +263,7 @@ fn accepted_drag_operation<'s>(
     target: DomHandle,
     transfer: v8::Local<'s, v8::Object>,
     canceled: bool,
+    default_operation: &str,
 ) -> Option<String> {
     if canceled {
         return author_drag_operation(scope, transfer);
@@ -273,8 +274,8 @@ fn accepted_drag_operation<'s>(
         runtime_ptr,
         target,
         transfer,
-    ) && drop_effect_allowed_by_effect_allowed(Some(&allowed), "copy"))
-    .then(|| "copy".to_owned())
+    ) && drop_effect_allowed_by_effect_allowed(Some(&allowed), default_operation))
+    .then(|| default_operation.to_owned())
 }
 
 /// One renderer update owns one target view. A transition delivers enter before
@@ -291,6 +292,7 @@ fn update_drag_target<'s>(
     session.modifiers = modifiers;
     session.drop_allowed = false;
     session.drop_effect = "none".to_owned();
+    session.drop_caret = None;
     let target_document = target.and_then(|target| {
         unsafe { &*runtime_ptr }
             .dom_host()
@@ -316,12 +318,24 @@ fn update_drag_target<'s>(
         return;
     };
     let allowed = crate::context_bootstrap::native_data_transfer_effect_allowed(scope, transfer);
+    let copy_key = modifiers & if cfg!(target_os = "macos") { 1 } else { 2 } != 0;
+    let default_operation = if session
+        .editing_source
+        .as_ref()
+        .is_some_and(|source| Some(source.document) == target_document)
+        && !copy_key
+    {
+        "move"
+    } else {
+        "copy"
+    };
     crate::context_bootstrap::native_set_drag_drop_effect(
         scope,
         transfer,
         preferred_drop_effect_from_mask(drag_operations_mask_from_effect_allowed(&allowed)),
     );
     let mut operation = None;
+    let mut default_action = false;
     if session.target != target {
         if let Some(target) = target
             && let Some(dispatched) = dispatch_native_drag_event(
@@ -336,7 +350,15 @@ fn update_drag_target<'s>(
             )
         {
             let canceled = !dispatched.allows_default();
-            operation = accepted_drag_operation(scope, runtime_ptr, target, transfer, canceled);
+            default_action = !canceled;
+            operation = accepted_drag_operation(
+                scope,
+                runtime_ptr,
+                target,
+                transfer,
+                canceled,
+                default_operation,
+            );
         }
         if let Some(previous) = session.target {
             crate::context_bootstrap::native_set_drag_drop_effect(scope, transfer, "none");
@@ -366,7 +388,15 @@ fn update_drag_target<'s>(
         )
     {
         let canceled = !dispatched.allows_default();
-        operation = accepted_drag_operation(scope, runtime_ptr, target, transfer, canceled);
+        default_action = !canceled;
+        operation = accepted_drag_operation(
+            scope,
+            runtime_ptr,
+            target,
+            transfer,
+            canceled,
+            default_operation,
+        );
         session.only_drag_over_next = false;
     }
     crate::context_bootstrap::finish_drag_data_transfer_view(scope, transfer);
@@ -382,6 +412,39 @@ fn update_drag_target<'s>(
         return;
     }
     if let Some(operation) = operation {
+        // Only a native editable selection retains a source range. Its
+        // destination must be independent of that Selection. Preserve the
+        // existing target-range contract for externally supplied drag data.
+        if session.editing_source.is_some()
+            && let Some(target) = target
+            && let Some(document) = target_document
+            && let Some(transform) = root_to_document_frame(unsafe { &*runtime_ptr }, document)
+        {
+            let point = transform.map_point(moli_layout::LayoutPoint::new(
+                coordinates.screen_x as f32,
+                coordinates.screen_y as f32,
+            ));
+            let caret = crate::context_bootstrap::editing_drag_caret(
+                scope,
+                runtime_ptr,
+                target,
+                f64::from(point.x),
+                f64::from(point.y),
+            );
+            let inside = caret.as_ref().is_some_and(|caret| {
+                session
+                    .editing_source
+                    .as_ref()
+                    .is_some_and(|source| source.contains(scope, unsafe { &*runtime_ptr }, caret))
+            });
+            if inside {
+                if default_action {
+                    return;
+                }
+            } else {
+                session.drop_caret = caret;
+            }
+        }
         session.drop_allowed = true;
         session.drop_effect = operation;
     }
@@ -456,7 +519,14 @@ fn drop_drag_target<'s>(
     ) {
         // The DOM drop view is already disabled before beforeinput/input run.
         // The existing editing code consumes a private view of the same store.
-        completed = perform_drop_default_action(scope, runtime_ptr, target, default_transfer);
+        completed = perform_drop_default_action(
+            scope,
+            runtime_ptr,
+            target,
+            default_transfer,
+            session.drop_caret.as_ref(),
+            session.editing_source.as_ref(),
+        );
         crate::context_bootstrap::finish_drag_data_transfer_view(scope, default_transfer);
     }
     if completed {
@@ -471,7 +541,11 @@ fn native_drag_source(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
     gesture: PendingDragGesture,
-) -> Option<(DomHandle, RendererDragData)> {
+) -> Option<(
+    DomHandle,
+    RendererDragData,
+    Option<crate::context_bootstrap::DragEditingRange>,
+)> {
     let runtime = unsafe { &*runtime_ptr };
     let host = runtime.dom_host();
     if !host.is_connected(gesture.handle) {
@@ -481,12 +555,16 @@ fn native_drag_source(
     let mut current = Some(gesture.handle);
     while let Some(handle) = current {
         if let Some(element) = host.node(handle).and_then(Node::as_element) {
-            let attribute = element.attribute_ns("", "draggable");
+            let drag = crate::native_bridge::element::style_property_value(
+                runtime,
+                handle,
+                crate::native_bridge::element::StyleMode::Computed,
+                "-webkit-user-drag",
+            );
             let is_image = element.is_html_element("img");
             let is_link = element.is_html_element("a") && element.has_attribute_ns("", "href");
-            let explicitly_draggable =
-                attribute.is_some_and(|value| value.eq_ignore_ascii_case("true"));
-            let disabled = attribute.is_some_and(|value| value.eq_ignore_ascii_case("false"));
+            let explicitly_draggable = drag == "element";
+            let disabled = drag == "none";
             if !disabled && (explicitly_draggable || is_image || is_link) {
                 candidate = Some((
                     handle,
@@ -505,7 +583,15 @@ fn native_drag_source(
             .parent_node(handle)
             .or_else(|| host.shadow_root_host(handle));
     }
-    if candidate.is_none_or(|(_, attribute)| attribute != Some("src"))
+    // Blink delays resolving a selection as the source on macOS, allowing a
+    // quick gesture to adjust the selection instead. Element drags remain
+    // eligible during that interval (including elements inside a selection).
+    if (candidate.is_some()
+        || !drag_source::selection_drag_is_delayed(
+            gesture.pressed_at.elapsed(),
+            cfg!(target_os = "macos"),
+        ))
+        && candidate.is_none_or(|(_, attribute)| attribute != Some("src"))
         && let Some(data) = super::native_drag_data::selection_drag_data_at_point(
             scope,
             runtime_ptr,
@@ -514,12 +600,15 @@ fn native_drag_source(
             gesture.y,
         )
     {
-        return Some((gesture.handle, data));
+        let editing_source =
+            crate::context_bootstrap::editable_drag_selection(scope, runtime_ptr, gesture.handle);
+        return Some((gesture.handle, data, editing_source));
     }
     let (source, _) = candidate?;
     Some((
         source,
         super::native_drag_data::element_drag_data(runtime, source),
+        None,
     ))
 }
 
@@ -1365,6 +1454,7 @@ impl ScriptVm {
                     x: client_x,
                     y: client_y,
                     root_to_frame,
+                    pressed_at: std::time::Instant::now(),
                 });
             }
         }
@@ -1393,8 +1483,11 @@ impl ScriptVm {
                     f64::from(start_root.y),
                 )
                 .with_client(gesture.x, gesture.y);
-                native_drag_source(scope, runtime_ptr, gesture)
-                    .map(|(source, data)| (source, data, start_coordinates))
+                native_drag_source(scope, runtime_ptr, gesture).map(
+                    |(source, data, editing_source)| {
+                        (source, data, start_coordinates, editing_source)
+                    },
+                )
             });
             let mut pointer_dispatch_handle = handle;
             if let Some((Some(previous_handle), previous_root_to_frame)) = pointer_hover_transition
@@ -1665,7 +1758,8 @@ impl ScriptVm {
             } else {
                 None
             };
-            if let Some((drag_start_handle, initial_data, start_coordinates)) = drag_start
+            if let Some((drag_start_handle, initial_data, start_coordinates, editing_source)) =
+                drag_start
                 && !suppress_current_mouse_event
                 && let Some(data_store) =
                     crate::context_bootstrap::create_native_drag_data_store(scope)
@@ -1673,6 +1767,11 @@ impl ScriptVm {
                     scope,
                     &data_store,
                     &initial_data,
+                    // Blink writes URL, encoded image File, then HTML.
+                    unsafe { &*runtime_ptr }
+                        .dom_host()
+                        .is_html_element_named(drag_start_handle, "img")
+                        .then_some("text/html"),
                 )
                 .is_some()
                 && let Some(data_transfer) = create_drag_data_transfer_view_for_target(
@@ -1728,6 +1827,8 @@ impl ScriptVm {
                         drop_effect: "none".to_owned(),
                         drop_allowed: false,
                         source: Some(drag_start_handle),
+                        editing_source,
+                        drop_caret: None,
                         intercepted: intercept_drags,
                         target: None,
                         only_drag_over_next: false,
@@ -2567,6 +2668,8 @@ impl ScriptVm {
                     drop_effect: "none".to_owned(),
                     drop_allowed: false,
                     source: None,
+                    editing_source: None,
+                    drop_caret: None,
                     intercepted: false,
                     target: None,
                     only_drag_over_next: false,
@@ -3024,6 +3127,7 @@ impl ScriptVm {
             {
                 return Ok(input_dispatch_outcome(select_contenteditable_contents(
                     scope,
+                    runtime_ptr,
                     editing_host,
                 )));
             }

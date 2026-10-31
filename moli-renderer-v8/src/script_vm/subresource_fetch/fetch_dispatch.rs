@@ -788,7 +788,7 @@ impl ScriptVm {
                                         let _ = context_host
                                             .borrow_mut()
                                             .complete_stylesheet_css_image_response(
-                                                &identity, descriptor, encoded.clone(),
+                                                &identity, descriptor, encoded.clone(), &observable_response,
                                             );
                                     }
                                     None

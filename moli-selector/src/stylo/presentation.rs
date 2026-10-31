@@ -162,6 +162,7 @@ impl QueryElement<'_> {
             }
         } else if element.namespace() == HTML_NAMESPACE {
             append_html_direction_declaration(element, &mut block);
+            append_html_draggable_declaration(element, &mut block);
             if element.local_name() == "object" {
                 append_html_object_dimension_declarations(element, &mut block);
             }
@@ -182,6 +183,19 @@ impl QueryElement<'_> {
             hints,
         );
     }
+}
+
+fn append_html_draggable_declaration(element: &Element, block: &mut PropertyDeclarationBlock) {
+    use style::properties::longhands::_webkit_user_drag::SpecifiedValue as UserDrag;
+    let drag = match element.attribute("draggable") {
+        Some(value) if value.eq_ignore_ascii_case("true") => UserDrag::Element,
+        Some(value) if value.eq_ignore_ascii_case("false") => UserDrag::None,
+        _ => return,
+    };
+    block.push(
+        PropertyDeclaration::WebkitUserDrag(drag),
+        Importance::Normal,
+    );
 }
 
 fn append_html_direction_declaration(element: &Element, block: &mut PropertyDeclarationBlock) {

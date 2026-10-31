@@ -111,10 +111,9 @@ pub(super) fn element_drag_data(runtime: &JsContextHost, source: DomHandle) -> R
         if let Some(html) = element_html(runtime, source) {
             data.items.push(string_item("text/html", html));
         }
-        // The ready image resource retains decoded pixels/SVG, not the source
-        // response's encoded bytes, content type and download filename. Until
-        // those are available together, preserve URL/HTML without inventing a
-        // filesystem path or claiming an original image File.
+        if let Some(file) = runtime.image_drag_file(source) {
+            data.files.push(file);
+        }
     } else if element.is_html_element("a")
         && let Some(url) = resolved_attribute_url(runtime, source, "href")
     {
