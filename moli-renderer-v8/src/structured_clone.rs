@@ -400,27 +400,43 @@ pub(crate) enum RuntimeMessageAgentCluster {
     ServiceWorker,
 }
 
-/// Hidden origin identity shared by a document and its inheriting Workers.
-/// Serialized opaque origins are all "null"; the native nonce and its
-/// browser partition must both match before a Wasm module can be delivered.
+/// Security-origin identity, independent of storage partition nonces. Window
+/// identity is scoped by its host, since LocalWindow ids are owner-local.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RuntimeMessageOpaqueOrigin {
-    nonce: moli_storage_key::OpaqueOriginNonce,
+    owner: RuntimeOpaqueOriginOwner,
     partition: crate::runtime::RendererStoragePartitionIdentity,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RuntimeOpaqueOriginOwner {
+    Window {
+        host: crate::resource_owner::ResourceOwnerId,
+        window: crate::native_bridge::WindowExecutionContextOwner,
+    },
+    Worker(crate::resource_owner::ResourceOwnerId),
+}
+
 impl RuntimeMessageOpaqueOrigin {
-    pub(crate) fn from_storage_key(
-        key: &moli_storage_key::MoliStorageKey,
+    pub(crate) fn window(
+        host: crate::resource_owner::ResourceOwnerId,
+        window: crate::native_bridge::WindowExecutionContextOwner,
         partition: crate::runtime::RendererStoragePartitionIdentity,
-    ) -> Option<Arc<Self>> {
-        if key.origin() != "null" {
-            return None;
-        }
-        Some(Arc::new(Self {
-            nonce: key.opaque_nonce()?,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            owner: RuntimeOpaqueOriginOwner::Window { host, window },
             partition,
-        }))
+        })
+    }
+
+    pub(crate) fn worker(
+        owner: crate::resource_owner::ResourceOwnerId,
+        partition: crate::runtime::RendererStoragePartitionIdentity,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            owner: RuntimeOpaqueOriginOwner::Worker(owner),
+            partition,
+        })
     }
 }
 

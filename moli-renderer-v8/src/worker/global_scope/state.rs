@@ -17,6 +17,7 @@ impl WorkerGlobalState {
 }
 
 pub(crate) struct WorkerGlobalState {
+    pub(crate) message_source_security: crate::context_bootstrap::RuntimeMessageSourceSecurity,
     /// Components shared with Window runtimes, owned by this Worker run.
     pub(crate) common: Rc<crate::common_runtime::CommonRuntimeState>,
     /// Resource Timing capacity and overflow state belongs to this worker,
@@ -329,15 +330,6 @@ pub(crate) fn worker_exception_report_target(
         .map(ToString::to_string)
         .unwrap_or_default();
     Some((state.parent_tx.clone(), script_url))
-}
-
-pub(crate) fn worker_uses_shared_worker_agent_cluster(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    get_worker_state(scope).is_some_and(|state| {
-        matches!(
-            state.borrow().global_kind,
-            crate::worker::thread::WorkerGlobalKind::Shared { .. }
-        )
-    })
 }
 
 pub(super) fn worker_close_callback(

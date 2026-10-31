@@ -1,8 +1,5 @@
 use crate::{
-    context_bootstrap::{
-        current_child_browsing_context_handle_for_runtime_scope, current_worker_script_url,
-        message_port_id_from_object,
-    },
+    context_bootstrap::message_port_id_from_object,
     structured_clone::{
         PreparedStructuredClone, RuntimeMessageAgentCluster, RuntimeMessageOpaqueOrigin,
         StructuredCloneMetadata, V8StructuredClonePayload, WireTransfer, WireTransfers,
@@ -84,7 +81,7 @@ impl TransferListOperation<'_> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RuntimeMessageSourceSecurity {
     origin: Option<String>,
     opaque_origin: Option<std::sync::Arc<RuntimeMessageOpaqueOrigin>>,
@@ -107,37 +104,54 @@ impl RuntimeMessageSourceSecurity {
         self.origin.as_deref()
     }
 
-    fn current(scope: &mut v8::PinScope<'_, '_>) -> Self {
-        let origin = current_runtime_message_origin(scope);
-        let opaque_origin = if origin.as_deref() == Some("null") {
-            current_runtime_message_opaque_origin(scope)
-        } else {
-            None
-        };
+    pub(crate) fn opaque_origin(&self) -> Option<std::sync::Arc<RuntimeMessageOpaqueOrigin>> {
+        self.opaque_origin.clone()
+    }
+
+    pub(crate) fn worker(
+        script_url: Option<&url::Url>,
+        creator: Option<Self>,
+        owner: crate::resource_owner::ResourceOwnerId,
+        partition: crate::runtime::RendererStoragePartitionIdentity,
+        agent_cluster: RuntimeMessageAgentCluster,
+    ) -> Self {
+        if script_url.is_some_and(|url| url.scheme() == "blob")
+            && let Some(mut creator) = creator
+        {
+            creator.agent_cluster = agent_cluster;
+            return creator;
+        }
+        let origin = script_url.map(moli_url::origin_ascii_serialization);
+        let opaque_origin = (origin.as_deref() == Some("null"))
+            .then(|| RuntimeMessageOpaqueOrigin::worker(owner, partition));
         Self {
             origin,
             opaque_origin,
-            agent_cluster: current_runtime_message_agent_cluster(scope),
+            agent_cluster,
         }
     }
-}
 
-fn current_runtime_message_opaque_origin(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> Option<std::sync::Arc<RuntimeMessageOpaqueOrigin>> {
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let child = current_child_browsing_context_handle_for_runtime_scope(scope);
-        let host = unsafe { &mut *host_ptr };
-        let storage = host.active_storage_context(scope, child);
-        return RuntimeMessageOpaqueOrigin::from_storage_key(
-            storage.storage_key(),
-            host.browser_context_runtime().storage_partition_identity(),
-        );
+    pub(crate) fn current(scope: &mut v8::PinScope<'_, '_>) -> Self {
+        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+            let host = unsafe { &*host_ptr };
+            let context = scope.get_current_context();
+            if let Some(identity) =
+                host.window_execution_context_identity_for_v8_context(scope, context)
+                && host.window_execution_context_identity_is_current(identity)
+                && let Some(security) =
+                    host.window_message_source_security(identity.dispatch_scope())
+            {
+                return security;
+            }
+        } else if let Some(state) = crate::worker::get_worker_state(scope) {
+            return state.borrow().message_source_security.clone();
+        }
+        Self {
+            origin: None,
+            opaque_origin: None,
+            agent_cluster: RuntimeMessageAgentCluster::WindowOrDedicatedWorker,
+        }
     }
-    RuntimeMessageOpaqueOrigin::from_storage_key(
-        &crate::worker::worker_storage_key(scope)?,
-        crate::worker::worker_storage_partition_identity(scope)?,
-    )
 }
 
 pub(crate) fn structured_serialize_value<'s>(
@@ -220,34 +234,7 @@ pub(crate) fn structured_deserialize_value_for_message_event<'s>(
 }
 
 pub(crate) fn current_runtime_message_origin(scope: &mut v8::PinScope<'_, '_>) -> Option<String> {
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let host = unsafe { &*host_ptr };
-        let top_origin = moli_url::origin_ascii_serialization(host.document_url());
-        if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
-            return host.lightweight_popup_origin(popup_id);
-        }
-        if let Some(handle) = current_child_browsing_context_handle_for_runtime_scope(scope) {
-            return host.child_browsing_context_target_origin(handle);
-        }
-        return Some(top_origin);
-    }
-    current_worker_script_url(scope).map(|url| moli_url::origin_ascii_serialization(&url))
-}
-
-pub(crate) fn current_runtime_message_agent_cluster(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> RuntimeMessageAgentCluster {
-    if context_host_ptr_from_global_bridge(scope).is_some() {
-        return RuntimeMessageAgentCluster::WindowOrDedicatedWorker;
-    }
-    if crate::worker::service_worker_runtime_identity(scope).is_some() {
-        return RuntimeMessageAgentCluster::ServiceWorker;
-    }
-    if crate::worker::worker_uses_shared_worker_agent_cluster(scope) {
-        RuntimeMessageAgentCluster::SharedWorker
-    } else {
-        RuntimeMessageAgentCluster::WindowOrDedicatedWorker
-    }
+    RuntimeMessageSourceSecurity::current(scope).origin
 }
 
 pub(crate) fn wasm_module_message_allowed_for_target(

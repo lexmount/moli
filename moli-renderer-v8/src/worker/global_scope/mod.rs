@@ -240,6 +240,6 @@ pub(crate) use state::{
     WORKER_STATE_SLOT, WorkerGlobalState, get_worker_state, worker_current_script_url,
     worker_exception_report_target, worker_global_is_closed, worker_realm_secure_context_available,
     worker_service_worker_control_state, worker_storage_key, worker_storage_partition_identity,
-    worker_termination_requested, worker_uses_shared_worker_agent_cluster,
+    worker_termination_requested,
 };
 pub(super) use timers::{TimerInfo, WorkerIsolateTimerQueues, worker_isolate_timer_queues};

@@ -13,6 +13,44 @@ impl JsContextHost {
             .unwrap_or_else(|| moli_url::origin_ascii_serialization(self.document_url()))
     }
 
+    pub(crate) fn window_message_source_security(
+        &self,
+        dispatch: OwnerDispatchScope,
+    ) -> Option<crate::context_bootstrap::RuntimeMessageSourceSecurity> {
+        use crate::context_bootstrap::RuntimeMessageSourceSecurity;
+        let access = self.window_access_origin_for_dispatch_scope(dispatch)?;
+        if let WindowAccessOrigin::Opaque {
+            identity: Some(owner),
+        } = access
+        {
+            let inherited = match owner {
+                WindowExecutionContextOwner::Frame(window) => self
+                    .frame_owner_store
+                    .local_windows
+                    .get(&window)
+                    .and_then(|record| record.inherited_opaque_origin.clone()),
+                WindowExecutionContextOwner::LightweightPopup { .. } => None,
+            };
+            let opaque_origin = inherited.or_else(|| {
+                Some(crate::structured_clone::RuntimeMessageOpaqueOrigin::window(
+                    self.child_default_context_bootstrap
+                        .as_ref()?
+                        .resource_owner_id,
+                    owner,
+                    self.browser_context_runtime().storage_partition_identity(),
+                ))
+            });
+            return Some(RuntimeMessageSourceSecurity::window(
+                "null".to_owned(),
+                opaque_origin,
+            ));
+        }
+        Some(RuntimeMessageSourceSecurity::window(
+            access.serialized_origin(),
+            None,
+        ))
+    }
+
     pub(crate) fn main_default_world_security_token_key(&self) -> Option<String> {
         if self.document_sandbox_policy().forces_opaque_origin {
             return None;

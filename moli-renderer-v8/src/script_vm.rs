@@ -1969,6 +1969,7 @@ impl ScriptVm {
 
 pub(crate) struct ScriptVmInitialDocumentEnvironment {
     security_token: Option<v8::Global<v8::Value>>,
+    opaque_origin: Option<std::sync::Arc<crate::structured_clone::RuntimeMessageOpaqueOrigin>>,
     document_domain_override: Rc<RefCell<Option<String>>>,
     origin: String,
     pub(crate) policy_container: crate::document_runtime::DocumentPolicyContainer,
@@ -2048,6 +2049,13 @@ impl ScriptVmPageRealmBootstrap {
         let main_document_owner = frame_owner_store
             .current_main_document_task_owner()
             .expect("main frame admission must produce a Document owner");
+        frame_owner_store
+            .local_windows
+            .get_mut(&main_document_owner.local_window_id)
+            .expect("main Document must own a LocalWindow")
+            .inherited_opaque_origin = initial_environment
+            .as_ref()
+            .and_then(|environment| environment.opaque_origin.clone());
         let post_domcontentloaded_page_task_tx = page_task_tx.page_task_sender();
         let page_runtime_wake_tx = page_task_tx.page_runtime_wake_sender();
         let top_level_navigation_handoff_tx = page_task_tx.top_level_navigation_handoff_sender();

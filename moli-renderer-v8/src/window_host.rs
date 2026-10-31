@@ -51,6 +51,7 @@ use super::{
 use crate::event_listener_args::{
     AddEventListenerArgs, RemoveEventListenerArgs, parse_listener_args,
 };
+use crate::native_bridge::OwnerDispatchScope;
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1704,27 +1705,14 @@ fn window_message_endpoint_security(
     host: &mut JsContextHost,
     endpoint: PendingWindowMessageEndpoint,
 ) -> Option<crate::context_bootstrap::RuntimeMessageSourceSecurity> {
-    let origin = window_message_endpoint_origin(host, endpoint)?;
-    let opaque_origin = if origin == "null" {
-        let storage = match endpoint {
-            PendingWindowMessageEndpoint::TopWindow => Some(host.top_document_storage_context()),
-            PendingWindowMessageEndpoint::ChildWindow(handle) => {
-                host.storage_context_for_child_browsing_context(handle)
-            }
-            PendingWindowMessageEndpoint::LightweightPopup(id) => {
-                host.storage_context_for_lightweight_popup(id)
-            }
-        };
-        storage.and_then(|storage| {
-            crate::structured_clone::RuntimeMessageOpaqueOrigin::from_storage_key(
-                storage.storage_key(),
-                host.browser_context_runtime().storage_partition_identity(),
-            )
-        })
-    } else {
-        None
+    let dispatch = match endpoint {
+        PendingWindowMessageEndpoint::TopWindow => OwnerDispatchScope::Top,
+        PendingWindowMessageEndpoint::ChildWindow(handle) => OwnerDispatchScope::Child(handle),
+        PendingWindowMessageEndpoint::LightweightPopup(id) => {
+            OwnerDispatchScope::LightweightPopup(id)
+        }
     };
-    Some(crate::context_bootstrap::RuntimeMessageSourceSecurity::window(origin, opaque_origin))
+    host.window_message_source_security(dispatch)
 }
 
 fn window_message_requires_messageerror(

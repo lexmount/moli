@@ -218,6 +218,7 @@ fn dispatch_one_message_port_event_in_current_context<'s>(
         if !crate::context_bootstrap::runtime_message_allowed_for_current_target(
             &mut scope, &payload,
         ) {
+            registry.discard_message(payload);
             dispatch_message_port_messageerror_event(&mut scope, target, callback_errors)
         } else if let Some((data, ports)) =
             crate::context_bootstrap::structured_deserialize_value_for_message_event(

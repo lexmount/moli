@@ -196,6 +196,8 @@ pub(crate) struct WorkerSpawnOptions {
     /// inherited from an explicit API, creator, or shared-worker instance key.
     pub(crate) broadcast_channel_top_level_site: Option<String>,
     pub(crate) creator_storage_key: Option<MoliStorageKey>,
+    pub(crate) creator_message_security:
+        Option<crate::context_bootstrap::RuntimeMessageSourceSecurity>,
     pub(crate) service_worker_runtime: Option<ServiceWorkerRuntimeService>,
     pub(crate) reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
@@ -330,6 +332,7 @@ impl WorkerSpawnOptions {
             api_storage_key: None,
             broadcast_channel_top_level_site: None,
             creator_storage_key: None,
+            creator_message_security: None,
             service_worker_runtime: None,
             reserved_service_worker_client_id: None,
             indexed_db_manager: None,
@@ -457,6 +460,14 @@ impl WorkerSpawnOptions {
         top_level_site: Option<String>,
     ) -> Self {
         self.broadcast_channel_top_level_site = top_level_site;
+        self
+    }
+
+    pub(crate) fn with_creator_message_security(
+        mut self,
+        security: Option<crate::context_bootstrap::RuntimeMessageSourceSecurity>,
+    ) -> Self {
+        self.creator_message_security = security;
         self
     }
 
@@ -1340,6 +1351,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         api_storage_key,
         broadcast_channel_top_level_site,
         creator_storage_key,
+        creator_message_security,
         service_worker_runtime,
         reserved_service_worker_client_id,
         indexed_db_manager,
@@ -1391,6 +1403,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 api_storage_key,
                 broadcast_channel_top_level_site,
                 creator_storage_key,
+                creator_message_security,
                 service_worker_runtime,
                 reserved_service_worker_client_id,
                 indexed_db_manager,
@@ -1522,6 +1535,7 @@ async fn worker_main(
     api_storage_key: Option<BroadcastChannelStorageKey>,
     broadcast_channel_top_level_site: Option<String>,
     creator_storage_key: Option<MoliStorageKey>,
+    creator_message_security: Option<crate::context_bootstrap::RuntimeMessageSourceSecurity>,
     service_worker_runtime: Option<ServiceWorkerRuntimeService>,
     reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
@@ -1631,7 +1645,26 @@ async fn worker_main(
     let service_worker_client_id = service_worker_worker_client
         .as_ref()
         .map(|client| client.client_id);
+    let message_agent_cluster = match &global_kind {
+        WorkerGlobalKind::Dedicated { .. } => {
+            crate::structured_clone::RuntimeMessageAgentCluster::WindowOrDedicatedWorker
+        }
+        WorkerGlobalKind::Shared { .. } => {
+            crate::structured_clone::RuntimeMessageAgentCluster::SharedWorker
+        }
+        WorkerGlobalKind::Service { .. } => {
+            crate::structured_clone::RuntimeMessageAgentCluster::ServiceWorker
+        }
+    };
+    let message_source_security = crate::context_bootstrap::RuntimeMessageSourceSecurity::worker(
+        current_script_url.as_ref(),
+        creator_message_security,
+        resource_owner_id,
+        worker_context_runtime.storage_partition_identity(),
+        message_agent_cluster,
+    );
     let state = Rc::new(RefCell::new(WorkerGlobalState {
+        message_source_security,
         common: Rc::new(crate::common_runtime::CommonRuntimeState::default()),
         resource_timing_buffers: crate::native_bridge::SharedResourceTimingBufferRegistry::new(),
         parent_tx: parent_tx.clone(),
