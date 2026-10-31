@@ -49,6 +49,6 @@ pub use options::{
 pub use types::{
     DatabaseHandle, IndexInfo, IndexOptions, IndexedDbExternalObject,
     IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind, IndexedDbQuotaCheck,
-    IndexedDbValue, ObjectStoreInfo, ObjectStoreOptions, RecordSnapshot, TransactionHandle,
-    TransactionMode,
+    IndexedDbValue, ObjectStoreInfo, ObjectStoreOptions, RecordSnapshot, TransactionDurability,
+    TransactionHandle, TransactionMode,
 };

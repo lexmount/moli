@@ -4,6 +4,8 @@ fn upgrade(client: &DatabaseClient, version: u64) {
     execute(
         client,
         Command::Begin {
+            durability: crate::TransactionDurability::Relaxed,
+
             transaction: TX,
             mode: TransactionMode::VersionChange,
             stores: BTreeSet::new(),
