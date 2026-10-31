@@ -140,8 +140,8 @@ fn merges_both_browsers_with_existing_storage_by_utf16_key() -> Result<()> {
     assert_eq!(
         summary,
         ImportSummary {
-            cookies: 0,
-            storage: 5
+            storage: 5,
+            ..ImportSummary::default()
         }
     );
     let mut expected = [
@@ -378,6 +378,8 @@ fn imports_a_netscape_cookie_jar() -> Result<()> {
     owner.close()?;
     runtime.shutdown()?;
     assert_eq!(summary.cookies, 1);
+    assert_eq!(summary.cookies_rejected, 0);
+    assert_eq!(summary.cookies_stored, 1);
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "session");
     for name in ["cookies.json", "localstorage.json"] {
@@ -386,5 +388,137 @@ fn imports_a_netscape_cookie_jar() -> Result<()> {
             b"old JSON must stay untouched"
         );
     }
+    Ok(())
+}
+
+fn imported_cookies(destination: &Path) -> Result<Vec<moli_cookie_jar::StoredCookie>> {
+    let profile = BrowserProfile::open(destination)?;
+    let mut runtime = moli_sqlite::Runtime::new()?;
+    let (store, owner) = moli_cookie_db::CookieDatabase::open(
+        profile.default_partition().cookies_path().to_owned(),
+        moli_sqlite::OpenMode::Existing,
+        runtime.handle(),
+    )?;
+    let cookies = store.lock()?.cookies();
+    owner.close()?;
+    runtime.shutdown()?;
+    Ok(cookies)
+}
+
+#[test]
+fn cookie_import_reports_acceptance_replacements_and_rejection_reasons() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let destination = root.path().join("profile");
+    let jars = [root.path().join("cookies.txt")];
+    let request = ImportRequest {
+        profile_dir: &destination,
+        includes: "cookies".parse().unwrap(),
+        chrome_profile_dir: None,
+        chrome_crypto_key: None,
+        firefox_profile_dir: None,
+        cookie_jars: &jars,
+    };
+    fs::write(&jars[0], "old.test\tFALSE\t/\tFALSE\t0\told\tkeep\n")?;
+    assert_eq!(import_session_state(&request)?.cookies, 1);
+    fs::write(
+        &jars[0],
+        format!(
+            "example.com\tFALSE\t/\tFALSE\t0\tvalid\tfirst\n\
+         example.com\tFALSE\t/\tFALSE\t0\tvalid\tlast\n\
+         example.com\tFALSE\t/\tFALSE\t0\t__Secure-a\trejected\n\
+         example.com\tFALSE\t/\tFALSE\t0\t__Secure-b\trejected\n\
+         example.com\tFALSE\t/\tFALSE\t0\toversized\t{}\n",
+            "x".repeat(4097)
+        ),
+    )?;
+    let summary = import_session_state(&request)?;
+    assert_eq!(summary.cookies, 2);
+    assert_eq!(summary.cookies_rejected, 3);
+    assert_eq!(summary.cookies_stored, 2);
+    assert_eq!(
+        summary.cookie_rejections,
+        vec![
+            CookieImportRejection {
+                reason: StoredCookieSetRejectionReason::PrefixViolation,
+                count: 2
+            },
+            CookieImportRejection {
+                reason: StoredCookieSetRejectionReason::NameValueTooLarge,
+                count: 1
+            },
+        ]
+    );
+    assert_eq!(
+        summary.to_string(),
+        "cookies accepted=2, rejected=3, stored in destination=2, cookie rejections=[PrefixViolation=2, NameValueTooLarge=1]"
+    );
+    let cookies = imported_cookies(&destination)?;
+    assert_eq!(cookies.len(), summary.cookies_stored);
+    assert!(cookies.iter().any(|c| c.name == "old" && c.value == "keep"));
+    assert!(
+        cookies
+            .iter()
+            .any(|c| c.name == "valid" && c.value == "last")
+    );
+    Ok(())
+}
+
+#[test]
+fn rejected_cookie_imports_do_not_report_successful_writes() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let destination = root.path().join("profile");
+    let jars = [root.path().join("cookies.txt")];
+    fs::write(
+        &jars[0],
+        "example.com\tFALSE\t/\tFALSE\t0\t__Secure-invalid\tvalue\n",
+    )?;
+    let summary = import_session_state(&ImportRequest {
+        profile_dir: &destination,
+        includes: "cookies".parse().unwrap(),
+        chrome_profile_dir: None,
+        chrome_crypto_key: None,
+        firefox_profile_dir: None,
+        cookie_jars: &jars,
+    })?;
+    assert_eq!(summary.cookies, 0);
+    assert_eq!(summary.cookies_rejected, 1);
+    assert_eq!(summary.cookies_stored, 0);
+    assert_eq!(
+        summary.to_string(),
+        "cookies accepted=0, rejected=1, stored in destination=0, cookie rejections=[PrefixViolation=1]"
+    );
+    assert!(imported_cookies(&destination)?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn quota_eviction_is_distinct_from_accepting_cookie_imports() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let destination = root.path().join("profile");
+    let jars = [root.path().join("cookies.txt")];
+    fs::write(
+        &jars[0],
+        (0..181)
+            .map(|i| format!("example.com\tFALSE\t/\tFALSE\t0\tk{i}\tvalue\n"))
+            .collect::<String>(),
+    )?;
+    let summary = import_session_state(&ImportRequest {
+        profile_dir: &destination,
+        includes: "cookies".parse().unwrap(),
+        chrome_profile_dir: None,
+        chrome_crypto_key: None,
+        firefox_profile_dir: None,
+        cookie_jars: &jars,
+    })?;
+    assert_eq!(summary.cookies, 181);
+    assert_eq!(summary.cookies_rejected, 0);
+    assert_eq!(summary.cookies_stored, 180);
+    let cookies = imported_cookies(&destination)?;
+    assert_eq!(cookies.len(), 180);
+    assert!(!cookies.iter().any(|c| c.name == "k0"));
+    assert_eq!(
+        summary.to_string(),
+        "cookies accepted=181, rejected=0, stored in destination=180"
+    );
     Ok(())
 }
