@@ -109,6 +109,78 @@ fn browser_metadata_requires_a_potentially_trustworthy_current_destination() -> 
     Ok(())
 }
 
+#[test]
+fn non_navigation_requests_without_initiators_never_generate_sec_fetch_user() -> Result<()> {
+    let config = FetchConfig::default();
+    for target in ["https://example.test/resource", "http://localhost/resource"] {
+        let target = Url::parse(target)?;
+        for mode in [
+            RequestMode::Cors,
+            RequestMode::NoCors,
+            RequestMode::SameOrigin,
+        ] {
+            // Request::get retains its top-level cookie context when its mode changes.
+            let request = Request::get(target.as_str())?
+                .with_request_mode(mode)
+                .with_request_origin(moli_url::WebOrigin::from_url(&target))
+                .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            let headers = crate::outgoing_request_headers(&config, &request, None);
+            for (name, expected) in [
+                ("Sec-Fetch-Mode", Some(mode.as_ref())),
+                ("Sec-Fetch-Dest", Some("empty")),
+                ("Sec-Fetch-Site", Some("same-origin")),
+                ("Sec-Fetch-User", None),
+            ] {
+                let actual = headers
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                    .map(|(_, value)| value.as_str());
+                assert_eq!(actual, expected, "{mode:?}: {target}: {name}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn explicit_embedder_metadata_headers_are_preserved_for_every_destination() -> Result<()> {
+    let config = FetchConfig::default();
+    let explicit = [
+        ("Sec-Fetch-Mode", "same-origin"),
+        ("Sec-Fetch-Dest", "document"),
+        ("Sec-Fetch-Site", "same-site"),
+        ("Sec-Fetch-User", "?1"),
+    ];
+    for target in [
+        "https://example.test/resource",
+        "http://example.test/resource",
+    ] {
+        let target = Url::parse(target)?;
+        let request = Request::new(
+            "GET",
+            target.as_str(),
+            None,
+            explicit
+                .iter()
+                .map(|&(name, value)| (name.to_owned(), value.to_owned()))
+                .collect::<Vec<_>>(),
+        )?
+        .with_request_mode(RequestMode::Cors)
+        .with_request_origin(moli_url::WebOrigin::from_url(&target))
+        .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+        let headers = crate::outgoing_request_headers(&config, &request, None);
+        for (name, expected) in explicit {
+            let values = headers
+                .iter()
+                .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(values, [expected], "{target}: {name}");
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Transport {
     Buffered,
@@ -130,10 +202,13 @@ async fn check_redirects(transport: Transport) -> Result<()> {
         RequestKind::Iframe,
         RequestKind::Fetch,
     ] {
-        for trustworthy in [
-            [true, false, true],
-            [false, true, false],
-            [false, false, false],
+        for (trustworthy, expected_sites) in [
+            (
+                [true, false, true],
+                [Some("same-origin"), None, Some("cross-site")],
+            ),
+            ([false, true, false], [None, Some("cross-site"), None]),
+            ([false, false, false], [None, None, None]),
         ] {
             let last = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("done")]);
             let last_url = destination_url(&last, trustworthy[2])?;
@@ -199,8 +274,13 @@ async fn check_redirects(transport: Transport) -> Result<()> {
                         Some(kind.destination()),
                         "{case}: hop {hop}"
                     );
-                    assert!(
-                        header(request, "Sec-Fetch-Site").is_some(),
+                    assert_eq!(
+                        header(request, "Sec-Fetch-Site"),
+                        if matches!(kind, RequestKind::Navigation) {
+                            Some("none")
+                        } else {
+                            expected_sites[hop]
+                        },
                         "{case}: hop {hop}"
                     );
                     assert_eq!(

@@ -465,7 +465,10 @@ fn append_fetch_metadata_headers(
         "Sec-Fetch-Site",
         request_sec_fetch_site(request, request_url),
     );
-    if request.is_top_level_navigation_request() && request.cookie_context.initiator_url.is_none() {
+    if request.is_navigation_request()
+        && request.is_top_level_navigation_request()
+        && request.cookie_context.initiator_url.is_none()
+    {
         append_encoded_header_if_missing(outgoing, "Sec-Fetch-User", "?1".to_owned());
     }
 }
@@ -1344,28 +1347,38 @@ mod tests {
 
     #[test]
     fn browser_subresource_origin_uses_redirect_target_url() {
-        let config = FetchConfig::default();
-        let initiator_url = url("https://app.test/page");
-        let original_url = url("https://app.test/redirect");
-        let redirected_url = url("https://api.test/data");
-        let request = Request::new("GET", original_url.as_str(), None, Vec::new())
-            .unwrap()
-            .with_initiator_url(&initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
-            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
-        let redirect_chain = vec![redirect(&original_url, &redirected_url)];
-        let request = request.with_redirect_chain(redirect_chain);
+        for scheme in ["http", "https"] {
+            let config = FetchConfig::default();
+            let initiator_url = url(&format!("{scheme}://app.test/page"));
+            let original_url = url(&format!("{scheme}://app.test/redirect"));
+            let redirected_url = url(&format!("{scheme}://api.test/data"));
+            let request = Request::new("GET", original_url.as_str(), None, Vec::new())
+                .unwrap()
+                .with_initiator_url(&initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
+                .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            let redirect_chain = vec![redirect(&original_url, &redirected_url)];
+            let request = request.with_redirect_chain(redirect_chain);
 
-        let headers = outgoing_request_headers_for_url(&config, &request, &redirected_url, None);
+            let headers =
+                outgoing_request_headers_for_url(&config, &request, &redirected_url, None);
 
-        assert_eq!(
-            header_value(&headers, "origin"),
-            Some("https://app.test".to_owned())
-        );
-        assert_eq!(
-            header_value(&headers, "sec-fetch-site"),
-            Some("cross-site".to_owned())
-        );
+            assert_eq!(
+                header_value(&headers, "origin"),
+                Some(format!("{scheme}://app.test"))
+            );
+            assert_eq!(
+                header_value(&headers, "sec-fetch-site"),
+                (scheme == "https").then(|| "cross-site".to_owned())
+            );
+            if scheme == "http" {
+                assert!(
+                    headers
+                        .iter()
+                        .all(|(name, _)| { !name.to_ascii_lowercase().starts_with("sec-fetch-") })
+                );
+            }
+        }
     }
 
     #[test]
@@ -1398,108 +1411,145 @@ mod tests {
 
     #[test]
     fn browser_subresource_origin_serializes_null_after_cross_site_redirect() {
-        let config = FetchConfig::default();
-        let initiator_url = url("https://app.test/page");
-        let original_url = url("https://api.test/redirect");
-        let redirected_url = url("https://app.test/data");
-        let request = Request::new("GET", original_url.as_str(), None, Vec::new())
-            .unwrap()
-            .with_initiator_url(&initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
-            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
-        let redirect_chain = vec![redirect(&original_url, &redirected_url)];
-        let request = request.with_redirect_chain(redirect_chain);
+        for scheme in ["http", "https"] {
+            let config = FetchConfig::default();
+            let initiator_url = url(&format!("{scheme}://app.test/page"));
+            let original_url = url(&format!("{scheme}://api.test/redirect"));
+            let redirected_url = url(&format!("{scheme}://app.test/data"));
+            let request = Request::new("GET", original_url.as_str(), None, Vec::new())
+                .unwrap()
+                .with_initiator_url(&initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
+                .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            let redirect_chain = vec![redirect(&original_url, &redirected_url)];
+            let request = request.with_redirect_chain(redirect_chain);
 
-        let headers = outgoing_request_headers_for_url(&config, &request, &redirected_url, None);
+            let headers =
+                outgoing_request_headers_for_url(&config, &request, &redirected_url, None);
 
-        assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
-        assert_eq!(
-            header_value(&headers, "sec-fetch-site"),
-            Some("cross-site".to_owned())
-        );
+            assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
+            assert_eq!(
+                header_value(&headers, "sec-fetch-site"),
+                (scheme == "https").then(|| "cross-site".to_owned())
+            );
+            if scheme == "http" {
+                assert!(
+                    headers
+                        .iter()
+                        .all(|(name, _)| { !name.to_ascii_lowercase().starts_with("sec-fetch-") })
+                );
+            }
+        }
     }
 
     #[test]
     fn browser_subresource_origin_serializes_null_after_same_site_redirect_chain() {
-        let config = FetchConfig::default();
-        let initiator_url = url("https://app.test:8000/page");
-        let original_url = url("https://app.test:8000/redirect");
-        let intermediate_url = url("https://app.test:8001/redirect");
-        let final_url = url("https://app.test:8000/data");
-        let request = Request::new("GET", original_url.as_str(), None, Vec::new())
-            .unwrap()
-            .with_initiator_url(&initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
-            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
-        let redirect_chain = vec![
-            redirect(&original_url, &intermediate_url),
-            redirect(&intermediate_url, &final_url),
-        ];
-        let request = request.with_redirect_chain(redirect_chain);
+        for scheme in ["http", "https"] {
+            let config = FetchConfig::default();
+            let initiator_url = url(&format!("{scheme}://app.test:8000/page"));
+            let original_url = url(&format!("{scheme}://app.test:8000/redirect"));
+            let intermediate_url = url(&format!("{scheme}://app.test:8001/redirect"));
+            let final_url = url(&format!("{scheme}://app.test:8000/data"));
+            let request = Request::new("GET", original_url.as_str(), None, Vec::new())
+                .unwrap()
+                .with_initiator_url(&initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
+                .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            let redirect_chain = vec![
+                redirect(&original_url, &intermediate_url),
+                redirect(&intermediate_url, &final_url),
+            ];
+            let request = request.with_redirect_chain(redirect_chain);
 
-        let headers = outgoing_request_headers_for_url(&config, &request, &final_url, None);
+            let headers = outgoing_request_headers_for_url(&config, &request, &final_url, None);
 
-        assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
-        assert_eq!(
-            header_value(&headers, "sec-fetch-site"),
-            Some("same-site".to_owned())
-        );
+            assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
+            assert_eq!(
+                header_value(&headers, "sec-fetch-site"),
+                (scheme == "https").then(|| "same-site".to_owned())
+            );
+            if scheme == "http" {
+                assert!(
+                    headers
+                        .iter()
+                        .all(|(name, _)| { !name.to_ascii_lowercase().starts_with("sec-fetch-") })
+                );
+            }
+        }
     }
 
     #[test]
     fn browser_subresource_origin_serializes_null_after_cross_site_redirect_chain_returns_to_origin()
      {
-        let config = FetchConfig::default();
-        let initiator_url = url("https://app.test/page");
-        let original_url = url("https://app.test/redirect");
-        let cross_site_url = url("https://cross.test/redirect");
-        let final_url = url("https://app.test/data");
-        let request = Request::new("GET", original_url.as_str(), None, Vec::new())
-            .unwrap()
-            .with_initiator_url(&initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
-            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
-        let redirect_chain = vec![
-            redirect(&original_url, &cross_site_url),
-            redirect(&cross_site_url, &final_url),
-        ];
-        let request = request.with_redirect_chain(redirect_chain);
+        for scheme in ["http", "https"] {
+            let config = FetchConfig::default();
+            let initiator_url = url(&format!("{scheme}://app.test/page"));
+            let original_url = url(&format!("{scheme}://app.test/redirect"));
+            let cross_site_url = url(&format!("{scheme}://cross.test/redirect"));
+            let final_url = url(&format!("{scheme}://app.test/data"));
+            let request = Request::new("GET", original_url.as_str(), None, Vec::new())
+                .unwrap()
+                .with_initiator_url(&initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
+                .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            let redirect_chain = vec![
+                redirect(&original_url, &cross_site_url),
+                redirect(&cross_site_url, &final_url),
+            ];
+            let request = request.with_redirect_chain(redirect_chain);
 
-        let headers = outgoing_request_headers_for_url(&config, &request, &final_url, None);
+            let headers = outgoing_request_headers_for_url(&config, &request, &final_url, None);
 
-        assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
-        assert_eq!(
-            header_value(&headers, "sec-fetch-site"),
-            Some("cross-site".to_owned())
-        );
+            assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
+            assert_eq!(
+                header_value(&headers, "sec-fetch-site"),
+                (scheme == "https").then(|| "cross-site".to_owned())
+            );
+            if scheme == "http" {
+                assert!(
+                    headers
+                        .iter()
+                        .all(|(name, _)| { !name.to_ascii_lowercase().starts_with("sec-fetch-") })
+                );
+            }
+        }
     }
 
     #[test]
     fn browser_subresource_origin_serializes_null_after_cross_site_redirect_chain_stays_cross_site()
     {
-        let config = FetchConfig::default();
-        let initiator_url = url("https://app.test/page");
-        let original_url = url("https://app.test/redirect");
-        let cross_site_redirect_url = url("https://cross.test/redirect");
-        let final_url = url("https://api.test/data");
-        let request = Request::new("GET", original_url.as_str(), None, Vec::new())
-            .unwrap()
-            .with_initiator_url(&initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
-            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
-        let redirect_chain = vec![
-            redirect(&original_url, &cross_site_redirect_url),
-            redirect(&cross_site_redirect_url, &final_url),
-        ];
-        let request = request.with_redirect_chain(redirect_chain);
+        for scheme in ["http", "https"] {
+            let config = FetchConfig::default();
+            let initiator_url = url(&format!("{scheme}://app.test/page"));
+            let original_url = url(&format!("{scheme}://app.test/redirect"));
+            let cross_site_redirect_url = url(&format!("{scheme}://cross.test/redirect"));
+            let final_url = url(&format!("{scheme}://api.test/data"));
+            let request = Request::new("GET", original_url.as_str(), None, Vec::new())
+                .unwrap()
+                .with_initiator_url(&initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
+                .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            let redirect_chain = vec![
+                redirect(&original_url, &cross_site_redirect_url),
+                redirect(&cross_site_redirect_url, &final_url),
+            ];
+            let request = request.with_redirect_chain(redirect_chain);
 
-        let headers = outgoing_request_headers_for_url(&config, &request, &final_url, None);
+            let headers = outgoing_request_headers_for_url(&config, &request, &final_url, None);
 
-        assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
-        assert_eq!(
-            header_value(&headers, "sec-fetch-site"),
-            Some("cross-site".to_owned())
-        );
+            assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
+            assert_eq!(
+                header_value(&headers, "sec-fetch-site"),
+                (scheme == "https").then(|| "cross-site".to_owned())
+            );
+            if scheme == "http" {
+                assert!(
+                    headers
+                        .iter()
+                        .all(|(name, _)| { !name.to_ascii_lowercase().starts_with("sec-fetch-") })
+                );
+            }
+        }
     }
 
     #[test]
