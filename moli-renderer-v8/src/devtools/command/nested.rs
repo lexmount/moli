@@ -84,6 +84,7 @@ impl RendererPageCommand {
             | Self::ChildFrameOwnerNodeReference { .. }
             | Self::ChildFrameDocumentRootNodeReference { .. }
             | Self::PendingSubresourceRequestCount
+            | Self::ForPendingDocumentPolicy { .. }
             | Self::SetFetchSubresourceInterception { .. }
             | Self::SetJavaScriptDialogHandlerEnabled(..)
             | Self::SetExtraHttpHeaders(..)

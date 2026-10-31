@@ -17,6 +17,23 @@ impl PageVm {
         &mut self,
         command: RendererPageCommand,
     ) -> Result<RendererPageReply> {
+        let command = match command {
+            RendererPageCommand::ForPendingDocumentPolicy {
+                expected_agent,
+                update,
+            } => {
+                if self.vm.as_ref().map(|vm| vm.devtools_agent_token()) != Some(expected_agent) {
+                    return Err(RendererPageAccessError::DocumentReplaced.into());
+                }
+                // Resolve the native Document without waiting for protocol
+                // output, then reuse its existing checks across action flushes.
+                RendererPageCommand::ForDocument {
+                    source_document: self.document_lifecycle.identity(),
+                    command: Box::new(update.into()),
+                }
+            }
+            command => command,
+        };
         let (source_document, command) = match command {
             RendererPageCommand::ForDocument {
                 source_document,
@@ -36,7 +53,7 @@ impl PageVm {
             return Err(RendererPageAccessError::DocumentReplaced.into());
         }
         match command {
-            command @ RendererPageCommand::ForDocument { .. } => self.dispatch_renderer_page_command(command),
+            command @ (RendererPageCommand::ForDocument { .. } | RendererPageCommand::ForPendingDocumentPolicy { .. }) => self.dispatch_renderer_page_command(command),
             RendererPageCommand::Native(command) => {
                 Ok(RendererPageReply::NativeCommandReady(Box::new(command.dispatch(self))))
             }

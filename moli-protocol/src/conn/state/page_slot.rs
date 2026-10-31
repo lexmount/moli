@@ -1002,6 +1002,31 @@ impl TargetPageSlot {
         Some(Some(commit.attachment) == attachment && commit.native_document == Some(source))
     }
 
+    pub(crate) fn prepared_document_policy_attachment(
+        &self,
+    ) -> Option<(
+        RendererPageResidenceIdentity,
+        moli_core::page::RendererAgentAttachmentId,
+    )> {
+        let request = self.prepared_document_navigation_handoff()?;
+        Some((
+            self.prepared_document_renderer_page()?,
+            request.renderer_commit.as_ref()?.attachment,
+        ))
+    }
+
+    fn prepared_document_renderer_page(&self) -> Option<RendererPageResidenceIdentity> {
+        let request = self.prepared_document_navigation_handoff()?;
+        let (renderer_page, page_attachment_id) = match self.pending_renderer_page.as_ref() {
+            Some(pending) => (pending.renderer_page(), pending.page_attachment_id()),
+            None => (
+                RendererPageResidenceIdentity::from_page(self.loaded_page.as_ref()?),
+                self.page_attachment_id()?,
+            ),
+        };
+        (page_attachment_id == request.page_attachment_id).then_some(renderer_page)
+    }
+
     pub(crate) fn prepared_document_output_binding(
         &self,
     ) -> Option<(
@@ -1010,16 +1035,8 @@ impl TargetPageSlot {
     )> {
         let request = self.prepared_document_navigation_handoff()?;
         let document = request.renderer_commit.as_ref()?.native_document?;
-        let (renderer_page, page_attachment_id) = match self.pending_renderer_page.as_ref() {
-            Some(pending) => (pending.renderer_page(), pending.page_attachment_id()),
-            None => (
-                RendererPageResidenceIdentity::from_page(self.loaded_page.as_ref()?),
-                self.page_attachment_id()?,
-            ),
-        };
-        if page_attachment_id != request.page_attachment_id
-            || renderer_page.page_id() != document.frame.page_id
-        {
+        let renderer_page = self.prepared_document_renderer_page()?;
+        if renderer_page.page_id() != document.frame.page_id {
             return None;
         }
         Some((

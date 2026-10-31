@@ -310,7 +310,7 @@ pub use runtime::{
     RendererPageCreationArtifacts, RendererPageCreationDiagnostics, RendererPageCreationPhase,
     RendererPageCreationProgress, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
     RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageHandle,
-    RendererPageReplacementCommit, RendererPageReplacementError,
+    RendererPageNetworkPolicyUpdate, RendererPageReplacementCommit, RendererPageReplacementError,
     RendererPageReplacementFailureDisposition, RendererPageReplacementReservationRequest,
     RendererPageReplacementTarget, RendererPageReply, RendererPageReservationToken,
     RendererPageState, RendererPageStateRevision, RendererPageTestingHandle, RendererPageView,

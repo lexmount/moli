@@ -40,4 +40,7 @@ pub use moli_renderer_v8::{
     RendererRuntimeInspectorResponseChannel, RendererRuntimeInspectorResponseSender,
     RendererRuntimeRemoteObjectResolution,
 };
-pub use moli_renderer_v8::{RendererPageAccessError, RendererPageCommand, RendererPageReply};
+pub use moli_renderer_v8::{
+    RendererPageAccessError, RendererPageCommand, RendererPageNetworkPolicyUpdate,
+    RendererPageReply,
+};
