@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, sync::Arc};
 
-pub(crate) use moli_message_port::MessagePortCloseKind;
+pub(crate) use moli_message_port::{MessagePortCloseKind, MessagePortPoll};
 use moli_message_port::{MessagePortRegistry as CoreMessagePortRegistry, MessagePortWake};
 use tokio::sync::mpsc;
 
@@ -114,6 +114,7 @@ impl RendererMessagePortRegistry {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn take_pending_message_port_message(
         &self,
         port_id: MessagePortId,
@@ -121,8 +122,12 @@ impl RendererMessagePortRegistry {
         self.inner.take_pending_message_port_message(port_id)
     }
 
-    pub(crate) fn contains_message_port(&self, port_id: MessagePortId) -> bool {
-        self.inner.contains_message_port(port_id)
+    pub(crate) fn poll_message_port(
+        &self,
+        port_id: MessagePortId,
+        started: bool,
+    ) -> MessagePortPoll<V8StructuredClonePayload> {
+        self.inner.poll_message_port(port_id, started)
     }
 
     pub(crate) fn discard_message_port_channel(
@@ -140,6 +145,7 @@ impl RendererMessagePortRegistry {
         self.inner.endpoint_count()
     }
 
+    #[cfg(test)]
     pub(crate) fn take_pending_message_port_close(
         &self,
         port_id: MessagePortId,

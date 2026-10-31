@@ -1,7 +1,7 @@
 use super::*;
 use crate::context_bootstrap::dispatch_simple_event_target_event_collecting_errors;
 use crate::context_bootstrap::events::mark_event_trusted;
-use crate::message_port_runtime::MessagePortCloseKind;
+use crate::message_port_runtime::{MessagePortCloseKind, MessagePortPoll};
 use crate::types::MessagePortId;
 use crate::worker::worker_message_port_wrapper;
 
@@ -185,31 +185,27 @@ fn dispatch_one_message_port_event_in_current_context<'s>(
     let Some(registry) = current_message_port_registry(scope) else {
         return MessagePortDeliveryRunResult::Idle;
     };
-    if !registry.contains_message_port(port_id) {
-        // A discarded private stream channel can belong to another isolate.
-        // Its owner wake releases the wrapper without running author code.
-        close_message_port_object(scope, target);
-        return MessagePortDeliveryRunResult::Idle;
-    }
-    if !message_port_is_started(scope, target) {
-        // A peer disconnection is observed by its receiving queue. Retain the
-        // pending notification until start() or onmessage enables that queue;
-        // onclose alone must not activate it.
-        return MessagePortDeliveryRunResult::Idle;
-    }
-    let Some(payload) = registry.take_pending_message_port_message(port_id) else {
-        let Some(kind) = registry.take_pending_message_port_close(port_id) else {
+    let started = message_port_is_started(scope, target);
+    let payload = match registry.poll_message_port(port_id, started) {
+        MessagePortPoll::Removed => {
+            // A discarded channel can belong to another isolate. Clean up
+            // its wrapper even when the receiving queue was never started.
+            close_message_port_object(scope, target);
             return MessagePortDeliveryRunResult::Idle;
-        };
-        return MessagePortDeliveryRunResult::Consumed {
-            callback_dispatched: dispatch_message_port_close_event(
-                scope,
-                port_id,
-                target,
-                kind,
-                callback_errors,
-            ),
-        };
+        }
+        MessagePortPoll::Idle => return MessagePortDeliveryRunResult::Idle,
+        MessagePortPoll::Close(kind) => {
+            return MessagePortDeliveryRunResult::Consumed {
+                callback_dispatched: dispatch_message_port_close_event(
+                    scope,
+                    port_id,
+                    target,
+                    kind,
+                    callback_errors,
+                ),
+            };
+        }
+        MessagePortPoll::Message(payload) => payload,
     };
 
     let target_origin = crate::context_bootstrap::current_runtime_message_origin(scope);

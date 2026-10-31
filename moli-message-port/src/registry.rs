@@ -13,6 +13,15 @@ pub enum MessagePortCloseKind {
     ConnectionError,
 }
 
+/// One atomic observation of an endpoint and its enabled receiving queue.
+#[derive(Debug, Eq, PartialEq)]
+pub enum MessagePortPoll<P> {
+    Removed,
+    Idle,
+    Message(P),
+    Close(MessagePortCloseKind),
+}
+
 /// Closing an endpoint cancels its queued messages. The embedding releases
 /// their native attachments after the registry lock has been released.
 #[derive(Debug)]
@@ -198,6 +207,25 @@ where
         Ok(peer_id)
     }
 
+    /// Observe removal even before start(), without consuming a disabled
+    /// queue. Enabled queues deliver messages before their close notification.
+    pub fn poll_message_port(&self, port_id: MessagePortId, started: bool) -> MessagePortPoll<P> {
+        let mut ports = self.ports.lock();
+        let Some(state) = ports.get_mut(&port_id) else {
+            return MessagePortPoll::Removed;
+        };
+        if !started {
+            return MessagePortPoll::Idle;
+        }
+        if let Some(message) = state.pending_messages.pop_front() {
+            MessagePortPoll::Message(message)
+        } else if let Some(close) = state.pending_close.take() {
+            MessagePortPoll::Close(close)
+        } else {
+            MessagePortPoll::Idle
+        }
+    }
+
     /// Pop one pending message for a port.
     pub fn take_pending_message_port_message(&self, port_id: MessagePortId) -> Option<P> {
         self.ports
@@ -292,6 +320,63 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poll_preserves_unstarted_queues_and_delivers_messages_before_close() {
+        let registry = MessagePortRegistry::<u8, u8>::default();
+        let (sender, receiver) = registry.create_entangled_message_port_pair(7);
+        assert_eq!(
+            registry.poll_message_port(receiver, true),
+            MessagePortPoll::Idle
+        );
+        registry.enqueue_message_to_message_port(sender, 1).unwrap();
+        registry.enqueue_message_to_message_port(sender, 2).unwrap();
+        registry.close_message_port(sender);
+        assert_eq!(
+            registry.poll_message_port(receiver, false),
+            MessagePortPoll::Idle
+        );
+        assert_eq!(
+            registry.poll_message_port(receiver, true),
+            MessagePortPoll::Message(1)
+        );
+        assert_eq!(
+            registry.poll_message_port(receiver, true),
+            MessagePortPoll::Message(2)
+        );
+        assert_eq!(
+            registry.poll_message_port(receiver, false),
+            MessagePortPoll::Idle
+        );
+        assert_eq!(
+            registry.poll_message_port(receiver, true),
+            MessagePortPoll::Close(MessagePortCloseKind::PeerClosed)
+        );
+        assert_eq!(
+            registry.poll_message_port(receiver, true),
+            MessagePortPoll::Idle
+        );
+        for started in [false, true] {
+            assert_eq!(
+                registry.poll_message_port(sender, started),
+                MessagePortPoll::Removed
+            );
+        }
+        registry.discard_message_port_channel(receiver);
+        assert_eq!(
+            registry.poll_message_port(receiver, false),
+            MessagePortPoll::Removed
+        );
+        let disconnected = registry.create_disconnected_message_port(7);
+        assert_eq!(
+            registry.poll_message_port(disconnected, false),
+            MessagePortPoll::Idle
+        );
+        assert_eq!(
+            registry.poll_message_port(disconnected, true),
+            MessagePortPoll::Close(MessagePortCloseKind::ConnectionError)
+        );
+    }
 
     #[test]
     fn disconnected_transfer_keeps_its_connection_error_through_owner_changes() {
