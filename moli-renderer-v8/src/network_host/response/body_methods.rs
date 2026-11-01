@@ -85,8 +85,8 @@ fn begin_body_consumption_promise<'s>(
         rv.set(promise.into());
         return None;
     };
-    if !begin_body_consumption(scope, object, receiver) {
-        reject_body_already_used(scope, resolver);
+    if let Err(reason) = begin_body_consumption(scope, object, receiver) {
+        let _ = resolver.reject(scope, reason);
         rv.set(promise.into());
         return None;
     }
@@ -121,45 +121,42 @@ fn finish_body_consumption<'s>(
     rv.set(consumption.promise.into());
 }
 
-fn reject_body_already_used<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    resolver: v8::Local<'s, v8::PromiseResolver>,
-) {
-    reject_body_type_error(
-        scope,
-        resolver,
-        "Failed to execute body consumption: body stream already used",
-    );
-}
-
 fn begin_body_consumption<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     receiver: BodyReceiver,
-) -> bool {
-    let Some(body) = body_stream_object(scope, object) else {
-        // Consuming a null body performs the empty conversion without disturbing it.
-        return true;
+) -> Result<(), v8::Local<'s, v8::Value>> {
+    let Some(stream) = body_stream_object(scope, object) else {
+        // Consuming a null body does not disturb it.
+        return Ok(());
     };
-    if readable_body_stream_unusable(scope, body) {
-        return false;
+    let already_used = readable_body_stream_unusable(scope, stream)
+        || match receiver {
+            BodyReceiver::Response => response_slot_bool(scope, object, RESPONSE_BODY_USED_SLOT),
+            BodyReceiver::Request => request_slot_bool(scope, object, REQUEST_BODY_USED_SLOT),
+        };
+    if already_used {
+        let message = v8str(
+            scope,
+            "Failed to execute body consumption: body stream already used",
+        );
+        return Err(v8::Exception::type_error(scope, message));
+    }
+    // Chromium rejects an aborted fetch before starting its body loader. Do
+    // not disturb the stream: repeated calls must preserve the abort reason.
+    // Ordinary stream errors still go through consumption and become used.
+    if let Some(reason) = body_source::aborted_network_body_reason(scope, object) {
+        return Err(reason);
     }
     match receiver {
         BodyReceiver::Response => {
-            if response_slot_bool(scope, object, RESPONSE_BODY_USED_SLOT) {
-                return false;
-            }
             set_response_slot_bool(scope, object, RESPONSE_BODY_USED_SLOT, true);
-            true
         }
         BodyReceiver::Request => {
-            if request_slot_bool(scope, object, REQUEST_BODY_USED_SLOT) {
-                return false;
-            }
             set_request_slot_bool(scope, object, REQUEST_BODY_USED_SLOT, true);
-            true
         }
     }
+    Ok(())
 }
 
 fn body_receiver<'s>(
