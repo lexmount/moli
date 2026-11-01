@@ -1047,7 +1047,7 @@ impl LiveStylesheet {
             ParsingMode::DEFAULT,
             contents.quirks_mode,
             Cow::Borrowed(&contents.namespaces),
-            None,
+            Some(&crate::style_engine::filter_diagnostics::FILTER_PARSE_DIAGNOSTICS),
             None,
             AttrTaint::default(),
         );

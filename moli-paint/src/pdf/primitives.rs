@@ -438,7 +438,13 @@ impl<'a, 's> PdfPainter<'a, 's> {
         snapshot.fonts = self.snapshot.fonts.clone();
         snapshot.images = self.snapshot.images.clone();
         snapshot.svg_images = self.snapshot.svg_images.clone();
-        snapshot.fragments = fragments.to_vec();
+        // PDF export omits backdrop-filter everywhere (and reports it), so a
+        // rasterized effect group must not render it either.
+        snapshot.fragments = fragments
+            .iter()
+            .filter(|fragment| !matches!(fragment, PaintFragment::BackdropFilter { .. }))
+            .cloned()
+            .collect();
         let outer_compositing = match snapshot.fragments.first_mut() {
             Some(PaintFragment::PushLayer {
                 opacity,
@@ -571,7 +577,8 @@ fn translate_fragment(fragment: &mut PaintFragment, translation: Affine) {
         PaintFragment::GlyphRun(run) => &mut run.transform,
         PaintFragment::Image(image) => &mut image.transform,
         PaintFragment::SvgImage(image) => &mut image.transform,
-        PaintFragment::PopLayer => return,
+        PaintFragment::BackdropFilter { transform, .. } => transform,
+        PaintFragment::PopLayer | PaintFragment::BackdropRoot => return,
     };
     *matrix = PaintTransform2D::new(
         (translation * crate::geometry::to_backend_transform(*matrix)).as_coeffs(),
