@@ -1173,7 +1173,8 @@ fn detached_simple_structural_accessors_use_owner_prototypes() {
   }
   method(HTMLDialogElement.prototype, "show", 0);
   method(HTMLDialogElement.prototype, "showModal", 0);
-  method(HTMLDialogElement.prototype, "close", 1);
+  method(HTMLDialogElement.prototype, "close", 0);
+  method(HTMLDialogElement.prototype, "requestClose", 0);
 
   const detachedDoc = document.implementation.createHTMLDocument("");
   for (const [doc, label] of [[document, "live"], [detachedDoc, "detached"]]) {
@@ -1221,7 +1222,7 @@ fn detached_simple_structural_accessors_use_owner_prototypes() {
     assert(delete dialog.returnValue, `${label}.returnValue delete`);
     assert(dialog.returnValue === "done", `${label}.returnValue after delete`);
 
-    for (const name of ["show", "showModal", "close"]) {
+    for (const name of ["show", "showModal", "close", "requestClose"]) {
       assert(!own(dialog, name), `${label}.dialog.${name} should not be own`);
     }
     assert(!Object.prototype.hasOwnProperty.call(dialog, "__moliDialogHandle"), `${label}.dialog private handle should not be own`);
