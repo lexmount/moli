@@ -50,11 +50,7 @@ fn navigation_preload_request_for_job(
     request.request_headers = headers;
     Ok(request
         .with_redirect_mode(moli_fetch::RequestRedirectMode::Manual)
-        .with_browser_navigation_kind(if job.is_reload {
-            moli_fetch::BrowserNavigationRequestKind::Reload
-        } else {
-            moli_fetch::BrowserNavigationRequestKind::Navigate
-        })
+        .with_browser_navigation_kind(job.metadata.navigation_kind(job.is_reload))
         .with_page_network_policy())
 }
 
@@ -309,6 +305,8 @@ impl ServiceWorkerRuntimeService {
         let native_request = dispatch
             .request_client
             .bind_browser_site_context(native_request);
+        let native_request = native_request
+            .with_browser_navigation_kind(request.metadata.navigation_kind(request.is_reload));
         let initial_redirect_count = native_request.redirect_count();
         let fetch_job = ServiceWorkerFetchJob {
             response_delivery,
@@ -364,6 +362,7 @@ impl ServiceWorkerRuntimeService {
         fetch_job.request.browser_request_metadata = Some(
             super::fetch_settlement::service_worker_fetch_browser_metadata(
                 fetch_job.network_context.resource_type,
+                request.destination,
             ),
         );
         fetch_job

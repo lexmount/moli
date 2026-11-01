@@ -257,6 +257,7 @@ impl PageScriptHost {
             handle,
             &url,
             record.seed,
+            moli_fetch::BrowserNavigationRequestKind::HistoryTraversal,
             None,
             None,
             Some(OwnerDispatchScope::Child(handle)),

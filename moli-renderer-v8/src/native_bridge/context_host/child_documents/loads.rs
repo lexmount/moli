@@ -130,6 +130,7 @@ impl PageScriptHost {
     ) -> Option<u64> {
         let PendingChildFrameNavigation {
             bootstrap,
+            browser_navigation_kind,
             blob_resource,
             initiator,
             initiator_url,
@@ -269,6 +270,7 @@ impl PageScriptHost {
                                     crate::runtime::RendererNavigationPolicy::referrer_policy,
                                 )),
                         )
+                        .with_browser_navigation_kind(browser_navigation_kind)
                         .with_page_network_policy()
                         .with_network_partition_key(network_partition_key)
                     })

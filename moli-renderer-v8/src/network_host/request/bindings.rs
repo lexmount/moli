@@ -309,6 +309,12 @@ pub(crate) fn build_service_worker_request_object<'s>(
         REQUEST_IS_RELOAD_NAVIGATION_SLOT,
         source.is_reload,
     );
+    set_request_slot_bool(
+        scope,
+        request,
+        REQUEST_IS_HISTORY_NAVIGATION_SLOT,
+        source.metadata.is_history_navigation,
+    );
     if let Some(bytes) = &source.body {
         let body = PreparedBodySource::Bytes(bytes.clone()).into_body_stream(scope, request)?;
         set_request_slot_value(scope, request, REQUEST_BODY_SLOT, body.into());
