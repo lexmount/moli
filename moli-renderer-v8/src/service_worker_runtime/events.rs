@@ -524,11 +524,7 @@ pub(crate) fn service_worker_fetch_request_metadata(
 }
 
 fn service_worker_request_cache_label(cache_mode: RequestCacheMode) -> &'static str {
-    match cache_mode {
-        RequestCacheMode::Default => "default",
-        RequestCacheMode::Validate | RequestCacheMode::Bypass => "reload",
-        RequestCacheMode::NoStore => "no-store",
-    }
+    cache_mode.into()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -836,7 +832,7 @@ mod referrer_tests {
                 "{target} {policy:?} {document_policy:?}"
             );
             assert_eq!(metadata.referrer_policy, expected_policy);
-            assert_eq!(metadata.cache, "reload");
+            assert_eq!(metadata.cache, "no-cache");
             assert_eq!(metadata.integrity, "sha384-test");
             assert!(metadata.use_cors_preflight);
         }

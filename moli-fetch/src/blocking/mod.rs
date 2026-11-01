@@ -245,6 +245,25 @@ fn outgoing_request_header_bytes_for_url(
         outgoing.push((name.clone(), value.clone()));
     }
 
+    // Cache modes affect intermediary caches as well as our local lookup.
+    // Explicit request fields retain precedence, including empty values.
+    match request.cache_mode() {
+        crate::RequestCacheMode::Validate => {
+            if !header_present(&outgoing, "cache-control") {
+                outgoing.push(("Cache-Control".to_owned(), b"max-age=0".to_vec()));
+            }
+        }
+        crate::RequestCacheMode::Bypass | crate::RequestCacheMode::NoStore => {
+            if !header_present(&outgoing, "pragma") {
+                outgoing.push(("Pragma".to_owned(), b"no-cache".to_vec()));
+            }
+            if !header_present(&outgoing, "cache-control") {
+                outgoing.push(("Cache-Control".to_owned(), b"no-cache".to_vec()));
+            }
+        }
+        _ => {}
+    }
+
     // Fetch selects identity whenever Range is present, even with an invalid
     // value. Explicit embedder encoding preferences still take precedence.
     if header_present(&outgoing, "range") {
