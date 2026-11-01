@@ -200,6 +200,11 @@ pub type WasmAsyncResolvePromiseCallback = unsafe extern "C" fn(
 pub type AllowWasmCodeGenerationCallback =
   unsafe extern "C" fn(Local<Context>, Local<String>) -> bool;
 
+/// Selects whether a Context exposes its SharedArrayBuffer constructor when
+/// V8's `--enable-sharedarraybuffer-per-context` flag is enabled.
+pub type SharedArrayBufferConstructorEnabledCallback =
+  unsafe extern "C" fn(Local<Context>) -> bool;
+
 /// HostInitializeImportMetaObjectCallback is called the first time import.meta
 /// is accessed for a module. Subsequent access will reuse the same value.
 ///
@@ -796,6 +801,14 @@ unsafe extern "C" {
   fn v8__Isolate__SetAllowWasmCodeGenerationCallback(
     isolate: *mut RealIsolate,
     callback: AllowWasmCodeGenerationCallback,
+  );
+  fn v8__Isolate__SetSharedArrayBufferConstructorEnabledCallback(
+    isolate: *mut RealIsolate,
+    callback: SharedArrayBufferConstructorEnabledCallback,
+  );
+  fn v8__Isolate__InstallConditionalFeatures(
+    isolate: *mut RealIsolate,
+    context: *const Context,
   );
   fn v8__Isolate__SetHostInitializeImportMetaObjectCallback(
     isolate: *mut RealIsolate,
@@ -1712,6 +1725,31 @@ impl Isolate {
         self.as_real_ptr(),
         callback,
       );
+    }
+  }
+
+  /// Set the native policy for exposing the SharedArrayBuffer constructor.
+  /// Requires `--enable-sharedarraybuffer-per-context`; unbound contexts should
+  /// return false until their embedder policy is available.
+  #[inline(always)]
+  pub fn set_shared_array_buffer_constructor_enabled_callback(
+    &mut self,
+    callback: SharedArrayBufferConstructorEnabledCallback,
+  ) {
+    unsafe {
+      v8__Isolate__SetSharedArrayBufferConstructorEnabledCallback(
+        self.as_real_ptr(),
+        callback,
+      );
+    }
+  }
+
+  /// Install dynamically enabled V8 features after binding a Context's native
+  /// policy. This adds eligible features; it does not remove existing globals.
+  #[inline(always)]
+  pub fn install_conditional_features(&mut self, context: Local<Context>) {
+    unsafe {
+      v8__Isolate__InstallConditionalFeatures(self.as_real_ptr(), &*context);
     }
   }
 
