@@ -131,8 +131,8 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) next_websocket_id: u64,
     /// Worker-local dedicated workers created through `new Worker(...)`.
     pub(in crate::worker) next_nested_worker_id: u64,
-    pub(in crate::worker) nested_worker_wrappers:
-        HashMap<DedicatedWorkerId, v8::Global<v8::Object>>,
+    pub(in crate::worker) nested_workers:
+        HashMap<DedicatedWorkerId, super::nested_workers::NestedWorker>,
     /// Heavyweight WebCrypto completions routed back onto the worker event loop.
     pub(in crate::worker) webcrypto_completion_tx: mpsc::UnboundedSender<WorkerWebCryptoCompletion>,
     /// In-flight worker WebCrypto blocking tasks keyed by task id.

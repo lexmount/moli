@@ -4,6 +4,7 @@ mod browser_close;
 mod captured_document_navigation;
 mod child_navigation_wait;
 mod navigation_debugger;
+mod nested_worker_retirement;
 mod prepared_document_actions;
 mod target_message;
 
