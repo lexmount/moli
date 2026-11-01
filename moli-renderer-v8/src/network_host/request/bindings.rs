@@ -42,10 +42,10 @@ struct RequestInstanceDeclaration<'scope> {
     signal: v8::Local<'scope, v8::Value>,
     #[webapi(slot = REQUEST_DUPLEX_SLOT)]
     duplex: String,
-    #[webapi(slot = REQUEST_IS_HISTORY_NAVIGATION_SLOT, init = false)]
-    is_history_navigation: (),
-    #[webapi(slot = REQUEST_IS_RELOAD_NAVIGATION_SLOT, init = false)]
-    is_reload_navigation: (),
+    #[webapi(slot = REQUEST_IS_HISTORY_NAVIGATION_SLOT)]
+    is_history_navigation: bool,
+    #[webapi(slot = REQUEST_IS_RELOAD_NAVIGATION_SLOT)]
+    is_reload_navigation: bool,
     #[webapi(slot = REQUEST_BODY_SLOT)]
     body: v8::Local<'scope, v8::Value>,
     #[webapi(slot = REQUEST_BODY_USED_SLOT, init = false)]
@@ -141,6 +141,8 @@ pub(crate) fn request_constructor_callback<'s>(
         state.priority.as_ref().to_owned(),
         signal,
         state.duplex,
+        state.is_history_navigation,
+        state.is_reload_navigation,
         body_value,
     )
     .initialize(scope, obj)
