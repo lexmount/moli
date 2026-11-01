@@ -92,6 +92,7 @@ mod close_watchers;
 mod core;
 mod dialogs;
 mod document_domain;
+pub(crate) use document_domain::DocumentDomainSetOutcome;
 mod document_script_ready_inputs;
 #[cfg(feature = "devtools")]
 mod dom_debugger;

@@ -4,6 +4,7 @@ mod animations;
 mod blob_file_reader;
 mod css_surface;
 mod date_locale;
+mod document_domain;
 mod document_navigator;
 mod events_errors;
 mod fonts;
