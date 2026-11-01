@@ -727,6 +727,7 @@ impl AsyncSubresourceFetchResponseFilter {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SubresourcePolicyContext {
+    pub(super) https_state: bool,
     pub(super) mixed_content_policy: moli_fetch::RequestMixedContentPolicy,
     pub(super) cross_origin_embedder_policy:
         crate::cross_origin_isolation::CrossOriginEmbedderPolicy,
@@ -740,6 +741,7 @@ impl SubresourcePolicyContext {
     }
     pub(super) fn from_document_policy(policy: &DocumentPolicyContainer) -> Self {
         Self {
+            https_state: false,
             mixed_content_policy: Default::default(),
             cross_origin_embedder_policy: policy.cross_origin_embedder_policy,
             document_isolation_policy: policy.document_isolation_policy,

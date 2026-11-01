@@ -969,6 +969,7 @@ fn service_worker_script_policy_context(
     headers: &[(String, Vec<u8>)],
 ) -> SubresourcePolicyContext {
     SubresourcePolicyContext {
+        https_state: false,
         mixed_content_policy: Default::default(),
         cross_origin_embedder_policy:
             crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers),

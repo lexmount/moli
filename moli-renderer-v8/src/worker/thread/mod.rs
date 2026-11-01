@@ -1616,6 +1616,23 @@ async fn worker_main(
     let message_port_registry = worker_context_runtime.message_port_registry();
     let broadcast_channel_registry = worker_context_runtime.broadcast_channel_registry();
     let current_script_url = url::Url::parse(&script_url).ok();
+    let mut policy_context = crate::types::SubresourcePolicyContext {
+        https_state: current_script_url.as_ref().is_some_and(|url| {
+            if matches!(url.scheme(), "blob" | "data") {
+                policy_context.https_state
+            } else {
+                url.scheme() == "https"
+            }
+        }),
+        ..policy_context
+    };
+    policy_context.mixed_content_policy =
+        if policy_context.https_state && !matches!(global_kind, WorkerGlobalKind::Shared { .. }) {
+            moli_fetch::RequestMixedContentPolicy::Block
+        } else {
+            moli_fetch::RequestMixedContentPolicy::Allow
+        };
+
     let secure_context = network_policy.secure_context
         || current_script_url
             .as_ref()
