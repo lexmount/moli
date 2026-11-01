@@ -588,7 +588,23 @@ impl BrowserContext {
         config: NavigationRuntimeConfig,
         renderer_output_transport_sender: Option<moli_core::RendererOutputTransportSender>,
     ) {
+        let first_bind = self.page_navigation_runtime_config.is_none();
         self.page_navigation_runtime_config = Some(config.clone());
+        if first_bind {
+            // Configured `--document-start-script`s behave like default preloads: every
+            // page of every browser context runs them, matching `moli fetch`. Seed once
+            // per context so a re-bind cannot register duplicates.
+            for source in config.document_start_scripts() {
+                self.record_default_document_start_script(&DocumentStartScript {
+                    registry_key: None,
+                    devtools_session: None,
+                    source: source.clone(),
+                    world_name: None,
+                    has_bidi_channel_argument: false,
+                    bidi_channel_handoffs: Vec::new(),
+                });
+            }
+        }
         self.renderer_output_transport_sender = renderer_output_transport_sender;
         if self.renderer_output_transport_sender.is_some() {
             self.renderer_runtime()
