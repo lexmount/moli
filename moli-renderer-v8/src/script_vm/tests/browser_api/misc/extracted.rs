@@ -21,3 +21,5 @@ mod storage;
 mod trusted_types;
 mod webidl_surface;
 mod window_surface;
+
+mod service_worker_isolation;
