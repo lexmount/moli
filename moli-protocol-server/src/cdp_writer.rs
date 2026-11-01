@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
-use axum::extract::ws::{Message, WebSocket};
-use futures_util::{SinkExt, stream::SplitSink};
+use axum::extract::ws::Message;
+use futures_util::{Sink, SinkExt};
 use moli_bounded_json::{BoundedJsonError, json_string_between_with_limit, to_string_with_limit};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
@@ -47,8 +47,8 @@ enum SocketCloseSignal {
     PeerCloseReceived,
 }
 
-pub(crate) fn spawn_socket_sink(
-    socket: SplitSink<WebSocket, Message>,
+pub(crate) fn spawn_socket_sink<S: Sink<Message> + Unpin + Send + 'static>(
+    socket: S,
 ) -> (CdpSocketSink, CdpSocketWriterFinishedReceiver) {
     spawn_socket_sink_with_limits(
         socket,
@@ -58,8 +58,8 @@ pub(crate) fn spawn_socket_sink(
     )
 }
 
-fn spawn_socket_sink_with_limits(
-    socket: SplitSink<WebSocket, Message>,
+fn spawn_socket_sink_with_limits<S: Sink<Message> + Unpin + Send + 'static>(
+    socket: S,
     queue_capacity: usize,
     max_pending_bytes: usize,
     max_message_bytes: usize,
@@ -385,7 +385,7 @@ impl StalledCdpSocketWriter {
     }
 }
 
-async fn send_socket_text(socket: &mut SplitSink<WebSocket, Message>, text: String) -> bool {
+async fn send_socket_text<S: Sink<Message> + Unpin>(socket: &mut S, text: String) -> bool {
     socket.send(Message::Text(text.into())).await.is_ok()
 }
 
