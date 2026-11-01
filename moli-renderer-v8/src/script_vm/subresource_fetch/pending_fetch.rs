@@ -52,6 +52,23 @@ impl ScriptVm {
                 .map(|body| String::from_utf8_lossy(body).into_owned());
         }
         let pending = match continuation {
+            PendingSubresourceContinuation::ChildDocument(fetch) => {
+                // The child navigation has no renderer response or auth stage
+                // yet, so `intercept_response` cannot pause it again.
+                self._context_host
+                    .borrow_mut()
+                    .continue_child_document_fetch(
+                        internal_id,
+                        *fetch,
+                        url.unwrap_or_else(|| info.url.clone()),
+                        method.unwrap_or_else(|| info.method.clone()),
+                        headers.unwrap_or_else(|| info.request_headers.clone()),
+                        info.request_body_bytes.clone(),
+                    );
+                return Ok(AsyncSubresourceCommandExecution::without_window_realm(
+                    PendingSubresourceContinueOutcome::Started,
+                ));
+            }
             PendingSubresourceContinuation::WebSocket(connection) => {
                 let request_url = url.unwrap_or_else(|| info.url.clone());
                 let headers_overridden = headers.is_some();
@@ -380,7 +397,7 @@ impl ScriptVm {
             SubresourceResourceType::Xhr => {
                 request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Xhr)
             }
-            SubresourceResourceType::WebSocket => request,
+            SubresourceResourceType::WebSocket | SubresourceResourceType::Document => request,
         };
         let cancel_handle = moli_fetch::FetchCancelHandle::new();
         pending.load.attach_cancel_handle(cancel_handle.clone());
@@ -693,7 +710,7 @@ impl ScriptVm {
             SubresourceResourceType::Xhr => {
                 request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Xhr)
             }
-            SubresourceResourceType::WebSocket => request,
+            SubresourceResourceType::WebSocket | SubresourceResourceType::Document => request,
         };
         let request_headers = original_request_headers;
         if self._context_host.borrow().network_offline() {
@@ -916,6 +933,28 @@ impl ScriptVm {
             deferred_request_started,
         } = pending;
         let pending = match continuation {
+            PendingSubresourceContinuation::ChildDocument(fetch) => {
+                let request_body_bytes = info.request_body_bytes.clone();
+                let request_handle = info.network_request_handle;
+                let network_record = with_pending_subresource_record_identity(
+                    crate::types::SubresourceNetworkRecord::failure(
+                        info.frame_id,
+                        info.document_url,
+                        info.url,
+                        info.method,
+                        info.request_headers,
+                        info.request_body,
+                        info.resource_type,
+                        error_text.clone(),
+                    ),
+                    request_body_bytes,
+                    request_handle,
+                );
+                let mut host = self._context_host.borrow_mut();
+                host.record_subresource_network(network_record);
+                host.fail_child_document_fetch(internal_id, *fetch, error_text);
+                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
+            }
             PendingSubresourceContinuation::WebSocket(connection) => {
                 self._context_host
                     .borrow_mut()
@@ -1128,6 +1167,17 @@ impl ScriptVm {
             negotiated_http_version: None,
         };
         let pending = match continuation {
+            PendingSubresourceContinuation::ChildDocument(fetch) => {
+                self._context_host
+                    .borrow_mut()
+                    .fulfill_child_document_fetch(
+                        internal_id,
+                        *fetch,
+                        head,
+                        response_body.bytes().to_vec(),
+                    );
+                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
+            }
             PendingSubresourceContinuation::WebSocket(connection) => {
                 if response_code != 101 {
                     self._context_host

@@ -24,7 +24,9 @@ pub(in crate::native_bridge::context_host) use frame_owner_resource_timing::{
     PendingFrameOwnerResourceTiming,
 };
 pub(super) use initial_empty::ChildInitialEmptyDocumentInit;
-pub(crate) use loads::{ChildDocumentLoadApplication, ChildDocumentLoadBodyActivity};
+pub(crate) use loads::{
+    ChildDocumentFetch, ChildDocumentLoadApplication, ChildDocumentLoadBodyActivity,
+};
 pub(in crate::native_bridge::context_host) use parser_store::ChildDocumentParserStore;
 pub(in crate::native_bridge::context_host) use snapshots::child_document_content_type_from_headers;
 
@@ -51,6 +53,8 @@ pub(super) struct PendingChildDocumentNavigation {
     pub(super) document_credentialless: bool,
     pub(super) credentialless_storage_nonce: Option<OpaqueOriginNonce>,
     pub(super) frame_owner_resource_timing: Option<PendingFrameOwnerResourceTiming>,
+    /// The Fetch pause holding this navigation's request, if any.
+    pub(super) paused_fetch: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

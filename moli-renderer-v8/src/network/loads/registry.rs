@@ -44,6 +44,7 @@ pub(crate) enum ResourceLoadDisposition {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResourceLoadKind {
+    Document,
     Script,
     Stylesheet,
     Image,
@@ -63,6 +64,7 @@ pub(crate) enum ResourceLoadKind {
 impl From<SubresourceResourceType> for ResourceLoadKind {
     fn from(resource_type: SubresourceResourceType) -> Self {
         match resource_type {
+            SubresourceResourceType::Document => Self::Document,
             SubresourceResourceType::Script => Self::Script,
             SubresourceResourceType::Stylesheet => Self::Stylesheet,
             SubresourceResourceType::Image => Self::Image,

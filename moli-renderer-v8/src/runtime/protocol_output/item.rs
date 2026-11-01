@@ -68,6 +68,9 @@ pub enum RendererOwnerAction {
     SubresourceFetchPause {
         source_document: RendererDocumentLifecycleIdentity,
         info: Box<PendingSubresourceFetchInfo>,
+        /// Set for a child frame navigation, whose Network request id is the
+        /// loader id of the Document it creates.
+        document_loader_id: Option<String>,
     },
     SubresourceContinue {
         source_document: RendererDocumentLifecycleIdentity,

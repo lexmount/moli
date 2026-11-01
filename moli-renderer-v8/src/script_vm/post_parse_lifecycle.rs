@@ -59,7 +59,8 @@ fn preload_like_resource_initiator_type(resource_type: SubresourceResourceType) 
         SubresourceResourceType::Media => "video",
         SubresourceResourceType::Video => "video",
         SubresourceResourceType::TextTrack => "track",
-        SubresourceResourceType::Fetch
+        SubresourceResourceType::Document
+        | SubresourceResourceType::Fetch
         | SubresourceResourceType::EventSource
         | SubresourceResourceType::Font
         | SubresourceResourceType::Ping

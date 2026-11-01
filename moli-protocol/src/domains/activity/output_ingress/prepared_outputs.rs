@@ -526,6 +526,7 @@ impl PreparedProtocolOutputs {
             RendererOwnerAction::SubresourceFetchPause {
                 source_document,
                 info,
+                document_loader_id,
             } => {
                 crate::domains::fetch::
                     subresource_fetch_pause_prepared_outputs_for_renderer_record(
@@ -533,6 +534,7 @@ impl PreparedProtocolOutputs {
                         owner,
                         source_document,
                         *info,
+                        document_loader_id,
                         page_source,
                     )
                     .append_to_output_sink(&mut prepared);
