@@ -97,12 +97,12 @@ pub(in crate::network_host) use self::fetch_surface::{
 };
 pub(crate) use self::fetch_surface::{
     REQUEST_URL_SLOT, is_branded_request_object, request_headers_entries, request_method,
-    request_slot_string, set_response_slot_bool,
+    request_slot_string, response_slot_bool, set_response_slot_bool,
 };
 pub(crate) use self::fetch_surface::{
     RESPONSE_BODY_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT, RESPONSE_OK_SLOT,
-    RESPONSE_REDIRECTED_SLOT, RESPONSE_STATUS_SLOT, RESPONSE_STATUS_TEXT_SLOT, RESPONSE_TYPE_SLOT,
-    RESPONSE_URL_SLOT, is_branded_response_object,
+    RESPONSE_REDIRECTED_SLOT, RESPONSE_REQUEST_INCLUDE_CREDENTIALS_SLOT, RESPONSE_STATUS_SLOT,
+    RESPONSE_STATUS_TEXT_SLOT, RESPONSE_TYPE_SLOT, RESPONSE_URL_SLOT, is_branded_response_object,
 };
 pub(crate) use self::fetch_surface::{
     consume_webassembly_streaming_response_value, initialize_fetch_realm_helpers,
@@ -113,8 +113,8 @@ pub(crate) use self::fetch_surface::{
 };
 pub(in crate::network_host) use self::fetch_surface::{
     mark_request_object, request_slot_bool, request_slot_object, request_slot_value,
-    response_slot_bool, response_slot_object, response_slot_string, response_slot_value,
-    set_request_slot_bool, set_response_slot_value,
+    response_slot_object, response_slot_string, response_slot_value, set_request_slot_bool,
+    set_response_slot_value,
 };
 pub(crate) use self::headers::headers_constructor_callback;
 pub(crate) use self::headers::install_headers_template_bindings;
