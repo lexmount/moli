@@ -26,7 +26,7 @@ fn service_worker_redirect_target(
         .headers
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("location"))
-        .map(|(_, value)| moli_fetch::decode_header_value(value))
+        .map(|(_, value)| moli_fetch::encode_redirect_location(value))
     else {
         return Ok(None);
     };
@@ -1998,6 +1998,29 @@ mod tests {
             headers: vec![("Location".to_owned(), b"next".to_vec())],
             body: Vec::new(),
         };
+        for (location, expected) in [
+            (
+                b"next?utf8=\xe2\x98\x83".as_slice(),
+                "https://example.test/app/next?utf8=%E2%98%83",
+            ),
+            (
+                b"next?bad=\xff".as_slice(),
+                "https://example.test/app/next?bad=%FF",
+            ),
+            (
+                b"next?%e2%98%83\xe2\x98\x83".as_slice(),
+                "https://example.test/app/next?%e2%98%83%E2%98%83",
+            ),
+        ] {
+            let raw_response = ServiceWorkerFetchResponse {
+                headers: vec![("Location".to_owned(), location.to_vec())],
+                ..response.clone()
+            };
+            assert_eq!(
+                service_worker_redirect_target(&job, &raw_response).unwrap(),
+                Some(url(expected))
+            );
+        }
         let next_url = service_worker_redirect_target(&job, &response)
             .expect("redirect target should resolve")
             .expect("redirect target should be present");

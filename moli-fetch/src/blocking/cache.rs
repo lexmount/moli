@@ -120,7 +120,7 @@ pub(crate) fn next_redirect_url_from_parts(
     let Some(location) = headers
         .iter()
         .find(|(name, _)| name == "location")
-        .map(|(_, value)| crate::decode_header_value(value))
+        .map(|(_, value)| crate::encode_redirect_location(value))
     else {
         return Ok(None);
     };

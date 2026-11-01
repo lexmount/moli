@@ -689,3 +689,70 @@ async fn bare_cr_response_headers_preserve_invalid_framing_errors_in_all_transpo
     assert!(client.shutdown().is_clean());
     Ok(())
 }
+
+#[tokio::test]
+async fn redirect_location_bytes_reach_the_wire_without_unicode_reencoding() -> Result<()> {
+    let cases: &[(&[u8], &str)] = &[
+        (b"/final?%E2%98%83%e2%98%83", "/final?%E2%98%83%e2%98%83"),
+        (b"/final?\xe2\x98\x83", "/final?%E2%98%83"),
+        (b"/final?\xe2\x98\x83%e2%98%83", "/final?%E2%98%83%e2%98%83"),
+        (b"/final?%\xe2\x98\x83", "/final?%%E2%98%83"),
+        (b"/final?\xff", "/final?%FF"),
+    ];
+    for mode in ["buffered", "html", "raw"] {
+        for &(location, expected) in cases {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let base = format!("http://{}", listener.local_addr()?);
+            let redirect = [
+                b"HTTP/1.1 302 Found\r\nContent-Length: 0\r\nConnection: close\r\nLocation: "
+                    .as_slice(),
+                location,
+                b"\r\n\r\n",
+            ]
+            .concat();
+            let server = tokio::spawn(serve_responses(
+                listener,
+                vec![
+                    redirect,
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec(),
+                ],
+            ));
+            let client =
+                FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+            let request = Request::get(&format!("{base}/start"))?;
+            let (head, body) = match mode {
+                "buffered" => {
+                    let (tx, rx) = oneshot::channel();
+                    client.fetch_with_cancel_callback(
+                        request,
+                        FetchCancelHandle::new(),
+                        move |result| {
+                            let _ = tx.send(result);
+                        },
+                    )?;
+                    rx.await??.into_body()
+                }
+                "html" => client.fetch_html_stream(request).await?.into_body(),
+                "raw" => client.fetch_raw(request).await?.into_body(),
+                _ => unreachable!(),
+            };
+            assert_eq!(body.into_materialized_bytes().await?, b"ok");
+            assert_eq!(
+                head.final_url.as_str(),
+                format!("{base}{expected}"),
+                "{mode}"
+            );
+            assert_eq!(head.redirect_chain.len(), 1);
+            assert!(head.redirect_chain[0].headers.iter().any(|(name,value)| name.eq_ignore_ascii_case("location") && value == location));
+            let requests = server.await??;
+            assert_eq!(requests.len(), 2);
+            assert!(
+                requests[1].starts_with(format!("GET {expected} HTTP/1.1\r\n").as_bytes()),
+                "{mode}: {:?}",
+                String::from_utf8_lossy(&requests[1])
+            );
+            assert!(client.shutdown().is_clean());
+        }
+    }
+    Ok(())
+}

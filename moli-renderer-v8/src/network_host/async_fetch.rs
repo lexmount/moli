@@ -371,7 +371,7 @@ fn next_redirect_url(
     let Some(location) = headers
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("location"))
-        .map(|(_, value)| moli_fetch::decode_header_value(value))
+        .map(|(_, value)| moli_fetch::encode_redirect_location(value))
     else {
         return Ok(None);
     };
@@ -944,6 +944,28 @@ mod tests {
             if request.ends_with(b"\r\n\r\n") {
                 return Ok(request);
             }
+        }
+    }
+
+    #[test]
+    fn redirect_location_preserves_raw_bytes_and_existing_escapes() {
+        let base = Url::parse("https://redirect.test/start").unwrap();
+        for (location, expected) in [
+            (b"/final?utf8=\xe2\x98\x83".as_slice(), "utf8=%E2%98%83"),
+            (b"/final?bad=\xff".as_slice(), "bad=%FF"),
+            (
+                b"/final?%e2%98%83\xe2\x98\x83".as_slice(),
+                "%e2%98%83%E2%98%83",
+            ),
+        ] {
+            let headers = vec![("Location".to_owned(), location.to_vec())];
+            let target = next_redirect_url(&base, 302, &headers, 0).unwrap().unwrap();
+            assert_eq!(target.query(), Some(expected));
+            assert!(
+                next_redirect_url(&base, 200, &headers, 0)
+                    .unwrap()
+                    .is_none()
+            );
         }
     }
 
