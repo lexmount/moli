@@ -1002,12 +1002,7 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
         );
         pending.load.cancel();
         if let Some(body_source_id) = pending.streaming_body_source_id {
-            error_pending_network_body_stream_with_reason(
-                scope,
-                body_source_id,
-                "net::ERR_ABORTED".into(),
-                reason,
-            );
+            crate::network_host::abort_pending_network_body_stream(scope, body_source_id, reason);
         }
         let resolver = v8::Local::new(scope, &pending.resolver);
         let _ = resolver.reject(scope, reason);
