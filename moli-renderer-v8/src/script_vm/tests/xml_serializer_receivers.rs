@@ -129,3 +129,44 @@ fn xml_serializer_native_receivers_reject_forgery_and_author_proxies_in_the_call
     "#).unwrap();
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn xml_serializer_derived_node_arguments_reject_invalid_roots_without_author_access() {
+    let mut vm = new_storage_html_test_vm("https://xml-serializer-node-arguments.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        document.body.innerHTML = '<iframe></iframe>';
+        const other = document.querySelector('iframe').contentWindow;
+        const root = document.createElement('p');
+        root.textContent = 'hello & goodbye';
+        const foreign = other.document.createElement('p');
+        foreign.textContent = root.textContent;
+        let traps = 0;
+        const author = new Proxy(root, {
+            get() { traps++; throw Error('get trap'); },
+            getPrototypeOf() { traps++; throw Error('prototype trap'); }
+        });
+        const revoked = Proxy.revocable(root, {}); revoked.revoke();
+        const shaped = {get nodeType() {traps++; throw Error('nodeType getter');}};
+        for (const realm of [window, other]) {
+            const serializer = new realm.XMLSerializer();
+            const serialize = realm.XMLSerializer.prototype.serializeToString;
+            const expected = '<p xmlns="http://www.w3.org/1999/xhtml">hello &amp; goodbye</p>';
+            for (const node of [root, foreign]) {
+                if (serialize.call(serializer, node) !== expected) throw Error('genuine Node serialization');
+            }
+            const fragment = document.createDocumentFragment();
+            fragment.appendChild(document.createTextNode('a < b'));
+            if (serialize.call(serializer, fragment) !== 'a &lt; b') throw Error('fragment');
+            for (const args of [[], [undefined], [null], [1], ['text'], [shaped],
+                                [Object.create(root)], [Object.create(Node.prototype)],
+                                [author], [revoked.proxy]]) {
+                let error;
+                try { Reflect.apply(serialize, serializer, args); } catch (caught) { error = caught; }
+                if (!error || Object.getPrototypeOf(error) !== realm.TypeError.prototype)
+                    throw Error('invalid Node must throw callee TypeError');
+            }
+        }
+        if (traps !== 0) throw Error('argument conversion invoked author access');
+        return true;
+    })()"#).unwrap(), "true");
+}
