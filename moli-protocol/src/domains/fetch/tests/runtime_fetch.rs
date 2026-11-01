@@ -168,6 +168,8 @@ async fn wait_for_background_request_paused(
     })
 }
 
+#[path = "runtime_fetch/child_documents.rs"]
+mod child_documents;
 #[path = "runtime_fetch/runtime_subresources.rs"]
 mod runtime_subresources;
 #[path = "runtime_fetch/session_interception.rs"]

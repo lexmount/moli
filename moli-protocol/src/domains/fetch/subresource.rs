@@ -52,6 +52,9 @@ fn subresource_request_paused_payload(
 struct PendingSubresourceFetchPauseSource {
     info: moli_core::page::PendingSubresourceFetchInfo,
     detached_parser_script_fetch_continuation: Option<DetachedParserScriptFetchContinuation>,
+    /// A child frame navigation keeps Chromium's document identity: its
+    /// Network request id is the loader id of the Document it creates.
+    document_loader_id: Option<String>,
 }
 
 pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
@@ -59,6 +62,7 @@ pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
     owner: &CommandOwnerScope,
     source_document: moli_core::RendererDocumentLifecycleIdentity,
     info: moli_core::page::PendingSubresourceFetchInfo,
+    document_loader_id: Option<String>,
     page_source: Option<(
         crate::conn::TargetPageResidenceIdentity,
         crate::conn::RendererPageResidenceIdentity,
@@ -94,6 +98,7 @@ pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
         vec![PendingSubresourceFetchPauseSource {
             info,
             detached_parser_script_fetch_continuation: None,
+            document_loader_id,
         }],
     )
 }
@@ -120,6 +125,7 @@ pub(crate) fn detached_parser_script_fetch_pause_prepared_outputs_for_renderer_r
         vec![PendingSubresourceFetchPauseSource {
             info,
             detached_parser_script_fetch_continuation: Some(continuation),
+            document_loader_id: None,
         }],
     )
 }
@@ -160,11 +166,16 @@ fn prepare_subresource_fetch_pause_sources(
         let PendingSubresourceFetchPauseSource {
             info,
             detached_parser_script_fetch_continuation,
+            document_loader_id,
         } = source;
         let Some((request_id, network_request_id)) =
             conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
         else {
             return network::NetworkPreparedOutputs::from_subresource_fetch_pauses_and_continuations(outputs, automatic);
+        };
+        let (network_request_id, request_loader_id) = match document_loader_id {
+            Some(document_loader_id) => (document_loader_id.clone(), document_loader_id),
+            None => (network_request_id, loader_id.clone()),
         };
         let document_url = document_url
             .cloned()
@@ -354,7 +365,7 @@ fn prepare_subresource_fetch_pause_sources(
             network::TargetSubresourceFetchPauseNetworkOutput::from_pending_fetch_info(
                 pending.network_request_id.clone(),
                 pending.frame_id.clone(),
-                loader_id.clone(),
+                request_loader_id,
                 monotonic_timestamp_seconds(),
                 pending.document_url.clone(),
                 &info,

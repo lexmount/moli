@@ -724,6 +724,7 @@ impl ScriptVm {
                     PendingSubresourceContinuation::Beacon
                     | PendingSubresourceContinuation::CspReport { .. }
                     | PendingSubresourceContinuation::WebSocket(_)
+                    | PendingSubresourceContinuation::ChildDocument(_)
                     | PendingSubresourceContinuation::WorkerFetch { .. }
                     | PendingSubresourceContinuation::WorkerXhr { .. }
                     | PendingSubresourceContinuation::WorkerCspReport { .. }
@@ -1006,6 +1007,7 @@ impl ScriptVm {
                 | PendingSubresourceContinuation::CspReport { .. }
                 | PendingSubresourceContinuation::Xhr { .. }
                 | PendingSubresourceContinuation::WebSocket(_)
+                | PendingSubresourceContinuation::ChildDocument(_)
                 | PendingSubresourceContinuation::WorkerFetch { .. }
                 | PendingSubresourceContinuation::WorkerXhr { .. }
                 | PendingSubresourceContinuation::WorkerCspReport { .. }
