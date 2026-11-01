@@ -3305,6 +3305,76 @@ fn transforms_and_semantic_paint_order_share_the_hit_test_projection() {
 }
 
 #[test]
+fn atomic_inlines_paint_and_hit_test_above_their_wrapping_inline_box() {
+    let red = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+    let blue = PaintColor::new(0.0, 0.0, 1.0, 1.0);
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("inline", vec![2, 3, 4]),
+        Node::text("before", "before"),
+        Node::element("atomic", Vec::new()),
+        Node::text("after", "after"),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 300.0, 100.0));
+    styles.0.insert(
+        1,
+        ResolvedLayoutStyle::synthetic(LayoutDisplay::Inline, Style::default(), red)
+            .with_text_metrics(20.0, 20.0),
+    );
+    styles.0.insert(
+        3,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::InlineBlock,
+            Style {
+                size: Size {
+                    width: length(40.0),
+                    height: length(10.0),
+                },
+                ..Style::default()
+            },
+            blue,
+        ),
+    );
+
+    let output = build_with_request(
+        &source,
+        &mut styles,
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
+    );
+    let fragments = &output.paint_snapshot().unwrap().fragments;
+    let (inline_index, atomic_index) = (
+        solid_fill_index(fragments, red),
+        solid_fill_index(fragments, blue),
+    );
+    let (inline_rect, _, _) = fragments[inline_index].solid_fill().unwrap();
+    let (atomic_rect, _, _) = fragments[atomic_index].solid_fill().unwrap();
+    let center_y = atomic_rect.y + atomic_rect.height / 2.0;
+    assert!(
+        (inline_rect.y..inline_rect.y + inline_rect.height).contains(&center_y),
+        "the atomic box must overlap the inline box: {inline_rect:?} {atomic_rect:?}"
+    );
+    assert!(
+        inline_index < atomic_index,
+        "the inline background must paint behind its atomic child"
+    );
+    assert!(
+        fragments
+            .iter()
+            .rposition(|fragment| matches!(fragment, PaintFragment::GlyphRun(..)))
+            .unwrap()
+            > atomic_index,
+        "the text of the line must paint over the atomic background"
+    );
+
+    let center = LayoutPoint::new(atomic_rect.x + atomic_rect.width / 2.0, center_y);
+    let hit = output.into_tree().hit_test(center, false).unwrap();
+    assert_eq!(hit.source, 3);
+}
+
+#[test]
 fn point_hits_select_paint_order_before_deduplicating_sources() {
     let source = Source(vec![
         Node::element("root", vec![2, 1, 3]),
