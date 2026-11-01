@@ -50,7 +50,7 @@ async fn body_blob_mime_uses_combined_lowercase_header_values() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn body_blob_type_normalizes_pending_response_streams() {
+async fn body_blob_type_normalizes_pending_streams_without_author_constructors() {
     let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm =
         new_page_task_executor_test_vm_with_loader("https://pending-blob-mime.test/", &loader);
@@ -58,20 +58,34 @@ async fn body_blob_type_normalizes_pending_response_streams() {
       globalThis.pendingBlobMimeResult = null;
       (async () => {
         const getHeader = Headers.prototype.get;
+        const originalBlob = globalThis.Blob;
         const type = 'Text/Plain ; Charset="UTF-8"; X-Label="Aa B"';
-        let controller;
-        const stream = new ReadableStream({start(value) { controller = value; }});
-        const response = new Response(stream, {headers:{'Content-Type':type}});
-        response.headers.get = () => { throw new Error('author Headers.get'); };
-        response.headers.entries = () => { throw new Error('author Headers.entries'); };
-        const pending = response.blob();
-        controller.enqueue(new Uint8Array([0,65,255]));
-        controller.close();
-        const blob = await pending;
-        if (!(blob instanceof Blob) || blob.type !== type.toLowerCase()) throw new Error('Blob type/prototype');
-        const bytes = Array.from(new Uint8Array(await blob.arrayBuffer())).join(',');
-        if (bytes !== '0,65,255' || !response.bodyUsed) throw new Error('body bytes/state');
-        if (getHeader.call(response.headers, 'Content-Type') !== type) throw new Error('changed header');
+        for (const kind of ['Request', 'Response']) {
+          let controller;
+          const stream = new ReadableStream({start(value) { controller = value; }});
+          const options = {headers: {'Content-Type': type}};
+          const body = kind === 'Request'
+            ? new Request('https://pending-blob-mime.test/', {...options,method:'POST',body:stream,duplex:'half'})
+            : new Response(stream, options);
+          body.headers.get = () => { throw new Error('author Headers.get'); };
+          body.headers.entries = () => { throw new Error('author Headers.entries'); };
+          const pending = body.blob();
+          globalThis.Blob = function() { throw new Error('author Blob constructor'); };
+          try {
+            controller.enqueue(new Uint8Array([0,65,255]));
+            controller.close();
+            const blob = await pending;
+            if (!(blob instanceof originalBlob) || blob.type !== type.toLowerCase())
+              throw new Error(kind + ': Blob type/prototype');
+            const bytes = Array.from(new Uint8Array(await blob.arrayBuffer())).join(',');
+            if (bytes !== '0,65,255' || !body.bodyUsed)
+              throw new Error(kind + ': body bytes/state');
+            if (getHeader.call(body.headers, 'Content-Type') !== type)
+              throw new Error(kind + ': changed header');
+          } finally {
+            globalThis.Blob = originalBlob;
+          }
+        }
         return 'passed';
       })().then(value => pendingBlobMimeResult = value, error => pendingBlobMimeResult = String(error));
     "#).unwrap();
@@ -80,7 +94,7 @@ async fn body_blob_type_normalizes_pending_response_streams() {
         &loader,
         "String(pendingBlobMimeResult !== null)",
         "true",
-        "pending Response Blob MIME",
+        "pending Body Blob MIME",
     )
     .await;
     assert_eq!(vm.eval("pendingBlobMimeResult").unwrap(), "passed");

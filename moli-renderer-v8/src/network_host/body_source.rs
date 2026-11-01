@@ -2203,7 +2203,7 @@ fn body_materialization_value<'s>(
                 .ok_or_else(|| v8::undefined(scope).into())
         }
         PendingBodyMaterializationKind::FormData { headers } => {
-            let content_type = body_mime_type(scope, headers);
+            let content_type = body_form_data_mime_type(scope, headers);
             let multipart_boundary = multipart_form_data_boundary(&content_type);
             if let Some(boundary) = multipart_boundary.as_deref() {
                 crate::context_bootstrap::form_data_object_from_multipart_bytes(
@@ -2251,7 +2251,7 @@ fn body_blob_type(
     String::new()
 }
 
-fn body_mime_type(
+fn body_form_data_mime_type(
     scope: &mut v8::PinScope<'_, '_>,
     headers: Option<v8::Global<v8::Object>>,
 ) -> String {
@@ -2262,9 +2262,8 @@ fn body_mime_type(
     let entries = headers_entries(scope, headers);
     let headers =
         moli_fetch::headers_from_byte_strings(&entries).expect("Headers contain ByteStrings");
-    // Preserve MIME parameter values (including charset and boundary case).
-    // Blob constructor normalization and Resource Timing minimization are
-    // different algorithms from Fetch's get-the-MIME-type operation.
+    // FormData parsing needs a MIME record with case-sensitive parameter
+    // values, particularly multipart boundaries.
     moli_web_mime::extract_response_mime_type(&headers)
         .map(|mime| mime.to_string())
         .unwrap_or_default()
