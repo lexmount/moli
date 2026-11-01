@@ -156,6 +156,12 @@ impl DocumentConnectPolicySnapshot {
 }
 
 impl DocumentPolicyContainer {
+    pub(crate) fn allows_cross_origin_isolation(&self) -> bool {
+        self.document_isolation_policy
+            .enables_cross_origin_isolation()
+            || self.permissions_policy.cross_origin_isolated_enabled()
+    }
+
     pub(crate) fn from_navigation_response_headers(
         headers: &[(String, Vec<u8>)],
         final_url: &Url,
@@ -639,6 +645,7 @@ impl DocumentRuntime {
 
     pub(crate) fn cross_origin_isolated(&self) -> bool {
         self.policy_container.cross_origin_isolated
+            && self.policy_container.allows_cross_origin_isolation()
     }
 
     pub(crate) fn ensure_credentialless_storage_nonce(
