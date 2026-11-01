@@ -2396,7 +2396,7 @@ pub(super) struct HtmlDetailsElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLDialogElement, enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLDialogElement, enumerable, receiver)]
 pub(super) struct HtmlDialogElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -2414,8 +2414,10 @@ pub(super) struct HtmlDialogElementPrototypeDeclaration {
     show: (),
     #[webapi(method, length = 0, callback = dialog_show_modal_callback)]
     show_modal: (),
-    #[webapi(method, length = 1, callback = dialog_close_callback)]
+    #[webapi(method, length = 0, callback = dialog_close_callback)]
     close: (),
+    #[webapi(method, length = 0, callback = dialog_request_close_callback)]
+    request_close: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

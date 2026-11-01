@@ -70,6 +70,120 @@ async fn dialog_toggle_events_cancel_opening_and_coalesce_state_changes() {
     );
 }
 
+#[tokio::test]
+async fn dialog_request_close_ignores_recursive_cancel_and_queues_close() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://dialog-request-close-recursive.test/",
+        &loader,
+    );
+
+    let before_close = vm
+        .eval(
+            r#"
+(() => {
+  const host = document.body || document.documentElement || document;
+  const dialog = document.createElement('dialog');
+  host.appendChild(dialog);
+  globalThis.__dialogRequestCloseEvents = [];
+  let cancelCount = 0;
+  dialog.addEventListener('cancel', event => {
+    cancelCount += 1;
+    __dialogRequestCloseEvents.push(`${event.type}:${event.bubbles}:${event.cancelable}`);
+    dialog.requestClose('nested');
+  });
+  dialog.addEventListener('close', event => {
+    __dialogRequestCloseEvents.push(`${event.type}:${event.bubbles}:${event.cancelable}`);
+  });
+
+  dialog.showModal();
+  dialog.requestClose('outer');
+  return JSON.stringify({
+    length: dialog.requestClose.length,
+    cancelCount,
+    open: dialog.open,
+    returnValue: dialog.returnValue,
+    events: __dialogRequestCloseEvents
+  });
+})()
+"#,
+        )
+        .expect("recursive dialog requestClose setup should evaluate");
+
+    assert_eq!(
+        before_close,
+        r#"{"length":0,"cancelCount":1,"open":false,"returnValue":"outer","events":["cancel:false:true"]}"#
+    );
+
+    assert!(
+        !vm.has_ready_timeout(),
+        "dialog requestClose must not create synthetic Page timers"
+    );
+    assert!(
+        vm.run_one_dom_manipulation_task_executor_turn(
+            PageDomManipulationTestFamily::ElementToggle,
+            &loader,
+        )
+        .await
+        .expect("coalesced dialog toggle event should run")
+    );
+    assert!(
+        vm.run_one_user_interaction_executor_turn(&loader)
+            .await
+            .expect("queued dialog close event should run")
+    );
+    let after_close = vm
+        .eval("JSON.stringify(__dialogRequestCloseEvents)")
+        .expect("dialog requestClose event log should evaluate");
+    assert_eq!(after_close, r#"["cancel:false:true","close:false:false"]"#);
+}
+
+#[test]
+fn dialog_request_close_honors_cancellation_and_active_document() {
+    let mut vm = new_storage_test_vm("https://dialog-request-close-state.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const host = document.body || document.documentElement || document;
+  const dialog = document.createElement('dialog');
+  host.appendChild(dialog);
+  dialog.returnValue = 'seed';
+  dialog.show();
+  dialog.addEventListener('cancel', event => event.preventDefault(), { once: true });
+  dialog.requestClose('blocked');
+  const canceled = [dialog.open, dialog.returnValue];
+  dialog.requestClose('accepted');
+  const accepted = [dialog.open, dialog.returnValue];
+
+  const disconnected = document.createElement('dialog');
+  disconnected.open = true;
+  disconnected.requestClose('disconnected');
+
+  const inactiveDocument = document.implementation.createHTMLDocument('');
+  const inactive = inactiveDocument.createElement('dialog');
+  inactiveDocument.body.appendChild(inactive);
+  inactive.open = true;
+  inactive.requestClose('inactive');
+
+  return JSON.stringify({
+    canceled,
+    accepted,
+    disconnected: [disconnected.open, disconnected.returnValue],
+    inactive: [inactive.open, inactive.returnValue]
+  });
+})()
+"#,
+        )
+        .expect("dialog requestClose state probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"canceled":[true,"seed"],"accepted":[false,"accepted"],"disconnected":[true,""],"inactive":[true,""]}"#
+    );
+}
+
 #[test]
 fn dialog_show_methods_enforce_requested_state_and_active_document() {
     let mut vm = new_storage_test_vm("https://dialog-requested-state.test/");
@@ -306,4 +420,34 @@ fn dialog_form_submission_distinguishes_absent_and_empty_submitter_values() {
         result,
         r#"{"absentValue":{"open":false,"returnValue":"previous","valueAttribute":null},"emptyValue":{"open":false,"returnValue":"","valueAttribute":""}}"#
     );
+}
+
+#[test]
+fn dialog_closing_methods_validate_native_receivers_before_optional_conversion() {
+    let mut vm = new_storage_html_test_vm("https://dialog-webidl-boundary.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        const frame=document.createElement('iframe');document.body.appendChild(frame);
+        const other=frame.contentWindow;
+        const dialog=document.createElement('dialog');document.body.appendChild(dialog);
+        const assert=(condition,label)=>{if(!condition)throw Error(label)};
+        let traps=0,conversions=0;
+        const value={toString(){conversions++;return 'accepted'}};
+        const proxy=new Proxy(dialog,{get(){traps++;throw Error('trap')},getPrototypeOf(){traps++;throw Error('trap')}});
+        const revoked=Proxy.revocable(dialog,{});revoked.revoke();
+        const invalid=[null,undefined,{},document.createElement('div'),Object.create(dialog),proxy,revoked.proxy];
+        for(const realm of [window,other]) {
+            const prototype=realm.HTMLDialogElement.prototype;
+            assert(prototype.close.length===0&&prototype.requestClose.length===0,'optional argument arity');
+            const setter=Object.getOwnPropertyDescriptor(prototype,'returnValue').set;
+            for(const receiver of invalid) for(const method of [prototype.close,prototype.requestClose,setter]) {
+                let error;try{method.call(receiver,value)}catch(caught){error=caught}
+                assert(error instanceof realm.TypeError&&conversions===0&&traps===0,'brand before conversion in callee realm');
+            }
+        }
+        let canceled=0;dialog.addEventListener('cancel',()=>canceled++);
+        other.HTMLDialogElement.prototype.show.call(dialog);
+        other.HTMLDialogElement.prototype.requestClose.call(dialog,value);
+        assert(!dialog.open&&dialog.returnValue==='accepted'&&conversions===1&&canceled===1,'genuine foreign receiver');
+        return true;
+    })()"#).unwrap(),"true");
 }
