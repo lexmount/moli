@@ -1565,6 +1565,37 @@ impl RuntimeOwner {
                     .as_ref()
                     .and_then(moli_curl::CurlConnectionTiming::from_easy),
             );
+        if !self.shutdown_requested.load(Ordering::SeqCst)
+            && !completion.context.is_cancelled()
+            && completion.easy.as_ref().is_some_and(|easy| {
+                matches!(
+                    easy.get_ref().misdirected_response,
+                    MisdirectedResponse::Restart
+                )
+            })
+        {
+            state.active_transfers = state.active_transfers.saturating_sub(1);
+            // The first 421 was intercepted before any response channel was
+            // committed. Reuse the logical request, cancellation and hop clock;
+            // only the connection changes. A second 421 is a final response.
+            match completion.context {
+                ActiveTransferContext::Buffered(mut context) => {
+                    context.job.request.new_connection_fetch = true;
+                    self.start_job_or_reply(state, context.job);
+                }
+                ActiveTransferContext::Streaming(mut context) => {
+                    context.job.request.new_connection_fetch = true;
+                    context.job.easy = completion.easy;
+                    self.start_streaming_job_or_reply(state, context.job);
+                }
+                ActiveTransferContext::StreamingRaw(mut context) => {
+                    context.job.request.new_connection_fetch = true;
+                    context.job.easy = completion.easy;
+                    self.start_raw_streaming_job_or_reply(state, context.job);
+                }
+            }
+            return;
+        }
         let authentication_retry = if !self.shutdown_requested.load(Ordering::SeqCst)
             && !completion.context.is_cancelled()
         {
@@ -3044,6 +3075,38 @@ struct CallbackEasyHandle(std::ptr::NonNull<curl_sys::CURL>);
 // neither destruction nor callback execution races with another thread.
 unsafe impl Send for CallbackEasyHandle {}
 
+#[derive(Default)]
+enum MisdirectedResponse {
+    #[default]
+    Disabled,
+    Eligible,
+    Headers,
+    Restart,
+}
+
+impl MisdirectedResponse {
+    fn header(&mut self, status: Option<u16>, end: bool) -> Option<bool> {
+        if let Some(status) = status
+            && matches!(self, Self::Eligible | Self::Headers)
+        {
+            *self = if status == 421 {
+                Self::Headers
+            } else {
+                Self::Eligible
+            };
+        }
+        if matches!(self, Self::Headers) {
+            if end {
+                *self = Self::Restart;
+            }
+            // Defer headers until the block is complete, then abort the first
+            // transfer without exposing its headers or waiting for its body.
+            return Some(!end);
+        }
+        None
+    }
+}
+
 pub(crate) struct FetchTransferHandler {
     callback_easy: Option<CallbackEasyHandle>,
     response: FetchResponseCollector,
@@ -3055,6 +3118,7 @@ pub(crate) struct FetchTransferHandler {
     proxy_connect_response_recorder: ProxyConnectResponseRecorder,
     dictionary_response: Option<crate::compression_dictionary::DictionaryResponse>,
     http_authentication: Option<crate::http_authentication::HttpAuthenticationResponse>,
+    misdirected_response: MisdirectedResponse,
     content_decoding: Option<crate::content_decoding::ContentDecoding>,
     content_decoding_error: Option<String>,
 }
@@ -3112,6 +3176,7 @@ impl FetchTransferHandler {
             proxy_connect_response_recorder: ProxyConnectResponseRecorder::default(),
             dictionary_response: None,
             http_authentication: None,
+            misdirected_response: MisdirectedResponse::Disabled,
             content_decoding: None,
             content_decoding_error: None,
         }
@@ -3184,6 +3249,11 @@ impl FetchTransferHandler {
     }
 
     pub(crate) fn begin_dictionary_response(&mut self, request: &Request, url: &Url) {
+        self.misdirected_response = if request.can_retry_misdirected_request() {
+            MisdirectedResponse::Eligible
+        } else {
+            MisdirectedResponse::Disabled
+        };
         self.http_authentication =
             crate::http_authentication::HttpAuthenticationResponse::new(request);
         self.dictionary_response = request.compression_dictionary_store.as_ref().map(|store| {
@@ -3360,7 +3430,8 @@ impl Handler for FetchTransferHandler {
     }
 
     fn header(&mut self, data: &[u8]) -> bool {
-        if let Some(status) = crate::response::parse_http_response_status_line(data) {
+        let status = crate::response::parse_http_response_status_line(data);
+        if let Some(status) = status.as_ref() {
             self.upload_response_status = Some(status.status);
         } else if data.iter().all(|byte| matches!(*byte, b'\r' | b'\n'))
             && self
@@ -3374,6 +3445,14 @@ impl Handler for FetchTransferHandler {
         }
         if let Some(recorder) = self.network_observation_recorder.as_ref() {
             recorder.record_response_header_line(data);
+        }
+        if !self.upload_request_is_connect
+            && let Some(keep_reading) = self.misdirected_response.header(
+                status.map(|line| line.status),
+                data == b"\r\n" || data == b"\n",
+            )
+        {
+            return keep_reading;
         }
         use crate::http_authentication::AuthenticationHeaderAction;
         match self

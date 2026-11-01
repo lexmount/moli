@@ -693,6 +693,7 @@ async fn service_worker_fetch_event_request_exposes_destination_metadata() {
         is_reload: true,
         metadata: ServiceWorkerFetchRequestMetadata {
             mixed_content_policy: Default::default(),
+            body_source_is_null: false,
             cache: "reload".to_owned(),
             referrer: "https://example.test/app/referrer.html".to_owned(),
             referrer_policy: "origin".to_owned(),

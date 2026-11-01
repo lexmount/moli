@@ -11,6 +11,7 @@ mod fetch_metadata;
 mod header_bytes;
 mod header_eof;
 mod http_authentication;
+mod misdirected_request;
 mod mixed_transport;
 mod redirect_auth;
 mod redirect_cookie_context;

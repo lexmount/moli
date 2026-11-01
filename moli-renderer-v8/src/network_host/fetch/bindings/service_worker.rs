@@ -100,6 +100,7 @@ pub(super) fn dispatch_service_worker_fetch(
         prepared.priority,
         ServiceWorkerFetchRequestMetadata {
             mixed_content_policy: prepared.mixed_content_policy,
+            body_source_is_null: prepared.body_source_is_null,
             cache: prepared.cache.clone(),
             referrer: prepared.referrer.clone(),
             referrer_policy: prepared.referrer_policy.clone(),
