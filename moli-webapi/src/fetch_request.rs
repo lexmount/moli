@@ -77,6 +77,8 @@ pub struct RequestInitMembers<'s> {
 }
 
 impl RequestInitMembers<'_> {
+    // Null body and signal members count after conversion. Undefined and
+    // unknown members do not count. This check must not read getters again.
     pub fn has_any_member(&self) -> bool {
         self.body.is_some()
             || self.signal.is_some()

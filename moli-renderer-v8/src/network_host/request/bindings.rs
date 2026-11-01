@@ -6,7 +6,7 @@ use self::init::{
 };
 use super::input::request_headers_guard_for_mode;
 use super::*;
-use crate::network_host::fetch_surface::{set_request_slot_bool, set_request_slot_value};
+use crate::network_host::fetch_surface::set_request_slot_value;
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
@@ -164,8 +164,8 @@ pub(crate) fn request_constructor_callback<'s>(
         state.priority.as_ref().to_owned(),
         signal,
         state.duplex,
-        false,
-        false,
+        state.is_history_navigation,
+        state.is_reload_navigation,
         body_value,
     )
     .initialize(scope, obj)
