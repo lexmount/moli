@@ -3,6 +3,7 @@ use super::super::*;
 use anyhow::Context as _;
 
 pub(super) struct PreparedWindowFetchRequest {
+    pub(super) mixed_content_policy: moli_fetch::RequestMixedContentPolicy,
     pub(super) frame_id: Option<String>,
     pub(super) fetch_context: crate::native_bridge::WindowFetchContext,
     pub(super) resource_loader: crate::network::context::DocumentResourceLoader,
@@ -131,6 +132,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
         .or_else(|| CapturedBlobUrl::capture(&resolved_url))
         .map(|entry| entry.for_environment(Some(blob_environment)));
     Ok(PreparedWindowFetchRequest {
+        mixed_content_policy: host.window_mixed_content_policy(request_scope),
         resource_timing: crate::context_bootstrap::FetchResourceTiming::capture(
             scope,
             &request_origin,

@@ -2576,3 +2576,36 @@ async fn worker_keepalive_continues_when_its_interceptor_and_js_owner_close() {
     release_tx.send(()).unwrap();
     timeout(TIMEOUT, server).await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn worker_fetch_blocks_mixed_content_with_empty_referrer_before_interception() {
+    ensure_v8();
+    let mut handle = spawn_worker_with_request_client_and_network_policy(
+        r#"onmessage = async () => {
+            try {
+                await fetch('http://remote.test/unsafe', {referrer: '', headers: {'X-Probe': 'unsafe'}});
+                postMessage('allowed');
+            } catch (error) { postMessage(error.name); }
+            close();
+        };"#.into(),
+        "https://worker.test/main.js".into(),
+        ResourceRequestClient::new(&FetchConfig::default()).unwrap(),
+        WorkerNetworkPolicy::default(),
+    );
+    handle.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            SubresourceResourceType::Fetch,
+        ),
+    );
+    handle.post_message(serialize_test_string("go"));
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    let WorkerToParentMessage::SubresourceNetwork(record) = message else {
+        panic!("mixed content must fail before any interception pause: {message:?}");
+    };
+    assert!(
+        matches!(record.outcome(), SubresourceNetworkOutcome::Failure { error_text } if error_text.contains("Mixed content"))
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    assert_eq!(expect_post_json(message), r#""TypeError""#);
+
+}

@@ -452,6 +452,7 @@ pub(crate) struct ServiceWorkerFetchRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ServiceWorkerFetchRequestMetadata {
+    pub(crate) mixed_content_policy: moli_fetch::RequestMixedContentPolicy,
     pub(crate) cache: String,
     pub(crate) referrer: String,
     pub(crate) referrer_policy: String,
@@ -467,6 +468,7 @@ pub(crate) struct ServiceWorkerFetchRequestMetadata {
 impl Default for ServiceWorkerFetchRequestMetadata {
     fn default() -> Self {
         Self {
+            mixed_content_policy: Default::default(),
             cache: "default".to_owned(),
             referrer: "about:client".to_owned(),
             referrer_policy: String::new(),
@@ -499,6 +501,7 @@ pub(crate) fn service_worker_fetch_request_metadata(
 ) -> ServiceWorkerFetchRequestMetadata {
     let subresource_metadata = request.subresource_request_metadata();
     ServiceWorkerFetchRequestMetadata {
+        mixed_content_policy: request.mixed_content_policy(),
         // Native navigation already implements a soft reload through
         // BrowserNavigationRequestKind and Cache-Control: max-age=0. Its
         // Fetch Request representation exposes that policy as no-cache.
