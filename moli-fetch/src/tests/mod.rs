@@ -1,6 +1,7 @@
 mod cache_request_controls;
 mod cookie_context;
 mod cookie_store;
+mod corp;
 mod fetch_metadata;
 mod header_bytes;
 mod header_eof;
