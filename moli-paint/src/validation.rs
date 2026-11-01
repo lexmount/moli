@@ -10,6 +10,7 @@
 //! Resource identities, balanced scopes and work budgets shared by paint backends.
 
 use crate::PaintError;
+use crate::geometry::{backdrop_workspace_bytes, device_region};
 use moli_layout::{PaintBrush, PaintFragment, PaintShape, PaintSnapshot};
 
 /// Maximum backend-neutral paint work units admitted to one paint snapshot.
@@ -27,6 +28,13 @@ pub(crate) struct PaintStreamMetrics {
     pub(crate) max_filter_depth: usize,
     glyph_count: usize,
     pub(crate) operation_count: usize,
+    /// `BackdropFilter` fragments with a visible device region.
+    pub(crate) backdrop_count: usize,
+    /// Sum of the straight-alpha RGBA bytes of every backdrop region.
+    pub(crate) backdrop_bytes: usize,
+    /// Largest single backdrop region in bytes.
+    pub(crate) max_backdrop_bytes: usize,
+    pub(crate) max_backdrop_workspace_bytes: usize,
 }
 
 pub(crate) fn validate_fragment_stream(
@@ -95,6 +103,35 @@ pub(crate) fn validate_fragment_stream(
                     index: image.image.index(),
                 });
             }
+            PaintFragment::BackdropFilter {
+                shape,
+                transform,
+                filters,
+                ..
+            } => {
+                let region = surface_pixels(snapshot).and_then(|(width, height)| {
+                    device_region(
+                        shape,
+                        *transform,
+                        f64::from(snapshot.surface.device_scale),
+                        width,
+                        height,
+                    )
+                });
+                if let Some(region) = region {
+                    let bytes = region.byte_len();
+                    metrics.backdrop_count += 1;
+                    metrics.backdrop_bytes = metrics.backdrop_bytes.saturating_add(bytes);
+                    metrics.max_backdrop_bytes = metrics.max_backdrop_bytes.max(bytes);
+                    metrics.max_backdrop_workspace_bytes = metrics
+                        .max_backdrop_workspace_bytes
+                        .max(backdrop_workspace_bytes(
+                            region,
+                            filters,
+                            f64::from(snapshot.surface.device_scale),
+                        ));
+                }
+            }
             PaintFragment::GlyphRun(run) => {
                 metrics.glyph_count = metrics.glyph_count.saturating_add(run.glyphs.len());
             }
@@ -107,7 +144,8 @@ pub(crate) fn validate_fragment_stream(
             | PaintFragment::BoxShadow(_)
             | PaintFragment::TextDecoration(_)
             | PaintFragment::Image(_)
-            | PaintFragment::SvgImage(_) => {}
+            | PaintFragment::SvgImage(_)
+            | PaintFragment::BackdropRoot => {}
         }
     }
     if !layers.is_empty() {
@@ -124,6 +162,17 @@ pub(crate) fn validate_fragment_stream(
     Ok(metrics)
 }
 
+/// Raster surface size in device pixels, when representable.
+fn surface_pixels(snapshot: &PaintSnapshot) -> Option<(u32, u32)> {
+    let surface = snapshot.surface;
+    let scale = f64::from(surface.device_scale);
+    let width = (f64::from(surface.css_width) * scale).ceil();
+    let height = (f64::from(surface.css_height) * scale).ceil();
+    let max = f64::from(u16::MAX);
+    ((0.0..=max).contains(&width) && (0.0..=max).contains(&height))
+        .then_some((width as u32, height as u32))
+}
+
 fn validate_paint_operation_budget(operations: usize) -> Result<(), PaintError> {
     if operations > MAX_PAINT_OPERATIONS {
         return Err(PaintError::PaintOperationBudgetExceeded {
@@ -138,6 +187,9 @@ fn fragment_auxiliary_units(snapshot: &PaintSnapshot, fragment: &PaintFragment) 
     match fragment {
         PaintFragment::PushLayer { clip, .. } => shape_units(clip),
         PaintFragment::PushClip { shape, .. } => shape_units(shape),
+        PaintFragment::BackdropFilter { shape, filters, .. } => {
+            shape_units(shape).saturating_add(filters.len())
+        }
         PaintFragment::Fill { shape, brush, .. } => {
             shape_units(shape).saturating_add(brush_units(brush))
         }
@@ -152,6 +204,7 @@ fn fragment_auxiliary_units(snapshot: &PaintSnapshot, fragment: &PaintFragment) 
             .svg_image(image.image)
             .map_or(0, |resource| resource.image.paint_work_units()),
         PaintFragment::PopLayer
+        | PaintFragment::BackdropRoot
         | PaintFragment::Border { .. }
         | PaintFragment::BoxShadow(_)
         | PaintFragment::TextDecoration(_)

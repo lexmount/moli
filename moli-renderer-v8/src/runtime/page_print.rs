@@ -59,7 +59,17 @@ impl PageVm {
             );
         Ok(match result? {
             Some(snapshot) => match moli_paint::pdf::pdf_snapshot(&snapshot, &request.options) {
-                Ok(bytes) => Reply::Printed(bytes),
+                Ok(bytes) => {
+                    for diagnostic in moli_paint::pdf::pdf_snapshot_diagnostics(&snapshot) {
+                        tracing::warn!(
+                            target: "moli_paint",
+                            code = %diagnostic.code,
+                            "{}",
+                            diagnostic.message
+                        );
+                    }
+                    Reply::Printed(bytes)
+                }
                 Err(error) => Reply::Failed(error.to_string()),
             },
             None => Reply::NoDocument,

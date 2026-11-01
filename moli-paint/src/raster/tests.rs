@@ -906,3 +906,540 @@ fn html_text_shadow_uses_fill_ink_in_both_paint_orders() {
         }
     }
 }
+
+// ---- backdrop-filter -------------------------------------------------------
+
+fn backdrop(rect: PaintRect, filters: Vec<PaintFilter>) -> PaintFragment {
+    PaintFragment::BackdropFilter {
+        shape: PaintShape::Rect(rect),
+        transform: PaintTransform2D::IDENTITY,
+        filters,
+        own_scopes: 0,
+    }
+}
+
+fn effect_layer(opacity: f32, blend_mode: PaintBlendMode) -> PaintFragment {
+    PaintFragment::PushLayer {
+        opacity,
+        blend_mode,
+        composite: PaintCompositeMode::SrcOver,
+        clip: PaintShape::Rect(PaintRect::new(0.0, 0.0, 40.0, 40.0)),
+        transform: PaintTransform2D::IDENTITY,
+        filter: None,
+    }
+}
+
+fn assert_near(actual: [u8; 4], expected: [u8; 4], tolerance: u8) {
+    assert!(
+        actual
+            .iter()
+            .zip(expected)
+            .all(|(a, e)| a.abs_diff(e) <= tolerance),
+        "expected {expected:?} +/- {tolerance}, got {actual:?}"
+    );
+}
+
+#[test]
+fn backdrop_inside_ancestor_opacity_applies_the_opacity_once() {
+    // Filter Effects 2: the ancestor opacity layer is the Backdrop Root, so the
+    // backdrop is the layer's own content (opaque blue) and the layer opacity
+    // is applied exactly once when the root composites over the white canvas.
+    let rect = PaintRect::new(0.0, 0.0, 40.0, 40.0);
+    let mut snapshot = snapshot(40, 40, 1.0);
+    snapshot.push_fragment(effect_layer(0.5, PaintBlendMode::Normal));
+    snapshot.push_fragment(PaintFragment::solid_rect(
+        rect,
+        PaintColor::new(0.0, 0.0, 1.0, 1.0),
+    ));
+    snapshot.push_fragment(backdrop(rect, vec![PaintFilter::Brightness(1.0)]));
+    snapshot.push_fragment(PaintFragment::PopLayer);
+
+    let image = raster_snapshot(&snapshot).expect("backdrop should rasterize");
+    assert_near(pixel(&image, 20, 20), [128, 128, 255, 255], 2);
+}
+
+#[test]
+fn backdrop_inside_ancestor_blend_applies_the_blend_once() {
+    let rect = PaintRect::new(0.0, 0.0, 40.0, 40.0);
+    let grey = PaintColor::new(128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0);
+    let mut snapshot = snapshot(40, 40, 1.0);
+    snapshot.push_fragment(PaintFragment::solid_rect(rect, grey));
+    snapshot.push_fragment(effect_layer(1.0, PaintBlendMode::Multiply));
+    snapshot.push_fragment(PaintFragment::solid_rect(rect, grey));
+    snapshot.push_fragment(backdrop(rect, vec![PaintFilter::Brightness(1.0)]));
+    snapshot.push_fragment(PaintFragment::PopLayer);
+
+    let image = raster_snapshot(&snapshot).expect("backdrop should rasterize");
+    // grey multiply grey = 64; a second multiply would give 32.
+    assert_near(pixel(&image, 20, 20), [64, 64, 64, 255], 2);
+}
+
+fn rounded_backdrop(rect: PaintRect, radius: f32, filters: Vec<PaintFilter>) -> PaintFragment {
+    PaintFragment::BackdropFilter {
+        shape: PaintShape::RoundedRect {
+            rect,
+            radii: PaintCornerRadii::all(PaintCornerRadius::new(radius, radius)),
+        },
+        transform: PaintTransform2D::IDENTITY,
+        filters,
+        own_scopes: 0,
+    }
+}
+
+/// White canvas with 2px black stripes at even 2px columns: x % 4 in {0, 1}.
+fn striped(width: u32, height: u32) -> PaintSnapshot {
+    let mut snapshot = snapshot(width, height, 1.0);
+    for x in (0..width).step_by(4) {
+        snapshot.push_fragment(PaintFragment::solid_rect(
+            PaintRect::new(x as f32, 0.0, 2.0, height as f32),
+            PaintColor::BLACK,
+        ));
+    }
+    snapshot
+}
+
+fn stripe_value(x: u32) -> [u8; 4] {
+    if x % 4 < 2 {
+        [0, 0, 0, 255]
+    } else {
+        [255, 255, 255, 255]
+    }
+}
+
+#[test]
+fn backdrop_blur_stays_inside_the_rounded_border_box_with_mirrored_edges() {
+    let mut snapshot = striped(60, 60);
+    snapshot.push_fragment(rounded_backdrop(
+        PaintRect::new(10.0, 10.0, 40.0, 40.0),
+        10.0,
+        vec![PaintFilter::Blur(4.0)],
+    ));
+    let image = raster_snapshot(&snapshot).expect("backdrop blur should rasterize");
+
+    // Inside: stripes average to mid grey.
+    for (x, y) in [(29, 30), (30, 30), (31, 30), (32, 30)] {
+        assert_near(pixel(&image, x, y), [128, 128, 128, 255], 24);
+    }
+    // Outside the border box: untouched.
+    for (x, y) in [
+        (5, 30),
+        (6, 30),
+        (55, 30),
+        (30, 5),
+        (31, 55),
+        (30, 9),
+        (50, 30),
+    ] {
+        assert_eq!(pixel(&image, x, y), stripe_value(x), "({x}, {y})");
+    }
+    // Inside the bounding box but outside the 10px corner radius: untouched.
+    for (x, y) in [(10, 10), (11, 11), (49, 10), (48, 48), (10, 49)] {
+        assert_eq!(pixel(&image, x, y), stripe_value(x), "corner ({x}, {y})");
+    }
+    // Edge rows/columns sample mirrored backdrop, not transparent black:
+    // they stay mid grey over both black and white stripes.
+    for (x, y) in [
+        (30, 10),
+        (31, 10),
+        (32, 10),
+        (33, 10),
+        (10, 30),
+        (49, 30),
+        (30, 49),
+    ] {
+        assert_near(pixel(&image, x, y), [128, 128, 128, 255], 40);
+    }
+}
+
+#[test]
+fn backdrop_root_skips_the_elements_own_layers() {
+    // Layout emits the element's own opacity layer before its backdrop; that
+    // layer is not the Backdrop Root, so the canvas-rooted backdrop (blue) is
+    // inverted to yellow and faded once by the element's opacity.
+    let rect = PaintRect::new(0.0, 0.0, 40.0, 40.0);
+    let mut snapshot = snapshot(40, 40, 1.0);
+    snapshot.push_fragment(PaintFragment::solid_rect(
+        rect,
+        PaintColor::new(0.0, 0.0, 1.0, 1.0),
+    ));
+    snapshot.push_fragment(effect_layer(0.5, PaintBlendMode::Normal));
+    snapshot.push_fragment(PaintFragment::BackdropFilter {
+        shape: PaintShape::Rect(rect),
+        transform: PaintTransform2D::IDENTITY,
+        filters: vec![PaintFilter::Invert(1.0)],
+        own_scopes: 1,
+    });
+    snapshot.push_fragment(PaintFragment::PopLayer);
+
+    let image = raster_snapshot(&snapshot).expect("backdrop should rasterize");
+    assert_near(pixel(&image, 20, 20), [128, 128, 128, 255], 2);
+}
+
+#[test]
+fn backdrop_inside_a_software_color_filter_layer_reads_only_that_layer() {
+    let mut snapshot = snapshot(40, 40, 1.0);
+    snapshot.push_fragment(PaintFragment::solid_rect(
+        PaintRect::new(0.0, 0.0, 40.0, 40.0),
+        PaintColor::new(1.0, 0.0, 0.0, 1.0),
+    ));
+    snapshot.push_fragment(PaintFragment::PushLayer {
+        opacity: 1.0,
+        blend_mode: PaintBlendMode::Normal,
+        composite: PaintCompositeMode::SrcOver,
+        clip: PaintShape::Rect(PaintRect::new(0.0, 0.0, 40.0, 40.0)),
+        transform: PaintTransform2D::IDENTITY,
+        filter: Some(PaintFilter::Grayscale(1.0)),
+    });
+    snapshot.push_fragment(PaintFragment::solid_rect(
+        PaintRect::new(0.0, 0.0, 20.0, 40.0),
+        PaintColor::new(0.0, 0.0, 1.0, 1.0),
+    ));
+    snapshot.push_fragment(backdrop(
+        PaintRect::new(0.0, 0.0, 40.0, 40.0),
+        vec![PaintFilter::Invert(1.0)],
+    ));
+    snapshot.push_fragment(PaintFragment::PopLayer);
+
+    let image = raster_snapshot(&snapshot).expect("backdrop should rasterize");
+    // The red canvas fill is outside the Backdrop Root and stays visible.
+    assert_eq!(pixel(&image, 30, 20), [255, 0, 0, 255]);
+    // Blue inverted to yellow, then the root's grayscale applies once.
+    let [r, g, b, a] = pixel(&image, 10, 20);
+    assert!(
+        r == g && g == b && r > 200 && a == 255,
+        "{:?}",
+        [r, g, b, a]
+    );
+}
+
+#[test]
+fn backdrop_root_marker_makes_a_clip_scope_the_backdrop_root() {
+    // A clip-path scope followed by BackdropRoot is a Backdrop Root, like
+    // Chromium: the child backdrop reads only what the scope painted, so the
+    // red canvas outside it is not inverted into the child's region. Without
+    // the marker the clip is an ordinary overflow clip and the canvas is read.
+    let rect = PaintRect::new(0.0, 0.0, 40.0, 40.0);
+    let render = |marked: bool| {
+        let mut snapshot = snapshot(40, 40, 1.0);
+        snapshot.push_fragment(PaintFragment::solid_rect(
+            rect,
+            PaintColor::new(1.0, 0.0, 0.0, 1.0),
+        ));
+        snapshot.push_fragment(PaintFragment::PushClip {
+            shape: PaintShape::Rect(rect),
+            transform: PaintTransform2D::IDENTITY,
+        });
+        if marked {
+            snapshot.push_fragment(PaintFragment::BackdropRoot);
+        }
+        snapshot.push_fragment(backdrop(rect, vec![PaintFilter::Invert(1.0)]));
+        snapshot.push_fragment(PaintFragment::PopLayer);
+        pixel(
+            &raster_snapshot(&snapshot).expect("backdrop should rasterize"),
+            20,
+            20,
+        )
+    };
+    // Red inverted to cyan when the canvas is the root; untouched when the clip is.
+    assert_near(render(false), [0, 255, 255, 255], 2);
+    assert_eq!(render(true), [255, 0, 0, 255]);
+}
+
+#[test]
+fn backdrop_root_marker_makes_an_isolation_layer_the_backdrop_root() {
+    // An opacity-1 layer is not a root by itself; the marker makes it one, which
+    // is how a backdrop-filter ancestor scopes its descendants' backdrops.
+    let rect = PaintRect::new(0.0, 0.0, 40.0, 40.0);
+    let mut snapshot = snapshot(40, 40, 1.0);
+    snapshot.push_fragment(PaintFragment::solid_rect(
+        rect,
+        PaintColor::new(0.0, 0.0, 1.0, 1.0),
+    ));
+    snapshot.push_fragment(effect_layer(1.0, PaintBlendMode::Normal));
+    snapshot.push_fragment(PaintFragment::BackdropRoot);
+    snapshot.push_fragment(backdrop(rect, vec![PaintFilter::Invert(1.0)]));
+    snapshot.push_fragment(PaintFragment::PopLayer);
+    let image = raster_snapshot(&snapshot).expect("backdrop should rasterize");
+    // The canvas blue is outside the root, so nothing is inverted over it.
+    assert_eq!(pixel(&image, 20, 20), [0, 0, 255, 255]);
+}
+
+fn entry_at(index: usize, root_start: usize) -> super::backdrop::TestEntry {
+    super::backdrop::TestEntry { index, root_start }
+}
+
+#[test]
+fn last_use_matches_the_naive_prefix_scan_for_nested_and_independent_roots() {
+    // (index, root_start) in paint order; nested, sibling and canvas roots.
+    let entries = [
+        (2, 0),
+        (5, 0),
+        (7, 6),
+        (9, 6),
+        (12, 0),
+        (14, 13),
+        (15, 13),
+        (20, 0),
+        (22, 21),
+        (25, 0),
+    ]
+    .map(|(index, root_start)| entry_at(index, root_start));
+    let mut expected: Vec<usize> = entries.iter().map(|entry| entry.index).collect();
+    for (position, entry) in entries.iter().enumerate() {
+        for earlier in (0..position).rev() {
+            if entries[earlier].index < entry.root_start {
+                break;
+            }
+            expected[earlier] = entry.index;
+        }
+    }
+    assert_eq!(super::backdrop::last_use_for_test(&entries), expected);
+}
+
+#[test]
+fn backdrop_bookkeeping_is_not_quadratic_when_every_effect_is_skipped() {
+    // 40,000 canvas-rooted backdrops used to cost ~800 million prefix updates in
+    // planning alone; a zero allowance skips them all, so only bookkeeping runs.
+    let entries: Vec<_> = (0..40_000).map(|i| entry_at(i + 1, 0)).collect();
+    let started = std::time::Instant::now();
+    let last_use = super::backdrop::last_use_for_test(&entries);
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(last_use[0], 40_000);
+    assert_eq!(last_use[39_999], 40_000);
+}
+
+#[test]
+fn pdf_effect_group_fallback_does_not_render_backdrop_filter() {
+    // A backdrop inside a software color-filter group is rasterized by the PDF
+    // painter; PDF export promises to omit backdrop-filter, so the fallback
+    // must not draw it (the raster path would invert the blue to yellow).
+    let rect = PaintRect::new(0.0, 0.0, 40.0, 40.0);
+    let mut snapshot = snapshot(40, 40, 1.0);
+    snapshot.push_fragment(PaintFragment::PushLayer {
+        opacity: 1.0,
+        blend_mode: PaintBlendMode::Normal,
+        composite: PaintCompositeMode::SrcOver,
+        clip: PaintShape::Rect(rect),
+        transform: PaintTransform2D::IDENTITY,
+        filter: Some(PaintFilter::Grayscale(1.0)),
+    });
+    snapshot.push_fragment(PaintFragment::solid_rect(
+        rect,
+        PaintColor::new(0.0, 0.0, 1.0, 1.0),
+    ));
+    snapshot.push_fragment(backdrop(rect, vec![PaintFilter::Invert(1.0)]));
+    snapshot.push_fragment(PaintFragment::PopLayer);
+    let with_backdrop = crate::pdf::pdf_snapshot(&snapshot, &crate::pdf::PdfOptions::default())
+        .expect("PDF export skips backdrop-filter");
+    snapshot
+        .fragments
+        .retain(|fragment| !matches!(fragment, PaintFragment::BackdropFilter { .. }));
+    let without_backdrop = crate::pdf::pdf_snapshot(&snapshot, &crate::pdf::PdfOptions::default())
+        .expect("PDF export of the same page");
+    assert_eq!(with_backdrop, without_backdrop);
+}
+
+fn half_invert_snapshot() -> PaintSnapshot {
+    let mut snapshot = snapshot(40, 40, 1.0);
+    snapshot.push_fragment(PaintFragment::solid_rect(
+        PaintRect::new(0.0, 0.0, 20.0, 40.0),
+        PaintColor::BLACK,
+    ));
+    snapshot.push_fragment(backdrop(
+        PaintRect::new(0.0, 0.0, 20.0, 40.0),
+        vec![PaintFilter::Invert(1.0)],
+    ));
+    snapshot.push_fragment(backdrop(
+        PaintRect::new(20.0, 0.0, 20.0, 40.0),
+        vec![PaintFilter::Invert(1.0)],
+    ));
+    snapshot
+}
+
+#[test]
+fn backdrops_within_budget_render_without_diagnostics() {
+    let output = raster_snapshot_with_diagnostics(&half_invert_snapshot())
+        .expect("backdrops should rasterize");
+    assert!(output.diagnostics.is_empty());
+    assert_eq!(pixel(&output.image, 10, 20), [255, 255, 255, 255]);
+    assert_eq!(pixel(&output.image, 30, 20), [0, 0, 0, 255]);
+}
+
+#[test]
+fn backdrops_over_transient_budget_degrade_with_a_diagnostic() {
+    // 40x40 surface: 6_400 bytes; each region 20x40: 3_200 bytes. The output,
+    // one capture surface and two working buffers take 19_200 bytes.
+    // Each cached region also reserves its final/capture premultiplied copies,
+    // so 9_600 more bytes admit exactly one region.
+    let output = raster_with_budget(&half_invert_snapshot(), 28_800)
+        .expect("over-budget backdrops degrade instead of failing");
+    assert_eq!(pixel(&output.image, 10, 20), [255, 255, 255, 255]);
+    // The second backdrop is skipped: its region keeps the unfiltered white.
+    assert_eq!(pixel(&output.image, 30, 20), [255, 255, 255, 255]);
+    assert_eq!(output.diagnostics.len(), 1);
+    assert_eq!(
+        output.diagnostics[0].code,
+        "backdrop-filter-budget-exceeded"
+    );
+    assert!(
+        output.diagnostics[0].message.starts_with("skipped 1 of 2"),
+        "{}",
+        output.diagnostics[0].message
+    );
+    assert_eq!(
+        output.diagnostics[0].severity,
+        moli_layout::PaintDiagnosticSeverity::Warning
+    );
+}
+
+#[test]
+fn backdrop_bytes_are_charged_against_the_transient_raster_budget() {
+    let dimensions = validate_dimensions(PaintCaptureSurface::new(4_096.0, 4_096.0, 1.0))
+        .expect("dimensions supported by the backend");
+    let mut snapshot = snapshot(4_096, 4_096, 1.0);
+    for _ in 0..3 {
+        snapshot.push_fragment(backdrop(
+            PaintRect::new(0.0, 0.0, 4_096.0, 4_096.0),
+            vec![PaintFilter::Blur(1.0)],
+        ));
+    }
+    let stream = validate_fragment_stream(&snapshot).expect("valid stream");
+    assert_eq!(stream.backdrop_count, 3);
+    assert_eq!(stream.backdrop_bytes, 3 * 67_108_864);
+    assert_eq!(stream.max_backdrop_bytes, 67_108_864);
+    // Output + capture + two blur buffers already fill the 256 MiB budget,
+    // so every region degrades rather than failing the capture.
+    assert_eq!(validate_resource_budget(dimensions, stream), Ok(()));
+    assert_eq!(
+        backdrop_allowance(dimensions, stream, MAX_TRANSIENT_RASTER_BYTES),
+        0
+    );
+}
+
+#[test]
+fn pdf_export_reports_backdrop_filter_as_unsupported() {
+    let snapshot = half_invert_snapshot();
+    crate::pdf::pdf_snapshot(&snapshot, &crate::pdf::PdfOptions::default())
+        .expect("PDF export skips backdrop-filter");
+    let diagnostics = crate::pdf::pdf_snapshot_diagnostics(&snapshot);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "backdrop-filter-unsupported");
+}
+
+#[test]
+fn huge_backdrop_blur_is_clamped_to_the_region() {
+    let started = std::time::Instant::now();
+    let mut snapshot = striped(40, 40);
+    snapshot.push_fragment(backdrop(
+        PaintRect::new(0.0, 0.0, 40.0, 40.0),
+        vec![PaintFilter::Blur(1.0e9)],
+    ));
+    let image = raster_snapshot(&snapshot).expect("huge blur should rasterize");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "clamped blur took {:?}",
+        started.elapsed()
+    );
+    // A region-sized mirrored blur flattens the stripes.
+    for (x, y) in [(0, 0), (1, 20), (20, 20), (39, 39)] {
+        assert_near(pixel(&image, x, y), [128, 128, 128, 255], 24);
+    }
+}
+
+#[test]
+fn non_finite_backdrop_blur_is_ignored() {
+    for radius in [f32::NAN, f32::INFINITY, -4.0] {
+        let mut snapshot = striped(20, 20);
+        snapshot.push_fragment(backdrop(
+            PaintRect::new(0.0, 0.0, 20.0, 20.0),
+            vec![PaintFilter::Blur(radius)],
+        ));
+        let image = raster_snapshot(&snapshot).expect("invalid blur should rasterize");
+        for x in 0..20 {
+            assert_eq!(pixel(&image, x, 10), stripe_value(x), "radius {radius}");
+        }
+    }
+}
+
+#[test]
+fn limitation_element_filter_does_not_apply_to_its_backdrop() {
+    // Pins current behavior: layout pushes the element's own `filter` layers
+    // after its BackdropFilter, so `filter: invert(1)` affects the element's
+    // content but not the filtered backdrop (Chromium applies both).
+    let rect = PaintRect::new(0.0, 0.0, 40.0, 40.0);
+    let mut snapshot = snapshot(40, 40, 1.0);
+    snapshot.push_fragment(PaintFragment::solid_rect(rect, PaintColor::BLACK));
+    snapshot.push_fragment(backdrop(rect, vec![PaintFilter::Brightness(1.0)]));
+    snapshot.push_fragment(PaintFragment::PushLayer {
+        opacity: 1.0,
+        blend_mode: PaintBlendMode::Normal,
+        composite: PaintCompositeMode::SrcOver,
+        clip: PaintShape::Rect(rect),
+        transform: PaintTransform2D::IDENTITY,
+        filter: Some(PaintFilter::Invert(1.0)),
+    });
+    snapshot.push_fragment(PaintFragment::PopLayer);
+
+    let image = raster_snapshot(&snapshot).expect("backdrop should rasterize");
+    assert_eq!(pixel(&image, 20, 20), [0, 0, 0, 255]);
+}
+
+#[test]
+fn limitation_drop_shadow_in_raster_backdrop_list_is_ignored() {
+    // Layout strips drop-shadow() and reports it; raster tolerates it.
+    let mut snapshot = striped(20, 20);
+    snapshot.push_fragment(backdrop(
+        PaintRect::new(0.0, 0.0, 20.0, 20.0),
+        vec![PaintFilter::DropShadow {
+            offset: moli_layout::PaintPoint::new(4.0, 4.0),
+            blur_radius: 2.0,
+            color: PaintColor::new(1.0, 0.0, 0.0, 1.0),
+        }],
+    ));
+    let output = raster_snapshot_with_diagnostics(&snapshot).expect("backdrop should rasterize");
+    assert_eq!(output.diagnostics.len(), 1);
+    assert_eq!(
+        output.diagnostics[0].code,
+        "backdrop-filter-drop-shadow-unsupported"
+    );
+    for x in 0..20 {
+        assert_eq!(pixel(&output.image, x, 10), stripe_value(x));
+    }
+}
+
+#[test]
+fn backdrop_blur_has_a_fixed_device_pixel_cap() {
+    let render = |radius| {
+        let mut snapshot = snapshot(320, 32, 1.0);
+        snapshot.push_fragment(PaintFragment::solid_rect(
+            PaintRect::new(0.0, 0.0, 160.0, 32.0),
+            PaintColor::BLACK,
+        ));
+        snapshot.push_fragment(backdrop(
+            PaintRect::new(0.0, 0.0, 320.0, 32.0),
+            vec![PaintFilter::Blur(radius)],
+        ));
+        raster_snapshot(&snapshot).unwrap()
+    };
+    assert_eq!(render(1.0e9), render(128.0));
+}
+
+#[test]
+fn backdrop_blur_expanded_backend_surfaces_are_budgeted() {
+    let plain = striped(40, 40);
+    let mut blurred = plain.clone();
+    blurred.push_fragment(backdrop(
+        PaintRect::new(0.0, 0.0, 40.0, 40.0),
+        vec![PaintFilter::Blur(4.0)],
+    ));
+    let stream = validate_fragment_stream(&blurred).unwrap();
+    // Mirror sampling and Vello's filter padding require more than two
+    // unexpanded region buffers. A budget that fits those must still degrade.
+    assert!(stream.max_backdrop_workspace_bytes > 2 * stream.max_backdrop_bytes);
+    let output = raster_with_budget(&blurred, 5 * 40 * 40 * 4).unwrap();
+    assert_eq!(output.image, raster_snapshot(&plain).unwrap());
+    assert_eq!(
+        output.diagnostics[0].code,
+        "backdrop-filter-budget-exceeded"
+    );
+}

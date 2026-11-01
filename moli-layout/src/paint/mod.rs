@@ -17,7 +17,7 @@ use std::{collections::HashMap, fmt::Debug, hash::Hash};
 use background::{project_background_color, project_background_layers};
 use clip_path::{ClipPathUnsupported, project_clip_path};
 use cull::{PaintCullPlan, PaintCullRegion};
-use filters::{expanded_filter_clip, project_filters};
+use filters::{expanded_filter_clip, has_backdrop_filter, project_filters};
 use form_controls::project_form_control_appearance;
 use geometry::{BoxAreas, BoxModelBox, canonical_shape, inset_radii};
 use image::project_replaced_image;
@@ -98,6 +98,10 @@ impl ActivePaintClipChain {
     fn clear(&mut self, snapshot: &mut PaintSnapshot) {
         pop_clips(self.nodes.len(), snapshot);
         self.nodes.clear();
+    }
+
+    fn len(&self) -> usize {
+        self.nodes.len()
     }
 }
 
@@ -186,6 +190,13 @@ where
         );
     }
 
+    // Backdrop Root markers are emitted only when some box uses backdrop-filter,
+    // so every other document projects exactly the fragments it did before.
+    let uses_backdrop_filter = projection
+        .world
+        .boxes
+        .iter()
+        .any(|layout_box| has_backdrop_filter(&layout_box.style));
     let mut context_cull_regions = Vec::new();
     let mut context_layers = Vec::new();
     let mut active_clips = ActivePaintClipChain::default();
@@ -242,6 +253,9 @@ where
                 let clip_path_layer = match project_clip_path(style, areas) {
                     Ok(Some(shape)) => {
                         snapshot.push_fragment(PaintFragment::PushClip { shape, transform });
+                        if uses_backdrop_filter {
+                            snapshot.push_fragment(PaintFragment::BackdropRoot);
+                        }
                         true
                     }
                     Ok(None) => false,
@@ -311,12 +325,22 @@ where
                         ),
                     );
                 }
-                if filters.has_backdrop_filter {
+                if filters.backdrop_skipped_url {
                     push_diagnostic_once(
                         &mut snapshot,
-                        "backdrop-filter-unsupported",
+                        "backdrop-filter-url-reference-unsupported",
                         format!(
-                            "{} uses backdrop-filter, which the CPU backend does not implement",
+                            "{} uses a URL-referenced backdrop-filter that software paint skips",
+                            layout_box.source_label
+                        ),
+                    );
+                }
+                if filters.backdrop_skipped_drop_shadow {
+                    push_diagnostic_once(
+                        &mut snapshot,
+                        "backdrop-filter-drop-shadow-unsupported",
+                        format!(
+                            "{} uses drop-shadow() in backdrop-filter, which software paint skips",
                             layout_box.source_label
                         ),
                     );
@@ -346,6 +370,44 @@ where
                         transform,
                         filter: None,
                     });
+                    effect_layers += 1;
+                }
+                // The filtered backdrop is the element's bottom-most paint. It
+                // sits inside the element's own clip-path, mask, and
+                // opacity/blend scopes so those apply to it, and inside the
+                // ancestor overflow clips that clip its background; the raster
+                // backend skips all of them when locating the Backdrop Root.
+                // A `visibility: hidden` element paints no backdrop.
+                if !filters.backdrop.is_empty() && style.is_visible() {
+                    active_clips.transition_to(
+                        projection,
+                        projection.background_clips[id.index()],
+                        &mut snapshot,
+                    );
+                    let own_scopes = usize::from(clip_path_layer)
+                        + usize::from(mask_layer)
+                        + effect_layers
+                        + active_clips.len();
+                    snapshot.push_fragment(PaintFragment::BackdropFilter {
+                        shape: areas.shape(BoxModelBox::Border),
+                        transform,
+                        filters: filters.backdrop.clone(),
+                        own_scopes: u16::try_from(own_scopes).unwrap_or(u16::MAX),
+                    });
+                    active_clips.clear(&mut snapshot);
+                }
+                // An element with backdrop-filter is a Backdrop Root for its
+                // descendants; its own backdrop was rooted above it.
+                if filters.has_backdrop && uses_backdrop_filter {
+                    snapshot.push_fragment(PaintFragment::PushLayer {
+                        opacity: 1.0,
+                        blend_mode: crate::PaintBlendMode::Normal,
+                        composite: crate::PaintCompositeMode::SrcOver,
+                        clip: PaintShape::Rect(effect_clip),
+                        transform,
+                        filter: None,
+                    });
+                    snapshot.push_fragment(PaintFragment::BackdropRoot);
                     effect_layers += 1;
                 }
                 // CSS applies filter functions in list order. Nest the list in

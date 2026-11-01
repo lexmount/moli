@@ -87,7 +87,9 @@ pub(super) fn validate(snapshot: &PaintSnapshot) -> Result<(), PdfError> {
                 image.transform,
             ),
             PaintFragment::SvgImage(image) => (rect(image.destination), image.transform),
-            PaintFragment::PopLayer => continue,
+            PaintFragment::PopLayer
+            | PaintFragment::BackdropRoot
+            | PaintFragment::BackdropFilter { .. } => continue,
         };
         if !valid
             || !matrix
