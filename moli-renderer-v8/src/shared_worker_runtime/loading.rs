@@ -476,8 +476,7 @@ fn loaded_shared_worker_script_from_fetch_response(
         response.body_bytes(),
     )?;
     let response_referrer_policy = response_referrer_policy(&response.headers);
-    let response_policy_context =
-        worker_policy_context_from_response(&response.final_url, &response.headers);
+    let response_policy_context = worker_policy_context_from_response(&response.headers);
     let response_content_security_policies =
         crate::content_security_policy::content_security_policy_headers(&response.headers);
     let response_content_security_report_only_policies =
@@ -529,8 +528,7 @@ fn loaded_shared_worker_script_from_navigation_response(
         &body_bytes,
     )?;
     let response_referrer_policy = response_referrer_policy(&head.headers);
-    let response_policy_context =
-        worker_policy_context_from_response(&head.final_url, &head.headers);
+    let response_policy_context = worker_policy_context_from_response(&head.headers);
     let response_content_security_policies =
         crate::content_security_policy::content_security_policy_headers(&head.headers);
     let response_content_security_report_only_policies =
@@ -610,19 +608,13 @@ fn response_referrer_policy(headers: &[(String, Vec<u8>)]) -> Option<String> {
     response_referrer_policy_from_headers(headers)
 }
 
-fn worker_policy_context_from_response(
-    final_url: &Url,
-    headers: &[(String, Vec<u8>)],
-) -> SubresourcePolicyContext {
+fn worker_policy_context_from_response(headers: &[(String, Vec<u8>)]) -> SubresourcePolicyContext {
     SubresourcePolicyContext {
         cross_origin_embedder_policy:
             crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers),
         document_isolation_policy:
             crate::cross_origin_isolation::document_isolation_policy_from_headers(headers),
-        cross_origin_isolated:
-            crate::cross_origin_isolation::response_headers_enable_cross_origin_isolation(
-                final_url, headers,
-            ),
+        cross_origin_isolated: false,
     }
 }
 
@@ -762,8 +754,7 @@ mod tests {
             ),
         ];
 
-        let final_url = Url::parse("https://worker.test/shared.js").unwrap();
-        let policy_context = worker_policy_context_from_response(&final_url, &headers);
+        let policy_context = worker_policy_context_from_response(&headers);
 
         assert_eq!(
             policy_context.cross_origin_embedder_policy,
@@ -773,7 +764,7 @@ mod tests {
             policy_context.document_isolation_policy,
             crate::cross_origin_isolation::DocumentIsolationPolicy::IsolateAndCredentialless
         );
-        assert!(policy_context.cross_origin_isolated);
+        assert!(!policy_context.cross_origin_isolated);
     }
 
     #[test]
