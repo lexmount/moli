@@ -1,9 +1,8 @@
 use super::*;
 use crate::network_host::{
     BlobUrlFetchEnvironment, CapturedBlobUrl, FetchArgumentError, RedirectOwner,
-    convert_fetch_arguments, fetch_browser_subresource_for_owner,
+    combined_headers_entries, convert_fetch_arguments, fetch_browser_subresource_for_owner,
     fetch_browser_subresource_raw_stream_for_owner, local_url_response_with_blob_entry,
-    normalized_headers_entries,
 };
 use crate::service_worker_runtime::{
     ServiceWorkerClientId, ServiceWorkerDirectFetchResult, ServiceWorkerFetchDispatch,
@@ -2463,9 +2462,9 @@ pub(super) fn start_worker_resource_fetch<'s>(
         blob_url_entry.map(|entry| entry.for_environment(blob_environment.as_ref()));
     let network_credentials_mode =
         policy_context.network_credentials_mode(request_mode, credentials_mode);
-    // Use the same normalized header list as Request before policy checks and
-    // context overrides can otherwise discard a repeated Range field.
-    let request_headers = normalized_headers_entries(&request_headers);
+    // Combine values before policy checks and context overrides, preserving
+    // the first field spelling through native network dispatch.
+    let request_headers = combined_headers_entries(&request_headers);
     let headers = merge_worker_request_headers(
         &extra_http_headers,
         &moli_fetch::RequestHeaders::from_byte_strings(&request_headers)

@@ -104,9 +104,9 @@ pub(super) fn prepare_window_fetch_request<'s>(
     host: &JsContextHost,
     blob_environment: &BlobUrlFetchEnvironment,
 ) -> Result<PreparedWindowFetchRequest, FetchPrepareError> {
-    // Match Request's Headers representation before preflight and context
-    // overrides: repeated Range fields form one unsafe, comma-joined value.
-    let request_headers = normalized_headers_entries(&parsed.headers);
+    // Combine duplicate values before preflight and context overrides while
+    // preserving the first field spelling for native network serialization.
+    let request_headers = combined_headers_entries(&parsed.headers);
     // Receiver capture and WebIDL conversion are complete before this pure
     // preparation stage. Never inspect `args.this()` here: doing so could bind
     // the operation to a replacement LocalWindow after an author getter

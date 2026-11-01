@@ -1,6 +1,7 @@
 use super::*;
 
 mod credentialless;
+mod header_names;
 
 #[tokio::test]
 async fn worker_fetch_referrer_inputs_reach_the_network() {

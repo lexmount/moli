@@ -740,8 +740,12 @@ fn materialize_response_head_for_purpose<'s>(
 
     Ok((
         MaterializedResponseHead {
-            cors_exposed_header_names: (response_type == "cors")
-                .then(|| headers.iter().map(|(name, _)| name.clone()).collect()),
+            cors_exposed_header_names: (response_type == "cors").then(|| {
+                headers
+                    .iter()
+                    .map(|(name, _)| name.to_ascii_lowercase())
+                    .collect()
+            }),
             request_include_credentials: response_slot_bool(
                 scope,
                 response,
