@@ -900,7 +900,10 @@ mod tests {
         let mut document = HostDocumentState::new(top.clone());
         document.cookie_store = Some(store.clone());
 
-        assert_eq!(document.cookie_for_url(&top).unwrap(), "strict=1; lax=1; none=1");
+        assert_eq!(
+            document.cookie_for_url(&top).unwrap(),
+            "strict=1; lax=1; none=1"
+        );
         assert_eq!(document.cookie_for_url(&child).unwrap(), "none=1");
         assert!(
             document
@@ -938,7 +941,10 @@ mod tests {
                 .outcome,
             DocumentCookieSetOutcome::Disabled
         );
-        assert_eq!(store.lock().unwrap().document_cookie_generation(), generation);
+        assert_eq!(
+            store.lock().unwrap().document_cookie_generation(),
+            generation
+        );
 
         store.lock().unwrap().store_response_headers(
             &child,
@@ -949,6 +955,9 @@ mod tests {
         );
         document.clear_cookie_facade_overrides();
         assert_eq!(document.cookie_for_url(&child).unwrap(), "none=updated");
-        assert_eq!(document.cookie_for_url(&top).unwrap(), "strict=1; lax=1; none=1");
+        assert_eq!(
+            document.cookie_for_url(&top).unwrap(),
+            "strict=1; lax=1; none=1"
+        );
     }
 }

@@ -72,7 +72,9 @@ impl Eq for WebStorageEventSource {}
 
 impl fmt::Debug for WebStorageEventSource {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("WebStorageEventSource").finish_non_exhaustive()
+        formatter
+            .debug_struct("WebStorageEventSource")
+            .finish_non_exhaustive()
     }
 }
 
@@ -113,7 +115,9 @@ impl WebStorageStore {
             let mut entries = self.event_recipients.lock();
             let mut recipients = Vec::with_capacity(entries.len());
             entries.retain(|entry| {
-                let Some(recipient) = entry.upgrade() else { return false; };
+                let Some(recipient) = entry.upgrade() else {
+                    return false;
+                };
                 recipients.push(recipient);
                 true
             });
@@ -124,14 +128,99 @@ impl WebStorageStore {
         let mut closed = Vec::new();
         for recipient in &recipients {
             match recipient.queue_storage_event(source, origin, area_key, data) {
-                WebStorageEventDelivery::Skipped => {},
+                WebStorageEventDelivery::Skipped => {}
                 WebStorageEventDelivery::Queued => queued += 1,
                 WebStorageEventDelivery::Closed => closed.push(Arc::downgrade(recipient)),
             }
         }
         if !closed.is_empty() {
-            self.event_recipients.lock().retain(|entry| !closed.iter().any(|closed| Weak::ptr_eq(entry, closed)));
+            self.event_recipients
+                .lock()
+                .retain(|entry| !closed.iter().any(|closed| Weak::ptr_eq(entry, closed)));
         }
         queued
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Recipient {
+        events: Mutex<Vec<WebStorageEventData>>,
+        register: Mutex<Option<(Weak<WebStorageStore>, Arc<Recipient>)>>,
+        closed: bool,
+    }
+
+    impl WebStorageEventSink for Recipient {
+        fn queue_storage_event(
+            &self,
+            _source: &WebStorageEventSource,
+            _origin: &str,
+            _area_key: &str,
+            data: &WebStorageEventData,
+        ) -> WebStorageEventDelivery {
+            self.events.lock().push(data.clone());
+            if self.closed {
+                return WebStorageEventDelivery::Closed;
+            }
+            if let Some((store, recipient)) = self.register.lock().take() {
+                store.upgrade().unwrap().register_event_recipient(recipient);
+            }
+            WebStorageEventDelivery::Queued
+        }
+    }
+
+    #[test]
+    fn event_recipients_are_weak_and_delivery_can_register_a_future_recipient() {
+        let store = new_shared_web_storage_store();
+        let future = Arc::new(Recipient::default());
+        let first = Arc::new(Recipient {
+            register: Mutex::new(Some((Arc::downgrade(&store), future.clone()))),
+            ..Default::default()
+        });
+        let closed = Arc::new(Recipient {
+            closed: true,
+            ..Default::default()
+        });
+        let expired = Arc::new(Recipient::default());
+        let weak = Arc::downgrade(&expired);
+        store.register_event_recipient(first.clone());
+        store.register_event_recipient(closed.clone());
+        store.register_event_recipient(expired.clone());
+        drop(expired);
+        assert!(weak.upgrade().is_none());
+        let identity = Arc::new(());
+        let source = WebStorageEventSource::new(identity.clone());
+        assert_eq!(source, WebStorageEventSource::new(identity));
+        let data = WebStorageEventData::new(
+            "https://source.test/".into(),
+            false,
+            Some(vec![0xd800]),
+            None,
+            Some(vec![0xdc00]),
+        );
+        assert_eq!(
+            store.queue_remote_storage_events(&source, "https://source.test", "area", &data),
+            1
+        );
+        assert!(future.events.lock().is_empty());
+        assert_eq!(
+            store.queue_remote_storage_events(&source, "https://source.test", "area", &data),
+            2
+        );
+        assert_eq!(*first.events.lock(), vec![data.clone(), data.clone()]);
+        assert_eq!(*future.events.lock(), vec![data.clone()]);
+        assert_eq!(*closed.events.lock(), vec![data]);
+        drop(first);
+        drop(future);
+        assert_eq!(store.event_recipients.lock().len(), 2);
+        let data = WebStorageEventData::new(String::new(), false, None, None, None);
+        assert_eq!(
+            store.queue_remote_storage_events(&source, "https://source.test", "area", &data),
+            0
+        );
+        assert!(store.event_recipients.lock().is_empty());
     }
 }

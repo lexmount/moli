@@ -26,7 +26,7 @@ async fn redirected_navigation_keeps_cookie_method_allowance_in_every_transport(
                 target_url.port().unwrap()
             )]);
             let cookies = new_shared_browser_cookie_store();
-            cookies.lock().store_response_headers(
+            cookies.lock()?.store_response_headers(
                 &target_url,
                 &[
                     (

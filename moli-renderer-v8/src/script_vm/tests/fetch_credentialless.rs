@@ -97,6 +97,7 @@ async fn window_fetch_credentialless_credentials_follow_redirect_taint() {
             .cookie_store();
         cookies
             .lock()
+            .unwrap()
             .set_document_cookie(&same.base_url(), "seed=1; Path=/; SameSite=Lax");
         // The same probe exercises Request metadata and redirects in Window and Worker realms.
         vm.eval(&format!(
@@ -169,6 +170,7 @@ async fn window_fetch_credentialless_credentials_follow_redirect_taint() {
         }
         let actual_cookies = cookies
             .lock()
+            .unwrap()
             .cookies()
             .into_iter()
             .map(|cookie| cookie.name)

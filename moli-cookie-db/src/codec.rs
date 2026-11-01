@@ -23,16 +23,28 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<(), WritebackErr
             same_site INTEGER NOT NULL CHECK(same_site BETWEEN 0 AND 3),priority INTEGER CHECK(priority BETWEEN 0 AND 2),
             source_scheme INTEGER NOT NULL CHECK(source_scheme BETWEEN 0 AND 2),source_port INTEGER NOT NULL,
             creation_index BLOB NOT NULL CHECK(length(creation_index)=8),last_access_index BLOB NOT NULL CHECK(length(last_access_index)=8),
+            creation_seconds INTEGER,creation_nanos INTEGER CHECK(creation_nanos>=0 AND creation_nanos<1000000000),
+            CHECK((creation_seconds IS NULL)=(creation_nanos IS NULL)),
             CHECK((expires_seconds IS NULL)=(expires_nanos IS NULL)),PRIMARY KEY(partition_key,domain,path,name)) WITHOUT ROWID;")?;
         tx.pragma_update(None, "application_id", APPLICATION_ID)?;
-        tx.pragma_update(None, "user_version", 1)?;
+        tx.pragma_update(None, "user_version", 2)?;
         tx.commit()?;
-    } else if application != APPLICATION_ID || version != 1 {
+    } else if application == APPLICATION_ID && version == 1 {
+        // Legacy rows have unknown age. Preserve that state instead of granting
+        // them a new Lax-by-default unsafe-navigation grace period.
+        let tx = connection.transaction()?;
+        tx.execute_batch("ALTER TABLE cookies ADD COLUMN creation_seconds INTEGER;
+            ALTER TABLE cookies ADD COLUMN creation_nanos INTEGER
+            CHECK((creation_seconds IS NULL)=(creation_nanos IS NULL)
+                AND (creation_nanos IS NULL OR (creation_nanos>=0 AND creation_nanos<1000000000)));")?;
+        tx.pragma_update(None, "user_version", 2)?;
+        tx.commit()?;
+    } else if application != APPLICATION_ID || version != 2 {
         return Err(WritebackError::new(format!(
             "unsupported Cookie database identity/version {application}/{version}"
         )));
     }
-    connection.prepare("SELECT partition_key,domain,path,name,value,host_only,secure,http_only,expires_seconds,expires_nanos,same_site,priority,source_scheme,source_port,creation_index,last_access_index FROM cookies LIMIT 0")?;
+    connection.prepare("SELECT partition_key,domain,path,name,value,host_only,secure,http_only,expires_seconds,expires_nanos,same_site,priority,source_scheme,source_port,creation_index,last_access_index,creation_seconds,creation_nanos FROM cookies LIMIT 0")?;
     Ok(())
 }
 pub(super) fn partition_bytes(key: Option<&StoredCookiePartitionKey>) -> Vec<u8> {
@@ -92,21 +104,32 @@ fn flag(row: &rusqlite::Row<'_>, position: usize) -> rusqlite::Result<bool> {
         _ => Err(invalid("invalid Cookie flag")),
     }
 }
+fn timestamp(
+    row: &rusqlite::Row<'_>,
+    seconds_position: usize,
+    nanos_position: usize,
+    message: &str,
+) -> rusqlite::Result<Option<OffsetDateTime>> {
+    match (
+        row.get::<_, Option<i64>>(seconds_position)?,
+        row.get::<_, Option<i64>>(nanos_position)?,
+    ) {
+        (None, None) => Ok(None),
+        (Some(seconds), Some(nanos)) if (0..1_000_000_000).contains(&nanos) => {
+            OffsetDateTime::from_unix_timestamp(seconds)
+                .ok()
+                .and_then(|time| time.checked_add(Duration::nanoseconds(nanos)))
+                .map(Some)
+                .ok_or_else(|| invalid(message))
+        }
+        _ => Err(invalid(message)),
+    }
+}
+
 pub(super) fn read(connection: &mut Connection) -> Result<Vec<StoredCookie>, WritebackError> {
-    let mut statement=connection.prepare("SELECT partition_key,domain,path,name,value,host_only,secure,http_only,expires_seconds,expires_nanos,same_site,priority,source_scheme,source_port,creation_index,last_access_index FROM cookies ORDER BY creation_index")?;
+    let mut statement=connection.prepare("SELECT partition_key,domain,path,name,value,host_only,secure,http_only,expires_seconds,expires_nanos,same_site,priority,source_scheme,source_port,creation_index,last_access_index,creation_seconds,creation_nanos FROM cookies ORDER BY creation_index")?;
     let rows = statement.query_map([], |row| {
-        let seconds: Option<i64> = row.get(8)?;
-        let nanos: Option<i64> = row.get(9)?;
-        let expires = match (seconds, nanos) {
-            (None, None) => None,
-            (Some(seconds), Some(nanos)) if (0..1_000_000_000).contains(&nanos) => Some(
-                OffsetDateTime::from_unix_timestamp(seconds)
-                    .ok()
-                    .and_then(|time| time.checked_add(Duration::nanoseconds(nanos)))
-                    .ok_or_else(|| invalid("invalid Cookie expiry"))?,
-            ),
-            _ => return Err(invalid("invalid Cookie expiry fields")),
-        };
+        let expires = timestamp(row, 8, 9, "invalid Cookie expiry")?;
         let same_site = match row.get::<_, i64>(10)? {
             0 => StoredCookieSameSite::Unspecified,
             1 => StoredCookieSameSite::Lax,
@@ -142,6 +165,7 @@ pub(super) fn read(connection: &mut Connection) -> Result<Vec<StoredCookie>, Wri
             source_scheme,
             source_port: row.get(13)?,
             creation_index: index(row.get(14)?)?,
+            creation_time: timestamp(row, 16, 17, "invalid Cookie creation time")?,
             last_access_index: index(row.get(15)?)?,
         })
     })?;
@@ -168,9 +192,9 @@ pub(super) fn upsert(
         StoredCookieSourceScheme::NonSecure => 1,
         StoredCookieSourceScheme::Secure => 2,
     };
-    connection.execute("INSERT INTO cookies(partition_key,domain,path,name,value,host_only,secure,http_only,expires_seconds,expires_nanos,same_site,priority,source_scheme,source_port,creation_index,last_access_index)
-        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
-        ON CONFLICT(partition_key,domain,path,name) DO UPDATE SET value=excluded.value,host_only=excluded.host_only,secure=excluded.secure,http_only=excluded.http_only,expires_seconds=excluded.expires_seconds,expires_nanos=excluded.expires_nanos,same_site=excluded.same_site,priority=excluded.priority,source_scheme=excluded.source_scheme,source_port=excluded.source_port,creation_index=excluded.creation_index,last_access_index=excluded.last_access_index",
-        params![key.partition,key.domain,key.path,key.name,cookie.value,cookie.host_only,cookie.secure,cookie.http_only,cookie.expires.map(|e|e.unix_timestamp()),cookie.expires.map(|e|i64::from(e.nanosecond())),same_site,priority,source,cookie.source_port,cookie.creation_index.to_be_bytes().as_slice(),cookie.last_access_index.to_be_bytes().as_slice()])?;
+    connection.execute("INSERT INTO cookies(partition_key,domain,path,name,value,host_only,secure,http_only,expires_seconds,expires_nanos,same_site,priority,source_scheme,source_port,creation_index,last_access_index,creation_seconds,creation_nanos)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+        ON CONFLICT(partition_key,domain,path,name) DO UPDATE SET value=excluded.value,host_only=excluded.host_only,secure=excluded.secure,http_only=excluded.http_only,expires_seconds=excluded.expires_seconds,expires_nanos=excluded.expires_nanos,same_site=excluded.same_site,priority=excluded.priority,source_scheme=excluded.source_scheme,source_port=excluded.source_port,creation_index=excluded.creation_index,last_access_index=excluded.last_access_index,creation_seconds=excluded.creation_seconds,creation_nanos=excluded.creation_nanos",
+        params![key.partition,key.domain,key.path,key.name,cookie.value,cookie.host_only,cookie.secure,cookie.http_only,cookie.expires.map(|e|e.unix_timestamp()),cookie.expires.map(|e|i64::from(e.nanosecond())),same_site,priority,source,cookie.source_port,cookie.creation_index.to_be_bytes().as_slice(),cookie.last_access_index.to_be_bytes().as_slice(),cookie.creation_time.map(|time|time.unix_timestamp()),cookie.creation_time.map(|time|i64::from(time.nanosecond()))])?;
     Ok(())
 }

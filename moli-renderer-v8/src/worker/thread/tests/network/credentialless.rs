@@ -91,7 +91,7 @@ async fn check_worker_credentialless_fetch(intercept: bool) {
             7,
         ));
         let cookie_store = moli_cookie_jar::new_shared_browser_cookie_store();
-        cookie_store.lock().set_document_cookie(
+        cookie_store.lock().unwrap().set_document_cookie(
             &url::Url::parse(&same_origin).unwrap(),
             "seed=1; Path=/; SameSite=Lax",
         );
@@ -197,6 +197,7 @@ async fn check_worker_credentialless_fetch(intercept: bool) {
         }
         let actual_cookies = cookie_store
             .lock()
+            .unwrap()
             .cookies()
             .into_iter()
             .map(|cookie| cookie.name)

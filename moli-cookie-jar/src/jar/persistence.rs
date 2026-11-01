@@ -119,6 +119,7 @@ mod tests {
             source_scheme: StoredCookieSourceScheme::Secure,
             source_port: 443,
             creation_index: 0,
+            creation_time: None,
             last_access_index: 0,
         }
     }

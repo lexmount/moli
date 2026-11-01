@@ -1147,28 +1147,6 @@ pub(crate) fn utf16_next_scalar_boundary(units: &[u16], offset: usize) -> usize 
     next
 }
 
-pub(crate) fn utf16_units_contain_unpaired_surrogate(units: &[u16]) -> bool {
-    let mut index = 0;
-    while index < units.len() {
-        let unit = units[index];
-        if (0xD800..=0xDBFF).contains(&unit) {
-            if units
-                .get(index + 1)
-                .is_some_and(|next| (0xDC00..=0xDFFF).contains(next))
-            {
-                index += 2;
-                continue;
-            }
-            return true;
-        }
-        if (0xDC00..=0xDFFF).contains(&unit) {
-            return true;
-        }
-        index += 1;
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use std::pin::pin;

@@ -20,7 +20,12 @@ impl WebStorageEventRecipient {
         target: WindowTaskTarget,
         sender: RendererPageStorageEventDeliverySender,
     ) -> Self {
-        Self { origin, area_key, target, sender }
+        Self {
+            origin,
+            area_key,
+            target,
+            sender,
+        }
     }
 
     pub(crate) fn matches(&self, origin: &str, area_key: &str, target: WindowTaskTarget) -> bool {

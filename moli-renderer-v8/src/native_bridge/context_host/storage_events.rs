@@ -94,9 +94,12 @@ impl JsContextHost {
             }
         }
         if !data.is_session() {
-            queued += self
-                .web_storage_store
-                .queue_remote_storage_events(&sender.event_source(), origin, area_key, &data);
+            queued += self.web_storage_store.queue_remote_storage_events(
+                &sender.event_source(),
+                origin,
+                area_key,
+                &data,
+            );
         }
         queued
     }

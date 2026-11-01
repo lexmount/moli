@@ -172,11 +172,8 @@ async fn retained_popup_storage_managers_use_bound_popup_owner() {
         let host = vm.context_host_weak_for_test().upgrade().unwrap();
         let store = host.borrow().storage_bucket_store();
         let service = store.lock().storage_service();
-        let key = moli_storage_key::MoliStorageKey::first_party_from_url(
-            &url::Url::parse("https://popup-storage-owner-child.test").unwrap(),
-            None,
-        )
-        .serialized_storage_key();
+        let key = moli_storage_key::MoliStorageKey::first_party_from_url(&popup_url, None)
+            .serialized_storage_key();
         let locator = moli_storage_service::StorageBucketLocator::default_bucket(key);
         let bucket_key = moli_storage_service::StorageService::opfs_bucket_key(&locator).unwrap();
         let root = service.ensure_opfs_root(&locator).unwrap();

@@ -23,7 +23,7 @@ impl CookieStoreKey {
 }
 #[derive(Debug, Clone)]
 pub enum CookieStoreMutation {
-    Upsert { cookie: Cookie<'static> },
+    Upsert { cookie: Box<Cookie<'static>> },
     Delete(CookieStoreKey),
     Clear,
 }
