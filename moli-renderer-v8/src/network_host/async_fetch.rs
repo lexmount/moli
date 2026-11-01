@@ -991,6 +991,7 @@ mod tests {
         let transition = redirects
             .advance(
                 ResponseHead {
+                    request_include_credentials: false,
                     status_text: None,
                     final_url: Url::parse("https://origin.test/start")?,
                     status: 303,
@@ -1043,6 +1044,7 @@ mod tests {
 
             let transition = redirects.advance(
                 ResponseHead {
+                    request_include_credentials: false,
                     final_url: current_url.clone(),
                     status: 307,
                     status_text: Some("Temporary Redirect".to_owned()),

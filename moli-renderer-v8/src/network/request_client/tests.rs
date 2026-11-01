@@ -324,6 +324,7 @@ async fn memory_cache_tee_drop_after_body_eof_cancels_pending_completion_and_rel
     let (mut completion_tx, completion_rx) = oneshot::channel();
     let inner = StreamingRawResponse::new_with_head(
         ResponseHead {
+            request_include_credentials: false,
             status_text: None,
             final_url: request.url.clone(),
             status: 200,
@@ -1628,6 +1629,7 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
     let final_url = Url::parse("http://example.test/final.txt")?;
     let response = RawResponse::from_head_and_body(
         ResponseHead {
+            request_include_credentials: false,
             status_text: None,
             final_url: final_url.clone(),
             status: 200,

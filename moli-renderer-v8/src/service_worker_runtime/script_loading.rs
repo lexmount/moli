@@ -428,6 +428,7 @@ mod tests {
     fn script_resource_records_response_metadata_and_body_hash() {
         let request_url = Url::parse("https://example.test/app/sw.js").unwrap();
         let head = ResponseHead {
+            request_include_credentials: false,
             status_text: None,
             final_url: Url::parse("https://example.test/app/sw.js?final").unwrap(),
             status: 200,
@@ -818,6 +819,7 @@ mod tests {
         kind: WorkerScriptResourceKind,
     ) -> ServiceWorkerScriptResource {
         let head = ResponseHead {
+            request_include_credentials: false,
             status_text: None,
             final_url: script_url.clone(),
             status: 200,

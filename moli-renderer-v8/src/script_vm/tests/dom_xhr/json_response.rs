@@ -113,6 +113,7 @@ __jsonStream.send();
         request_body: None,
         body_source_id,
         head: moli_fetch::ResponseHead {
+            request_include_credentials: false,
             final_url: pending.url.clone(),
             status: 200,
             status_text: None,

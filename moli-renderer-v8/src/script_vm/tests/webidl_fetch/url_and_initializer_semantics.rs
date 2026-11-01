@@ -715,6 +715,7 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
                         mode: moli_fetch::RequestMode::Cors,
                     },
                     moli_fetch::ResponseHead {
+                        request_include_credentials: false,
                         final_url: response_url,
                         status: 200,
                         status_text: None,
@@ -821,6 +822,7 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
                         mode: moli_fetch::RequestMode::Cors,
                     },
                     moli_fetch::ResponseHead {
+                        request_include_credentials: false,
                         final_url: response_url,
                         status: 200,
                         status_text: None,
@@ -944,6 +946,7 @@ fn materialize_response_object_preserves_redirected_slot() {
                 },
                 moli_fetch::Response::from_head_and_text_body(
                     moli_fetch::ResponseHead {
+                        request_include_credentials: false,
                         final_url: final_url.clone(),
                         status: 200,
                         status_text: None,
@@ -1003,6 +1006,7 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
                     &document_url,
                     crate::network_host::FetchResponseRequest { method: "GET", mode: moli_fetch::RequestMode::Cors },
                     moli_fetch::ResponseHead {
+request_include_credentials: false,
                         final_url: final_url.clone(),
                         status: 302,
                             status_text: None,
@@ -1479,6 +1483,7 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
                             mode: if opaque { moli_fetch::RequestMode::NoCors } else { moli_fetch::RequestMode::Cors },
                         };
                         let head = moli_fetch::ResponseHead {
+request_include_credentials: false,
                             status_text: None,
                             final_url: Url::parse("https://cross-null-response.test/data").unwrap(),
                             status,

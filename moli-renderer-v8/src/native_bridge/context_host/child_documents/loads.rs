@@ -874,6 +874,7 @@ mod tests {
             "GET".to_owned(),
             Vec::new(),
             moli_fetch::ResponseHead {
+                request_include_credentials: false,
                 status_text: None,
                 final_url: url::Url::parse("https://example.test/child").unwrap(),
                 status: 200,

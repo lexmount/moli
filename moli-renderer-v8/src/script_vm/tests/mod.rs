@@ -379,6 +379,7 @@ fn register_pending_window_fetch_for_test(
                         request_body: None,
                         body_source_id: 10_000 + internal_id,
                         head: moli_fetch::ResponseHead {
+                            request_include_credentials: false,
                             status_text: None,
                             final_url: url.clone(),
                             status: 200,
