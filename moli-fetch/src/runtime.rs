@@ -881,6 +881,9 @@ impl RuntimeOwner {
         if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
             return Err((job.response_tx, error));
         }
+        if job.request.cache_mode() == crate::RequestCacheMode::OnlyIfCached {
+            return Err((job.response_tx, anyhow::Error::new(crate::FetchCacheMiss)));
+        }
         let request_cookie_report = if job.request.allows_credentials_for_url(&job.current_url) {
             match cookie_access_report_for_request(
                 &self.cookie_store,
@@ -1019,6 +1022,14 @@ impl RuntimeOwner {
         ),
     > {
         job.response_progress = job.cancel_handle.begin_response_progress();
+        if job.cancel_handle.is_cancelled() {
+            return Err((
+                Box::new(job),
+                None,
+                anyhow::Error::new(crate::FetchCancelled)
+                    .context("fetch runtime request cancelled"),
+            ));
+        }
         if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
             return Err((Box::new(job), None, error));
         }
@@ -1069,6 +1080,14 @@ impl RuntimeOwner {
             }
             Ok(Some(_)) | Ok(None) => {}
             Err(error) => return Err((Box::new(job), None, error)),
+        }
+
+        if job.request.cache_mode() == crate::RequestCacheMode::OnlyIfCached {
+            return Err((
+                Box::new(job),
+                None,
+                anyhow::Error::new(crate::FetchCacheMiss),
+            ));
         }
 
         let mut easy = job.easy.take().unwrap_or_else(|| {
@@ -1224,6 +1243,14 @@ impl RuntimeOwner {
         ),
     > {
         job.response_progress = job.cancel_handle.begin_response_progress();
+        if job.cancel_handle.is_cancelled() {
+            return Err((
+                Box::new(job),
+                None,
+                anyhow::Error::new(crate::FetchCancelled)
+                    .context("fetch runtime request cancelled"),
+            ));
+        }
         if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
             return Err((Box::new(job), None, error));
         }
@@ -1278,6 +1305,14 @@ impl RuntimeOwner {
             }
             Ok(None) => {}
             Err(error) => return Err((Box::new(job), None, error)),
+        }
+
+        if job.request.cache_mode() == crate::RequestCacheMode::OnlyIfCached {
+            return Err((
+                Box::new(job),
+                None,
+                anyhow::Error::new(crate::FetchCacheMiss),
+            ));
         }
 
         let mut easy = job.easy.take().unwrap_or_else(|| {
@@ -4462,6 +4497,32 @@ mod tests {
             joined.push_str(&chunk);
         }
         assert_eq!(joined, "a\u{20ac}b");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn pre_cancelled_html_cache_admission_preserves_cancellation() -> Result<()> {
+        let owner =
+            FetchRuntimeOwner::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let request = Request::get("http://127.0.0.1:9/cancelled")?
+            .with_cache_mode(crate::RequestCacheMode::OnlyIfCached);
+        let cancel = FetchCancelHandle::new();
+        cancel.cancel();
+        let (started_tx, started_rx) = oneshot::channel();
+        let (body_tx, _body_rx) = mpsc::unbounded_channel();
+        let (completion_tx, completion_rx) = oneshot::channel();
+        owner.handle().enqueue_streaming(StreamingRuntimeJob::new(
+            request,
+            started_tx,
+            body_tx,
+            completion_tx,
+            cancel,
+        ))?;
+        let error = started_rx
+            .await?
+            .expect_err("cancelled HTML request must fail");
+        assert!(error.is::<crate::FetchCancelled>(), "{error:#}");
+        assert!(completion_rx.await?.is_err());
+        assert!(owner.shutdown().is_clean());
         Ok(())
     }
 }

@@ -54,6 +54,7 @@ pub(crate) fn load_cached_streaming_response_lookup(
         key,
         cached,
         force_validate,
+        request.cache_mode().allows_stale_http_cache_response(),
     )))
 }
 
@@ -154,6 +155,7 @@ fn cached_streaming_record_from_entry(
     key: String,
     entry: HttpCachedEntryReader,
     force_validate: bool,
+    allow_stale: bool,
 ) -> CachedStreamingResponseLookup {
     let metadata = entry.metadata.clone();
     CachedStreamingResponseLookup {
@@ -165,6 +167,7 @@ fn cached_streaming_record_from_entry(
         body: entry.body,
         expires_at_unix_ms: entry.metadata.expires_at_unix_ms,
         force_validate,
+        allow_stale,
         cache_state: crate::ResponseCacheState::Local,
     }
 }

@@ -90,11 +90,13 @@ pub(crate) struct CachedStreamingResponseLookup {
     pub(crate) body: std::io::BufReader<std::fs::File>,
     pub(crate) expires_at_unix_ms: Option<u64>,
     pub(crate) force_validate: bool,
+    pub(crate) allow_stale: bool,
     pub(crate) cache_state: crate::ResponseCacheState,
 }
 
 pub(crate) fn cached_streaming_response_is_stale(record: &CachedStreamingResponseLookup) -> bool {
-    cached_response_is_stale(record.expires_at_unix_ms, record.force_validate)
+    !record.allow_stale
+        && cached_response_is_stale(record.expires_at_unix_ms, record.force_validate)
 }
 
 pub(super) fn request_cache_control_requires_validation(
