@@ -416,6 +416,7 @@ fn dispatch_service_worker_event_source<'s>(
         RequestRedirectMode::Follow,
         None,
         ServiceWorkerFetchRequestMetadata {
+            mixed_content_policy: Default::default(),
             cache: "no-store".to_owned(),
             ..ServiceWorkerFetchRequestMetadata::default()
         },

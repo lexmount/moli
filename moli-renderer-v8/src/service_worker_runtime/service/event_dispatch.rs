@@ -251,6 +251,7 @@ impl ServiceWorkerRuntimeService {
                         .expect("service worker request headers are ByteStrings"),
                     origin,
                 )
+                .with_mixed_content_policy(request.metadata.mixed_content_policy)
                 .with_initiator_url(&dispatch.network_context.document_url)
                 .with_browser_navigation_kind(request.metadata.navigation_kind(request.is_reload))
                 .with_request_mode(request.request_mode)

@@ -948,7 +948,7 @@ impl RuntimeOwner {
                     .context("fetch runtime request cancelled"),
             ));
         }
-        if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
+        if let Err(error) = job.request.validate_network_target(&job.current_url) {
             return Err((job.response_tx, error));
         }
         if job.request.cache_mode() == RequestCacheMode::OnlyIfCached {
@@ -1116,7 +1116,7 @@ impl RuntimeOwner {
                     .context("fetch runtime request cancelled"),
             ));
         }
-        if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
+        if let Err(error) = job.request.validate_network_target(&job.current_url) {
             return Err((Box::new(job), None, error));
         }
         let credentials_allowed = job.request.allows_credentials_for_url(&job.current_url);
@@ -1347,7 +1347,7 @@ impl RuntimeOwner {
                     .context("fetch runtime request cancelled"),
             ));
         }
-        if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
+        if let Err(error) = job.request.validate_network_target(&job.current_url) {
             return Err((Box::new(job), None, error));
         }
         let credentials_allowed = job.request.allows_credentials_for_url(&job.current_url);

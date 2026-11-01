@@ -95,6 +95,8 @@ pub use request::{
     ResourceLoadPriority, ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority,
     SubresourceRequestMetadata,
 };
+mod mixed_content;
+pub use mixed_content::RequestMixedContentPolicy;
 pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port};
 pub use response::{
     FetchResponseFilter, NegotiatedHttpVersion, NetworkRequestExtraInfo, NetworkResponseExtraInfo,

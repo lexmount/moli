@@ -93,6 +93,7 @@ pub struct Request {
     browser_identity: Option<std::sync::Arc<moli_browser_profile::BrowserIdentityProfile>>,
     upload_observer: Option<crate::UploadObserver>,
     redirect_check: Option<RequestRedirectCheck>,
+    mixed_content_policy: crate::RequestMixedContentPolicy,
     pub(crate) compression_dictionary: Option<Arc<crate::compression_dictionary::Dictionary>>,
     pub(crate) compression_dictionary_store:
         Option<crate::compression_dictionary::SharedDictionaryStore>,
@@ -607,6 +608,7 @@ impl Request {
             browser_identity: None,
             upload_observer: None,
             redirect_check: None,
+            mixed_content_policy: crate::RequestMixedContentPolicy::default(),
             compression_dictionary: None,
             compression_dictionary_store: None,
             compression_dictionary_snapshot: None,
@@ -648,6 +650,7 @@ impl Request {
             browser_identity: None,
             upload_observer: None,
             redirect_check: None,
+            mixed_content_policy: crate::RequestMixedContentPolicy::default(),
             compression_dictionary: None,
             compression_dictionary_store: None,
             compression_dictionary_snapshot: None,
@@ -722,6 +725,7 @@ impl Request {
             browser_identity: None,
             upload_observer: None,
             redirect_check: None,
+            mixed_content_policy: crate::RequestMixedContentPolicy::default(),
             compression_dictionary: None,
             compression_dictionary_store: None,
             compression_dictionary_snapshot: None,
@@ -971,12 +975,33 @@ impl Request {
         self
     }
 
+    pub fn with_mixed_content_policy(mut self, policy: crate::RequestMixedContentPolicy) -> Self {
+        self.mixed_content_policy = policy;
+        self
+    }
+
+    pub fn mixed_content_policy(&self) -> crate::RequestMixedContentPolicy {
+        self.mixed_content_policy
+    }
+
+    pub(crate) fn validate_network_target(&self, target: &Url) -> anyhow::Result<()> {
+        self.mixed_content_policy
+            .check(target)
+            .map_err(anyhow::Error::msg)?;
+        self.validate_request_mode_for_url(target)
+    }
+
+    pub fn check_mixed_content(&self) -> std::result::Result<(), String> {
+        self.mixed_content_policy.check(&self.url)
+    }
+
     /// Browser redirect loops call this when the transport fetches one hop at
     /// a time. Automatically followed transport requests perform the same check.
     pub fn check_redirect_target(&self, next_url: &Url) -> std::result::Result<(), String> {
         self.redirect_check
             .as_ref()
-            .map_or(Ok(()), |check| (check.0)(next_url))
+            .map_or(Ok(()), |check| (check.0)(next_url))?;
+        self.mixed_content_policy.check(next_url)
     }
 
     pub fn upload_observer(&self) -> Option<&crate::UploadObserver> {

@@ -123,6 +123,7 @@ pub(super) fn dispatch_service_worker_xhr(
         RequestRedirectMode::Follow,
         None,
         ServiceWorkerFetchRequestMetadata {
+            mixed_content_policy: Default::default(),
             use_cors_preflight: prepared.use_cors_preflight,
             ..ServiceWorkerFetchRequestMetadata::default()
         },

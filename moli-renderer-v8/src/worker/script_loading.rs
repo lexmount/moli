@@ -6,6 +6,8 @@ pub(crate) fn dedicated_worker_policy_context_from_headers(
     creator: crate::types::SubresourcePolicyContext,
 ) -> crate::types::SubresourcePolicyContext {
     crate::types::SubresourcePolicyContext {
+        https_state: creator.https_state,
+        mixed_content_policy: creator.mixed_content_policy,
         cross_origin_embedder_policy:
             crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers),
         cross_origin_embedder_policy_report_only:
