@@ -1847,7 +1847,7 @@ async fn storage_set_cookies_reports_invalid_path_and_url_as_facade_rejections()
                         "reason": "PathMustStartWithSlash"
                     },
                     "rejectionReasons": ["PathMustStartWithSlash"],
-                    "effectiveSameSite": "LaxAllowUnsafe",
+                    "effectiveSameSite": null,
                     "warningReasons": []
                 },
                 {
@@ -1856,7 +1856,7 @@ async fn storage_set_cookies_reports_invalid_path_and_url_as_facade_rejections()
                         "reason": "InvalidUrl"
                     },
                     "rejectionReasons": ["InvalidUrl", "UnspecifiedDomain"],
-                    "effectiveSameSite": "LaxAllowUnsafe",
+                    "effectiveSameSite": null,
                     "warningReasons": []
                 }
             ]
@@ -1910,7 +1910,7 @@ async fn storage_set_cookies_reports_structured_name_value_facade_rejections() {
                         "reason": "EmptyNameAndValue"
                     },
                     "rejectionReasons": ["EmptyNameAndValue", "MissingCookieUrl"],
-                    "effectiveSameSite": "LaxAllowUnsafe",
+                    "effectiveSameSite": null,
                     "warningReasons": []
                 },
                 {
@@ -1919,7 +1919,7 @@ async fn storage_set_cookies_reports_structured_name_value_facade_rejections() {
                         "reason": "EmptyNameValueContainsEquals"
                     },
                     "rejectionReasons": ["EmptyNameValueContainsEquals"],
-                    "effectiveSameSite": "LaxAllowUnsafe",
+                    "effectiveSameSite": null,
                     "warningReasons": []
                 },
                 {
@@ -1928,7 +1928,7 @@ async fn storage_set_cookies_reports_structured_name_value_facade_rejections() {
                         "reason": "NameContainsEquals"
                     },
                     "rejectionReasons": ["NameContainsEquals"],
-                    "effectiveSameSite": "LaxAllowUnsafe",
+                    "effectiveSameSite": null,
                     "warningReasons": []
                 }
             ]
@@ -3922,7 +3922,7 @@ async fn storage_set_cookies_reports_missing_cookie_url_when_no_default_scope_ex
                     "reason": "MissingCookieUrl"
                 },
                 "rejectionReasons": ["MissingCookieUrl"],
-                "effectiveSameSite": "LaxAllowUnsafe",
+                "effectiveSameSite": null,
                 "warningReasons": []
             }]
         }),

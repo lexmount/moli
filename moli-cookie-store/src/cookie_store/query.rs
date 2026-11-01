@@ -1,6 +1,7 @@
 use std::ops::Deref;
 
 use cookie::Cookie as RawCookie;
+use time::OffsetDateTime;
 use url::Url;
 
 use crate::cookie::Cookie;
@@ -46,13 +47,14 @@ impl CookieStore {
         context: &QueryContext<'_>,
     ) -> CookieAccessQueryResult {
         let mut result = CookieAccessQueryResult::default();
+        let now = OffsetDateTime::now_utc();
         for cookie in self
             .cookies
             .iter()
             .filter(|&(d, _)| domain_match(d, context.url))
             .flat_map(|(_, dcs)| dcs.values().flat_map(|pcs| pcs.values().cloned()))
         {
-            let access_result = query_context_access_result(&cookie, context);
+            let access_result = query_context_access_result(&cookie, context, now);
             let entry = CookieWithAccessResult {
                 cookie,
                 access_result,

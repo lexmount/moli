@@ -1,7 +1,7 @@
 use moli_cookie_jar::{
-    CookiePriority, StoredCookie, StoredCookieEffectiveSameSite, StoredCookiePartitionKey,
-    StoredCookieSameSite, StoredCookieSetRejectionReason, StoredCookieSetReport,
-    StoredCookieSetStatus, StoredCookieSourceScheme,
+    CookiePriority, StoredCookie, StoredCookiePartitionKey, StoredCookieSameSite,
+    StoredCookieSetRejectionReason, StoredCookieSetReport, StoredCookieSetStatus,
+    StoredCookieSourceScheme,
 };
 use url::Url;
 
@@ -55,12 +55,6 @@ pub(super) fn normalize_cookie_param(
     // semantic issues become structured cookie reports instead of aborting the
     // whole batch.
     let same_site = stored_cookie_same_site_from_cdp(param.same_site.as_deref());
-    let now = time::OffsetDateTime::now_utc();
-    let effective_same_site = Some(StoredCookieEffectiveSameSite::for_cookie(
-        same_site,
-        Some(now),
-        now,
-    ));
     let mut rejection_reasons = Vec::new();
 
     // Blink's Cookie Store API rejects several structured-name/value edge
@@ -171,10 +165,7 @@ pub(super) fn normalize_cookie_param(
     });
 
     if !rejection_reasons.is_empty() {
-        return NormalizedCdpCookieParam::Rejected(rejected_cookie_param_report(
-            rejection_reasons,
-            effective_same_site,
-        ));
+        return NormalizedCdpCookieParam::Rejected(rejected_cookie_param_report(rejection_reasons));
     }
 
     NormalizedCdpCookieParam::Ready(
@@ -193,7 +184,7 @@ pub(super) fn normalize_cookie_param(
             source_scheme,
             source_port,
             creation_index: 0,
-            creation_time: Some(now),
+            creation_time: Some(time::OffsetDateTime::now_utc()),
             last_access_index: 0,
         }),
         parsed_url,
@@ -233,7 +224,6 @@ pub(crate) fn normalize_partition_key(
 
 fn rejected_cookie_param_report(
     rejection_reasons: Vec<StoredCookieSetRejectionReason>,
-    effective_same_site: Option<StoredCookieEffectiveSameSite>,
 ) -> StoredCookieSetReport {
     let primary_reason = rejection_reasons
         .first()
@@ -243,7 +233,7 @@ fn rejected_cookie_param_report(
         status: StoredCookieSetStatus::Rejected(primary_reason),
         rejection_reasons,
         warning_reasons: Vec::new(),
-        effective_same_site,
+        effective_same_site: None,
     }
 }
 

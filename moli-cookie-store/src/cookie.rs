@@ -350,7 +350,9 @@ impl<'a> Cookie<'a> {
     }
 
     pub(crate) fn restore_creation_time(&mut self) {
-        self.set_creation_time(self.creation_time());
+        if self.creation_time == CreationTime::Pending {
+            self.creation_time = CreationTime::Unknown;
+        }
     }
 
     pub(crate) fn touch_with_access_index(&mut self, access_index: u64) {

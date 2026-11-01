@@ -1,17 +1,19 @@
+use time::OffsetDateTime;
+
 use crate::cookie::Cookie;
 use crate::utils::{is_http_scheme, is_secure, is_trustworthy_non_cryptographic};
 
-use super::policy::{
-    access_semantics, effective_same_site, scope_semantics, source_scheme_mismatch,
-};
+use super::policy::{access_semantics, scope_semantics, source_scheme_mismatch};
 use super::*;
 
 pub(super) fn query_context_access_result(
     cookie: &Cookie<'_>,
     context: &QueryContext<'_>,
+    now: OffsetDateTime,
 ) -> CookieAccessResult {
     let mut status = CookieInclusionStatus::default();
-    let effective_same_site = effective_same_site(cookie);
+    let effective_same_site =
+        CookieEffectiveSameSite::for_cookie(cookie.same_site(), cookie.creation_time(), now);
     let access_semantics = access_semantics(cookie);
     let scope_semantics = scope_semantics(cookie);
     let is_allowed_to_access_secure_cookies = is_secure(context.url);

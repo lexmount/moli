@@ -917,7 +917,7 @@ async fn network_set_cookie_reports_structured_facade_rejections_without_protoco
                     "reason": "PathMustStartWithSlash"
                 },
                 "rejectionReasons": ["PathMustStartWithSlash"],
-                "effectiveSameSite": "LaxAllowUnsafe",
+                "effectiveSameSite": null,
                 "warningReasons": []
             }]
         }),
@@ -993,7 +993,7 @@ async fn network_set_cookie_reports_invalid_url_as_cookie_rejection() {
                     "reason": "InvalidUrl"
                 },
                 "rejectionReasons": ["InvalidUrl", "UnspecifiedDomain"],
-                "effectiveSameSite": "LaxAllowUnsafe",
+                "effectiveSameSite": null,
                 "warningReasons": []
             }]
         }),
@@ -1030,7 +1030,7 @@ async fn network_set_cookie_reports_structured_name_value_rejections_without_pro
                     "reason": "EmptyNameValueContainsEquals"
                 },
                 "rejectionReasons": ["EmptyNameValueContainsEquals"],
-                "effectiveSameSite": "LaxAllowUnsafe",
+                "effectiveSameSite": null,
                 "warningReasons": []
             }]
         }),
@@ -1117,7 +1117,7 @@ async fn network_set_cookie_reports_missing_cookie_url_when_no_default_scope_exi
                     "reason": "MissingCookieUrl"
                 },
                 "rejectionReasons": ["MissingCookieUrl"],
-                "effectiveSameSite": "LaxAllowUnsafe",
+                "effectiveSameSite": null,
                 "warningReasons": []
             }]
         }),
