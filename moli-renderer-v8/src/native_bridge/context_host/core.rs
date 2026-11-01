@@ -85,7 +85,13 @@ impl PageScriptHost {
             };
         crate::frame_owner_model::FrameDocumentLocalWindowTransition::for_document_commit(
             self.initial_empty_main_document,
-            same_origin,
+            same_origin
+                && self.window_agent_cluster(OwnerDispatchScope::Top)
+                    == self.window_agent_cluster_for_policy(
+                        OwnerDispatchScope::Top,
+                        policy,
+                        origin.to_owned(),
+                    ),
             self.document_policy_container(),
             policy,
         )

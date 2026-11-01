@@ -80,39 +80,7 @@ const GEOMETRY_KIND_DOM_MATRIX: u32 = 6;
 // Kind 4 remains readable for existing numeric Quad payloads.
 const GEOMETRY_KIND_DOM_QUAD_REFERENCES: u32 = 7;
 
-/// Native shared-memory identity. Compatible isolated Window agents can share
-/// a cluster even across unrelated browsing contexts. Dedicated Workers inherit
-/// their creator's identity; top-level Worker agents receive a fresh identity.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SharedMemoryAgentCluster(Arc<SharedMemoryAgentClusterKey>);
-
-#[derive(Debug, Eq, PartialEq)]
-enum SharedMemoryAgentClusterKey {
-    Window {
-        partition: crate::runtime::RendererStoragePartitionIdentity,
-        origin: String,
-        isolation_origin: String,
-    },
-    Worker(crate::resource_owner::ResourceOwnerId),
-}
-
-impl SharedMemoryAgentCluster {
-    pub(crate) fn window(
-        partition: crate::runtime::RendererStoragePartitionIdentity,
-        origin: String,
-        isolation_origin: String,
-    ) -> Self {
-        Self(Arc::new(SharedMemoryAgentClusterKey::Window {
-            partition,
-            origin,
-            isolation_origin,
-        }))
-    }
-
-    pub(crate) fn worker(owner: crate::resource_owner::ResourceOwnerId) -> Self {
-        Self(Arc::new(SharedMemoryAgentClusterKey::Worker(owner)))
-    }
-}
+pub(crate) use crate::agent_cluster::AgentClusterIdentity as SharedMemoryAgentCluster;
 
 #[derive(Debug)]
 struct ClonedSharedMemory {

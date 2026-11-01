@@ -29,6 +29,7 @@ pub use app_manifest::{
 mod abort_signal_route;
 #[cfg(feature = "ace-protocol")]
 pub mod ace_page_task;
+mod agent_cluster;
 mod app_manifest;
 mod blob;
 mod broadcast_channel_runtime;

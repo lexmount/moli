@@ -35,9 +35,18 @@ pub(super) fn refresh_from_current_context<'s>(
     location: v8::Local<'s, v8::Object>,
 ) {
     let location = location_target(scope, location);
+    if location.get_creation_context(scope) != Some(scope.get_current_context()) {
+        // A replacement Window may still be adopting its proxy. Its old
+        // Location belongs to the retired realm and must keep that snapshot.
+        return;
+    }
     let Some(origin) = WindowSecurityOrigin::for_context(scope.get_current_context()) else {
         return;
     };
+    if for_target(scope, location).is_none() {
+        install(scope, location);
+        return;
+    }
     let Some(value) = location.get_internal_field(scope, SECURITY_ORIGIN_FIELD) else {
         return;
     };
