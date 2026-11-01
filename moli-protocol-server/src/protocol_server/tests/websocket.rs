@@ -3,6 +3,7 @@ use super::*;
 mod browser_close;
 mod captured_document_navigation;
 mod child_navigation_wait;
+mod media_source_closed;
 mod navigation_debugger;
 mod prepared_document_actions;
 mod target_message;
