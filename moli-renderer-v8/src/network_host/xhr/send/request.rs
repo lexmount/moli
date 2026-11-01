@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::network_host::body::URL_SEARCH_PARAMS_CONTENT_TYPE;
 use crate::network_host::url_helpers::ResolveContextUrlError;
 
 const CONTENT_TYPE_HEADER: &str = "Content-Type";
@@ -84,7 +85,7 @@ pub(super) fn prepare_xhr_send_request<'s>(
     let resolved_url =
         resolve_context_url(&base_url, &url_str, None).map_err(XhrSendPrepareError::Url)?;
     let (request_headers, cors_preflight_request_headers) =
-        xhr_request_headers(scope, host, xhr, prepared_body.default_content_type);
+        xhr_request_headers(scope, host, xhr, &prepared_body);
     let credentials_mode =
         if xhr_state_bool_property(scope, xhr, XHR_WITH_CREDENTIALS_SLOT).unwrap_or(false) {
             moli_fetch::RequestCredentialsMode::Include
@@ -115,6 +116,7 @@ pub(super) fn prepare_xhr_send_request<'s>(
 pub(crate) struct PreparedXhrSendBody {
     pub(crate) body: Option<bytes::Bytes>,
     pub(crate) default_content_type: Option<String>,
+    rewrite_content_type_charset: bool,
 }
 
 pub(crate) enum ConvertedXhrSendBody<'s> {
@@ -134,9 +136,9 @@ impl<'s> ConvertedXhrSendBody<'s> {
         }
         match self {
             Self::Native(value) => prepare_xhr_send_body(scope, value),
-            Self::Text(text) => Ok(PreparedXhrSendBody::new(
+            Self::Text(text) => Ok(PreparedXhrSendBody::utf8_text(
                 text.into_bytes(),
-                Some(TEXT_CONTENT_TYPE.to_owned()),
+                TEXT_CONTENT_TYPE,
             )),
         }
     }
@@ -147,6 +149,7 @@ impl PreparedXhrSendBody {
         Self {
             body: None,
             default_content_type: None,
+            rewrite_content_type_charset: false,
         }
     }
 
@@ -154,6 +157,15 @@ impl PreparedXhrSendBody {
         Self {
             body: Some(body.into()),
             default_content_type,
+            rewrite_content_type_charset: false,
+        }
+    }
+
+    fn utf8_text(body: Vec<u8>, content_type: &str) -> Self {
+        Self {
+            body: Some(body.into()),
+            default_content_type: Some(content_type.to_owned()),
+            rewrite_content_type_charset: true,
         }
     }
 }
@@ -166,13 +178,21 @@ pub(crate) fn prepare_xhr_send_body<'s>(
         return Ok(PreparedXhrSendBody::empty());
     }
 
-    if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
-        && let Some(body) = crate::network_host::body::object_body_init(scope, object)?
-    {
-        return Ok(PreparedXhrSendBody {
-            body: Some(body.bytes),
-            default_content_type: body.content_type,
-        });
+    if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
+        if let Some(body) = crate::context_bootstrap::url_search_params_request_body(scope, object)
+        {
+            return Ok(PreparedXhrSendBody::utf8_text(
+                body.into_bytes(),
+                URL_SEARCH_PARAMS_CONTENT_TYPE,
+            ));
+        }
+        if let Some(body) = crate::network_host::body::object_body_init(scope, object)? {
+            return Ok(PreparedXhrSendBody {
+                body: Some(body.bytes),
+                default_content_type: body.content_type,
+                rewrite_content_type_charset: false,
+            });
+        }
     }
 
     validate_xhr_buffer_source(value)?;
@@ -186,9 +206,9 @@ pub(crate) fn prepare_xhr_send_body<'s>(
         value,
         crate::webidl::Context::argument("XMLHttpRequest.send", 1),
     )?;
-    Ok(PreparedXhrSendBody::new(
+    Ok(PreparedXhrSendBody::utf8_text(
         body.0.into_bytes(),
-        Some(TEXT_CONTENT_TYPE.to_owned()),
+        TEXT_CONTENT_TYPE,
     ))
 }
 
@@ -235,9 +255,9 @@ fn xhr_request_headers(
     scope: &mut v8::PinScope<'_, '_>,
     host: &JsContextHost,
     xhr: v8::Local<'_, v8::Object>,
-    default_content_type: Option<String>,
+    prepared_body: &PreparedXhrSendBody,
 ) -> (moli_fetch::RequestHeaders, Vec<(String, String)>) {
-    let author_headers = xhr_author_request_headers(scope, xhr, default_content_type);
+    let author_headers = xhr_author_request_headers(scope, xhr, prepared_body);
     let merged = merge_byte_string_request_headers(host.extra_http_headers(), &author_headers);
     (merged, author_headers)
 }
@@ -245,7 +265,7 @@ fn xhr_request_headers(
 pub(crate) fn xhr_author_request_headers(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
-    default_content_type: Option<String>,
+    prepared_body: &PreparedXhrSendBody,
 ) -> Vec<(String, String)> {
     let headers_json = xhr_state_string_property(scope, xhr, XHR_REQUEST_HEADERS_SLOT)
         .unwrap_or_else(|| "[]".to_owned());
@@ -254,10 +274,82 @@ pub(crate) fn xhr_author_request_headers(
         .into_iter()
         .map(|[name, value]| (name, value))
         .collect();
-    if let Some(default_content_type) = default_content_type
-        && !has_header(&author_headers, CONTENT_TYPE_HEADER)
+    if let Some((_, value)) = author_headers
+        .iter_mut()
+        .find(|(name, _)| name.eq_ignore_ascii_case(CONTENT_TYPE_HEADER))
     {
-        author_headers.push((CONTENT_TYPE_HEADER.to_owned(), default_content_type));
+        if prepared_body.rewrite_content_type_charset
+            && let Some(rewritten) = xhr_content_type_with_utf8_charset(value)
+        {
+            *value = rewritten;
+        }
+    } else if let Some(default_content_type) = &prepared_body.default_content_type {
+        author_headers.push((CONTENT_TYPE_HEADER.to_owned(), default_content_type.clone()));
     }
     author_headers
+}
+
+fn xhr_content_type_with_utf8_charset(original: &str) -> Option<String> {
+    let mut mime = moli_content_type::parse_mime_type(original)?;
+    let charset = mime.parameter_mut("charset")?;
+    if charset.eq_ignore_ascii_case("UTF-8") {
+        return None;
+    }
+    *charset = "UTF-8".to_owned();
+    Some(mime.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::xhr_content_type_with_utf8_charset;
+
+    #[test]
+    fn xhr_charset_rewriting_uses_mime_parameter_parsing_and_serialization() {
+        for (input, expected) in [
+            ("", None),
+            ("text; charset=ascii", None),
+            ("text/plain", None),
+            ("text/plain;  hi=bye", None),
+            ("text/plain; charset =ascii", None),
+            ("text/plain;charset=utf-8;charset=ascii", None),
+            (r#"Text/Plain; CHARSET="uTf-8"; KEEP=Value"#, None),
+            (r#"text/plain;charset="u\t\f-8""#, None),
+            (r#"text/plain;boundary="; charset=ascii""#, None),
+            ("text/plain;charset=utf-8 ;x=x", None),
+            (
+                "text/plain;charset= utf-8",
+                Some("text/plain;charset=UTF-8"),
+            ),
+            (
+                "text/plain;charset=;charset=ascii",
+                Some("text/plain;charset=UTF-8"),
+            ),
+            (
+                r#"text/plain;charset="";charset=utf-8"#,
+                Some("text/plain;charset=UTF-8"),
+            ),
+            (
+                "text/plain;charset='utf-8'",
+                Some("text/plain;charset=UTF-8"),
+            ),
+            (
+                r#"text/plain;charset="ASCII"#,
+                Some("text/plain;charset=UTF-8"),
+            ),
+            (
+                "text/x-pink-unicorn; charset=windows-1252; charset=bogus; notrelated; charset=ascii",
+                Some("text/x-pink-unicorn;charset=UTF-8"),
+            ),
+            (
+                "YO/yo;charset=x;yo=YO; X=y",
+                Some("yo/yo;charset=UTF-8;yo=YO;x=y"),
+            ),
+        ] {
+            assert_eq!(
+                xhr_content_type_with_utf8_charset(input).as_deref(),
+                expected,
+                "{input}"
+            );
+        }
+    }
 }
