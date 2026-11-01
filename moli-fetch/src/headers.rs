@@ -8,6 +8,13 @@ pub(crate) fn decode_http_header_bytes(data: &[u8]) -> Cow<'_, str> {
     moli_header_field::decode_header_value(data)
 }
 
+/// Preserve raw Location bytes before URL parsing, as Chromium does. Ordinary
+/// HTTP fields still use isomorphic decoding; interpreting these bytes as
+/// Unicode would re-encode UTF-8 and corrupt invalid byte sequences.
+pub fn encode_redirect_location(value: &[u8]) -> Cow<'_, str> {
+    percent_encoding::percent_encode(value, &percent_encoding::AsciiSet::EMPTY).into()
+}
+
 pub(crate) fn parse_http_response_header_line(data: &[u8]) -> Option<(String, Vec<u8>)> {
     let end = data
         .iter()
