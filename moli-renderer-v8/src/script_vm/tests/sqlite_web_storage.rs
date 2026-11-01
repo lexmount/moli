@@ -139,7 +139,7 @@ fn sqlite_areas_follow_window_lifetime_without_storage_wrapper_finalizers() {
     .unwrap();
     let handles =
         crate::RendererWebStorageHandles::new(local, crate::new_shared_web_storage_store());
-    let mut vm = new_storage_test_vm("https://window-storage-lifetime.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://window-storage-lifetime.test/");
     vm.set_web_storage_handles(&handles);
     let host = vm.context_host_weak_for_test().upgrade().unwrap();
     assert_eq!(host.borrow().local_storage_area_count_for_test(), 0);
@@ -159,12 +159,34 @@ fn sqlite_areas_follow_window_lifetime_without_storage_wrapper_finalizers() {
     vm.eval("storagePopup.close()").unwrap();
     assert_eq!(
         host.borrow().local_storage_area_count_for_test(),
+        2,
+        "close() queues definite Window closure on the DOM-manipulation source"
+    );
+    assert_eq!(
+        vm.eval_after_selected_page_tasks(
+            "String(storagePopup.closed && storagePopup.opener === null)"
+        )
+        .unwrap(),
+        "true"
+    );
+    assert_eq!(
+        host.borrow().local_storage_area_count_for_test(),
         1,
         "a closed Window releases its area even while its Storage wrapper is retained"
     );
 
-    vm.eval("globalThis.storageFrame = document.createElement('iframe'); document.body.appendChild(storageFrame);").unwrap();
-    materialize_single_child_default_realm_for_test(&mut vm, "storage lifetime child");
+    assert_eq!(
+        vm.eval("globalThis.storageFrame = document.createElement('iframe'); document.body.appendChild(storageFrame); String(storageFrame.contentWindow !== null)").unwrap(),
+        "true"
+    );
+    assert_eq!(
+        vm.eval_after_selected_page_tasks(
+            "String(storageFrame.contentDocument.defaultView === storageFrame.contentWindow)"
+        )
+        .unwrap(),
+        "true"
+    );
+    assert_eq!(vm.live_child_default_runtime_realm_inventory().len(), 1);
     vm.eval("globalThis.retainedChildStorage = storageFrame.contentWindow.localStorage; retainedChildStorage.getItem('key');").unwrap();
     assert_eq!(host.borrow().local_storage_area_count_for_test(), 2);
     vm.eval("storageFrame.remove()").unwrap();

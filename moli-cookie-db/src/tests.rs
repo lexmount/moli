@@ -485,3 +485,77 @@ fn version_one_cookie_database_migrates_without_granting_a_new_cookie_age() {
     );
     owner.close().unwrap();
 }
+
+#[test]
+fn version_one_cookie_rows_migrate_with_unknown_creation_time() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("cookies.sqlite");
+    let connection = Connection::open(&path).unwrap();
+    connection.execute_batch("CREATE TABLE cookies(
+        partition_key BLOB NOT NULL,domain TEXT NOT NULL,path TEXT NOT NULL,name TEXT NOT NULL,value TEXT NOT NULL,
+        host_only INTEGER NOT NULL,secure INTEGER NOT NULL,http_only INTEGER NOT NULL,
+        expires_seconds INTEGER,expires_nanos INTEGER,same_site INTEGER NOT NULL,priority INTEGER,
+        source_scheme INTEGER NOT NULL,source_port INTEGER NOT NULL,
+        creation_index BLOB NOT NULL,last_access_index BLOB NOT NULL,
+        PRIMARY KEY(partition_key,domain,path,name)) WITHOUT ROWID;").unwrap();
+    connection
+        .pragma_update(None, "application_id", codec::APPLICATION_ID)
+        .unwrap();
+    connection.pragma_update(None, "user_version", 1).unwrap();
+    connection.execute("INSERT INTO cookies VALUES (?1,'cookie.test','/','legacy','value',1,1,0,NULL,NULL,0,NULL,2,443,?2,?3)",
+        params![vec![0_u8],7_u64.to_be_bytes().as_slice(),11_u64.to_be_bytes().as_slice()]).unwrap();
+    drop(connection);
+    let mut expected = cookie("legacy");
+    expected.creation_index = 7;
+    expected.last_access_index = 11;
+    let runtime = Runtime::new().unwrap();
+    for _ in 0..2 {
+        let (store, owner) =
+            CookieDatabase::open(path.clone(), OpenMode::Existing, runtime.handle()).unwrap();
+        assert_eq!(store.lock().unwrap().cookies(), vec![expected.clone()]);
+        assert_eq!(
+            owner.owner.client().query(codec::read).unwrap(),
+            vec![expected.clone()]
+        );
+        owner.close().unwrap();
+    }
+    let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
+            .unwrap(),
+        2
+    );
+    let timestamp: Option<i64> = connection
+        .query_row("SELECT creation_unix_micros FROM cookies", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(timestamp, None);
+}
+
+#[test]
+fn invalid_persisted_cookie_creation_time_does_not_become_an_empty_jar() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("cookies.sqlite");
+    let runtime = Runtime::new().unwrap();
+    let (store, owner) = open(root.path(), &runtime);
+    put(&store, cookie("invalid-age"));
+    owner.close().unwrap();
+    drop(owner);
+    drop(store);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE cookies SET creation_unix_micros=?1",
+            ["invalid timestamp"],
+        )
+        .unwrap();
+    drop(connection);
+    let (store, owner) =
+        CookieDatabase::deferred(path, OpenMode::Existing, runtime.handle()).unwrap();
+    let first = store.lock().unwrap_err().to_string();
+    assert!(first.contains("creation_unix_micros"), "{first}");
+    assert_eq!(store.lock().unwrap_err().to_string(), first);
+    owner.close().unwrap();
+}
