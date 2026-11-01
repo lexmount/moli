@@ -128,6 +128,24 @@ mod tests {
     }
 
     #[test]
+    fn production_registries_never_reuse_ids_across_documents() {
+        // Independent registries must not reuse exported ids when a new
+        // Document uses the same local DOM handle.
+        let first = new_shared_renderer_backend_node_registry();
+        let second = new_shared_renderer_backend_node_registry();
+        let a = first
+            .borrow_mut()
+            .id_for_node(document_id(1), dom_handle(7));
+        let b = second
+            .borrow_mut()
+            .id_for_node(document_id(2), dom_handle(7));
+        assert_ne!(a, b);
+        assert!(moli_page_types::is_renderer_backend_node_id(a));
+        assert!(moli_page_types::is_renderer_backend_node_id(b));
+        assert!(second.borrow().key_for_id(a).is_none());
+    }
+
+    #[test]
     fn registry_reuses_id_for_same_document_node_key() {
         let mut registry = RendererBackendNodeRegistry::default();
         let first = registry.id_for_node(document_id(1), dom_handle(7));
