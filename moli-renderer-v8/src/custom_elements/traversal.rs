@@ -4,14 +4,10 @@ pub(super) fn shadow_including_subtree_handles(
     host_ptr: *mut JsContextHost,
     root: DomHandle,
 ) -> Vec<DomHandle> {
-    let mut handles = Vec::new();
-    let mut stack = vec![root];
-    while let Some(handle) = stack.pop() {
-        handles.push(handle);
-        let children = shadow_including_child_handles(host_ptr, handle);
-        stack.extend(children.into_iter().rev());
-    }
-    handles
+    unsafe { &*host_ptr }
+        .dom_host()
+        .shadow_including_subtree(root)
+        .collect()
 }
 
 pub(super) fn collect_shadow_including_subtree_handles(
@@ -19,7 +15,11 @@ pub(super) fn collect_shadow_including_subtree_handles(
     root: DomHandle,
     handles: &mut Vec<DomHandle>,
 ) {
-    handles.extend(shadow_including_subtree_handles(host_ptr, root));
+    handles.extend(
+        unsafe { &*host_ptr }
+            .dom_host()
+            .shadow_including_subtree(root),
+    );
 }
 
 pub(super) fn shadow_including_child_handles(

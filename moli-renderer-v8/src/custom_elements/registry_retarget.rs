@@ -1,7 +1,4 @@
-use super::{
-    registry::{CustomElementRegistryAssociation, RegistryAssociationRetarget},
-    traversal::shadow_including_subtree_handles,
-};
+use super::registry::{CustomElementRegistryAssociation, RegistryAssociationRetarget};
 use crate::{document_runtime::DomHandle, dom::native::DomHost, native_bridge::JsContextHost};
 
 pub(crate) fn registry_association_retargets_before_removal(
@@ -10,7 +7,7 @@ pub(crate) fn registry_association_retargets_before_removal(
 ) -> Vec<RegistryAssociationRetarget> {
     let host = unsafe { &*host_ptr };
     let mut retargets = Vec::new();
-    for handle in shadow_including_subtree_handles(host_ptr, root) {
+    for handle in host.dom_host().shadow_including_subtree(root) {
         if !should_record_import_clone_registry_association(host.dom_host(), handle) {
             continue;
         }

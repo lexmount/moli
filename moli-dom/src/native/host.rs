@@ -21,6 +21,7 @@ mod mutation;
 mod parser;
 mod query_index;
 mod stylesheet_candidates;
+mod subtree;
 mod types;
 
 pub use adoption::{DomAdoptionTarget, DomAssociatedTreeEdgeKind};
