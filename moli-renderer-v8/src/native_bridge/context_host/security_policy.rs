@@ -928,11 +928,13 @@ impl PageScriptHost {
         if !policy
             .cross_origin_embedder_policy
             .enables_cross_origin_isolation()
+            && !policy.credentialless
         {
             return false;
         }
-        // COOP chooses the top-level group's mode. A COEP-only child joins it;
-        // a child's own COOP header cannot isolate an otherwise ordinary group.
+        // COOP chooses the top-level group's mode. A COEP child, or a
+        // credentialless Document exempt from COEP embedding checks, joins it.
+        // A child's own COOP cannot isolate an otherwise ordinary group.
         match self.child_browsing_context_root_scope(handle) {
             Some(OwnerDispatchScope::Top) => self.document_policy_container().coop_coep_isolation,
             Some(OwnerDispatchScope::LightweightPopup(id)) => self
@@ -949,38 +951,52 @@ impl PageScriptHost {
         if !self.window_cross_origin_isolated(owner) {
             return None;
         }
-        let dip = match owner {
-            OwnerDispatchScope::Top => self.document_isolation_policy(),
-            OwnerDispatchScope::Child(handle) => {
-                let policy = self.child_browsing_context_policy_container_snapshot(handle)?;
-                policy.document_isolation_policy
-            }
-            OwnerDispatchScope::LightweightPopup(id) => {
-                let policy = self.lightweight_popup_policy_container(id)?;
-                policy.document_isolation_policy
-            }
-        };
+        self.window_agent_cluster(owner)
+    }
+
+    pub(super) fn window_agent_cluster(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<crate::agent_cluster::AgentClusterIdentity> {
+        let policy = self.window_policy_container(owner)?;
         let origin = self.window_document_origin(owner)?;
-        // DIP supplies its own isolation origin; otherwise the top-level
-        // isolation origin is inherited, independently from the document origin.
-        let isolation_origin = if dip.enables_cross_origin_isolation() {
-            origin.clone()
-        } else {
-            let root = match owner {
-                OwnerDispatchScope::Child(handle) => {
-                    self.child_browsing_context_root_scope(handle)?
-                }
-                root => root,
-            };
-            self.window_document_origin(root)?
-        };
-        if origin == "null" || isolation_origin == "null" {
+        self.window_agent_cluster_for_policy(owner, &policy, origin)
+    }
+
+    pub(super) fn window_agent_cluster_for_policy(
+        &self,
+        owner: OwnerDispatchScope,
+        policy: &DocumentPolicyContainer,
+        origin: String,
+    ) -> Option<crate::agent_cluster::AgentClusterIdentity> {
+        use crate::agent_cluster::{AgentClusterIdentity, WindowAgentClusterIsolation};
+
+        if origin == "null"
+            || !self.window_agent_cluster_is_cross_origin_isolated_with_policy(owner, policy)
+        {
             return None;
         }
-        Some(crate::structured_clone::SharedMemoryAgentCluster::window(
+        let isolation = if policy
+            .document_isolation_policy
+            .enables_cross_origin_isolation()
+        {
+            WindowAgentClusterIsolation::DocumentIsolation
+        } else {
+            let isolation_origin = match owner {
+                OwnerDispatchScope::Child(handle) => {
+                    self.window_document_origin(self.child_browsing_context_root_scope(handle)?)?
+                }
+                OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_) => origin.clone(),
+            };
+            if isolation_origin == "null" {
+                return None;
+            }
+            WindowAgentClusterIsolation::CoopCoep { isolation_origin }
+        };
+        Some(AgentClusterIdentity::window(
             self.browser_context_runtime().storage_partition_identity(),
             origin,
-            isolation_origin,
+            isolation,
         ))
     }
 
