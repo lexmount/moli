@@ -652,7 +652,7 @@ fn prepare_shared_worker_script_load(
             script_url.scheme()
         )));
     }
-    if let Some(source) = materialize_worker_script_source(script_url)? {
+    if let Some(source) = materialize_worker_script_source(script_url, None)? {
         return Ok(SharedWorkerScriptLoad::ready(
             script_url.to_string(),
             source,
