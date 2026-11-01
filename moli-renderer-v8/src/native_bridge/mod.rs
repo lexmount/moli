@@ -7,7 +7,7 @@ mod collections;
 mod context_host;
 mod current_input;
 pub(crate) use context_host::{
-    JsContextHost, JsContextHostPageTaskCapabilities, MouseReleaseFollowUp,
+    ChildDocumentFetch, JsContextHost, JsContextHostPageTaskCapabilities, MouseReleaseFollowUp,
     PendingScrollObservableEffects, PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
     SharedResourceTimingBufferRegistry, caller_can_access_window,
 };

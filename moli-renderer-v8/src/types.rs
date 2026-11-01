@@ -95,6 +95,8 @@ pub(super) enum PendingSubresourceContinuation {
         use_cors_preflight: bool,
     },
     WebSocket(PendingWebSocketConnection),
+    /// A child frame navigation held before its request leaves the renderer.
+    ChildDocument(Box<crate::native_bridge::ChildDocumentFetch>),
     WorkerFetch {
         worker_id: DedicatedWorkerId,
         fetch_id: u32,

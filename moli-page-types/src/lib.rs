@@ -2613,6 +2613,9 @@ pub enum PendingSubresourceContinueEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SubresourceResourceType {
+    /// A child frame's navigation request. Only CDP Fetch interception uses
+    /// this type; the request itself is issued by the child navigation.
+    Document,
     Script,
     Stylesheet,
     Image,
@@ -2665,7 +2668,8 @@ impl OptionalResourceFetchMask {
             SubresourceResourceType::Video => Some(Self::VIDEO),
             SubresourceResourceType::Media => Some(Self::MEDIA),
             SubresourceResourceType::TextTrack => Some(Self::TEXT_TRACK),
-            SubresourceResourceType::Script
+            SubresourceResourceType::Document
+            | SubresourceResourceType::Script
             | SubresourceResourceType::Stylesheet
             | SubresourceResourceType::Fetch
             | SubresourceResourceType::EventSource
@@ -2715,6 +2719,7 @@ impl SubresourceRequestInitiatorType {
 impl SubresourceResourceType {
     pub fn as_cdp_type(self) -> &'static str {
         match self {
+            Self::Document => "Document",
             Self::Script => "Script",
             Self::Stylesheet => "Stylesheet",
             Self::Image => "Image",

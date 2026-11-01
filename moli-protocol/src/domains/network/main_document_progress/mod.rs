@@ -1447,6 +1447,14 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
     let Ok(final_url) = Url::parse(&network.final_url) else {
         return;
     };
+    // A Fetch pause already published this navigation's initial request.
+    let announced_by_fetch_pause = conn
+        .runtime_session_owner_slot_mut_for_owner(owner)
+        .is_some_and(|runtime_slot| {
+            let announced = runtime_slot.request_was_announced_by_fetch_pause(request_id);
+            runtime_slot.clear_fetch_pause_announced_request_id(request_id);
+            announced
+        });
     let session_ids = conn.network_event_session_ids_for_owner(owner);
     if session_ids.is_empty() {
         return;
@@ -1459,17 +1467,19 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
         timestamp,
     };
     let mut output = MainDocumentProgressOutputTarget::background_events(out);
-    output.emit_event(MainDocumentNavigationProgressEvent::RequestWillBeSent {
-        target: target.clone(),
-        url: request_url,
-        method: network.request_method.clone(),
-        request_body: None,
-        request_headers: network.request_headers.clone(),
-        request_initiator_type: SubresourceRequestInitiatorType::Parser,
-        redirect_response: Box::new(None),
-        redirect_has_extra_info: false,
-        cookie_access_report: None,
-    });
+    if !announced_by_fetch_pause {
+        output.emit_event(MainDocumentNavigationProgressEvent::RequestWillBeSent {
+            target: target.clone(),
+            url: request_url,
+            method: network.request_method.clone(),
+            request_body: None,
+            request_headers: network.request_headers.clone(),
+            request_initiator_type: SubresourceRequestInitiatorType::Parser,
+            redirect_response: Box::new(None),
+            redirect_has_extra_info: false,
+            cookie_access_report: None,
+        });
+    }
     output.emit_event(MainDocumentNavigationProgressEvent::ResponseReceived {
         target: target.clone(),
         final_url,

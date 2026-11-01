@@ -19,7 +19,8 @@ use crate::{
     },
     types::{
         ChildDocumentLoadCompletion, ChildDocumentLoadNetworkAttribution, ChildDocumentLoadOutcome,
-        LoadedChildDocument, SubresourceResponseBody,
+        LoadedChildDocument, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
+        SubresourceResourceType, SubresourceResponseBody,
     },
 };
 
@@ -94,6 +95,9 @@ impl JsContextHost {
             .collect::<Vec<_>>();
         for load_id in pending_ids {
             if let Some(pending) = self.pending_child_document_navigations.remove(&load_id) {
+                if let Some(internal_id) = pending.paused_fetch {
+                    self.abort_subresource_fetch(internal_id);
+                }
                 self.finish_pending_child_document_navigation_owner_request(&pending);
                 let _ = self.settle_child_navigation_load(
                     handle,
@@ -115,7 +119,8 @@ impl JsContextHost {
         initiator: ChildDocumentNavigationInitiator,
     ) -> Option<u64> {
         let target_url = Self::child_browsing_context_bootstrap_url(&bootstrap)?;
-        let initiating_loader = self.document_resource_loader_for_owner(navigation_load.owner())?;
+        let initiating_owner = navigation_load.owner();
+        let initiating_loader = self.document_resource_loader_for_owner(initiating_owner)?;
         let resource_loader =
             crate::network::navigation::NavigationResourceLoader::new_for_child_document(
                 initiating_loader.request_client().clone(),
@@ -192,73 +197,35 @@ impl JsContextHost {
                 document_credentialless,
                 credentialless_storage_nonce,
                 frame_owner_resource_timing,
+                paused_fetch: None,
             },
         );
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.mark_pending_document_load(load_id);
         }
-        let parent_character_set = self.document_character_set().to_owned();
-        let task_resource_loader = resource_loader.clone();
-        resource_loader.spawn_resource_task(async move {
-            let result = async {
-                let request = configure_child_document_navigation_request(
-                    child_document_load_request(bootstrap).ok_or_else(|| {
-                        "unsupported child document navigation bootstrap".to_owned()
-                    })?,
+        let fetch = ChildDocumentFetch {
+            target,
+            network_attribution,
+            request: child_document_load_request(bootstrap).map(|request| {
+                configure_child_document_navigation_request(
+                    request,
                     &initiator_url,
                     &browser_context,
                 )
                 .with_page_network_policy()
-                .with_network_partition_key(network_partition_key);
-                let request_url = request.url.as_str().to_owned();
-                let request_method = request.method.clone();
-                let request_headers = request.request_headers.to_byte_strings();
-                if let Some(client_id) = service_worker_client_id
-                    && let Some(response) = browser_context_runtime
-                        .fetch_service_worker_child_main_resource_for_reserved_client(
-                            client_id,
-                            &request,
-                            task_resource_loader.request_client(),
-                            task_resource_loader.task_runner(),
-                            completion_tx.clone(),
-                        )
-                        .await
-                        .map_err(|error| error.to_string())?
-                {
-                    task_resource_loader
-                        .note_service_worker_response_ready()
-                        .map_err(|error| error.to_string())?;
-                    let (head, body) = response.into_body();
-                    return child_document_load_outcome_from_response(
-                        request_url,
-                        request_method,
-                        request_headers,
-                        head,
-                        body,
-                        &parent_character_set,
-                    );
-                }
-                let response = task_resource_loader
-                    .fetch_raw(request)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                let (head, body) = response.into_body();
-                child_document_load_outcome_from_response(
-                    request_url,
-                    request_method,
-                    request_headers,
-                    head,
-                    body,
-                    &parent_character_set,
-                )
-            }
-            .await;
-            let _ = completion_tx.send_child_document(ChildDocumentLoadCompletion::new(
-                target,
-                network_attribution,
-                result,
-            ));
-        });
+                .with_network_partition_key(network_partition_key)
+            }),
+            service_worker_client_id,
+            browser_context_runtime,
+            resource_loader,
+            completion_tx,
+            parent_character_set: self.document_character_set().to_owned(),
+        };
+        let paused_fetch =
+            self.start_child_document_fetch(handle, initiating_owner, &initiating_loader, fetch);
+        if let Some(pending) = self.pending_child_document_navigations.get_mut(&load_id) {
+            pending.paused_fetch = paused_fetch;
+        }
         Some(load_id)
     }
 
@@ -761,6 +728,224 @@ impl JsContextHost {
             current = parent;
         }
         ancestors
+    }
+
+    /// Starts a child navigation request, or holds it at CDP Fetch's request
+    /// stage and returns the pause id. A navigation that cannot be paused
+    /// proceeds as if Fetch were disabled.
+    fn start_child_document_fetch(
+        &mut self,
+        handle: DomHandle,
+        initiating_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+        initiating_loader: &crate::network::context::DocumentResourceLoader,
+        fetch: ChildDocumentFetch,
+    ) -> Option<u64> {
+        let pause = fetch
+            .request
+            .as_ref()
+            .filter(|request| {
+                matches!(request.url.scheme(), "http" | "https")
+                    && self.should_intercept_subresource(SubresourceResourceType::Document)
+            })
+            .and_then(|request| {
+                let dispatch_scope = self.owner_dispatch_scope_for_node(handle)?;
+                let load = initiating_loader.register_load(
+                    crate::network::loads::ResourceLoadKind::Document,
+                    crate::network::loads::ResourceLoadDisposition::Ordinary,
+                    None,
+                )?;
+                Some((request, dispatch_scope, load))
+            });
+        let Some((request, dispatch_scope, load)) = pause else {
+            fetch.start();
+            return None;
+        };
+        let info = PendingSubresourceFetchInfo {
+            internal_id: 0,
+            network_request_handle: None,
+            frame_id: Some(fetch.network_attribution.frame_id().to_owned()),
+            document_url: request.url.clone(),
+            url: request.url.clone(),
+            websocket_socket_id: None,
+            method: request.method.clone(),
+            request_headers: request.request_headers.clone(),
+            request_body: request
+                .body
+                .as_ref()
+                .map(|body| String::from_utf8_lossy(body).into_owned()),
+            request_body_bytes: request.body.clone(),
+            resource_type: SubresourceResourceType::Document,
+            request_cookie_report: None,
+        };
+        let document_loader_id = fetch.network_attribution.loader_id().to_owned();
+        Some(self.record_pending_child_document_fetch(
+            crate::native_bridge::WindowDocumentNetworkRequestIdentity::new(
+                crate::native_bridge::WindowDocumentOwner::Frame(initiating_owner),
+                dispatch_scope,
+            ),
+            load,
+            initiating_loader.fetch_context().request_origin(),
+            info,
+            document_loader_id,
+            fetch,
+        ))
+    }
+
+    pub(crate) fn continue_child_document_fetch(
+        &mut self,
+        internal_id: u64,
+        mut fetch: ChildDocumentFetch,
+        url: url::Url,
+        method: String,
+        headers: moli_fetch::RequestHeaders,
+        body: Option<bytes::Bytes>,
+    ) {
+        if let Some(request) = fetch.request.as_mut() {
+            request.url = url;
+            request.method = method;
+            request.request_headers = headers;
+            request.body = body;
+        }
+        // A superseded navigation has already settled without this request.
+        if self
+            .pending_child_document_navigations
+            .get(&fetch.target.load_id())
+            .is_some_and(|pending| pending.target == fetch.target)
+        {
+            fetch.start();
+        }
+        self.record_pending_subresource_continue_event(
+            PendingSubresourceContinueEvent::Completed { internal_id },
+        );
+    }
+
+    pub(crate) fn fail_child_document_fetch(
+        &mut self,
+        internal_id: u64,
+        fetch: ChildDocumentFetch,
+        error_text: String,
+    ) {
+        fetch.finish(Err(error_text));
+        self.record_pending_subresource_continue_event(
+            PendingSubresourceContinueEvent::Completed { internal_id },
+        );
+    }
+
+    pub(crate) fn fulfill_child_document_fetch(
+        &mut self,
+        internal_id: u64,
+        fetch: ChildDocumentFetch,
+        head: moli_fetch::ResponseHead,
+        body: Vec<u8>,
+    ) {
+        let result = match &fetch.request {
+            Some(request) => fetch
+                .resource_loader
+                .note_external_response_ready()
+                .map_err(|error| error.to_string())
+                .and_then(|()| {
+                    child_document_load_outcome_from_response(
+                        request.url.as_str().to_owned(),
+                        request.method.clone(),
+                        request.request_headers.to_byte_strings(),
+                        head,
+                        moli_fetch::ResponseBody::materialized_bytes(body),
+                        &fetch.parent_character_set,
+                    )
+                }),
+            None => Err(UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP.to_owned()),
+        };
+        fetch.finish(result);
+        self.record_pending_subresource_continue_event(
+            PendingSubresourceContinueEvent::Completed { internal_id },
+        );
+    }
+}
+
+const UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP: &str =
+    "unsupported child document navigation bootstrap";
+
+/// A child navigation request, prepared before it leaves the renderer so CDP
+/// Fetch can hold it. Every outcome reaches the navigation as a load
+/// completion.
+pub(crate) struct ChildDocumentFetch {
+    target: ChildDocumentNavigationFetchTarget,
+    network_attribution: ChildDocumentLoadNetworkAttribution,
+    request: Option<moli_fetch::Request>,
+    service_worker_client_id: Option<crate::service_worker_runtime::ServiceWorkerClientId>,
+    browser_context_runtime: crate::runtime::RendererBrowserContextRuntime,
+    resource_loader: crate::network::navigation::NavigationResourceLoader,
+    completion_tx: crate::page_task_queue::RendererResourceCompletionSender,
+    parent_character_set: String,
+}
+
+impl ChildDocumentFetch {
+    fn start(mut self) {
+        let resource_loader = self.resource_loader.clone();
+        resource_loader.spawn_resource_task(async move {
+            let result = self.load().await;
+            self.finish(result);
+        });
+    }
+
+    async fn load(&mut self) -> Result<ChildDocumentLoadOutcome, String> {
+        let request = self
+            .request
+            .take()
+            .ok_or_else(|| UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP.to_owned())?;
+        let request_url = request.url.as_str().to_owned();
+        let request_method = request.method.clone();
+        let request_headers = request.request_headers.to_byte_strings();
+        if let Some(client_id) = self.service_worker_client_id
+            && let Some(response) = self
+                .browser_context_runtime
+                .fetch_service_worker_child_main_resource_for_reserved_client(
+                    client_id,
+                    &request,
+                    self.resource_loader.request_client(),
+                    self.resource_loader.task_runner(),
+                    self.completion_tx.clone(),
+                )
+                .await
+                .map_err(|error| error.to_string())?
+        {
+            self.resource_loader
+                .note_service_worker_response_ready()
+                .map_err(|error| error.to_string())?;
+            let (head, body) = response.into_body();
+            return child_document_load_outcome_from_response(
+                request_url,
+                request_method,
+                request_headers,
+                head,
+                body,
+                &self.parent_character_set,
+            );
+        }
+        let response = self
+            .resource_loader
+            .fetch_raw(request)
+            .await
+            .map_err(|error| error.to_string())?;
+        let (head, body) = response.into_body();
+        child_document_load_outcome_from_response(
+            request_url,
+            request_method,
+            request_headers,
+            head,
+            body,
+            &self.parent_character_set,
+        )
+    }
+
+    fn finish(self, result: Result<ChildDocumentLoadOutcome, String>) {
+        let _ = self
+            .completion_tx
+            .send_child_document(ChildDocumentLoadCompletion::new(
+                self.target,
+                self.network_attribution,
+                result,
+            ));
     }
 }
 
