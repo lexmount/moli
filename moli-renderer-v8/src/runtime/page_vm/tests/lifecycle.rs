@@ -3372,7 +3372,8 @@ document.body.appendChild(replacementFrame);
                         RendererPageResourceCompletion::child_blocking_stylesheet(
                             old_root_document,
                             ChildBlockingStylesheetLoadCompletion {
-                                child_handle: old_child_handle,
+                                import_graph: None,
+            child_handle: old_child_handle,
                                 owner: old_child_owner,
                                 signature: crate::DocumentBlockingStylesheetSignature::
                                     ParserCreatedStyleImport { urls: Vec::new() },

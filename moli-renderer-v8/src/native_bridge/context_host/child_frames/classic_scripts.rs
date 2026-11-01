@@ -1093,7 +1093,7 @@ impl JsContextHost {
             .frame_parser_classic_scripts
             .current_parser_blocking_stylesheet_signatures(document_owner)
             .is_some_and(|signatures| {
-                self.frame_document_blocking_stylesheets
+                self.frame_document_stylesheets
                     .blocks_signatures(document_owner, signatures)
             });
         if stylesheet_blocked {
@@ -1167,7 +1167,7 @@ impl JsContextHost {
             .frame_parser_classic_scripts
             .current_deferred_stylesheet_signatures(document_owner)
             .is_some_and(|signatures| {
-                self.frame_document_blocking_stylesheets
+                self.frame_document_stylesheets
                     .blocks_signatures(document_owner, signatures)
             });
         if stylesheet_blocked {
@@ -1274,7 +1274,7 @@ impl JsContextHost {
                     .child_document_script_schedulers
                     .parser_ordered_module_blocking_stylesheet_signatures(pending_script_id)
                     .is_some_and(|signatures| {
-                        self.frame_document_blocking_stylesheets
+                        self.frame_document_stylesheets
                             .blocks_signatures(document_owner, signatures)
                     });
                 if stylesheet_blocked {

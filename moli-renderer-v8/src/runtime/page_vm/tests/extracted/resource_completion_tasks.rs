@@ -181,6 +181,7 @@ async fn stale_child_unusable_stylesheet_preserves_physical_output_without_docum
         queue.enqueue_local_for_test(RendererPageResourceCompletion::child_blocking_stylesheet(
             root_document,
             ChildBlockingStylesheetLoadCompletion {
+                import_graph: None,
                 child_handle,
                 owner: stale_owner,
                 signature: crate::DocumentBlockingStylesheetSignature::ParserCreatedStyleImport {

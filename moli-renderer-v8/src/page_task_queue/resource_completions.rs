@@ -1030,6 +1030,7 @@ mod tests {
         owner: FrameDocumentTaskOwner,
     ) -> ChildBlockingStylesheetLoadCompletion {
         ChildBlockingStylesheetLoadCompletion {
+            import_graph: None,
             child_handle,
             owner,
             signature: crate::DocumentBlockingStylesheetSignature::ParserCreatedStyleImport {

@@ -1,7 +1,8 @@
 //! Renderer-independent stylesheet blocking discovery contract.
 //!
 //! The DOM owns candidate membership and order. This module only reads that
-//! canonical registry, classifies candidates, and produces blocking inputs.
+//! canonical registry and produces load inputs with independent script-blocking
+//! eligibility. The embedder supplies the Document media environment.
 
 use std::collections::HashSet;
 
@@ -91,9 +92,10 @@ pub struct DocumentOwnedBlockingStylesheet {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocumentOwnedBlockingStylesheetDiscoveryInput {
+pub struct DocumentOwnedStylesheetDiscoveryInput {
     node_id: NodeId,
     signature: DocumentBlockingStylesheetSignature,
+    blocks_scripts: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,7 +189,11 @@ impl DocumentOwnedBlockingStylesheet {
     }
 }
 
-impl DocumentOwnedBlockingStylesheetDiscoveryInput {
+impl DocumentOwnedStylesheetDiscoveryInput {
+    pub fn blocks_scripts(&self) -> bool {
+        self.blocks_scripts
+    }
+
     pub fn node_id(&self) -> NodeId {
         self.node_id
     }
@@ -202,22 +208,22 @@ impl DocumentOwnedBlockingStylesheetDiscoveryInput {
     }
 }
 
-impl From<&DocumentOwnedBlockingStylesheet> for DocumentOwnedBlockingStylesheetDiscoveryInput {
+impl From<&DocumentOwnedBlockingStylesheet> for DocumentOwnedStylesheetDiscoveryInput {
     fn from(blocker: &DocumentOwnedBlockingStylesheet) -> Self {
         Self {
             node_id: blocker.node_id(),
             signature: blocker.signature().clone(),
+            blocks_scripts: true,
         }
     }
 }
 
-impl From<&DocumentOwnedBlockingStylesheetCandidate>
-    for DocumentOwnedBlockingStylesheetDiscoveryInput
-{
+impl From<&DocumentOwnedBlockingStylesheetCandidate> for DocumentOwnedStylesheetDiscoveryInput {
     fn from(candidate: &DocumentOwnedBlockingStylesheetCandidate) -> Self {
         Self {
             node_id: candidate.node_id(),
             signature: DocumentBlockingStylesheetSignature::from_candidate(candidate),
+            blocks_scripts: true,
         }
     }
 }
@@ -245,6 +251,10 @@ impl DocumentBlockingStylesheetSignature {
 }
 
 pub trait StylesheetBlockingReadView {
+    /// Match using this read view's Document environment. Executable embedders
+    /// must provide native evaluation; page-authored JavaScript is never called.
+    fn media_query_matches(&self, media: &str) -> bool;
+
     fn stylesheet_element(&self, node_id: NativeNodeId) -> Option<StylesheetElementRead>;
     fn child_ids(&self, node_id: NativeNodeId) -> Vec<NativeNodeId>;
     fn text_content(&self, node_id: NativeNodeId) -> Option<String>;
@@ -263,6 +273,10 @@ pub trait StylesheetBlockingReadView {
 }
 
 impl StylesheetBlockingReadView for NativeDom {
+    fn media_query_matches(&self, media: &str) -> bool {
+        default_screen_media_query_matches(media, self.document_is_quirks_mode())
+    }
+
     fn stylesheet_element(&self, node_id: NativeNodeId) -> Option<StylesheetElementRead> {
         self.node(node_id)
             .and_then(StylesheetElementRead::from_node)
@@ -305,6 +319,10 @@ impl StylesheetBlockingReadView for NativeDom {
 }
 
 impl StylesheetBlockingReadView for DomHost {
+    fn media_query_matches(&self, media: &str) -> bool {
+        default_screen_media_query_matches(media, self.document_is_quirks_mode())
+    }
+
     fn stylesheet_element(&self, node_id: NativeNodeId) -> Option<StylesheetElementRead> {
         self.node(node_id)
             .and_then(StylesheetElementRead::from_node)
@@ -441,7 +459,8 @@ fn stylesheet_link_disposition_in_view(
     )
     .with_quirks_mode_mime_compatibility(document.document_is_quirks_mode());
     let is_alternate = link_rel_includes_token(rel, "alternate");
-    let blocking = !is_alternate && media_blocks_scripts(element.media.as_deref());
+    let blocking =
+        !is_alternate && document.media_query_matches(element.media.as_deref().unwrap_or_default());
     Some(if blocking {
         StylesheetLinkDisposition::Blocking { url, options }
     } else {
@@ -502,27 +521,6 @@ fn stylesheet_type_is_supported(value: Option<&str>) -> bool {
         let value = value.trim();
         value.is_empty() || value.eq_ignore_ascii_case("text/css")
     })
-}
-
-fn media_blocks_scripts(media: Option<&str>) -> bool {
-    let Some(media) = media else {
-        return true;
-    };
-    // Keep this device-independent gate limited to unconditional screen/all queries.
-    // CSS tokenization keeps commas inside strings and blocks out of the list.
-    let mut parser = cssparser::Parser::new(media);
-    if parser.is_exhausted() {
-        return true;
-    }
-    parser
-        .parse_comma_separated_ignoring_errors(|query| {
-            let media_type = query.expect_ident()?;
-            Ok::<_, cssparser::ParseError<()>>(
-                media_type.eq_ignore_ascii_case("all") || media_type.eq_ignore_ascii_case("screen"),
-            )
-        })
-        .into_iter()
-        .any(|matches| matches)
 }
 
 pub fn collect_blocking_stylesheet_nodes_before(
@@ -588,24 +586,53 @@ fn collect_document_owned_blocking_stylesheet_candidates_before_impl(
     out
 }
 
+pub fn document_owned_stylesheet_discovery_input_for_node(
+    document: &(impl StylesheetBlockingReadView + ?Sized),
+    node_id: NodeId,
+) -> Option<DocumentOwnedStylesheetDiscoveryInput> {
+    let element = document.stylesheet_element(NativeNodeId::new(node_id.index()))?;
+    if !element.parser_blocking_eligible {
+        return None;
+    }
+    if let Some(disposition) = stylesheet_link_disposition_in_view(document, node_id) {
+        return Some(DocumentOwnedStylesheetDiscoveryInput {
+            node_id,
+            signature: DocumentBlockingStylesheetSignature::Link {
+                url: disposition.url().clone(),
+                options: disposition.options().clone(),
+            },
+            blocks_scripts: disposition.is_blocking(),
+        });
+    }
+    parser_created_style_import_urls(document, node_id).map(|urls| {
+        DocumentOwnedStylesheetDiscoveryInput {
+            node_id,
+            signature: DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls },
+            blocks_scripts: document
+                .media_query_matches(element.media.as_deref().unwrap_or_default()),
+        }
+    })
+}
+
 pub fn document_owned_blocking_stylesheet_candidate_for_node(
     document: &(impl StylesheetBlockingReadView + ?Sized),
     node_id: NodeId,
 ) -> Option<DocumentOwnedBlockingStylesheetCandidate> {
-    let native_node_id = NativeNodeId::new(node_id.index());
-    let element = document.stylesheet_element(native_node_id)?;
-    if element.parser_blocking_eligible
-        && let Some(disposition) = stylesheet_link_disposition_in_view(document, node_id)
-        && disposition.is_blocking()
-    {
-        return Some(DocumentOwnedBlockingStylesheetCandidate::Link {
-            node_id,
-            url: disposition.url().clone(),
-            options: disposition.options().clone(),
-        });
+    let input = document_owned_stylesheet_discovery_input_for_node(document, node_id)?;
+    if !input.blocks_scripts() {
+        return None;
     }
-    parser_created_style_import_urls(document, node_id).map(|urls| {
-        DocumentOwnedBlockingStylesheetCandidate::ParserCreatedStyleImport { node_id, urls }
+    Some(match input.signature {
+        DocumentBlockingStylesheetSignature::Link { url, options } => {
+            DocumentOwnedBlockingStylesheetCandidate::Link {
+                node_id,
+                url,
+                options,
+            }
+        }
+        DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls } => {
+            DocumentOwnedBlockingStylesheetCandidate::ParserCreatedStyleImport { node_id, urls }
+        }
     })
 }
 
@@ -629,7 +656,7 @@ pub fn collect_document_owned_blocking_stylesheets_before(
 pub fn collect_document_owned_blocking_stylesheet_discovery_inputs_before_in_view(
     document: &(impl StylesheetBlockingReadView + ?Sized),
     target_node_ids: impl IntoIterator<Item = NodeId>,
-) -> Vec<DocumentOwnedBlockingStylesheetDiscoveryInput> {
+) -> Vec<DocumentOwnedStylesheetDiscoveryInput> {
     let mut discovered_inputs = Vec::new();
     let mut discovered_blocker_node_ids = HashSet::new();
     for target_node_id in target_node_ids {
@@ -637,9 +664,7 @@ pub fn collect_document_owned_blocking_stylesheet_discovery_inputs_before_in_vie
             collect_document_owned_blocking_stylesheets_before_in_view(document, target_node_id)
         {
             if discovered_blocker_node_ids.insert(blocker.node_id()) {
-                discovered_inputs.push(DocumentOwnedBlockingStylesheetDiscoveryInput::from(
-                    &blocker,
-                ));
+                discovered_inputs.push(DocumentOwnedStylesheetDiscoveryInput::from(&blocker));
             }
         }
     }
@@ -708,7 +733,9 @@ fn parser_created_style_import_urls(
     if !element.is_html_element("style") || !element.parser_blocking_eligible {
         return None;
     }
-    if element.disabled || !media_blocks_scripts(element.media.as_deref()) {
+    if element.disabled
+        || !moli_web_mime::is_css_style_element_type_attribute(element.type_attr.as_deref())
+    {
         return None;
     }
     let css_text = document.text_content(native_node_id)?;
@@ -768,6 +795,19 @@ fn trim_css_string(input: &str) -> Option<String> {
     Some(trimmed[1..trimmed.len() - 1].trim().to_owned())
 }
 
+/// Inert DOM adapters have no browsing context and select the ordinary default
+/// screen explicitly. Executable adapters supply their actual Document device.
+pub fn default_screen_media_query_matches(media: &str, quirks_mode: bool) -> bool {
+    let viewport = moli_page_types::ViewportSurface::default();
+    moli_css_parse::screen_media_query_matches(
+        media,
+        quirks_mode,
+        (viewport.inner_width as f32, viewport.inner_height as f32),
+        (viewport.screen_width as f32, viewport.screen_height as f32),
+        viewport.device_pixel_ratio as f32,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use moli_dom::native::{DomHost, NativeDom};
@@ -790,6 +830,11 @@ mod tests {
         for (media, blocking) in [
             ("", true),
             ("screen", true),
+            ("only screen", true),
+            ("only all", true),
+            ("not print", true),
+            ("(width >= 768px)", true),
+            ("(width > 99999px)", false),
             ("screen,print", true),
             ("print, screen", true),
             (" PRINT , ScReEn ", true),
@@ -800,7 +845,7 @@ mod tests {
             ("print", false),
             ("print, speech", false),
             ("not screen, print", false),
-            ("screen and (color), print", false),
+            ("screen and (color), print", true),
             ("not all, screen", true),
             (",print", false),
             (r#""print,screen,speech""#, false),

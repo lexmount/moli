@@ -1577,7 +1577,7 @@ document.body.setAttribute('data-result', [
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
                 panic!("expected parser step to stop at initial inline script handoff");
@@ -1715,7 +1715,7 @@ document.body.setAttribute('data-result', [
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
                 panic!("expected parser step to stop at initial inline script handoff");

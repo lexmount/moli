@@ -138,6 +138,11 @@ impl<'a, 'scope, 'pin> ChildFrameLiveParserOwner<'a, 'scope, 'pin> {
 impl LiveDocumentParserOwner for ChildFrameLiveParserOwner<'_, '_, '_> {}
 
 impl StylesheetBlockingReadView for ChildFrameLiveParserOwner<'_, '_, '_> {
+    fn media_query_matches(&self, media: &str) -> bool {
+        self.host
+            .media_query_matches_for_document(self.child_document_handle, media)
+    }
+
     fn stylesheet_element(&self, node_id: DomHandle) -> Option<StylesheetElementRead> {
         self.host
             .dom_host()
@@ -227,6 +232,11 @@ impl ParserMutationEffectConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
 }
 
 impl ParserDomReadConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
+    fn stylesheet_media_matches(&mut self, media: &str) -> bool {
+        self.host
+            .media_query_matches_for_document(self.child_document_handle, media)
+    }
+
     fn node_exists(&mut self, node_id: DomHandle) -> bool {
         self.host.dom_host().node(node_id).is_some()
     }
@@ -714,9 +724,7 @@ impl JsContextHost {
                     let remains_blocked = self
                         .frame_owner_store
                         .current_child_document_owner(child_handle)
-                        .is_some_and(|owner| {
-                            self.frame_document_blocking_stylesheets.has_pending(owner)
-                        });
+                        .is_some_and(|owner| self.frame_document_stylesheets.has_pending(owner));
                     if remains_blocked {
                         Self::suspend_live_child_parser(
                             parser,
@@ -1073,18 +1081,15 @@ impl JsContextHost {
     ) {
         let async_prefetch_count = discovery_signals.async_prefetch_scripts.len();
         let modulepreload_link_count = discovery_signals.modulepreload_link_candidates.len();
-        let blocking_stylesheet_count = discovery_signals.blocking_stylesheet_inputs.len();
+        let stylesheet_count = discovery_signals.stylesheet_inputs.len();
         let modulepreload_link_candidates = discovery_signals.modulepreload_link_candidates;
-        let blocking_stylesheet_inputs = discovery_signals.blocking_stylesheet_inputs;
-        if async_prefetch_count != 0
-            || modulepreload_link_count != 0
-            || blocking_stylesheet_count != 0
-        {
+        let stylesheet_inputs = discovery_signals.stylesheet_inputs;
+        if async_prefetch_count != 0 || modulepreload_link_count != 0 || stylesheet_count != 0 {
             tracing::debug!(
                 child_document_handle = ?document_handle,
                 async_prefetch_count,
                 modulepreload_link_count,
-                blocking_stylesheet_count,
+                stylesheet_count,
                 "child live parser emitted document-owned discovery signals"
             );
         }
@@ -1092,11 +1097,8 @@ impl JsContextHost {
             .frame_owner_store
             .current_child_document_task_owner(child_handle)
         {
-            let accepted_stylesheet_count = self.accept_child_parser_blocking_stylesheet_inputs(
-                child_handle,
-                owner,
-                blocking_stylesheet_inputs,
-            );
+            let accepted_stylesheet_count =
+                self.accept_child_parser_stylesheet_inputs(child_handle, owner, stylesheet_inputs);
             if accepted_stylesheet_count != 0 {
                 tracing::debug!(
                     child_handle = ?child_handle,
@@ -1374,7 +1376,7 @@ impl JsContextHost {
                     );
                 }
                 LiveDocumentParserStepOutcome::BlockingStylesheetPause(pause) => {
-                    if self.frame_document_blocking_stylesheets.has_pending(owner) {
+                    if self.frame_document_stylesheets.has_pending(owner) {
                         insertion.suspend(ParserSuspensionCause::ParserCreatedStylesheet {
                             owner: pause.node_id,
                         });

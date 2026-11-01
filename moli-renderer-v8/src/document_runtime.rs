@@ -799,16 +799,39 @@ pub(crate) struct ParserScriptStartPosition {
 /// call renderer-owned sinks, and each sink short-borrows this same native DOM
 /// object graph through `DocumentRuntime`.
 ///
-/// The wrapper centralizes direct `DomHost` borrowing so the parser path can
-/// avoid carrying a `DomHost` pointer or borrow token through helper layers.
+/// The live DOM also owns the canonical media settings, shared by native parser
+/// reads and Window bindings. The wrapper centralizes direct `DomHost` borrowing
+/// so the parser path avoids carrying a `DomHost` pointer or borrow token through
+/// helper layers.
 #[derive(Debug)]
 struct LiveRuntimeDomHost {
     dom_host: DomHost,
+    emulated_media: crate::protocol_types::EmulatedMediaOverrides,
+    viewport_surface: Option<crate::protocol_types::ViewportSurface>,
 }
 
 impl LiveRuntimeDomHost {
+    fn style_viewport(&self) -> crate::style_engine::StyleViewport {
+        self.viewport_surface
+            .map(crate::style_engine::StyleViewport::from_viewport_surface)
+            .unwrap_or_else(|| {
+                crate::style_engine::StyleViewport::new(
+                    Some(moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.inner_width),
+                    Some(moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.inner_height),
+                )
+                .with_screen_size(
+                    Some(moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.screen_width),
+                    Some(moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.screen_height),
+                )
+            })
+    }
+
     fn from_dom_host(dom_host: DomHost) -> Self {
-        Self { dom_host }
+        Self {
+            dom_host,
+            emulated_media: Default::default(),
+            viewport_surface: None,
+        }
     }
 
     #[track_caller]
@@ -1212,6 +1235,20 @@ impl super::planning::ParserPlanningReadView for LiveRuntimeDomHost {
 }
 
 impl super::stylesheet_blocking::StylesheetBlockingReadView for LiveRuntimeDomHost {
+    fn media_query_matches(&self, media: &str) -> bool {
+        let document = self
+            .borrow()
+            .node(self.borrow().document_handle())
+            .and_then(Node::as_document)
+            .expect("live Document");
+        crate::style_engine::media_list::evaluate_media_query_list_with_context(
+            media,
+            Some(&self.emulated_media),
+            self.style_viewport(),
+            document.base_url(),
+            document.quirks_mode(),
+        )
+    }
     fn stylesheet_element(
         &self,
         node_id: NativeNodeId,
@@ -1318,12 +1355,12 @@ mod tests {
         panic!("expected {tag_name} element in test document")
     }
 
-    fn parse_document_with_blocking_stylesheet_inputs(
+    fn parse_document_with_stylesheet_inputs(
         final_url: Url,
         html: impl Into<String>,
     ) -> (
         crate::dom::native::NativeDom,
-        Vec<crate::DocumentOwnedBlockingStylesheetDiscoveryInput>,
+        Vec<crate::DocumentOwnedStylesheetDiscoveryInput>,
     ) {
         let (document, _, inputs) =
             crate::parse_html_test_fixture_with_parser_outputs(final_url, html.into());
@@ -1367,6 +1404,51 @@ mod tests {
             ),
             Some(expected)
         );
+    }
+
+    #[test]
+    fn stylesheet_discovery_reads_the_canonical_document_media_environment() {
+        let document = HtmlParser::SCRIPTING_ENABLED.parse(
+            Url::parse("https://example.test/media").unwrap(),
+            "<!doctype html><link id=sheet rel=stylesheet href=app.css media='(min-width: 700px)'>"
+                .to_owned(),
+        );
+        let link = first_element_handle(&document, "link");
+        let mut runtime = DocumentRuntime::from_document(document);
+        let blocks = |runtime: &DocumentRuntime| {
+            crate::stylesheet_blocking::stylesheet_link_disposition(
+                &runtime.dom_host,
+                NodeId::new(link.index()),
+            )
+            .expect("a nonmatching stylesheet must still have a load operation")
+            .is_blocking()
+        };
+        assert!(blocks(&runtime));
+        runtime.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 320,
+            inner_height: 200,
+            device_pixel_ratio: 2.0,
+            ..Default::default()
+        }));
+        assert!(!blocks(&runtime));
+        runtime.dom_host.set_attribute(
+            link,
+            "media",
+            "screen and (width: 320px) and (device-width: 1920px) and (resolution: 2dppx)",
+        );
+        assert!(blocks(&runtime));
+        runtime
+            .dom_host
+            .set_attribute(link, "media", "print and (prefers-color-scheme: dark)");
+        assert!(!blocks(&runtime));
+        runtime.set_emulated_media(&crate::protocol_types::EmulatedMediaOverrides {
+            media: Some("print".into()),
+            color_scheme: Some("dark".into()),
+            ..Default::default()
+        });
+        assert!(blocks(&runtime));
+        runtime.set_emulated_media(&Default::default());
+        assert!(!blocks(&runtime));
     }
 
     #[test]
@@ -2357,8 +2439,8 @@ mod tests {
 
     #[tokio::test]
     async fn stylesheet_typed_task_is_ready_for_document_processing() {
-        let (document, blocking_stylesheet_inputs) =
-            parse_document_with_blocking_stylesheet_inputs(
+        let (document, stylesheet_inputs) =
+            parse_document_with_stylesheet_inputs(
             Url::parse("https://example.com/").unwrap(),
             "<!doctype html><html><head><link rel=stylesheet href=\"data:text/css,body%7B%7D\"></head><body></body></html>"
                 .to_owned(),
@@ -2368,9 +2450,7 @@ mod tests {
         let mut runtime = DocumentRuntime::new_networked(&document, &loader);
         let link = first_element_handle(&document, "link");
         let stylesheet_url = Url::parse("data:text/css,body%7B%7D").unwrap();
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            blocking_stylesheet_inputs.iter(),
-        );
+        runtime.note_discovered_document_owned_stylesheet_inputs(stylesheet_inputs.iter());
         runtime
             .stylesheet_lifecycle
             .fetches
@@ -2419,8 +2499,8 @@ mod tests {
 
     #[tokio::test]
     async fn stylesheet_completion_with_link_owner_surfaces_ready_parse_time_work() {
-        let (document, blocking_stylesheet_inputs) =
-            parse_document_with_blocking_stylesheet_inputs(
+        let (document, stylesheet_inputs) =
+            parse_document_with_stylesheet_inputs(
             Url::parse("https://example.com/").unwrap(),
             "<!doctype html><html><head><link rel=stylesheet href=\"data:text/css,body%7B%7D\"></head><body></body></html>"
                 .to_owned(),
@@ -2442,9 +2522,7 @@ mod tests {
             .expect("stylesheet link");
         let link_node_id = crate::dom::NodeId::new(link.index());
         let stylesheet_url = Url::parse("data:text/css,body%7B%7D").unwrap();
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            blocking_stylesheet_inputs.iter(),
-        );
+        runtime.note_discovered_document_owned_stylesheet_inputs(stylesheet_inputs.iter());
         runtime
             .stylesheet_lifecycle
             .fetches
@@ -2461,8 +2539,8 @@ mod tests {
 
     #[tokio::test]
     async fn draining_blocking_stylesheet_completion_persists_resolved_state() {
-        let (document, blocking_stylesheet_inputs) =
-            parse_document_with_blocking_stylesheet_inputs(
+        let (document, stylesheet_inputs) =
+            parse_document_with_stylesheet_inputs(
             Url::parse("https://example.com/").unwrap(),
             "<!doctype html><html><head><link rel=stylesheet href=/app.css></head><body></body></html>"
                 .to_owned(),
@@ -2470,9 +2548,7 @@ mod tests {
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut runtime = DocumentRuntime::new_networked(&document, &loader);
 
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            blocking_stylesheet_inputs.iter(),
-        );
+        runtime.note_discovered_document_owned_stylesheet_inputs(stylesheet_inputs.iter());
         assert!(!runtime.has_all_blocking_stylesheets_resolved());
 
         let node_id = NodeId::new(first_element_handle(&document, "link").index());
@@ -2515,17 +2591,15 @@ mod tests {
 
     #[tokio::test]
     async fn typed_stylesheet_claim_preserves_blocking_resolution_state() {
-        let (document, blocking_stylesheet_inputs) =
-            parse_document_with_blocking_stylesheet_inputs(
+        let (document, stylesheet_inputs) =
+            parse_document_with_stylesheet_inputs(
             Url::parse("https://example.com/").unwrap(),
             "<!doctype html><html><head><link rel=stylesheet href=/app.css></head><body></body></html>"
                 .to_owned(),
         );
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut runtime = DocumentRuntime::new_networked(&document, &loader);
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            blocking_stylesheet_inputs.iter(),
-        );
+        runtime.note_discovered_document_owned_stylesheet_inputs(stylesheet_inputs.iter());
 
         let node_id = NodeId::new(first_element_handle(&document, "link").index());
         let stylesheet_url = Url::parse("https://example.com/app.css").unwrap();
@@ -2878,17 +2952,15 @@ mod tests {
                 .unwrap();
         });
 
-        let (document, blocking_stylesheet_inputs) =
-            parse_document_with_blocking_stylesheet_inputs(
+        let (document, stylesheet_inputs) =
+            parse_document_with_stylesheet_inputs(
             Url::parse(&format!("http://{addr}/page")).unwrap(),
             "<!doctype html><html><head><link rel=stylesheet href='/app.css'><script defer src='/app.js'></script></head><body></body></html>".to_owned(),
         );
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut runtime = DocumentRuntime::new_networked(&document, &loader);
 
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            blocking_stylesheet_inputs.iter(),
-        );
+        runtime.note_discovered_document_owned_stylesheet_inputs(stylesheet_inputs.iter());
 
         let node_id = NodeId::new(first_element_handle(&document, "link").index());
         let stylesheet_url = Url::parse(&format!("http://{addr}/app.css")).unwrap();
@@ -2947,17 +3019,15 @@ mod tests {
                 .unwrap();
         });
 
-        let (document, blocking_stylesheet_inputs) =
-            parse_document_with_blocking_stylesheet_inputs(
+        let (document, stylesheet_inputs) =
+            parse_document_with_stylesheet_inputs(
             Url::parse(&format!("http://{addr}/page")).unwrap(),
             "<!doctype html><html><head><link rel=stylesheet href='/app.css'><script defer src='/app.js'></script></head><body></body></html>".to_owned(),
         );
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut runtime = DocumentRuntime::new_networked(&document, &loader);
 
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            blocking_stylesheet_inputs.iter(),
-        );
+        runtime.note_discovered_document_owned_stylesheet_inputs(stylesheet_inputs.iter());
 
         let node_id = NodeId::new(first_element_handle(&document, "link").index());
         let stylesheet_url = Url::parse(&format!("http://{addr}/app.css")).unwrap();
@@ -3042,14 +3112,14 @@ mod tests {
             script_node_id,
         )
         .into_iter()
-        .map(|blocker| crate::DocumentOwnedBlockingStylesheetDiscoveryInput::from(&blocker))
+        .map(|blocker| crate::DocumentOwnedStylesheetDiscoveryInput::from(&blocker))
         .collect::<Vec<_>>();
         assert_eq!(
             inputs.len(),
             1,
             "expected one parser-created style import blocker"
         );
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(inputs.iter());
+        runtime.note_discovered_document_owned_stylesheet_inputs(inputs.iter());
 
         let results = timeout(Duration::from_secs(2), async {
             loop {
@@ -3128,14 +3198,14 @@ mod tests {
             script_node_id,
         )
         .into_iter()
-        .map(|blocker| crate::DocumentOwnedBlockingStylesheetDiscoveryInput::from(&blocker))
+        .map(|blocker| crate::DocumentOwnedStylesheetDiscoveryInput::from(&blocker))
         .collect::<Vec<_>>();
         assert_eq!(
             inputs.len(),
             1,
             "expected one parser-created style import blocker"
         );
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(inputs.iter());
+        runtime.note_discovered_document_owned_stylesheet_inputs(inputs.iter());
 
         let results = timeout(Duration::from_secs(2), async {
             loop {
@@ -3599,8 +3669,8 @@ mod tests {
 
     #[tokio::test]
     async fn blocked_front_page_task_does_not_count_as_ready_document_processing_wake() {
-        let (document, blocking_stylesheet_inputs) =
-            parse_document_with_blocking_stylesheet_inputs(
+        let (document, stylesheet_inputs) =
+            parse_document_with_stylesheet_inputs(
             Url::parse("https://example.com/").unwrap(),
             "<!doctype html><html><head><link rel=stylesheet href=/app.css></head><body><script defer src=/app.js></script></body></html>"
                 .to_owned(),
@@ -3638,16 +3708,14 @@ mod tests {
             ),
         ]);
 
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            blocking_stylesheet_inputs.iter(),
-        );
+        runtime.note_discovered_document_owned_stylesheet_inputs(stylesheet_inputs.iter());
 
         assert!(!runtime.has_ready_document_processing_wake(&mut task_queue));
     }
 
     #[tokio::test]
     async fn open_document_resets_document_owned_lifecycle_state() {
-        let (document, blocking_stylesheet_inputs) = parse_document_with_blocking_stylesheet_inputs(
+        let (document, stylesheet_inputs) = parse_document_with_stylesheet_inputs(
             Url::parse("https://example.com/").unwrap(),
             "<!doctype html><html><body><link rel=stylesheet href=/app.css></body></html>"
                 .to_owned(),
@@ -3655,9 +3723,7 @@ mod tests {
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut runtime = DocumentRuntime::new_networked(&document, &loader);
         let handle = first_element_handle(&document, "link");
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            blocking_stylesheet_inputs.iter(),
-        );
+        runtime.note_discovered_document_owned_stylesheet_inputs(stylesheet_inputs.iter());
 
         runtime.enqueue_pending_connected_style_load_for_test(handle);
         runtime

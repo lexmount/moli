@@ -46,10 +46,10 @@ impl ScriptVm {
         }
     }
 
-    pub(crate) fn accept_main_document_blocking_stylesheet_inputs(
+    pub(crate) fn accept_main_document_stylesheet_inputs(
         &mut self,
         expected_owner: FrameDocumentTaskOwner,
-        inputs: &[crate::stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput],
+        inputs: &[crate::stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput],
     ) -> usize {
         if self.current_main_document_task_owner() != Some(expected_owner) {
             tracing::debug!(
@@ -62,7 +62,7 @@ impl ScriptVm {
         }
         let completed_stylesheet_clients = self
             .document_runtime
-            .note_discovered_document_owned_blocking_stylesheet_inputs(inputs.iter());
+            .note_discovered_document_owned_stylesheet_inputs(inputs.iter());
         self.settle_stylesheet_link_clients(completed_stylesheet_clients);
         inputs.len()
     }

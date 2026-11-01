@@ -72,7 +72,7 @@ pub(crate) use self::frame_parser_deferred_order::{
     FrameParserDeferredScriptKind, FrameParserDeferredScriptOrderEntry,
     FrameParserDeferredScriptOrderStore,
 };
-pub(crate) use self::frame_stylesheet::FrameDocumentBlockingStylesheetStore;
+pub(crate) use self::frame_stylesheet::FrameDocumentStylesheetStore;
 pub(crate) use self::main_document_ready::{
     MainDocumentClassicReadyWork, MainDocumentClassicScriptTarget,
     MainDocumentClassicSourceFailureWork, MainDocumentReadyActionRoute,

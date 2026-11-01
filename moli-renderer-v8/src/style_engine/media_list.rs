@@ -31,6 +31,10 @@ pub(crate) fn evaluate_media_query_list_with_context(
     quirks_mode: QuirksMode,
 ) -> bool {
     crate::style_engine::ensure_stylo_browser_compat_prefs();
+    if media_text.is_empty() {
+        return true;
+    }
+
     let environment = emulated_media
         .map(StyloStyleEnvironment::from_emulated_media)
         .unwrap_or_default();

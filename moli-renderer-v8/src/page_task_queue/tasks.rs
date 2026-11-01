@@ -5,7 +5,7 @@ use crate::{
     frame_owner_model::FrameDocumentTaskOwner,
     host::ScriptEventTask,
     planning::PreparedScript,
-    stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput,
+    stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput,
     types::ScriptErrorConstructorKind,
     types::ScriptRun,
 };
@@ -135,7 +135,7 @@ impl ContentSecurityPolicyViolationEventTask {
 // surface and can be unconstructed in focused test binaries.
 #[derive(Debug)]
 pub(crate) enum PageTask {
-    SeedDocumentOwnedBlockingStylesheets(Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>),
+    SeedDocumentOwnedBlockingStylesheets(Vec<DocumentOwnedStylesheetDiscoveryInput>),
     RecordDocumentScriptRun { position: usize, run: ScriptRun },
     DispatchContentSecurityPolicyViolation(ContentSecurityPolicyViolationEventTask),
     DispatchScriptEvent(ScriptEventTask),

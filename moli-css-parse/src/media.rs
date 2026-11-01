@@ -66,6 +66,9 @@ pub fn screen_media_query_matches(
     screen: (f32, f32),
     pixel_ratio: f32,
 ) -> bool {
+    if media_text.is_empty() {
+        return true;
+    }
     let quirks_mode = if quirks_mode {
         QuirksMode::Quirks
     } else {

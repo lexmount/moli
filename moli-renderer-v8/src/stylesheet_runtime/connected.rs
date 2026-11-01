@@ -2324,12 +2324,12 @@ mod tests {
             .expect("link handle")
     }
 
-    fn parse_document_with_blocking_stylesheet_inputs(
+    fn parse_document_with_stylesheet_inputs(
         final_url: Url,
         html: impl Into<String>,
     ) -> (
         crate::dom::native::NativeDom,
-        Vec<crate::DocumentOwnedBlockingStylesheetDiscoveryInput>,
+        Vec<crate::DocumentOwnedStylesheetDiscoveryInput>,
     ) {
         let (document, _, inputs) =
             crate::parse_html_test_fixture_with_parser_outputs(final_url, html.into());
@@ -4087,7 +4087,7 @@ mod tests {
     #[tokio::test]
     async fn queued_connected_admission_reuses_parser_bound_terminal_client() {
         let stylesheet_url = Url::parse("data:text/css,body{}").unwrap();
-        let (document, blocking_stylesheet_inputs) = parse_document_with_blocking_stylesheet_inputs(
+        let (document, stylesheet_inputs) = parse_document_with_stylesheet_inputs(
             Url::parse("https://example.test/page").unwrap(),
             format!(
                 "<!doctype html><html><head><link rel=\"stylesheet\" href=\"{stylesheet_url}\"></head><body></body></html>"
@@ -4111,9 +4111,8 @@ mod tests {
         assert!(runtime.apply_next_stylesheet_networking_task_for_test());
         assert!(speculative.terminal().is_some());
 
-        let completed_clients = runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            blocking_stylesheet_inputs.iter(),
-        );
+        let completed_clients =
+            runtime.note_discovered_document_owned_stylesheet_inputs(stylesheet_inputs.iter());
         assert_eq!(completed_clients.len(), 1);
         assert_eq!(completed_clients[0].load().owner(), link);
         let parser_client = runtime
@@ -4244,7 +4243,7 @@ mod tests {
 
         let document_url = Url::parse(&format!("http://{addr}/page.html")).unwrap();
         let stylesheet_url = document_url.join("/missing.css").unwrap();
-        let (document, blocking_stylesheet_inputs) = parse_document_with_blocking_stylesheet_inputs(
+        let (document, stylesheet_inputs) = parse_document_with_stylesheet_inputs(
             document_url,
             "<!doctype html><html><head>\
              <link rel=\"stylesheet\" href=\"/missing.css\">\
@@ -4271,12 +4270,11 @@ mod tests {
                 .is_some_and(|terminal| !terminal.is_ready())
         );
 
-        let completed_clients = runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            blocking_stylesheet_inputs.iter(),
-        );
+        let completed_clients =
+            runtime.note_discovered_document_owned_stylesheet_inputs(stylesheet_inputs.iter());
         assert_eq!(completed_clients.len(), 1);
         assert_eq!(completed_clients[0].load().owner(), link);
-        let signatures = blocking_stylesheet_inputs
+        let signatures = stylesheet_inputs
             .iter()
             .map(|input| input.signature().clone())
             .collect::<Vec<_>>();

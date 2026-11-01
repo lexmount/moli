@@ -12,7 +12,7 @@ use crate::subresource_integrity::response_matches_subresource_integrity_metadat
 use crate::types::{AsyncSubresourceFetchResponseFilter, SubresourceResourceType};
 
 pub(crate) use moli_stylesheet_blocking::{
-    DocumentBlockingStylesheetSignature, DocumentOwnedBlockingStylesheetDiscoveryInput,
+    DocumentBlockingStylesheetSignature, DocumentOwnedStylesheetDiscoveryInput,
     StylesheetBlockingOperation, StylesheetBlockingReadView, StylesheetBlockingState,
     StylesheetBlockingStatus, StylesheetCompletion, StylesheetElementRead, StylesheetFetch,
     StylesheetFetchIdentity, StylesheetFetchOptions, StylesheetFetchTerminal, StylesheetFetcher,
