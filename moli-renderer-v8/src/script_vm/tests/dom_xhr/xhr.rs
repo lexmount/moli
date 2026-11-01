@@ -4495,3 +4495,112 @@ fn xml_http_request_rewrites_only_utf8_text_body_charsets() {
     })
     .unwrap();
 }
+
+#[test]
+fn xml_http_request_serializes_native_document_bodies_without_public_properties() {
+    let mut vm = new_storage_test_vm("https://xhr-body-preparation.test/");
+    vm.eval(r#"globalThis.__xhrBodyFixtures = (() => {
+                    const xml = document.implementation.createDocument('urn:test', 'root');
+                    xml.documentElement.textContent = 'caf\u00e9\ud800';
+                    const html = document.implementation.createHTMLDocument();
+                    html.body.innerHTML = '<p>caf\u00e9 &amp;<br></p><template><b>x</b></template>';
+                    const empty = document.implementation.createDocument(null, null);
+                    const bogus = document.implementation.createDocument(null, null);
+                    const element = bogus.createElement('test:test');
+                    element.setAttribute('x', '\ud800');
+                    bogus.appendChild(element);
+                    const xhtml = new DOMParser().parseFromString('<html xmlns="http://www.w3.org/1999/xhtml"><br/></html>', 'application/xhtml+xml');
+                    for (const doc of [xml, html, empty, bogus, xhtml]) {
+                        Object.defineProperties(doc, {
+                            toString: {value() { throw new Error('Document toString'); }},
+                            contentType: {get() { throw new Error('Document contentType'); }},
+                            nodeType: {get() { throw new Error('Document nodeType'); }},
+                        });
+                    }
+                    const ordinaryElement = document.createElement('div');
+                    ordinaryElement.toString = () => 'element text';
+                    const spoof = {nodeType: 9, toString() { return 'ordinary text'; }};
+                    const form = new FormData();
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('POST', '/');
+                    xhr.setRequestHeader('Content-Type', 'Text/Plain; Charset=ASCII;keep="alpha;beta"');
+                    return [xhr, [
+                        [xml, '<root xmlns="urn:test">caf\u00e9\ufffd</root>', 'application/xml;charset=UTF-8', true],
+                        [html, '<!DOCTYPE html><html><head></head><body><p>caf\u00e9 &amp;<br></p><template><b>x</b></template></body></html>', 'text/html;charset=UTF-8', true],
+                        [empty, '', 'application/xml;charset=UTF-8', true],
+                        [bogus, '<test:test x="\ufffd"/>', 'application/xml;charset=UTF-8', true],
+                        [xhtml, '<html xmlns="http://www.w3.org/1999/xhtml"><br /></html>', 'application/xml;charset=UTF-8', true],
+                        [ordinaryElement, 'element text', 'text/plain;charset=UTF-8', true],
+                        [spoof, 'ordinary text', 'text/plain;charset=UTF-8', true],
+                        ['caf\u00e9\ud800', 'caf\u00e9\ufffd', 'text/plain;charset=UTF-8', true],
+                        ['', '', 'text/plain;charset=UTF-8', true],
+                        [new URLSearchParams({q: 'caf\u00e9'}), 'q=caf%C3%A9', 'application/x-www-form-urlencoded;charset=UTF-8', true],
+                        [new Blob(['bytes'], {type: 'text/plain;charset=ascii'}), 'bytes', 'text/plain;charset=ascii', false],
+                        [new Uint8Array([65, 66]), 'AB', null, false],
+                        [null, null, null, false],
+                        [form, undefined, undefined, false],
+                    ]];
+                })(); 'ready'"#).unwrap();
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let fixtures = global
+            .get(scope, crate::util::v8str(scope, "__xhrBodyFixtures").into())
+            .unwrap();
+        let fixtures = v8::Local::<v8::Array>::try_from(fixtures).expect("body fixture array");
+        let xhr_value = fixtures.get_index(scope, 0).expect("xhr fixture");
+        let xhr = v8::Local::<v8::Object>::try_from(xhr_value).expect("xhr object");
+        let cases_value = fixtures.get_index(scope, 1).expect("body cases");
+        let cases = v8::Local::<v8::Array>::try_from(cases_value).expect("body cases array");
+        for index in 0..cases.length() {
+            let case = cases.get_index(scope, index).expect("body case");
+            let case = v8::Local::<v8::Array>::try_from(case).expect("body case array");
+            let body = case.get_index(scope, 0).expect("body value");
+            let prepared = crate::network_host::prepare_xhr_send_body(scope, body)
+                .expect("prepare body without observing Document properties");
+            let expected_bytes = case.get_index(scope, 1).expect("expected bytes");
+            let expected_type = case.get_index(scope, 2).expect("expected type");
+            let rewrite = case.get_index(scope, 3).expect("charset policy").is_true();
+            if expected_bytes.is_null() {
+                assert!(prepared.body.is_none());
+            } else if !expected_bytes.is_undefined() {
+                let expected = expected_bytes
+                    .to_string(scope)
+                    .unwrap()
+                    .to_rust_string_lossy(scope);
+                assert_eq!(
+                    prepared.body.as_deref(),
+                    Some(expected.as_bytes()),
+                    "case {index}"
+                );
+            }
+            if expected_type.is_null() {
+                assert!(prepared.default_content_type.is_none());
+            } else if !expected_type.is_undefined() {
+                let expected = expected_type
+                    .to_string(scope)
+                    .unwrap()
+                    .to_rust_string_lossy(scope);
+                assert_eq!(
+                    prepared.default_content_type.as_deref(),
+                    Some(expected.as_str()),
+                    "case {index}"
+                );
+            }
+            let headers = crate::network_host::xhr_author_request_headers(scope, xhr, &prepared);
+            assert_eq!(
+                headers,
+                [(
+                    "Content-Type".to_owned(),
+                    if rewrite {
+                        "text/plain;charset=UTF-8;keep=\"alpha;beta\"".to_owned()
+                    } else {
+                        "Text/Plain; Charset=ASCII;keep=\"alpha;beta\"".to_owned()
+                    }
+                )],
+                "case {index}"
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+}
