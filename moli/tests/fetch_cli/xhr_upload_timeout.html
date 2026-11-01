@@ -2,6 +2,10 @@
 <body>
 <script>
 async function probeUploads(scope, base, pendingOrigin) {
+  function blockOwner(milliseconds) {
+    const until = performance.now() + milliseconds;
+    while (performance.now() < until) {}
+  }
   const cases = [
     {name: 'timeout before first report', timeout: 30, head: 500, pending: true, expected: 'timeout'},
     {name: 'busy before first report', timeout: 50, head: 500, busy: 80, pending: true, expected: 'timeout'},
@@ -16,12 +20,14 @@ async function probeUploads(scope, base, pendingOrigin) {
     {name: 'absent body success', bytes: null, timeout: 0, head: 150, expected: 'load'},
     {name: 'disable elapsed timeout', timeout: 30, head: 300, busy: 150, after: 0, complete: true, expected: 'load'},
     {name: 'author abort discards queued completion', timeout: 0, head: 500, busy: 150, abort: true, expected: 'abort'},
-    // Do not require a real HTTP response to win a 10 ms scheduling window.
-    // The native upload/timeout regression covers an already-expired timer;
-    // transport tests separately gate response-start and periodic reports.
-    {name: 'upload microtask disables timeout with early headers', timeout: 500, head: 20, body: 1500, busy: 800, afterUpload: 0, complete: true, expected: 'load'},
-    {name: 'upload microtask disables timeout while response is held', timeout: 500, head: 1500, busy: 800, afterUpload: 0, complete: true, expected: 'load'},
-    {name: 'upload microtask extends timeout', timeout: 500, head: 20, body: 1500, busy: 800, afterUpload: 5000, complete: true, expected: 'load'}
+    // Admit the real upload task before arming its timeout. The progress
+    // handler then holds the owner past that deadline, so the loadend
+    // microtask must retire it before the next timer task. This avoids
+    // requiring the transport to report within a fixed scheduling window.
+    // A native regression separately covers a timer due before task admission.
+    {name: 'upload microtask disables timeout with early headers', timeout: 0, uploadTimeout: 500, head: 20, body: 1500, busyAfterUpload: 800, afterUpload: 0, complete: true, expected: 'load'},
+    {name: 'upload microtask disables timeout while response is held', timeout: 0, uploadTimeout: 500, head: 1500, busyAfterUpload: 800, afterUpload: 0, complete: true, expected: 'load'},
+    {name: 'upload microtask extends timeout', timeout: 0, uploadTimeout: 500, head: 20, body: 1500, busyAfterUpload: 800, afterUpload: 5000, complete: true, expected: 'load'}
   ];
   const facts = [];
   for (const config of cases) {
@@ -42,6 +48,10 @@ async function probeUploads(scope, base, pendingOrigin) {
         xhr.addEventListener(type, () => { outcome = type; });
       }
       if ('afterUpload' in config) {
+        xhr.upload.addEventListener('progress', () => {
+          xhr.timeout = config.uploadTimeout;
+          blockOwner(config.busyAfterUpload);
+        }, {once: true});
         xhr.upload.addEventListener('loadend', () => Promise.resolve().then(() => {
           xhr.timeout = config.afterUpload;
         }));
@@ -78,8 +88,7 @@ async function probeUploads(scope, base, pendingOrigin) {
       xhr.open('POST', target + '/upload?head=' + config.head + '&body=' + (config.body || 0));
       xhr.timeout = config.timeout;
       xhr.send(bytes === null ? null : bytes === 0 ? '' : 'Test Message');
-      const until = performance.now() + (config.busy || 0);
-      while (performance.now() < until) {}
+      blockOwner(config.busy || 0);
       if ('after' in config) xhr.timeout = config.after;
       if (config.abort) xhr.abort();
     });
