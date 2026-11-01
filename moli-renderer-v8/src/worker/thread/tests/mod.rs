@@ -5,6 +5,7 @@ mod error_reporting_guard;
 mod geometry_matrix_constructor_union;
 #[cfg(feature = "devtools")]
 mod indexed_db_gc;
+mod worker_embedder_policy;
 
 mod exception_constructor_strings;
 mod native_exception_data;

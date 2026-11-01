@@ -3,6 +3,7 @@ mod baseline_drag_views;
 mod beforeinput_target_validation;
 mod fetch_cache_modes;
 mod selection_worlds;
+mod worker_embedder_policy;
 
 mod child_document_web_fonts;
 mod constructor_entry;

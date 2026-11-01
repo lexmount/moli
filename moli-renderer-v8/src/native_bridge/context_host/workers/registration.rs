@@ -16,7 +16,8 @@ use crate::structured_clone::V8StructuredClonePayload;
 use crate::types::{DedicatedWorkerId, SubresourcePolicyContext};
 use crate::worker::{
     WorkerGlobalKind, WorkerHandle, WorkerNetworkPolicy, WorkerRuntimeEvent, WorkerScriptKind,
-    WorkerScriptSource, WorkerSecureContextPolicy, WorkerSpawnOptions, spawn_worker_with_options,
+    WorkerScriptSource, WorkerSecureContextPolicy, WorkerSpawnOptions,
+    dedicated_worker_policy_context_from_headers, spawn_worker_with_options,
 };
 use moli_storage_key::MoliStorageKey;
 use url::Url;
@@ -347,6 +348,7 @@ impl PageScriptHost {
                             response_referrer_policy: loaded.response_referrer_policy,
                             network_partition_key: loaded.network_partition_key,
                             policy_context: loaded.policy_context,
+                            creator_policy_context,
                             content_security_policies: loaded.content_security_policies,
                             content_security_report_only_policies: loaded
                                 .content_security_report_only_policies,
@@ -452,6 +454,18 @@ impl PageScriptHost {
                 false
             }
         }
+    }
+
+    pub(crate) fn loading_worker_can_start(&self, worker_id: DedicatedWorkerId) -> bool {
+        self.workers.get(&worker_id).is_some_and(|state| {
+            matches!(
+                state.execution,
+                WorkerExecutionState::Loading {
+                    terminated: false,
+                    ..
+                }
+            )
+        })
     }
 
     pub(crate) fn finish_loading_worker(
@@ -566,7 +580,6 @@ impl PageScriptHost {
         )
         .with_interception_context(self.dedicated_worker_interception_context(worker_id))
         .with_resource_task_runner(resource_task_runner)
-
         .with_script_kind(script_kind)
         .with_module_credentials_mode(module_credentials_mode)
         .with_referrer_policy(response_referrer_policy)
@@ -1343,24 +1356,6 @@ fn loaded_worker_script_from_navigation_response(
         content_security_reporting_endpoints,
         network_response: response,
     })
-}
-
-fn dedicated_worker_policy_context_from_headers(
-    headers: &[(String, Vec<u8>)],
-    creator_policy_context: SubresourcePolicyContext,
-) -> SubresourcePolicyContext {
-    SubresourcePolicyContext {
-        cross_origin_embedder_policy:
-            crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers),
-        cross_origin_embedder_policy_report_only:
-            crate::cross_origin_isolation::cross_origin_embedder_policy_report_only_from_headers(
-                headers,
-            ),
-        // Chromium's DedicatedWorkerHost currently keeps Document-Isolation-Policy
-        // aligned with the creator while deriving the worker COEP from the script response.
-        document_isolation_policy: creator_policy_context.document_isolation_policy,
-        cross_origin_isolated: creator_policy_context.cross_origin_isolated,
-    }
 }
 
 #[cfg(test)]
