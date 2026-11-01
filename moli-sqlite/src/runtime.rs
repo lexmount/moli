@@ -3,6 +3,7 @@
 use std::{
     fmt,
     future::Future,
+    pin::Pin,
     sync::{Arc, mpsc},
 };
 
@@ -147,6 +148,15 @@ impl RuntimeHandle {
     pub fn spawn(
         &self,
         task: impl Future<Output = ()> + Send + 'static,
+    ) -> Result<(), RuntimeError> {
+        // Share Tokio's task machinery across owner loops. Individual blocking
+        // SQL operations retain their concrete types.
+        self.spawn_task(Box::pin(task))
+    }
+
+    fn spawn_task(
+        &self,
+        task: Pin<Box<dyn Future<Output = ()> + Send>>,
     ) -> Result<(), RuntimeError> {
         let mut tasks = self.tasks.lock();
         if tasks.closed {
