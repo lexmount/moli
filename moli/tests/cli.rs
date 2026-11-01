@@ -665,6 +665,8 @@ fn infers_serve_mode_when_called_without_args() {
     assert_eq!(
         cli.command,
         Commands::Serve(Box::new(ServeArgs {
+            #[cfg(unix)]
+            remote_debugging_pipe: false,
             debugger: false,
             host: "127.0.0.1".to_owned(),
             port: 9222,
@@ -692,6 +694,8 @@ fn parses_serve_flags_with_explicit_command() {
     assert_eq!(
         cli.command,
         Commands::Serve(Box::new(ServeArgs {
+            #[cfg(unix)]
+            remote_debugging_pipe: false,
             debugger: false,
             host: "0.0.0.0".to_owned(),
             port: 9333,
@@ -700,6 +704,31 @@ fn parses_serve_flags_with_explicit_command() {
             common: CommonArgs::default(),
         }))
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn parses_remote_debugging_pipe_and_rejects_listener_flags() {
+    let cli = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "serve",
+        "--remote-debugging-pipe",
+    ]))
+    .unwrap();
+    let Commands::Serve(args) = cli.command else {
+        panic!("expected serve command");
+    };
+    assert!(args.remote_debugging_pipe);
+
+    for listener in [["--port", "9333"], ["--host", "0.0.0.0"]] {
+        let error = Cli::try_parse_from(normalize_args_for_compat(
+            ["moli", "serve", "--remote-debugging-pipe"]
+                .into_iter()
+                .chain(listener),
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
 }
 
 #[test]

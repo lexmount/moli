@@ -36,6 +36,8 @@ pub use instance_control::{BrowserInstanceControl, InstanceCommand};
 mod cdp;
 mod cdp_agent_host;
 mod cdp_owner;
+#[cfg(unix)]
+mod cdp_pipe;
 mod cdp_socket;
 mod instance_control;
 mod instance_shutdown;
@@ -171,9 +173,11 @@ impl ProtocolServer {
     }
 }
 
+/// Upper bound on draining and flushing one instance after it is asked to stop.
+const SHUTDOWN_BUDGET: Duration = Duration::from_secs(5);
+
 /// Shared by the executable and instance-lifecycle integration tests.
 async fn serve_listener(listener: TcpListener, app_state: AppState) -> Result<()> {
-    const SHUTDOWN_BUDGET: Duration = Duration::from_secs(5);
     let control = app_state.control.clone();
     let cdp_owner_registry = app_state.cdp_owner_registry.clone();
     let classic_session_registry = app_state.classic_session_registry.clone();

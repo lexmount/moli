@@ -181,7 +181,10 @@ moli serve --layout --resource
 ```
 
 The same endpoint serves all three protocols: CDP, WebDriver Classic, and
-WebDriver BiDi. Playwright can connect directly over CDP:
+WebDriver BiDi. On Unix, a parent process that wants a private CDP session with
+no listening socket can instead pass `--remote-debugging-pipe`, as with
+Chromium: it writes NUL-terminated JSON messages to file descriptor 3 and reads
+replies from file descriptor 4. Playwright can connect directly over CDP:
 
 ```js
 import { chromium } from "playwright";
