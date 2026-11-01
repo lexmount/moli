@@ -1041,6 +1041,8 @@ impl From<moli_fetch::PreloadResponseFilter> for AsyncSubresourceFetchResponseFi
 pub(crate) struct SubresourcePolicyContext {
     pub(super) cross_origin_embedder_policy:
         crate::cross_origin_isolation::CrossOriginEmbedderPolicy,
+    pub(super) cross_origin_embedder_policy_report_only:
+        crate::cross_origin_isolation::CrossOriginEmbedderPolicy,
     pub(super) document_isolation_policy: crate::cross_origin_isolation::DocumentIsolationPolicy,
     pub(super) cross_origin_isolated: bool,
 }
@@ -1049,6 +1051,8 @@ impl SubresourcePolicyContext {
     pub(super) fn from_document_policy(policy: &DocumentPolicyContainer) -> Self {
         Self {
             cross_origin_embedder_policy: policy.cross_origin_embedder_policy,
+            cross_origin_embedder_policy_report_only: policy
+                .cross_origin_embedder_policy_report_only,
             document_isolation_policy: policy.document_isolation_policy,
             cross_origin_isolated: policy.cross_origin_isolated
                 && policy.allows_cross_origin_isolation(),

@@ -32,6 +32,7 @@ use crate::webidl;
 mod bucket_maintenance;
 mod cache_add;
 mod cache_query;
+mod cache_response_policy;
 mod cache_results;
 use moli_storage_service::StorageBucketCacheName;
 mod legacy_storage_quota;
@@ -1305,6 +1306,10 @@ fn storage_bucket_cache_storage_match_callback<'s>(
     });
     match matched {
         Some(Some(Some(response))) => {
+            if let Err(message) = cache_response_policy::validate(scope, &response) {
+                reject_type_error(scope, resolver, message);
+                return;
+            }
             let Some(response) = build_storage_bucket_cached_response_object(scope, response)
             else {
                 reject_type_error(
@@ -1769,6 +1774,10 @@ fn storage_bucket_cache_match_callback<'s>(
     });
     match matched {
         Some(Some(Some(response))) => {
+            if let Err(message) = cache_response_policy::validate(scope, &response) {
+                reject_type_error(scope, resolver, message);
+                return;
+            }
             let Some(response) = build_storage_bucket_cached_response_object(scope, response)
             else {
                 reject_type_error(scope, resolver, "Cache.match failed to build a Response.");
@@ -1830,6 +1839,10 @@ fn storage_bucket_cache_match_all_callback<'s>(
         Some(Some(matches)) => {
             let mut values = Vec::with_capacity(matches.len());
             for matched in matches {
+                if let Err(message) = cache_response_policy::validate(scope, &matched.response) {
+                    reject_type_error(scope, resolver, message);
+                    return;
+                }
                 let Some(response) =
                     build_storage_bucket_cached_response_object(scope, matched.response)
                 else {

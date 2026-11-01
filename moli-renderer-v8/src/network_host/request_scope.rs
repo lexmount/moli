@@ -51,6 +51,9 @@ pub(crate) fn effective_subresource_policy_context(
     let policy = match owner {
         crate::native_bridge::OwnerDispatchScope::Top => crate::types::SubresourcePolicyContext {
             cross_origin_embedder_policy: host.cross_origin_embedder_policy(),
+            cross_origin_embedder_policy_report_only: host
+                .document_policy_container()
+                .cross_origin_embedder_policy_report_only,
             document_isolation_policy: host.document_isolation_policy(),
             cross_origin_isolated: host.cross_origin_isolated(),
         },
@@ -63,6 +66,10 @@ pub(crate) fn effective_subresource_policy_context(
             crate::types::SubresourcePolicyContext {
                 cross_origin_embedder_policy: host
                     .lightweight_popup_cross_origin_embedder_policy(popup_id),
+                cross_origin_embedder_policy_report_only: host
+                    .lightweight_popup_policy_container(popup_id)
+                    .map(|policy| policy.cross_origin_embedder_policy_report_only)
+                    .unwrap_or_default(),
                 document_isolation_policy: host
                     .lightweight_popup_document_isolation_policy(popup_id),
                 cross_origin_isolated: host.lightweight_popup_cross_origin_isolated(popup_id),
