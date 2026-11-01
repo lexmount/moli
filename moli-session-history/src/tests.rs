@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn restored_contexts_require_readmission_only_when_the_transition_changes() {
+    let mut history = JointSessionHistory::default();
+    let root = SessionHistoryContextId::ROOT;
+    let child = SessionHistoryContextId::allocate();
+    history.attach(root, None, entry("top", "top"));
+    history.attach(child, Some(root), entry("child-0", "child"));
+    let first = history.current_step();
+    history.push(child, entry("child-1", "child"));
+    let second = history.current_step();
+    let saved = history.context_entries(child);
+    history.detach(child);
+    let stale = history.plan_traversal(first).unwrap();
+
+    history.restore_context(child, root, &saved);
+    let restored = history.clone();
+    assert_eq!(history.commit_traversal(&stale), None);
+    assert_eq!(
+        history, restored,
+        "failed admission must preserve restored entries"
+    );
+    let plan = history.plan_traversal(first).unwrap();
+    assert_eq!(history.commit_traversal(&plan), Some(-1));
+    assert_eq!(history.entry(child), Some(&entry("child-0", "child")));
+
+    let forward = history.plan_traversal(second).unwrap();
+    let stable = SessionHistoryContextId::allocate();
+    history.restore_context(
+        stable,
+        root,
+        &[
+            (first, entry("stable", "stable")),
+            (second, entry("stable", "stable")),
+        ],
+    );
+    assert_eq!(history.commit_traversal(&forward), Some(1));
+    assert_eq!(history.entry(child), Some(&entry("child-1", "child")));
+    assert_eq!(history.entry(stable), Some(&entry("stable", "stable")));
+}
+
+#[test]
 fn traversal_plan_contains_the_entire_mixed_transition_in_either_context_order() {
     for cross_created_first in [true, false] {
         let mut history = JointSessionHistory::default();
