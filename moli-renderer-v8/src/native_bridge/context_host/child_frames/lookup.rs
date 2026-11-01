@@ -59,6 +59,11 @@ impl JsContextHost {
         document: DomHandle,
         out: &mut Vec<DomHandle>,
     ) {
+        // This query only projects already-created contexts. Candidate
+        // discovery below cannot contribute a handle when that set is empty.
+        if self.child_browsing_contexts.is_empty() {
+            return;
+        }
         let mut visited_documents = HashSet::new();
         let mut visited_handles = HashSet::new();
         self.collect_child_browsing_context_handles_in_document_order_from_document_inner(
