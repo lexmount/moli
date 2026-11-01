@@ -4,6 +4,7 @@ mod dom_exception_stacks;
 mod error_reporting_guard;
 mod geometry_matrix_constructor_union;
 mod indexed_db_gc;
+mod worker_embedder_policy;
 
 mod native_exception_data;
 

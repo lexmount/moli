@@ -335,6 +335,30 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             if resolved_url.scheme() == "data" {
                 worker_policy_context.cross_origin_isolated = false;
             }
+            // Local scripts inherit enforced COEP, but a report-only creator
+            // with unsafe-none still reports the inheritance violation.
+            if creator_policy_context
+                .cross_origin_embedder_policy_report_only
+                .enables_cross_origin_isolation()
+                && !worker_policy_context
+                    .cross_origin_embedder_policy
+                    .enables_cross_origin_isolation()
+            {
+                let owner_url =
+                    crate::context_bootstrap::worker_creator_document_url(host, dispatch_scope)
+                        .expect("current Worker creator document");
+                let allowed = crate::context_bootstrap::check_dedicated_worker_embedder_policy(
+                    scope,
+                    creator_policy_context,
+                    worker_policy_context.cross_origin_embedder_policy,
+                    &owner_url,
+                    &resolved_url,
+                );
+                debug_assert!(
+                    allowed,
+                    "local scripts inherit their creator's enforced COEP"
+                );
+            }
             let mut options = WorkerSpawnOptions::new_with_request_client(
                 script_source,
                 resolved_url.to_string(),
@@ -534,6 +558,23 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 return;
             }
         };
+        let loaded_url = Url::parse(&loaded.script_url).expect("native Worker script URL");
+        if !crate::context_bootstrap::check_dedicated_worker_embedder_policy(
+            scope,
+            nested_context.policy_context,
+            loaded.policy_context.cross_origin_embedder_policy,
+            &nested_context.base_url,
+            &loaded_url,
+        ) {
+            queue_nested_worker_script_load_error(
+                scope,
+                worker,
+                &nested_context,
+                &resolved_url,
+                "Worker script was blocked by Cross-Origin-Embedder-Policy.".to_owned(),
+            );
+            return;
+        }
         let mut network_policy = nested_context.network_policy.clone();
         network_policy.secure_context =
             Url::parse(&loaded.script_url)
@@ -550,7 +591,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 &nested_context,
                 network_policy.secure_context,
             );
-        let mut worker_policy_context = nested_context.policy_context;
+        let mut worker_policy_context = loaded.policy_context;
         if resolved_url.scheme() == "data" {
             worker_policy_context.cross_origin_isolated = false;
         }
@@ -878,6 +919,7 @@ struct LoadedNestedWorkerScript {
     source: String,
     content_security_policy: crate::content_security_policy::InheritedContentSecurityPolicy,
     referrer_policy: Option<String>,
+    policy_context: crate::types::SubresourcePolicyContext,
 }
 
 fn materialize_nested_worker_script_source(
@@ -907,6 +949,7 @@ fn materialize_nested_worker_script_source(
             source,
             content_security_policy,
             referrer_policy,
+            policy_context: context.policy_context,
         });
     }
     let loader = context.loader.clone();
@@ -945,6 +988,10 @@ fn materialize_nested_worker_script_source(
         response.body_bytes(),
     )?;
     let (head, body) = response.into_text_parts();
+    let policy_context = crate::worker::dedicated_worker_policy_context_from_headers(
+        &head.headers,
+        context.policy_context,
+    );
     let referrer_policy =
         crate::referrer_policy::response_referrer_policy_from_headers(&head.headers);
     let policy = crate::content_security_policy::InheritedContentSecurityPolicy {
@@ -970,6 +1017,7 @@ fn materialize_nested_worker_script_source(
         source: body,
         content_security_policy: policy,
         referrer_policy,
+        policy_context,
     })
 }
 

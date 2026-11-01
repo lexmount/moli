@@ -276,3 +276,46 @@ fn reporting_records_use_hidden_native_prototypes_and_immutable_json_snapshots()
       return 'true';
     })()"#).unwrap(),"true");
 }
+
+#[test]
+fn worker_startup_reports_wait_for_late_observer_registration_and_checkpoint() {
+    use crate::cross_origin_isolation::CrossOriginEmbedderPolicy as Coep;
+    let mut vm = new_storage_page_task_executor_test_vm("https://queued-report.test/");
+    let context = &vm.page_default_runtime.context as *const _;
+    let allowed = vm
+        .with_context_scope_by_ptr_and_checkpoint_for_test(context, |scope, _| {
+            Ok(
+                crate::context_bootstrap::check_dedicated_worker_embedder_policy(
+                    scope,
+                    crate::types::SubresourcePolicyContext {
+                        cross_origin_embedder_policy: Coep::RequireCorp,
+                        cross_origin_embedder_policy_report_only: Coep::Credentialless,
+                        ..Default::default()
+                    },
+                    Coep::None,
+                    &Url::parse("https://queued-report.test/").unwrap(),
+                    &Url::parse("https://user:password@queued-report.test/worker.js#fragment")
+                        .unwrap(),
+                ),
+            )
+        })
+        .unwrap();
+    assert!(!allowed);
+    vm.eval("globalThis.order=['sync'];globalThis.reports=[];const observer=new ReportingObserver(list=>{order.push('report');reports.push(...list.map(r=>r.toJSON()));});observer.observe();Promise.resolve().then(()=>order.push('microtask'));").unwrap();
+    assert_eq!(vm.eval("reports.length").unwrap(), "0");
+    drain_reporting_tasks(&mut vm);
+    assert_eq!(
+        vm.eval("order.slice(0,2).join(',')").unwrap(),
+        "sync,microtask"
+    );
+    let reports: Vec<serde_json::Value> =
+        serde_json::from_str(&vm.eval("JSON.stringify(reports)").unwrap()).unwrap();
+    assert_eq!(reports.len(), 2);
+    for (report, disposition) in reports.iter().zip(["reporting", "enforce"]) {
+        assert_eq!(report["url"], "https://queued-report.test/");
+        assert_eq!(
+            report["body"],
+            serde_json::json!({"type":"worker initialization","blockedURL":"https://queued-report.test/worker.js","disposition":disposition})
+        );
+    }
+}

@@ -93,7 +93,9 @@ pub(crate) use module_mime::{
     ensure_worker_css_module_mime, ensure_worker_json_module_mime, ensure_worker_wasm_module_mime,
 };
 pub(crate) use module_runtime::worker_wasm_instance_for_namespace;
-pub(crate) use script_loading::ensure_worker_script_redirect_chain_same_origin;
+pub(crate) use script_loading::{
+    dedicated_worker_policy_context_from_headers, ensure_worker_script_redirect_chain_same_origin,
+};
 pub(crate) use script_mime::{
     ensure_worker_script_mime_acceptable, worker_response_has_webassembly_mime,
 };

@@ -92,6 +92,7 @@ pub(crate) enum RendererDedicatedWorkerClientEvent {
         response_referrer_policy: Option<String>,
         network_partition_key: Option<String>,
         policy_context: SubresourcePolicyContext,
+        creator_policy_context: SubresourcePolicyContext,
         content_security_policies: Vec<ContentSecurityPolicy>,
         content_security_report_only_policies: Vec<ContentSecurityPolicy>,
         content_security_reporting_endpoints:

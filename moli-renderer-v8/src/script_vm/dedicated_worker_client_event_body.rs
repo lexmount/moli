@@ -35,6 +35,88 @@ struct AuthorizedWorkerWrapperTarget<'s> {
 }
 
 impl ScriptVm {
+    fn apply_dedicated_worker_startup_policy(
+        &mut self,
+        owner: crate::page_task_queue::RendererPageDedicatedWorkerClientEventOwner,
+        event: RendererDedicatedWorkerClientEvent,
+    ) -> Result<Option<RendererDedicatedWorkerClientEvent>> {
+        let RendererDedicatedWorkerClientEvent::ScriptLoaded {
+            network_response,
+            policy_context,
+            creator_policy_context,
+            ..
+        } = &event
+        else {
+            return Ok(Some(event));
+        };
+        let worker_id = owner.worker_id();
+        if policy_context
+            .cross_origin_embedder_policy
+            .enables_cross_origin_isolation()
+            || !(creator_policy_context
+                .cross_origin_embedder_policy
+                .enables_cross_origin_isolation()
+                || creator_policy_context
+                    .cross_origin_embedder_policy_report_only
+                    .enables_cross_origin_isolation())
+            || !self
+                ._context_host
+                .borrow()
+                .loading_worker_can_start(worker_id)
+        {
+            return Ok(Some(event));
+        }
+        let context_host = self._context_host.clone();
+        let allowed = self.with_default_context_scope(|scope, _| {
+            let host = context_host.borrow();
+            let Some((dispatch_scope, context, _)) = host
+                .authorized_dedicated_worker_dispatch_target(
+                    scope,
+                    worker_id,
+                    owner.execution_context(),
+                )
+            else {
+                return Ok(None);
+            };
+            let Some(owner_url) =
+                crate::context_bootstrap::worker_creator_document_url(&host, dispatch_scope)
+            else {
+                return Ok(None);
+            };
+            drop(host);
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let previous_owner = dispatch_scope.enter(scope);
+            let allowed = crate::context_bootstrap::check_dedicated_worker_embedder_policy(
+                scope,
+                *creator_policy_context,
+                policy_context.cross_origin_embedder_policy,
+                &owner_url,
+                &network_response.final_url,
+            );
+            dispatch_scope.restore(scope, previous_owner);
+            Ok(Some(allowed))
+        })?;
+        let Some(allowed) = allowed else {
+            return Ok(None);
+        };
+        if allowed {
+            return Ok(Some(event));
+        }
+        let RendererDedicatedWorkerClientEvent::ScriptLoaded {
+            script_url,
+            network_response,
+            ..
+        } = event
+        else {
+            unreachable!("only loaded scripts require a COEP startup check");
+        };
+        Ok(Some(RendererDedicatedWorkerClientEvent::ScriptLoadFailed {
+            script_url,
+            error_message: "Worker script was blocked by Cross-Origin-Embedder-Policy.".to_owned(),
+            network_response: Some(network_response),
+        }))
+    }
+
     pub(crate) fn current_dedicated_worker_client_event_identity(
         &self,
         worker_id: crate::types::DedicatedWorkerId,
@@ -58,7 +140,11 @@ impl ScriptVm {
         let task = authorized.into_task();
         let owner = task.owner();
         let worker_id = owner.worker_id();
-        match task.into_event() {
+        let Some(event) = self.apply_dedicated_worker_startup_policy(owner, task.into_event())?
+        else {
+            return Ok(DedicatedWorkerClientEventBodyEffect::CurrentTargetDisappeared);
+        };
+        match event {
             RendererDedicatedWorkerClientEvent::ScriptLoaded {
                 script_url,
                 script_source,
@@ -68,6 +154,7 @@ impl ScriptVm {
                 response_referrer_policy,
                 network_partition_key,
                 policy_context,
+                creator_policy_context: _,
                 content_security_policies,
                 content_security_report_only_policies,
                 content_security_reporting_endpoints,

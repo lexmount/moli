@@ -1,6 +1,24 @@
 use moli_fetch::RedirectInfo;
 use url::Url;
 
+pub(crate) fn dedicated_worker_policy_context_from_headers(
+    headers: &[(String, Vec<u8>)],
+    creator: crate::types::SubresourcePolicyContext,
+) -> crate::types::SubresourcePolicyContext {
+    crate::types::SubresourcePolicyContext {
+        cross_origin_embedder_policy:
+            crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers),
+        cross_origin_embedder_policy_report_only:
+            crate::cross_origin_isolation::cross_origin_embedder_policy_report_only_from_headers(
+                headers,
+            ),
+        // The response owns COEP, while DIP and the agent's capability remain
+        // those of the creator, including for nested DedicatedWorkers.
+        document_isolation_policy: creator.document_isolation_policy,
+        cross_origin_isolated: creator.cross_origin_isolated,
+    }
+}
+
 pub(crate) fn ensure_worker_script_redirect_chain_same_origin(
     initiator_url: &Url,
     redirect_chain: &[RedirectInfo],

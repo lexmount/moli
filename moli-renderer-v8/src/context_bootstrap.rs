@@ -172,6 +172,10 @@ pub(crate) use self::opfs::{
 mod performance_observer_runtime;
 mod reporting_observer;
 pub(crate) use reporting_observer::notify_report as notify_reporting_observers;
+mod worker_embedder_policy;
+pub(crate) use worker_embedder_policy::{
+    check_dedicated_worker_embedder_policy, worker_creator_document_url,
+};
 mod performance_runtime;
 mod range;
 mod range_algorithms;

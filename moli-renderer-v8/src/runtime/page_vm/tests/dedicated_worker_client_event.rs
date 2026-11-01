@@ -700,6 +700,7 @@ async fn successful_script_loaded_worker_event_transitions_through_selected_disp
                 response_referrer_policy: None,
                 network_partition_key: None,
                 policy_context: Default::default(),
+                creator_policy_context: Default::default(),
                 content_security_policies: Vec::new(),
                 content_security_report_only_policies: Vec::new(),
                 content_security_reporting_endpoints:
@@ -908,4 +909,78 @@ Promise.resolve().then(() => {
                 .expect("DedicatedWorker PageVm replacement server should finish");
         },
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn terminated_worker_startup_does_not_queue_embedder_policy_reports() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page_vm, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/retired-worker-coep").unwrap(),
+        );
+        let (worker_id, producer) = page_vm
+            .vm_mut()
+            .register_loading_dedicated_worker_client_event_producer_for_test()?;
+        page_vm
+            .vm_mut()
+            .with_default_context_scope_for_test(|_, host_ptr| {
+                assert!(unsafe { &mut *host_ptr }.terminate_worker(worker_id));
+                Ok(())
+            })?;
+        producer
+            .send(RendererDedicatedWorkerClientEvent::ScriptLoaded {
+                script_url: "https://example.com/worker.js".into(),
+                script_source: crate::worker::WorkerScriptSource::text(
+                    "postMessage('unexpected')".into(),
+                ),
+                network_response: Box::new(
+                    crate::protocol_types::NavigationResponse::from_text_body(
+                        Url::parse("https://example.com/worker.js").unwrap(),
+                        200,
+                        vec![("Content-Type".into(), b"application/javascript".to_vec())],
+                        "postMessage('unexpected')".into(),
+                    ),
+                ),
+                script_kind: crate::worker::WorkerScriptKind::Classic,
+                secure_context: true,
+                response_referrer_policy: None,
+                network_partition_key: None,
+                policy_context: Default::default(),
+                creator_policy_context: crate::types::SubresourcePolicyContext {
+                    cross_origin_embedder_policy:
+                        crate::cross_origin_isolation::CrossOriginEmbedderPolicy::RequireCorp,
+                    cross_origin_embedder_policy_report_only:
+                        crate::cross_origin_isolation::CrossOriginEmbedderPolicy::RequireCorp,
+                    ..Default::default()
+                },
+                content_security_policies: Vec::new(),
+                content_security_report_only_policies: Vec::new(),
+                content_security_reporting_endpoints: Default::default(),
+            })
+            .unwrap();
+        let task = page_vm
+            .claim_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,
+            )
+            .unwrap();
+        page_vm
+            .run_claimed_selected_page_task_for_test(task, &loader)
+            .await?;
+        let diagnostics = page_vm.page_diagnostics_snapshot()?;
+        assert_eq!(diagnostics.diagnostics.dedicated_worker_loading_count, 0);
+        assert_eq!(
+            diagnostics
+                .diagnostics
+                .dedicated_worker_running_worker_isolate_count,
+            0
+        );
+        assert!(
+            !page_vm.vm_mut().has_ready_callback_timer(),
+            "terminated startup must not queue COEP reports"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .unwrap();
 }

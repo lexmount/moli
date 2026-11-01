@@ -192,10 +192,46 @@ pub(crate) fn notify_report(
     url: &str,
     body: serde_json::Value,
 ) {
+    let report = create_report(scope, report_type, url, &body);
+    notify_record(scope, report);
+}
+
+/// Inheritance violations discovered during a synchronous Worker constructor
+/// become observable after the caller can register its ReportingObserver.
+pub(crate) fn queue_report(
+    scope: &mut v8::PinScope<'_, '_>,
+    report_type: &str,
+    url: &str,
+    body: serde_json::Value,
+) {
+    let report = create_report(scope, report_type, url, &body);
+    queue_task(scope, notify_queued_report, report.into());
+}
+
+fn create_report<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    report_type: &str,
+    url: &str,
+    body: &serde_json::Value,
+) -> v8::Local<'s, v8::Object> {
     let report = crate::util::new_null_prototype_object(scope);
-    records::initialize_snapshot(scope, report, url, &body);
+    records::initialize_snapshot(scope, report, url, body);
     let kind = v8_string(scope, report_type).expect("report type should allocate");
     set_private_value(scope, report, REPORT_TYPE, kind.into());
+    report
+}
+
+fn notify_queued_report<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let report = v8::Local::<v8::Object>::try_from(args.data()).expect("native queued report");
+    notify_record(scope, report);
+}
+
+fn notify_record<'s>(scope: &mut v8::PinScope<'s, '_>, report: v8::Local<'s, v8::Object>) {
+    let kind = get_private_value(scope, report, REPORT_TYPE).expect("native report type");
     for observer in registered(scope) {
         add_report(scope, observer, report);
     }
@@ -211,7 +247,7 @@ pub(crate) fn notify_report(
             )
             .expect("internal report is an object");
             get_private_value(scope, previous, REPORT_TYPE)
-                .is_some_and(|value| value.strict_equals(kind.into()))
+                .is_some_and(|value| value.strict_equals(kind))
         })
         .count();
     let mut drop_first = matching >= 100;
@@ -221,7 +257,7 @@ pub(crate) fn notify_report(
             v8::Local::<v8::Object>::try_from(previous).expect("internal report is an object");
         if drop_first
             && get_private_value(scope, object, REPORT_TYPE)
-                .is_some_and(|value| value.strict_equals(kind.into()))
+                .is_some_and(|value| value.strict_equals(kind))
         {
             drop_first = false;
             continue;
