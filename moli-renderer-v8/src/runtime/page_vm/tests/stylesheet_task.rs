@@ -622,6 +622,208 @@ document.head.append(late);
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn stylesheet_integrity_does_not_reuse_an_unverified_css_source() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    run_page_vm_async_test(async move {
+        let css = "#integrity-cache-probe { color: rgb(1, 2, 3); }";
+        let (base_url, server) = spawn_path_response_http_server(vec![
+            (
+                "/integrity-cache.css",
+                "HTTP/1.1 200 OK\r\nCache-Control: no-store",
+                css.to_owned(),
+                Duration::ZERO,
+            );
+            3
+        ])
+        .await;
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page.html"))?;
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let href = serde_json::to_string(&format!("{base_url}/integrity-cache.css"))?;
+        let metadata = |body: &[u8]| {
+            format!(
+                "sha384-{}",
+                STANDARD.encode(moli_crypto::DigestAlgorithm::Sha384.digest_bytes(body))
+            )
+        };
+        let wrong = metadata(b"wrong");
+        let matching = metadata(css.as_bytes());
+        page_vm.vm_mut().eval(
+            r#"
+globalThis.__cacheIntegrityEvents = [];
+const target = document.createElement("div");
+target.id = "integrity-cache-probe";
+document.body.append(target);
+"ready"
+"#,
+        )?;
+
+        for (index, integrity, successful) in [
+            (0, "", true),
+            (1, wrong.as_str(), false),
+            (2, matching.as_str(), true),
+        ] {
+            let integrity = serde_json::to_string(integrity)?;
+            let synchronous = page_vm.vm_mut().eval(&format!(
+                r#"
+(() => {{
+  const link = document.createElement("link");
+  link.id = "integrity-cache-link";
+  link.rel = "stylesheet";
+  link.integrity = {integrity};
+  link.href = {href};
+  link.onload = () => __cacheIntegrityEvents.push("{index}:load");
+  link.onerror = () => __cacheIntegrityEvents.push("{index}:error");
+  document.head.append(link);
+  return [link.sheet === null, document.styleSheets.length,
+    getComputedStyle(target).color, __cacheIntegrityEvents.length].join("|");
+}})()
+"#,
+            ))?;
+            assert_eq!(
+                synchronous,
+                format!("true|0|rgb(0, 0, 0)|{index}"),
+                "a parsed source cached by URL must not authorize another link's integrity"
+            );
+            page_vm
+                .vm_mut()
+                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask)
+                .await;
+            assert!(
+                page_vm
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::StylesheetCompletion,
+                        &loader,
+                    )
+                    .await?
+            );
+            let event = take_next_link_element_event_task_for_test(&mut page_vm)
+                .expect("the integrity-specific load must publish its result");
+            page_vm
+                .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                    crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(
+                        event,
+                    ),
+                    &loader,
+                )
+                .await?;
+            let color = if successful { "rgb(1, 2, 3)" } else { "rgb(0, 0, 0)" };
+            let event = if successful { "load" } else { "error" };
+            assert_eq!(
+                page_vm.vm_mut().eval(
+                    "[document.getElementById('integrity-cache-link').sheet !== null, getComputedStyle(target).color, __cacheIntegrityEvents.at(-1)].join('|')"
+                )?,
+                format!("{successful}|{color}|{index}:{event}")
+            );
+            page_vm.vm_mut().eval("document.getElementById('integrity-cache-link').remove()")?;
+        }
+        server.await.expect("each integrity identity must fetch its own response");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("integrity cache authorization test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn integrity_rejected_stylesheets_skip_cssom_for_network_and_cached_loads() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![(
+            "/integrity-rejected.css",
+            "HTTP/1.1 200 OK\r\nContent-Type: text/css",
+            "@import url('/must-not-fetch.css'); body { color: red; }".to_owned(),
+            Duration::ZERO,
+        )])
+        .await;
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page.html"))?;
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let href = serde_json::to_string(&format!("{base_url}/integrity-rejected.css"))?;
+        let integrity = serde_json::to_string(&format!(
+            "sha384-{}",
+            STANDARD.encode(moli_crypto::DigestAlgorithm::Sha384.digest_bytes(b"wrong"))
+        ))?;
+        page_vm.vm_mut().eval("globalThis.__integrityEvents = []")?;
+
+        for index in 0..2 {
+            page_vm.vm_mut().eval(&format!(
+                r#"
+(() => {{
+  const link = document.createElement("link");
+  link.id = "integrity-rejected-{index}";
+  link.rel = "stylesheet";
+  link.integrity = {integrity};
+  link.href = {href};
+  link.onload = () => __integrityEvents.push("{index}:load");
+  link.onerror = () => __integrityEvents.push("{index}:error");
+  document.head.append(link);
+}})()
+"#,
+            ))?;
+            if index == 0 {
+                page_vm
+                    .vm_mut()
+                    .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask)
+                    .await;
+                assert!(
+                    page_vm
+                        .run_exact_selected_page_task_for_test(
+                            PageSelectedTaskTestSelector::StylesheetCompletion,
+                            &loader,
+                        )
+                        .await?
+                );
+            }
+            assert_eq!(
+                page_vm.vm_mut().eval(&format!(
+                    "[document.getElementById('integrity-rejected-{index}').sheet === null, document.styleSheets.length, __integrityEvents.length].join('|')"
+                ))?,
+                format!("true|0|{index}"),
+                "integrity failure must not create an owner sheet or synchronously dispatch its error"
+            );
+            assert!(
+                page_vm
+                    .take_stylesheet_networking_body_task_for_test()
+                    .is_none(),
+                "integrity rejection must not start imports or refetch a completed cache entry"
+            );
+            let event = take_next_link_element_event_task_for_test(&mut page_vm)
+                .expect("integrity failure must still publish its link error task");
+            let body = page_vm.apply_selected_page_connected_style_event_turn(event)?;
+            assert_eq!(
+                body.action.target_effect,
+                PageConnectedStyleEventTargetEffect::DispatchedToCurrentOwner {
+                    load_delay_effect: PageConnectedStyleLoadDelayEffect::ReleasedExactBinding,
+                }
+            );
+            page_vm
+                .finish_selected_page_dom_manipulation_task(
+                    PageDomManipulationTurnAction::ConnectedStyleEvent(body.action),
+                    &loader,
+                )
+                .await?;
+            assert!(!page_vm.vm().document_runtime.has_pending_style_loads());
+        }
+        assert_eq!(
+            page_vm.vm_mut().eval("__integrityEvents.join('|')")?,
+            "0:error|1:error"
+        );
+        server.await.expect("integrity fixture should be fetched once");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("integrity CSSOM settlement test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn failed_completed_preload_settles_empty_sheet_synchronously_before_link_error() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_path_response_http_server(vec![(
