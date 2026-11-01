@@ -3,6 +3,13 @@ use crate::dom::native::Node;
 use std::net::IpAddr;
 use url::{Host, Url};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DocumentDomainSetOutcome {
+    Applied,
+    Ignored,
+    Rejected,
+}
+
 impl JsContextHost {
     pub(crate) fn inherit_document_domain_override(&mut self, domain: Rc<RefCell<Option<String>>>) {
         self.document_domain_override = domain;
@@ -51,29 +58,32 @@ impl JsContextHost {
         &mut self,
         document_handle: DomHandle,
         value: &str,
-    ) -> bool {
+    ) -> DocumentDomainSetOutcome {
         if document_handle == self.document_handle() {
             if self.document_sandbox_policy().sandboxes_document_domain {
-                return false;
+                return DocumentDomainSetOutcome::Rejected;
             }
             let Some(current_host) = self.main_document_domain_host() else {
-                return false;
+                return DocumentDomainSetOutcome::Rejected;
             };
             let Some(domain) = normalize_document_domain_value(value) else {
-                return false;
+                return DocumentDomainSetOutcome::Rejected;
             };
             if !document_domain_is_allowed_for_host(&current_host, &domain) {
-                return false;
+                return DocumentDomainSetOutcome::Rejected;
+            }
+            if self.window_agent_cluster_is_cross_origin_isolated(OwnerDispatchScope::Top) {
+                return DocumentDomainSetOutcome::Ignored;
             }
             *self.document_domain_override.borrow_mut() = Some(domain);
-            return true;
+            return DocumentDomainSetOutcome::Applied;
         }
         let Some(child_handle) =
             self.child_browsing_context_handle_for_stored_document(document_handle)
         else {
             let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document_handle)
             else {
-                return false;
+                return DocumentDomainSetOutcome::Rejected;
             };
             return self.set_lightweight_popup_document_domain(popup_id, document_handle, value);
         };
@@ -115,21 +125,24 @@ impl JsContextHost {
         &mut self,
         handle: DomHandle,
         value: &str,
-    ) -> bool {
+    ) -> DocumentDomainSetOutcome {
         if self.child_browsing_context_document_domain_is_sandboxed(handle) {
-            return false;
+            return DocumentDomainSetOutcome::Rejected;
         }
         let Some(current_host) = self.child_browsing_context_document_domain_host(handle) else {
-            return false;
+            return DocumentDomainSetOutcome::Rejected;
         };
         let Some(domain) = normalize_document_domain_value(value) else {
-            return false;
+            return DocumentDomainSetOutcome::Rejected;
         };
         if !document_domain_is_allowed_for_host(&current_host, &domain) {
-            return false;
+            return DocumentDomainSetOutcome::Rejected;
+        }
+        if self.window_agent_cluster_is_cross_origin_isolated(OwnerDispatchScope::Child(handle)) {
+            return DocumentDomainSetOutcome::Ignored;
         }
         let Some(origin_owner) = self.child_browsing_context_security_origin_owner(handle) else {
-            return false;
+            return DocumentDomainSetOutcome::Rejected;
         };
         match origin_owner {
             ChildSecurityOriginOwner::Main => {
@@ -137,12 +150,12 @@ impl JsContextHost {
             }
             ChildSecurityOriginOwner::Child(owner) => {
                 let Some(entry) = self.child_browsing_contexts.get_mut(&owner) else {
-                    return false;
+                    return DocumentDomainSetOutcome::Rejected;
                 };
                 entry.set_document_domain_override(domain);
             }
         }
-        true
+        DocumentDomainSetOutcome::Applied
     }
 
     pub(crate) fn set_lightweight_popup_document_domain(
@@ -150,9 +163,9 @@ impl JsContextHost {
         popup_id: u64,
         document_handle: DomHandle,
         value: &str,
-    ) -> bool {
+    ) -> DocumentDomainSetOutcome {
         if self.lightweight_popup_document_domain_is_sandboxed(popup_id) {
-            return false;
+            return DocumentDomainSetOutcome::Rejected;
         }
         let Some(current_host) = self
             .lightweight_popup_origin(popup_id)
@@ -169,15 +182,24 @@ impl JsContextHost {
                     .and_then(|document| url_host_domain(document.url()))
             })
         else {
-            return false;
+            return DocumentDomainSetOutcome::Rejected;
         };
         let Some(domain) = normalize_document_domain_value(value) else {
-            return false;
+            return DocumentDomainSetOutcome::Rejected;
         };
         if !document_domain_is_allowed_for_host(&current_host, &domain) {
-            return false;
+            return DocumentDomainSetOutcome::Rejected;
         }
-        self.set_lightweight_popup_document_domain_override(popup_id, domain)
+        if self.window_agent_cluster_is_cross_origin_isolated(OwnerDispatchScope::LightweightPopup(
+            popup_id,
+        )) {
+            return DocumentDomainSetOutcome::Ignored;
+        }
+        if self.set_lightweight_popup_document_domain_override(popup_id, domain) {
+            DocumentDomainSetOutcome::Applied
+        } else {
+            DocumentDomainSetOutcome::Rejected
+        }
     }
 
     fn main_document_domain_host(&self) -> Option<String> {
