@@ -93,6 +93,7 @@ mod close_watchers;
 mod core;
 mod dialogs;
 mod document_domain;
+pub(crate) use document_domain::DocumentDomainSetOutcome;
 mod document_script_ready_inputs;
 mod dom_debugger;
 mod element_toggle_events;
