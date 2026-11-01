@@ -1,10 +1,9 @@
 use moli_fetch::validate_cors_response_for_origin;
 
-use moli_cookie_jar::same_site_urls;
 use moli_fetch::{RedirectSource, RequestCredentialsMode, RequestMode};
 use moli_url::WebOrigin;
 use moli_web_mime::{
-    response_header_value, response_header_values, should_opaque_response_be_blocked_by_orb,
+    response_header_values, should_opaque_response_be_blocked_by_orb,
     should_opaque_response_be_blocked_by_orb_with_body,
 };
 
@@ -270,23 +269,13 @@ pub(crate) fn validate_cross_origin_embedder_and_document_isolation_policy(
         requires_corp_due_to_dip,
         document_isolation_policy,
     );
-    let Some(policy) = response_header_value(response_headers, "cross-origin-resource-policy")
-    else {
-        return Err(format!(
-            "{policy_label} check failed: requires Cross-Origin-Resource-Policy for {} to load {response_url}",
-            request_origin.ascii_serialization()
-        ));
-    };
-    let policy = policy.trim().to_ascii_lowercase();
-    match policy.as_str() {
-        "same-origin" | "same-site" | "cross-origin" => {
-            validate_cross_origin_resource_policy(&request_origin, response_url, response_headers)
-        }
-        _ => Err(format!(
-            "{policy_label} check failed: treats invalid Cross-Origin-Resource-Policy `{policy}` as same-origin for {} to load {response_url}",
-            request_origin.ascii_serialization()
-        )),
+    if let Some(policy) = moli_fetch::CrossOriginResourcePolicy::from_headers(response_headers) {
+        return policy.check(&request_origin, response_url);
     }
+    Err(format!(
+        "{policy_label} check failed: requires a valid Cross-Origin-Resource-Policy for {} to load {response_url}",
+        request_origin.ascii_serialization()
+    ))
 }
 
 fn defaulted_corp_policy_label(
@@ -331,28 +320,10 @@ pub(crate) fn validate_cross_origin_resource_policy(
     response_headers: &[(String, Vec<u8>)],
 ) -> Result<(), String> {
     let request_origin = request_origin.into();
-    if !matches!(response_url.scheme(), "http" | "https") {
-        return Ok(());
+    if let Some(policy) = moli_fetch::CrossOriginResourcePolicy::from_headers(response_headers) {
+        policy.check(&request_origin, response_url)?;
     }
-    let Some(policy) = response_header_value(response_headers, "cross-origin-resource-policy")
-    else {
-        return Ok(());
-    };
-    let policy = policy.trim().to_ascii_lowercase();
-    let allowed = match policy.as_str() {
-        "same-origin" => request_origin.same_origin(&response_url.into()),
-        "same-site" => url::Url::parse(request_origin.ascii_serialization())
-            .is_ok_and(|origin| same_site_urls(&origin, response_url, true)),
-        "cross-origin" => true,
-        _ => true,
-    };
-    if allowed {
-        return Ok(());
-    }
-    Err(format!(
-        "Cross-Origin-Resource-Policy check failed: `{policy}` does not allow {} to load {response_url}",
-        request_origin.ascii_serialization()
-    ))
+    Ok(())
 }
 
 pub(crate) fn cors_preflight_request_headers(
@@ -557,6 +528,7 @@ fn parsed_header_name(name: &str) -> Option<http::HeaderName> {
 mod tests {
     use super::*;
     use moli_url::origin_ascii_serialization;
+    use moli_web_mime::response_header_value;
 
     fn url(value: &str) -> url::Url {
         url::Url::parse(value).expect("valid URL")
@@ -1247,7 +1219,7 @@ mod tests {
     }
 
     #[test]
-    fn corp_same_site_uses_schemeful_site_comparison() {
+    fn corp_same_site_uses_schemeless_site_with_asymmetric_https_requirement() {
         let same_site = validate_cross_origin_resource_policy(
             &url("https://app.example.test/page"),
             &url("https://cdn.example.test/data"),
@@ -1266,7 +1238,18 @@ mod tests {
                 b"same-site".to_vec(),
             )],
         );
-        assert!(cross_scheme.is_err());
+        assert!(cross_scheme.is_ok());
+        assert!(
+            validate_cross_origin_resource_policy(
+                &url("http://app.example.test/page"),
+                &url("https://cdn.example.test/data"),
+                &[(
+                    "Cross-Origin-Resource-Policy".to_owned(),
+                    b"same-site".to_vec()
+                )],
+            )
+            .is_err()
+        );
     }
 
     #[test]
