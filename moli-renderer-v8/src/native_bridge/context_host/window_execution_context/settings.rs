@@ -21,6 +21,7 @@ pub(crate) struct WindowEnvironmentSettings {
     access_origin: WindowAccessOrigin,
     domain_owner_document: DomHandle,
     execution_identity: WindowExecutionContextIdentity,
+    agent_cluster: Option<crate::agent_cluster::AgentClusterIdentity>,
 }
 
 impl WindowEnvironmentSettings {
@@ -52,6 +53,7 @@ impl WindowEnvironmentSettings {
             access_origin,
             domain_owner_document,
             execution_identity,
+            agent_cluster: host.window_agent_cluster(OwnerDispatchScope::Child(child_handle)),
         }));
         Some(())
     }
@@ -80,6 +82,7 @@ impl WindowEnvironmentSettings {
             access_origin,
             domain_owner_document: host.document_handle(),
             execution_identity,
+            agent_cluster: host.window_agent_cluster(OwnerDispatchScope::Top),
         }));
         Some(())
     }
@@ -97,6 +100,9 @@ impl WindowEnvironmentSettings {
         }
         if self.execution_identity.grants_universal_access() {
             return true;
+        }
+        if self.agent_cluster != target_host.window_agent_cluster(target.dispatch_scope()) {
+            return false;
         }
         // Retiring a resource loader must not turn an inherited origin into
         // the origin of its about:blank URL. Keep that origin, while observing

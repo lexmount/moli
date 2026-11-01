@@ -2610,6 +2610,7 @@ mod window_execution_context;
 
 mod window_immutable_prototype_chain;
 
+mod window_agent_clusters;
 mod window_getter_consolidation;
 mod window_receiver_access;
 mod worklet_interfaces;

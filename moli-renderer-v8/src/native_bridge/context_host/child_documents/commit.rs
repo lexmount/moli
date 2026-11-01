@@ -88,6 +88,12 @@ impl JsContextHost {
                 .is_some();
         let security_origin_allows_reuse = creation_kind != DocumentCreationKind::Error
             && !current_document_domain_was_set
+            && self.window_agent_cluster(OwnerDispatchScope::Child(handle))
+                == self.window_agent_cluster_for_policy(
+                    OwnerDispatchScope::Child(handle),
+                    &snapshot.policy_container,
+                    origin.clone(),
+                )
             && preflight
                 .current_access_origin
                 .as_ref()

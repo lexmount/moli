@@ -3,11 +3,15 @@ use super::{
     WindowExecutionContextIdentity, WindowExecutionContextOwner,
     child_frames::{ChildAncestorOriginsReferrerPolicy, ChildBrowsingContextEntry},
 };
+use crate::agent_cluster::AgentClusterIdentity;
 use crate::document_runtime::DomHandle;
 use std::{cell::RefCell, rc::Rc};
 
 const WINDOW_SECURITY_TOKEN_PREFIX: &str = "moli-window-origin-v1:";
 const WINDOW_ISOLATED_WORLD_SECURITY_TOKEN_PREFIX: &str = "moli-window-isolated-origin-v1:";
+const WINDOW_CLUSTER_SECURITY_TOKEN_PREFIX: &str = "moli-window-agent-cluster-v1:";
+const WINDOW_ISOLATED_CLUSTER_SECURITY_TOKEN_PREFIX: &str =
+    "moli-window-isolated-agent-cluster-v1:";
 
 pub(crate) fn window_contexts_allow_access(
     scope: &mut v8::PinScope<'_, '_>,
@@ -136,6 +140,7 @@ struct WindowContextSecurityOrigin {
     origin: WindowAccessOrigin,
     domain: Option<DocumentDomainState>,
     access_policy: WindowExecutionContextAccessPolicy,
+    agent_cluster: Option<AgentClusterIdentity>,
 }
 
 /// The origin of a particular LocalWindow, including virtual popup realms.
@@ -165,6 +170,7 @@ enum WindowSecurityOriginSource {
 pub(super) struct PopupWindowSecurityOrigin {
     pub(super) origin: WindowAccessOrigin,
     pub(super) domain: DocumentDomainState,
+    pub(super) agent_cluster: Option<AgentClusterIdentity>,
 }
 
 impl PopupWindowSecurityOrigin {
@@ -209,7 +215,15 @@ impl WindowSecurityOrigin {
     pub(crate) fn can_access(&self, target: &Self) -> bool {
         matches!(&self.0, WindowSecurityOriginSource::Context(origin)
             if origin.access_policy == WindowExecutionContextAccessPolicy::Universal)
-            || self.current_origin().can_access(&target.current_origin())
+            || (self.agent_cluster() == target.agent_cluster()
+                && self.current_origin().can_access(&target.current_origin()))
+    }
+
+    fn agent_cluster(&self) -> Option<AgentClusterIdentity> {
+        match &self.0 {
+            WindowSecurityOriginSource::Context(origin) => origin.agent_cluster.clone(),
+            WindowSecurityOriginSource::Popup(origin) => origin.borrow().agent_cluster.clone(),
+        }
     }
 }
 
@@ -405,8 +419,11 @@ impl JsContextHost {
             origin,
             domain,
             access_policy,
+            agent_cluster: self.window_agent_cluster(dispatch_scope),
         }));
         self.retain_window_global_csp_context(context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        crate::context_bootstrap::refresh_global_location_security_origin(scope);
     }
 
     pub(in crate::native_bridge::context_host) fn window_context_origins_allow_access(
@@ -421,9 +438,10 @@ impl JsContextHost {
             return false;
         };
         accessing.access_policy == WindowExecutionContextAccessPolicy::Universal
-            || accessing
-                .current_origin()
-                .can_access(&accessed.current_origin())
+            || (accessing.agent_cluster == accessed.agent_cluster
+                && accessing
+                    .current_origin()
+                    .can_access(&accessed.current_origin()))
     }
 
     pub(in crate::native_bridge::context_host) fn child_ancestor_origins_referrer_policy_from_owner_attribute(
@@ -507,7 +525,7 @@ impl JsContextHost {
         if self.document_domain_override.get().is_some() {
             return None;
         }
-        window_security_token_key(origin)
+        self.window_default_world_token_for_agent_cluster(OwnerDispatchScope::Top, origin)
     }
 
     pub(crate) fn popup_default_world_security_token_key(&self, popup_id: u64) -> Option<String> {
@@ -519,7 +537,10 @@ impl JsContextHost {
         {
             return None;
         }
-        window_security_token_key(origin.serialized_origin())
+        self.window_default_world_token_for_agent_cluster(
+            OwnerDispatchScope::LightweightPopup(popup_id),
+            origin.serialized_origin(),
+        )
     }
 
     pub(crate) fn child_default_world_security_token_key(
@@ -536,7 +557,20 @@ impl JsContextHost {
         {
             return None;
         }
-        window_security_token_key(origin)
+        self.window_default_world_token_for_agent_cluster(OwnerDispatchScope::Child(handle), origin)
+    }
+
+    fn window_default_world_token_for_agent_cluster(
+        &self,
+        owner: OwnerDispatchScope,
+        origin: String,
+    ) -> Option<String> {
+        match self.window_agent_cluster(owner) {
+            Some(cluster) => {
+                cluster.window_security_token_key(WINDOW_CLUSTER_SECURITY_TOKEN_PREFIX)
+            }
+            None => window_security_token_key(origin),
+        }
     }
 
     pub(crate) fn install_child_default_world_security_token(
@@ -569,7 +603,8 @@ impl JsContextHost {
         if self.document_sandbox_policy().forces_opaque_origin {
             return None;
         }
-        window_isolated_world_security_token_key(
+        self.window_isolated_world_token_for_agent_cluster(
+            OwnerDispatchScope::Top,
             self.main_document_origin(),
             self.document_domain_override.get().is_some(),
         )
@@ -583,11 +618,27 @@ impl JsContextHost {
             return None;
         }
         let origin = self.child_browsing_context_window_origin(handle)?;
-        window_isolated_world_security_token_key(
+        self.window_isolated_world_token_for_agent_cluster(
+            OwnerDispatchScope::Child(handle),
             origin,
             self.child_browsing_context_document_domain_override(handle)
                 .is_some(),
         )
+    }
+
+    fn window_isolated_world_token_for_agent_cluster(
+        &self,
+        owner: OwnerDispatchScope,
+        origin: String,
+        document_domain_was_set: bool,
+    ) -> Option<String> {
+        let origin_key = window_isolated_world_security_token_key(origin, document_domain_was_set)?;
+        match self.window_agent_cluster(owner) {
+            Some(cluster) => {
+                cluster.window_security_token_key(WINDOW_ISOLATED_CLUSTER_SECURITY_TOKEN_PREFIX)
+            }
+            None => Some(origin_key),
+        }
     }
 
     pub(crate) fn refresh_security_tokens_after_document_domain_mutation(
@@ -736,7 +787,11 @@ impl JsContextHost {
         let Some(child) = self.child_window_access_origin(handle) else {
             return false;
         };
-        top.can_access(&child)
+        self.window_agent_clusters_match(
+            OwnerDispatchScope::Top,
+            self,
+            OwnerDispatchScope::Child(handle),
+        ) && top.can_access(&child)
     }
 
     pub(crate) fn frame_owner_can_access_content_document(&self, handle: DomHandle) -> bool {
@@ -754,12 +809,14 @@ impl JsContextHost {
         } else {
             return false;
         };
-        // HTML's content document algorithm compares the container's node
-        // Document with the active child Document, using same origin-domain.
-        // Neither the top-level Window nor the callback's realm is its owner.
-        self.window_access_origin_for_dispatch_scope(owner_scope)
-            .zip(self.child_window_access_origin(handle))
-            .is_some_and(|(owner, child)| owner.can_access(&child))
+        // The returned Document also passes the native Window agent-cluster
+        // check. The container's node Document owns this access, independently
+        // from the callback's realm or the top-level Window.
+        self.window_agent_clusters_match(owner_scope, self, OwnerDispatchScope::Child(handle))
+            && self
+                .window_access_origin_for_dispatch_scope(owner_scope)
+                .zip(self.child_window_access_origin(handle))
+                .is_some_and(|(owner, child)| owner.can_access(&child))
     }
 
     pub(in crate::native_bridge::context_host) fn accessing_context_can_access_child_window(
@@ -788,18 +845,19 @@ impl JsContextHost {
         }
         // Opaque identities are host-local; only tuple origins can be compared
         // between hosts before the target has materialized a V8 Context.
-        accessing_host
-            .window_access_origin(identity)
-            .zip(self.child_window_access_origin(handle))
-            .is_some_and(|(origin, target)| {
-                matches!(
-                    (&origin, &target),
-                    (
-                        WindowAccessOrigin::Tuple { .. },
-                        WindowAccessOrigin::Tuple { .. }
-                    )
-                ) && origin.can_access(&target)
-            })
+        accessing_host.window_agent_clusters_match(identity.dispatch_scope(), self, target)
+            && accessing_host
+                .window_access_origin(identity)
+                .zip(self.child_window_access_origin(handle))
+                .is_some_and(|(origin, target)| {
+                    matches!(
+                        (&origin, &target),
+                        (
+                            WindowAccessOrigin::Tuple { .. },
+                            WindowAccessOrigin::Tuple { .. }
+                        )
+                    ) && origin.can_access(&target)
+                })
     }
 
     /// Compares the Window's origin with its top-level origin without applying
@@ -857,6 +915,13 @@ impl JsContextHost {
         if accessing.grants_universal_access() {
             return true;
         }
+        if !self.window_agent_clusters_match(
+            accessing.dispatch_scope(),
+            target_host,
+            accessed.dispatch_scope(),
+        ) {
+            return false;
+        }
         let Some(origin) = self.window_access_origin(accessing) else {
             return false;
         };
@@ -900,6 +965,9 @@ impl JsContextHost {
         if accessing.owner() == accessed_owner {
             return true;
         }
+        if !self.window_agent_clusters_match(accessing.dispatch_scope(), self, accessed_scope) {
+            return false;
+        }
         let Some(accessing_origin) = self.window_access_origin(accessing) else {
             return false;
         };
@@ -908,6 +976,15 @@ impl JsContextHost {
             return false;
         };
         accessing_origin.can_access(&accessed_origin)
+    }
+
+    fn window_agent_clusters_match(
+        &self,
+        source: OwnerDispatchScope,
+        target_host: &Self,
+        target: OwnerDispatchScope,
+    ) -> bool {
+        self.window_agent_cluster(source) == target_host.window_agent_cluster(target)
     }
 
     fn window_access_origin(

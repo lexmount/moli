@@ -27,6 +27,7 @@ pub use app_manifest::{
 };
 
 mod abort_signal_route;
+mod agent_cluster;
 mod app_manifest;
 mod blob;
 mod broadcast_channel_runtime;

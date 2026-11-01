@@ -1150,6 +1150,11 @@ impl JsContextHost {
             None
         }
         .unwrap_or_default();
+        let initial_agent_cluster = self.window_agent_cluster_for_policy(
+            OwnerDispatchScope::LightweightPopup(popup_id),
+            &initial_document_state.policy_container,
+            initial_origin.serialized_origin(),
+        );
         let session_storage_store = match opener {
             Some(opener) => self.cloned_lightweight_popup_session_storage_store(
                 scope,
@@ -1183,6 +1188,7 @@ impl JsContextHost {
                             super::window_security_tokens::PopupWindowSecurityOrigin {
                                 origin: initial_origin,
                                 domain: initial_domain,
+                                agent_cluster: initial_agent_cluster,
                             },
                         )),
                         state: initial_document_state.clone(),
@@ -2416,6 +2422,11 @@ impl JsContextHost {
             });
         let retained_access_origin = current_document.access_origin.borrow().current_origin();
         let retained_origin_state = current_document.access_origin.clone();
+        let retained_agent_cluster = current_document
+            .access_origin
+            .borrow()
+            .agent_cluster
+            .clone();
         let domain = if matches!(
             commit.origin,
             LightweightPopupDocumentCommitOrigin::RetainCurrent
@@ -2458,11 +2469,17 @@ impl JsContextHost {
                 }
             }
         };
+        let agent_cluster = self.window_agent_cluster_for_policy(
+            OwnerDispatchScope::LightweightPopup(popup_id),
+            &commit.state.policy_container,
+            access_origin.serialized_origin(),
+        );
         // The first same-origin navigation can reuse the initial Window even
         // though it commits a new Document and its own resource authority.
         let reuse_initial_window = changed_document
             && was_initial_empty
             && !document_domain_was_set
+            && retained_agent_cluster == agent_cluster
             && retained_access_origin.can_access(&access_origin);
         if reuse_initial_window {
             current_local_window_id = previous_local_window_id;
@@ -2479,6 +2496,7 @@ impl JsContextHost {
         let access_origin = super::window_security_tokens::PopupWindowSecurityOrigin {
             origin: access_origin,
             domain,
+            agent_cluster,
         };
         let access_origin = if changed_window {
             Rc::new(RefCell::new(access_origin))
