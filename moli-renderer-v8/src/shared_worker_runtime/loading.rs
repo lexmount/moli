@@ -596,10 +596,11 @@ pub(super) fn shared_worker_script_credentials_mode(
 
 pub(super) fn load_shared_worker_blob_script_source(
     script_url: &Url,
+    access_key: &crate::blob::ObjectUrlAccessKey,
 ) -> Result<SharedWorkerLoadedScript, String> {
     let mut resource_url = script_url.clone();
     resource_url.set_fragment(None);
-    crate::blob::object_url_body_and_type(resource_url.as_str())
+    crate::blob::object_url_body_and_type_with_access_key(resource_url.as_str(), access_key)
         .map(|(body, _)| SharedWorkerLoadedScript::new(script_url.to_string(), body))
         .ok_or_else(|| {
             format!("Failed to load shared worker script `{script_url}`: blob URL is unavailable.")

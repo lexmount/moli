@@ -66,10 +66,33 @@ struct BlobPrototypeDeclaration {
     r#type: (),
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct ObjectUrlAccessKey {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ObjectUrlAccessKey {
     partition: RendererStoragePartitionIdentity,
     storage_key: moli_storage_key::MoliStorageKey,
+}
+
+impl ObjectUrlAccessKey {
+    pub(crate) fn new(
+        partition: RendererStoragePartitionIdentity,
+        storage_key: moli_storage_key::MoliStorageKey,
+    ) -> Self {
+        Self {
+            partition,
+            storage_key,
+        }
+    }
+}
+
+pub(crate) fn object_url_body_and_type_with_access_key(
+    url: &str,
+    access_key: &ObjectUrlAccessKey,
+) -> Option<(String, String)> {
+    let captured = blob_store().object_url_entry_with_access_key(url, access_key)?;
+    Some((
+        String::from_utf8_lossy(&captured.bytes).into_owned(),
+        captured.mime_type,
+    ))
 }
 
 type RendererBlobStore =
