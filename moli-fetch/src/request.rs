@@ -146,16 +146,40 @@ pub enum BrowserNavigationRequestKind {
     Reload,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
 pub enum RequestCacheMode {
     #[default]
     Default,
+    #[strum(serialize = "no-cache")]
     Validate,
+    #[strum(serialize = "reload")]
     Bypass,
     NoStore,
 }
 
 impl RequestCacheMode {
+    /// Select the HTTP fetch policy without rewriting the author Request object.
+    pub fn for_fetch_headers(self, headers: &crate::RequestHeaders) -> Self {
+        if self == Self::Default
+            && headers.iter().any(|(name, _)| {
+                [
+                    "if-modified-since",
+                    "if-none-match",
+                    "if-unmodified-since",
+                    "if-match",
+                    "if-range",
+                ]
+                .iter()
+                .any(|conditional| name.eq_ignore_ascii_case(conditional))
+            })
+        {
+            Self::NoStore
+        } else {
+            self
+        }
+    }
+
     pub fn requires_http_cache_validation(self) -> bool {
         matches!(self, Self::Validate)
     }
