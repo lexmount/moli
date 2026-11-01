@@ -1,7 +1,6 @@
 use moli_fetch::validate_cors_response_for_origin;
 
-use moli_cookie_jar::same_site_urls;
-use moli_fetch::{RedirectSource, RequestCredentialsMode, RequestMode};
+use moli_fetch::{CrossOriginResourcePolicy, RedirectSource, RequestCredentialsMode, RequestMode};
 use moli_url::WebOrigin;
 #[cfg(test)]
 use moli_web_mime::response_header_value;
@@ -337,30 +336,6 @@ impl OpaqueResponsePolicyViolation {
     }
 }
 
-#[derive(Clone, Copy)]
-enum CrossOriginResourcePolicy {
-    SameOrigin,
-    SameSite,
-    CrossOrigin,
-}
-
-fn cross_origin_resource_policy_from_headers(
-    headers: &[(String, Vec<u8>)],
-) -> Option<CrossOriginResourcePolicy> {
-    // Multiple field lines form a comma-separated value and are invalid, even
-    // if the last line alone names a valid policy. Tokens are case-sensitive.
-    let values = response_header_values(headers, "cross-origin-resource-policy");
-    let [value] = values.as_slice() else {
-        return None;
-    };
-    match value.trim_matches([' ', '\t']) {
-        "same-origin" => Some(CrossOriginResourcePolicy::SameOrigin),
-        "same-site" => Some(CrossOriginResourcePolicy::SameSite),
-        "cross-origin" => Some(CrossOriginResourcePolicy::CrossOrigin),
-        _ => None,
-    }
-}
-
 /// Shared no-cors CORP decision for network responses and stored opaque
 /// responses. Cache reads use the original response's native credentials flag,
 /// never the Request used to look up the entry or the presence of Cookie headers.
@@ -377,7 +352,7 @@ pub(crate) fn check_opaque_response_policy(
     {
         return Ok(());
     }
-    let policy = cross_origin_resource_policy_from_headers(response_headers);
+    let policy = CrossOriginResourcePolicy::from_headers(response_headers);
     validate_cross_origin_resource_policy_value(request_origin, response_url, policy)
         .map_err(OpaqueResponsePolicyViolation::Explicit)?;
     if policy.is_some() {
@@ -450,7 +425,7 @@ pub(crate) fn validate_cross_origin_resource_policy(
     validate_cross_origin_resource_policy_value(
         &request_origin.into(),
         response_url,
-        cross_origin_resource_policy_from_headers(response_headers),
+        CrossOriginResourcePolicy::from_headers(response_headers),
     )
 }
 
@@ -459,24 +434,10 @@ fn validate_cross_origin_resource_policy_value(
     response_url: &url::Url,
     policy: Option<CrossOriginResourcePolicy>,
 ) -> Result<(), String> {
-    let (allowed, label) = match policy {
-        Some(CrossOriginResourcePolicy::SameOrigin) => {
-            (request_origin.same_origin_url(response_url), "same-origin")
-        }
-        Some(CrossOriginResourcePolicy::SameSite) => (
-            url::Url::parse(request_origin.ascii_serialization())
-                .is_ok_and(|origin| same_site_urls(&origin, response_url, true)),
-            "same-site",
-        ),
-        Some(CrossOriginResourcePolicy::CrossOrigin) | None => return Ok(()),
-    };
-    if allowed {
-        return Ok(());
+    if let Some(policy) = policy {
+        policy.check(request_origin, response_url)?;
     }
-    Err(format!(
-        "Cross-Origin-Resource-Policy check failed: `{label}` does not allow {} to load {response_url}",
-        request_origin.ascii_serialization()
-    ))
+    Ok(())
 }
 
 pub(crate) fn cors_preflight_request_headers(
@@ -1533,7 +1494,7 @@ mod tests {
     }
 
     #[test]
-    fn corp_same_site_uses_schemeful_site_comparison() {
+    fn corp_same_site_allows_https_initiators_to_load_http() {
         let same_site = validate_cross_origin_resource_policy(
             &url("https://app.example.test/page"),
             &url("https://cdn.example.test/data"),
@@ -1552,7 +1513,7 @@ mod tests {
                 b"same-site".to_vec(),
             )],
         );
-        assert!(cross_scheme.is_err());
+        assert!(cross_scheme.is_ok());
     }
 
     #[test]

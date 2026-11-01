@@ -15,6 +15,7 @@ mod connection_timing;
 mod content_coding;
 mod content_decoding;
 mod cors;
+mod cross_origin_resource_policy;
 mod dns;
 mod error;
 mod fetch_url_list;
@@ -51,6 +52,7 @@ pub use config::FetchConfig;
 pub use connection_timing::{FetchConnectionTiming, FetchCurlTiming};
 pub use content_coding::resource_timing_content_encoding;
 pub use cors::validate_cors_response_for_origin;
+pub use cross_origin_resource_policy::CrossOriginResourcePolicy;
 pub use error::{
     FetchCancelled, NET_ERR_ABORTED_ERROR_TEXT, ensure_http_status_success, is_fetch_cancelled,
 };

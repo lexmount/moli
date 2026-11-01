@@ -5,6 +5,7 @@ mod compression_dictionary;
 mod connection_timing;
 mod cookie_context;
 mod cookie_store;
+mod corp;
 mod fetch_metadata;
 mod header_bytes;
 mod header_eof;
