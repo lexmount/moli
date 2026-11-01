@@ -182,7 +182,9 @@ where
         PaintOrderEvent::BoxOutsetShadow(id) => outset_shadow_bounds(projection, id),
         PaintOrderEvent::BoxBackground(id) => box_background_bounds(projection, id),
         PaintOrderEvent::TableCollapsedBorders(id) => table_border_bounds(projection, id),
-        PaintOrderEvent::BoxContents(id) => box_contents_bounds(projection, id),
+        PaintOrderEvent::BoxContents(id) | PaintOrderEvent::BoxText(id) => {
+            box_contents_bounds(projection, id)
+        }
         PaintOrderEvent::BoxOutline(id) => box_outline_bounds(projection, id),
         PaintOrderEvent::PushStackingContext(_) | PaintOrderEvent::PopStackingContext(_) => {
             PaintCullBounds::Empty

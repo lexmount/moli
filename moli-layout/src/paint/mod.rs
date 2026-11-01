@@ -411,6 +411,14 @@ where
                     &mut snapshot,
                 );
             }
+            PaintOrderEvent::BoxText(id) => {
+                active_clips.transition_to(
+                    projection,
+                    projection.content_clips[id.index()],
+                    &mut snapshot,
+                );
+                project_box_text(projection, id, current_cull, &mut metrics, &mut snapshot);
+            }
             PaintOrderEvent::TableCollapsedBorders(id) => {
                 active_clips.transition_to(
                     projection,
@@ -941,7 +949,35 @@ fn project_box_contents<N>(
         local_cull,
         &mut text_clip_mask,
     );
-    project_text(layout_box, transform, local_cull, metrics, snapshot);
+}
+
+fn project_box_text<N>(
+    projection: &OutputProjection<'_, N>,
+    id: LayoutBoxId,
+    cull: PaintCullRegion,
+    metrics: &mut PaintProjectionMetrics,
+    snapshot: &mut PaintSnapshot,
+) where
+    N: Copy + Debug + Eq + Hash,
+{
+    let layout_box = &projection.world.boxes[id.index()];
+    if !layout_box.style.is_visible() {
+        return;
+    }
+    let geometry = &projection.boxes[id.index()];
+    let viewport_transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
+        .paint
+        .local_transform();
+    let transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
+        .paint_space(snapshot.viewport_to_surface)
+        .local_transform();
+    project_text(
+        layout_box,
+        transform,
+        cull.local_rect(viewport_transform),
+        metrics,
+        snapshot,
+    );
 }
 
 fn unavailable_replaced_content_paint<N>(
