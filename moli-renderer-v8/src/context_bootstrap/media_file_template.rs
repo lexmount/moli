@@ -1,14 +1,14 @@
 use super::canvas::{
     canvas_context_arc_callback, canvas_context_arc_to_callback,
     canvas_context_begin_path_callback, canvas_context_bezier_curve_to_callback,
-    canvas_context_clear_rect_callback, canvas_context_close_path_callback,
-    canvas_context_create_image_data_callback, canvas_context_create_linear_gradient_callback,
-    canvas_context_draw_image_callback, canvas_context_ellipse_callback,
-    canvas_context_fill_callback, canvas_context_fill_style_getter_callback,
-    canvas_context_fill_style_setter_callback, canvas_context_fill_text_callback,
-    canvas_context_font_getter_callback, canvas_context_font_setter_callback,
-    canvas_context_get_image_data_callback, canvas_context_get_line_dash_callback,
-    canvas_context_global_alpha_getter_callback, canvas_context_global_alpha_setter_callback,
+    canvas_context_close_path_callback, canvas_context_create_image_data_callback,
+    canvas_context_create_linear_gradient_callback, canvas_context_draw_image_callback,
+    canvas_context_ellipse_callback, canvas_context_fill_callback,
+    canvas_context_fill_style_getter_callback, canvas_context_fill_style_setter_callback,
+    canvas_context_fill_text_callback, canvas_context_font_getter_callback,
+    canvas_context_font_setter_callback, canvas_context_get_image_data_callback,
+    canvas_context_get_line_dash_callback, canvas_context_global_alpha_getter_callback,
+    canvas_context_global_alpha_setter_callback,
     canvas_context_global_composite_operation_getter_callback,
     canvas_context_global_composite_operation_setter_callback,
     canvas_context_image_smoothing_enabled_getter_callback,
@@ -30,7 +30,7 @@ use super::canvas::{
     canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
     canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
     canvas_context_transform_callback, canvas_context_translate_callback,
-    canvas_gradient_add_color_stop_callback, install_canvas_fill_rect_bindings,
+    canvas_gradient_add_color_stop_callback, install_canvas_rect_bindings,
     install_canvas_template_bindings, install_canvas_transform_bindings,
     offscreen_canvas_convert_to_blob_callback, offscreen_canvas_get_context_callback,
     webgl_boolean_callback, webgl_check_framebuffer_status_callback, webgl_create_buffer_callback,
@@ -235,13 +235,6 @@ struct CanvasRenderingContext2dTemplateDeclaration {
         callback = canvas_context_get_line_dash_callback
     )]
     get_line_dash: (),
-
-    #[webapi(
-        method = "clearRect",
-        length = 4,
-        callback = canvas_context_clear_rect_callback
-    )]
-    clear_rect: (),
 
     #[webapi(
         method = "strokeRect",
@@ -675,7 +668,7 @@ pub(super) fn install_media_file_template_bindings<'s>(
                 scope, proto,
             );
             install_canvas_transform_bindings(scope, proto, spec_name);
-            install_canvas_fill_rect_bindings(scope, proto, spec_name);
+            install_canvas_rect_bindings(scope, proto, spec_name);
         }
         "WebGLRenderingContext" => {
             let proto = template.prototype_template(scope);
