@@ -27,3 +27,10 @@ pub(in crate::native_bridge) struct GetRootNodeArgs {
     #[webidl(dictionary)]
     pub options: GetRootNodeOptions,
 }
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Node")]
+pub(in crate::native_bridge) struct NodeNamespaceArgs {
+    #[webidl(required, nullable)]
+    pub namespace: Option<String>,
+}

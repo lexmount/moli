@@ -285,9 +285,9 @@ fn non_empty_value(value: &str) -> Option<String> {
     }
 }
 
-pub(in crate::native_bridge) fn node_lookup_namespace_uri_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::native_bridge) fn node_lookup_namespace_uri_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
@@ -296,18 +296,10 @@ pub(in crate::native_bridge) fn node_lookup_namespace_uri_callback(
         rv.set_null();
         return;
     };
-    let raw_prefix = args.get(0);
-    let prefix = if raw_prefix.is_null_or_undefined() {
-        None
-    } else {
-        match raw_prefix.to_string(scope) {
-            Some(s) => {
-                let raw = s.to_rust_string_lossy(scope);
-                if raw.is_empty() { None } else { Some(raw) }
-            }
-            None => None,
-        }
+    let Some(parsed) = webidl::parse_args::<NodeNamespaceArgs>(scope, &args) else {
+        return;
     };
+    let prefix = parsed.namespace.filter(|value| !value.is_empty());
     let runtime = unsafe { &*runtime_ptr };
     match locate_namespace(runtime, handle, prefix.as_deref()) {
         Some(ns) => match crate::util::v8_string(scope, &ns) {
@@ -318,9 +310,9 @@ pub(in crate::native_bridge) fn node_lookup_namespace_uri_callback(
     }
 }
 
-pub(in crate::native_bridge) fn node_is_default_namespace_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::native_bridge) fn node_is_default_namespace_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
@@ -329,26 +321,18 @@ pub(in crate::native_bridge) fn node_is_default_namespace_callback(
         rv.set_bool(false);
         return;
     };
-    let raw_namespace = args.get(0);
-    let namespace = if raw_namespace.is_null_or_undefined() {
-        None
-    } else {
-        match raw_namespace.to_string(scope) {
-            Some(s) => {
-                let raw = s.to_rust_string_lossy(scope);
-                if raw.is_empty() { None } else { Some(raw) }
-            }
-            None => None,
-        }
+    let Some(parsed) = webidl::parse_args::<NodeNamespaceArgs>(scope, &args) else {
+        return;
     };
+    let namespace = parsed.namespace.filter(|value| !value.is_empty());
     let runtime = unsafe { &*runtime_ptr };
     let default_namespace = locate_namespace(runtime, handle, None);
     rv.set_bool(default_namespace.as_deref() == namespace.as_deref());
 }
 
-pub(in crate::native_bridge) fn node_lookup_prefix_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::native_bridge) fn node_lookup_prefix_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
@@ -357,18 +341,10 @@ pub(in crate::native_bridge) fn node_lookup_prefix_callback(
         rv.set_null();
         return;
     };
-    let raw = args.get(0);
-    let namespace = if raw.is_null_or_undefined() {
-        None
-    } else {
-        match raw.to_string(scope) {
-            Some(s) => {
-                let raw = s.to_rust_string_lossy(scope);
-                if raw.is_empty() { None } else { Some(raw) }
-            }
-            None => None,
-        }
+    let Some(parsed) = webidl::parse_args::<NodeNamespaceArgs>(scope, &args) else {
+        return;
     };
+    let namespace = parsed.namespace.filter(|value| !value.is_empty());
     let Some(namespace) = namespace else {
         rv.set_null();
         return;
