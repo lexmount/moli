@@ -727,6 +727,7 @@ impl AsyncSubresourceFetchResponseFilter {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SubresourcePolicyContext {
+    pub(super) mixed_content_policy: moli_fetch::RequestMixedContentPolicy,
     pub(super) cross_origin_embedder_policy:
         crate::cross_origin_isolation::CrossOriginEmbedderPolicy,
     pub(super) document_isolation_policy: crate::cross_origin_isolation::DocumentIsolationPolicy,
@@ -734,8 +735,12 @@ pub(crate) struct SubresourcePolicyContext {
 }
 
 impl SubresourcePolicyContext {
+    pub(super) fn mixed_content_policy(self) -> moli_fetch::RequestMixedContentPolicy {
+        self.mixed_content_policy
+    }
     pub(super) fn from_document_policy(policy: &DocumentPolicyContainer) -> Self {
         Self {
+            mixed_content_policy: Default::default(),
             cross_origin_embedder_policy: policy.cross_origin_embedder_policy,
             document_isolation_policy: policy.document_isolation_policy,
             cross_origin_isolated: policy.cross_origin_isolated,

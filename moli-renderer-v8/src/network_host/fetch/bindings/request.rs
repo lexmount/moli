@@ -52,6 +52,7 @@ impl std::error::Error for FetchPrepareError {
 }
 
 pub(super) struct PreparedWindowFetchRequest {
+    pub(super) mixed_content_policy: moli_fetch::RequestMixedContentPolicy,
     pub(super) frame_id: Option<String>,
     pub(super) fetch_context: crate::native_bridge::WindowFetchContext,
     pub(super) resource_loader: crate::network::context::DocumentResourceLoader,
@@ -126,6 +127,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
     let resolved_url = resolve_context_url(&base_url, &parsed.url, None)?;
 
     Ok(PreparedWindowFetchRequest {
+        mixed_content_policy: host.window_mixed_content_policy(request_scope),
         frame_id,
         fetch_context,
         resource_loader,

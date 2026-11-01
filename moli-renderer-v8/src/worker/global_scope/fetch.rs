@@ -1897,6 +1897,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
                 .then_some(inherited.priority)
         });
         let metadata = ServiceWorkerFetchRequestMetadata {
+            mixed_content_policy: Default::default(),
             cache: init.cache.unwrap_or(inherited.cache),
             referrer: init.referrer.unwrap_or(inherited.referrer),
             referrer_policy: init.referrer_policy.unwrap_or(inherited.referrer_policy),
@@ -1940,6 +1941,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             .unwrap_or(RequestCredentialsMode::SameOrigin);
         let redirect_mode = init.redirect_mode.unwrap_or(RequestRedirectMode::Follow);
         let metadata = ServiceWorkerFetchRequestMetadata {
+            mixed_content_policy: Default::default(),
             cache: init.cache.unwrap_or_else(|| "default".to_owned()),
             referrer: init.referrer.unwrap_or_else(|| "about:client".to_owned()),
             referrer_policy: init.referrer_policy.unwrap_or_default(),

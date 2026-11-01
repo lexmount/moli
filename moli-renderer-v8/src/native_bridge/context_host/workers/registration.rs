@@ -1586,6 +1586,7 @@ fn dedicated_worker_policy_context_from_headers(
     creator_policy_context: SubresourcePolicyContext,
 ) -> SubresourcePolicyContext {
     SubresourcePolicyContext {
+        mixed_content_policy: Default::default(),
         cross_origin_embedder_policy:
             crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers),
         // Chromium's DedicatedWorkerHost currently keeps Document-Isolation-Policy

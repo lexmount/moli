@@ -1,4 +1,5 @@
 use crate::content_security_policy::ContentSecurityPolicy;
+use crate::native_bridge::OwnerDispatchScope;
 
 use std::collections::HashSet;
 
@@ -583,6 +584,72 @@ impl JsContextHost {
             .document_base_url_for_handle(document)
             .unwrap_or_else(|| context.base_url().clone());
         Some(context.subresource_environment(base_url, frame_id))
+    }
+
+    /// Chromium restricts mixed content using the current and top frame's
+    /// origin/precursor protocol, independently of SecureContext exposure.
+    pub(crate) fn window_has_https_state(&self, mut owner: OwnerDispatchScope) -> bool {
+        loop {
+            let document = match owner {
+                OwnerDispatchScope::Top => Some(self.document_handle()),
+                OwnerDispatchScope::Child(handle) => {
+                    self.child_browsing_context_document_handle(handle)
+                }
+                OwnerDispatchScope::LightweightPopup(id) => {
+                    self.lightweight_popup_document_handle(id)
+                }
+            };
+            let Some(document) = document else {
+                return false;
+            };
+            let url = self.document_url_for_handle(document);
+            if url.scheme() == "https"
+                || (url.scheme() == "blob"
+                    && url.origin().ascii_serialization().starts_with("https://"))
+                || self
+                    .window_access_origin_for_dispatch_scope(owner)
+                    .is_some_and(|origin| {
+                        matches!(origin,
+                        super::window_security_tokens::WindowAccessOrigin::Tuple { scheme, .. }
+                        if scheme == "https")
+                    })
+            {
+                return true;
+            }
+            if (moli_url::is_about_blank(&url) || moli_url::is_about_srcdoc(&url))
+                && let OwnerDispatchScope::Child(handle) = owner
+                && let Some(parent) = self.owner_dispatch_scope_for_node(handle)
+                && parent != owner
+            {
+                owner = parent;
+                continue;
+            }
+            return false;
+        }
+    }
+
+    pub(crate) fn window_mixed_content_policy(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> moli_fetch::RequestMixedContentPolicy {
+        if self.window_has_https_state(owner) {
+            return moli_fetch::RequestMixedContentPolicy::Block;
+        }
+        let mut top = owner;
+        while let OwnerDispatchScope::Child(handle) = top {
+            let Some(parent) = self.owner_dispatch_scope_for_node(handle) else {
+                break;
+            };
+            if parent == top {
+                break;
+            }
+            top = parent;
+        }
+        if self.window_has_https_state(top) {
+            moli_fetch::RequestMixedContentPolicy::Block
+        } else {
+            moli_fetch::RequestMixedContentPolicy::Allow
+        }
     }
 
     pub(crate) fn parent_document_resource_loader_for_child_context(

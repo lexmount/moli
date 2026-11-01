@@ -208,6 +208,7 @@ pub(super) fn spawn_network_fetch(
         prepared.request_headers.clone(),
         prepared.request_origin.clone(),
     )
+    .with_mixed_content_policy(prepared.mixed_content_policy)
     .with_initiator_url(&prepared.document_url)
     .with_request_mode(prepared.request_mode)
     .with_credentials_mode(prepared.credentials_mode)
