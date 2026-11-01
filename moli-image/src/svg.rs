@@ -24,11 +24,134 @@ const MAX_SVG_TREE_DEPTH: usize = 1_024;
 const DEFAULT_OBJECT_WIDTH: f32 = 300.0;
 const DEFAULT_OBJECT_HEIGHT: f32 = 150.0;
 
-static SVG_FONT_DATABASE: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
+/// Font faces available to one SVG text parse plus the family that unstyled
+/// `<text>` falls back to.
+struct SvgFonts {
+    database: Arc<usvg::fontdb::Database>,
+    /// An installed family, used wherever `fontdb`'s advertised default is
+    /// absent from the machine.
+    default_family: String,
+}
+
+impl SvgFonts {
+    fn from_database(database: usvg::fontdb::Database) -> Self {
+        // An empty database cannot shape anything; keep usvg's own default so
+        // the failure mode stays "unsupported content is omitted" instead of
+        // naming a family the database would try to match as `""`.
+        let default_family = installed_default_family(&database).unwrap_or_else(|| {
+            database
+                .family_name(&usvg::fontdb::Family::Serif)
+                .to_owned()
+        });
+        Self {
+            database: Arc::new(database),
+            default_family,
+        }
+    }
+
+    /// Builds usvg's resolver so a `<text>` node survives to paint.
+    ///
+    /// usvg drops a text node entirely when its primary font can be neither
+    /// selected nor loaded: `usvg::text::layout` returns no bounding box and
+    /// `usvg::text::convert` gives up, so the subtree never reaches the tree.
+    /// Font selection is a plain family-name lookup, and the shipped
+    /// resolver's final candidate is the `serif` generic. That generic, and
+    /// `Options::font_family`'s `Times New Roman` default, name whatever
+    /// `fontdb` read out of the platform's fontconfig aliases — it keeps only
+    /// the first `prefer` family of each alias, so the *last* alias wins. On
+    /// Debian that is `FreeSerif` from `69-unifont.conf`, which the image does
+    /// not install, so unstyled or uninstalled-family text vanished.
+    ///
+    /// Keep the shipped selector and only add an installed-face fallback after
+    /// it, so family, weight, stretch, and style matching stay upstream.
+    fn resolver(&self) -> usvg::FontResolver<'static> {
+        let shipped = usvg::FontResolver::default_font_selector();
+        let default_family = self.default_family.clone();
+        usvg::FontResolver {
+            select_font: Box::new(move |font, fontdb| {
+                shipped(font, fontdb).or_else(|| {
+                    let names = [usvg::fontdb::Family::Name(default_family.as_str())];
+                    fontdb
+                        .query(&usvg::fontdb::Query {
+                            families: &names,
+                            weight: usvg::fontdb::Weight(font.weight()),
+                            stretch: fontdb_stretch(font.stretch()),
+                            style: fontdb_style(font.style()),
+                        })
+                        // Any installed face is still better than dropping the
+                        // node; per-character fallback then covers glyph gaps.
+                        .or_else(|| fontdb.faces().next().map(|face| face.id))
+                })
+            }),
+            select_fallback: usvg::FontResolver::default_fallback_selector(),
+        }
+    }
+}
+
+static SVG_FONTS: LazyLock<SvgFonts> = LazyLock::new(|| {
     let mut database = usvg::fontdb::Database::new();
     database.load_system_fonts();
-    Arc::new(database)
+    SvgFonts::from_database(database)
 });
+
+/// Returns the first generic family whose advertised name is installed.
+///
+/// `fontdb::Database::query` compares family names exactly, which is the same
+/// comparison usvg's selector performs, so this only accepts a name that can
+/// actually be resolved.
+fn installed_default_family(database: &usvg::fontdb::Database) -> Option<String> {
+    for generic in [
+        usvg::fontdb::Family::Serif,
+        usvg::fontdb::Family::SansSerif,
+        usvg::fontdb::Family::Monospace,
+        usvg::fontdb::Family::Cursive,
+        usvg::fontdb::Family::Fantasy,
+    ] {
+        let name = database.family_name(&generic);
+        if family_is_installed(database, name) {
+            return Some(name.to_owned());
+        }
+    }
+    // No generic resolved: name any installed face rather than a family the
+    // database cannot match. `faces()` follows load order, so this is stable.
+    database
+        .faces()
+        .find_map(|face| face.families.first().map(|family| family.0.clone()))
+}
+
+fn family_is_installed(database: &usvg::fontdb::Database, family: &str) -> bool {
+    let names = [usvg::fontdb::Family::Name(family)];
+    database
+        .query(&usvg::fontdb::Query {
+            families: &names,
+            weight: usvg::fontdb::Weight::NORMAL,
+            stretch: usvg::fontdb::Stretch::Normal,
+            style: usvg::fontdb::Style::Normal,
+        })
+        .is_some()
+}
+
+fn fontdb_stretch(stretch: usvg::FontStretch) -> usvg::fontdb::Stretch {
+    match stretch {
+        usvg::FontStretch::UltraCondensed => usvg::fontdb::Stretch::UltraCondensed,
+        usvg::FontStretch::ExtraCondensed => usvg::fontdb::Stretch::ExtraCondensed,
+        usvg::FontStretch::Condensed => usvg::fontdb::Stretch::Condensed,
+        usvg::FontStretch::SemiCondensed => usvg::fontdb::Stretch::SemiCondensed,
+        usvg::FontStretch::Normal => usvg::fontdb::Stretch::Normal,
+        usvg::FontStretch::SemiExpanded => usvg::fontdb::Stretch::SemiExpanded,
+        usvg::FontStretch::Expanded => usvg::fontdb::Stretch::Expanded,
+        usvg::FontStretch::ExtraExpanded => usvg::fontdb::Stretch::ExtraExpanded,
+        usvg::FontStretch::UltraExpanded => usvg::fontdb::Stretch::UltraExpanded,
+    }
+}
+
+fn fontdb_style(style: usvg::FontStyle) -> usvg::fontdb::Style {
+    match style {
+        usvg::FontStyle::Normal => usvg::fontdb::Style::Normal,
+        usvg::FontStyle::Italic => usvg::fontdb::Style::Italic,
+        usvg::FontStyle::Oblique => usvg::fontdb::Style::Oblique,
+    }
+}
 
 /// Natural SVG sizing data and its CSS default concrete object size.
 ///
@@ -178,11 +301,23 @@ pub fn decode_svg_image_with_metadata(
     bytes: &[u8],
     metadata: SvgImageMetadata,
 ) -> Result<SvgImage, SvgDecodeError> {
+    decode_svg_image_with_fonts(bytes, metadata, &SVG_FONTS)
+}
+
+fn decode_svg_image_with_fonts(
+    bytes: &[u8],
+    metadata: SvgImageMetadata,
+    fonts: &SvgFonts,
+) -> Result<SvgImage, SvgDecodeError> {
     check_encoded_budget(bytes)?;
     let default_size = usvg::Size::from_wh(metadata.concrete_width, metadata.concrete_height)
         .ok_or(SvgDecodeError::InvalidConcreteSize)?;
     let options = usvg::Options {
-        fontdb: SVG_FONT_DATABASE.clone(),
+        fontdb: fonts.database.clone(),
+        // usvg resolves a missing `font-family` name before consulting
+        // `font_resolver`, so the default must name an installed family.
+        font_family: fonts.default_family.clone(),
+        font_resolver: fonts.resolver(),
         default_size,
         // The default usvg resolver accepts data URLs and local filesystem
         // paths. Image resources must stay behind Moli's fetch and
@@ -540,5 +675,83 @@ mod tests {
             usvg::Node::Image(_) => true,
             usvg::Node::Path(_) | usvg::Node::Text(_) => false,
         })
+    }
+
+    // A text node only survives parsing when its font resolved: usvg drops the
+    // whole subtree otherwise, so "text exists and has glyph paths" is the
+    // consumer-visible behavior the inline-SVG bridge depends on. These use a
+    // database holding only the checked-in Ahem face, so they never depend on
+    // which fonts the host has.
+    fn fonts_with_only_ahem() -> SvgFonts {
+        let mut database = usvg::fontdb::Database::new();
+        database.load_font_data(
+            include_bytes!("../../moli-layout/tests/fixtures/moli-ahem.ttf").to_vec(),
+        );
+        SvgFonts::from_database(database)
+    }
+
+    fn text_nodes<'a>(group: &'a usvg::Group, found: &mut Vec<&'a usvg::Text>) {
+        for node in group.children() {
+            match node {
+                usvg::Node::Group(group) => text_nodes(group, found),
+                usvg::Node::Text(text) => found.push(text),
+                usvg::Node::Path(_) | usvg::Node::Image(_) => {}
+            }
+        }
+    }
+
+    #[test]
+    fn unstyled_text_shapes_with_an_installed_default_family() {
+        let fonts = fonts_with_only_ahem();
+        // `fontdb` advertises defaults this database does not contain, which is
+        // the shape of the reported failure.
+        assert!(!family_is_installed(&fonts.database, "Times New Roman"));
+        let source = br##"<svg xmlns="http://www.w3.org/2000/svg" width="90" height="40">
+                <rect width="90" height="40" fill="#087a65"/>
+                <text x="10" y="26" fill="white" font-size="18">SVG OK</text>
+            </svg>"##;
+        let svg =
+            decode_svg_image_with_fonts(source, probe_svg_image(source).expect("metadata"), &fonts)
+                .expect("unstyled text must parse");
+
+        let mut texts = Vec::new();
+        text_nodes(svg.tree().root(), &mut texts);
+        assert_eq!(texts.len(), 1, "text node must survive parsing");
+        let glyph_paths = texts[0]
+            .flattened()
+            .children()
+            .iter()
+            .filter(|node| matches!(node, usvg::Node::Path(_)))
+            .count();
+        assert!(
+            glyph_paths > 0,
+            "text must flatten to glyph paths, got {glyph_paths}"
+        );
+        // The node only exists because a real face was selected: with no
+        // authored family, usvg names `Options::font_family`, which must be the
+        // installed face rather than an absent platform default.
+        let families = texts[0].chunks()[0].spans()[0].font().families();
+        assert_eq!(families.len(), 1, "{families:?}");
+        assert_eq!(families[0], usvg::FontFamily::Named("Moli Ahem".to_owned()));
+    }
+
+    #[test]
+    fn named_family_absent_from_disk_still_shapes_text() {
+        let fonts = fonts_with_only_ahem();
+        let source = br#"<svg xmlns="http://www.w3.org/2000/svg" width="90" height="40">
+                <text x="10" y="26" font-family="Missing Family" font-size="18">SVG OK</text>
+            </svg>"#;
+        let svg =
+            decode_svg_image_with_fonts(source, probe_svg_image(source).expect("metadata"), &fonts)
+                .expect("an uninstalled family must not erase the text node");
+
+        let mut texts = Vec::new();
+        text_nodes(svg.tree().root(), &mut texts);
+        assert_eq!(
+            texts.len(),
+            1,
+            "text node must survive an uninstalled family"
+        );
+        assert!(!texts[0].flattened().children().is_empty());
     }
 }

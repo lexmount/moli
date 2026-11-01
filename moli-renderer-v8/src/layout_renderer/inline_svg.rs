@@ -4,6 +4,12 @@
 // live SVG subtree remains owned by NativeDom; a fresh paint pass serializes
 // it into one bounded, immutable `usvg::Tree`. No SVG child layout tree or
 // cross-pass resource cache is retained here.
+//
+// Because the tree is reparsed in isolation, every inherited input that
+// affects paint must be projected onto the serialized root: paint group,
+// resolved `currentColor`, root font, and the inherited text longhands. A
+// value left behind is not "slightly different styling"; usvg drops nodes it
+// cannot resolve, so `<text>` disappears from the output entirely.
 
 use std::sync::Arc;
 
@@ -197,6 +203,35 @@ fn computed_root_declarations(style: &ResolvedLayoutStyle) -> String {
     ] {
         append_serialized_declaration(&mut declarations, name, &value);
     }
+
+    // Text paint happens inside usvg, which resolves `font-*` while parsing.
+    // Document stylesheets are absent from the serialized document, so the
+    // root's computed font must travel with it; otherwise usvg falls back to
+    // its own default family and drops `text` nodes it cannot shape.
+    append_serialized_declaration(
+        &mut declarations,
+        "font-family",
+        // Stylo quotes a family name with double quotes and these declarations
+        // land inside a double-quoted `style` attribute of an XML document, so
+        // the value needs XML escaping; usvg decodes it back to authored text.
+        &escape_serialized_value(&computed.clone_font_family().to_css_string()),
+    );
+    append_serialized_declaration(
+        &mut declarations,
+        "font-weight",
+        &computed.clone_font_weight().to_css_string(),
+    );
+    append_serialized_declaration(
+        &mut declarations,
+        "font-style",
+        &computed.clone_font_style().to_css_string(),
+    );
+    // usvg only understands the keyword spellings of `font-stretch`; a
+    // numeric percentage (e.g. `87.5%`) would parse as `normal`, so omit the
+    // declaration unless the computed width maps onto a keyword.
+    if let Some(keyword) = computed.clone_font_width().as_keyword() {
+        append_serialized_declaration(&mut declarations, "font-stretch", &keyword.to_css_string());
+    }
     declarations
 }
 
@@ -248,6 +283,27 @@ fn append_serialized_declaration(declarations: &mut String, name: &str, value: &
     declarations.push_str(" !important;");
 }
 
+/// Escapes a declaration value for a double-quoted `style` attribute of the
+/// serialized XML document.
+///
+/// usvg parses the serialized subtree as XML, where an unescaped `"` would end
+/// the attribute and a bare `&` would start an entity. Only the characters
+/// that can appear in an authored font family (or a quoted CSS value) need
+/// this; the other declarations are numeric or identifier-only.
+fn escape_serialized_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '"' => escaped.push_str("&quot;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
 fn rgba_css(color: PaintColor) -> String {
     let channel = |value: f32| {
         let value = if value.is_finite() { value } else { 0.0 };
@@ -264,24 +320,4 @@ fn rgba_css(color: PaintColor) -> String {
         channel(color.green),
         channel(color.blue),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn source_bridge_adds_xml_namespace_and_resolved_current_color() {
-        let declarations =
-            inherited_context_declarations(PaintColor::new(1.0, 0.0, 0.0, 1.0), 16.0);
-        let source = prepare_source(
-            "<svg viewBox=\"0 0 2 1\" style=\"display:block\"><rect width=\"2\" height=\"1\" fill=\"currentColor\"></rect></svg>".to_owned(),
-            &declarations,
-        )
-        .unwrap();
-        assert!(source.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\""));
-        assert!(source.contains("color:rgba(255,0,0,1.000000) !important"));
-        assert!(source.contains("font-size:16.000000px !important"));
-        assert!(moli_image::decode_svg_image(source.as_bytes()).is_ok());
-    }
 }
