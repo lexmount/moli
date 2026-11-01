@@ -143,7 +143,7 @@ fn reporting_observer_converts_callback_and_returned_records_in_the_consumer_rea
       globalThis.other=frame.contentWindow;globalThis.calls=[];
       globalThis.observer=new ReportingObserver(other.Function('reports,self',`
         parent.calls.push([reports instanceof Array,
-          Object.getPrototypeOf(reports[0])===Object.prototype,
+          Object.getPrototypeOf(Object.getPrototypeOf(reports[0]))===Object.prototype&&Object.prototype.toString.call(reports[0])==='[object Report]',
           Object.getPrototypeOf(reports[0].body)===Object.prototype,
           this===self,reports[0].body.value]);
       `));
@@ -163,7 +163,7 @@ fn reporting_observer_converts_callback_and_returned_records_in_the_consumer_rea
             r#"(() => {
           const records=other.ReportingObserver.prototype.takeRecords.call(observer);
           return JSON.stringify([records instanceof other.Array,
-            Object.getPrototypeOf(records[0])===other.Object.prototype,
+            Object.getPrototypeOf(Object.getPrototypeOf(records[0]))===other.Object.prototype&&Object.prototype.toString.call(records[0])==='[object Report]',
             Object.getPrototypeOf(records[0].body)===other.Object.prototype,
             records[0].body.value,observer.takeRecords().length]);
         })()"#
@@ -229,4 +229,50 @@ fn reporting_observer_callback_and_owner_realm_retirement_suppresses_pending_del
     vm.eval("frame.remove()").unwrap();
     drain_reporting_tasks(&mut vm);
     assert_eq!(vm.eval("calls").unwrap(), "0");
+}
+
+#[test]
+fn reporting_records_use_hidden_native_prototypes_and_immutable_json_snapshots() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://reporting-records.test/");
+    vm.eval("document.body.innerHTML='<iframe id=child></iframe>';globalThis.other=child.contentWindow;globalThis.observer=new ReportingObserver(()=>{});observer.observe();").unwrap();
+    let context = &vm.page_default_runtime.context as *const _;
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context,|scope,_|{
+        crate::context_bootstrap::notify_reporting_observers(scope,"coep","https://reporting-records.test/",serde_json::json!({"type":"corp","blockedURL":"https://remote.test/image","destination":"","disposition":"enforce"}));
+        Ok(())
+    }).unwrap();
+    assert_eq!(vm.eval(r#"(() => {
+      if(typeof Report!=='undefined'||typeof other.Report!=='undefined')return 'global Report';
+      let constructorLookups=0;
+      Object.defineProperty(other,'Report',{configurable:true,get(){constructorLookups++;throw Error('public Report getter');}});
+      const record=other.ReportingObserver.prototype.takeRecords.call(observer)[0];
+      delete other.Report;
+      if(constructorLookups!==0)return 'constructor lookup';
+      const proto=Object.getPrototypeOf(record);const body=record.body;
+      if(Reflect.ownKeys(record).length!==0||Reflect.ownKeys(body).length!==0)return 'own properties';
+      if(Object.getPrototypeOf(proto)!==other.Object.prototype||Object.hasOwn(proto,'constructor'))return 'Report prototype';
+      if(Object.prototype.toString.call(record)!=='[object Report]'||Object.prototype.toString.call(body)!=='[object ReportBody]')return 'tags';
+      if(Object.getPrototypeOf(body)!==other.ReportBody.prototype)return 'body prototype';
+      const descriptor=Object.getOwnPropertyDescriptor(proto,'type');
+      if(!descriptor.enumerable||!descriptor.configurable||descriptor.set!==undefined)return 'readonly attribute';
+      if(record.type!=='coep'||record.url!=='https://reporting-records.test/')return 'attributes';
+      const serialize=proto.toJSON;const serializeBody=other.ReportBody.prototype.toJSON;
+      const expected={type:'corp',blockedURL:'https://remote.test/image',destination:'',disposition:'enforce'};
+      const first=serialize.call(record);first.body.blockedURL='changed';
+      if(serialize.call(record).body.blockedURL!==expected.blockedURL)return 'shared snapshot';
+      if(serializeBody.call(body).blockedURL!==expected.blockedURL)return 'body snapshot';
+      Object.defineProperties(record,{type:{get(){throw Error('public type getter')}},body:{get(){throw Error('public body getter')}},url:{value:'https://forged.test/'}});
+      const snapshot=serialize.call(record);
+      if(Object.keys(snapshot).join(',')!=='type,url,body')return 'snapshot keys';
+      if(snapshot.type!=='coep'||snapshot.url!=='https://reporting-records.test/'||snapshot.body.blockedURL!==expected.blockedURL)return 'public override';
+      if(Object.getPrototypeOf(snapshot)!==other.Object.prototype||Object.getPrototypeOf(snapshot.body)!==other.Object.prototype)return 'snapshot realm';
+      for(const [real,method] of [[record,serialize],[body,serializeBody]]){
+        let traps=0;const proxy=new Proxy(real,{get(){traps++;throw Error('proxy get')}});
+        for(const fake of [{},Object.create(real),proxy]){
+          try{method.call(fake);return 'accepted forged receiver';}
+          catch(error){if(!(error instanceof other.TypeError)||error instanceof TypeError)return 'error realm';}
+        }
+        if(traps!==0)return 'proxy traps';
+      }
+      return 'true';
+    })()"#).unwrap(),"true");
 }

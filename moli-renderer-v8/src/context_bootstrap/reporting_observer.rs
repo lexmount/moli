@@ -1,6 +1,6 @@
 //! Reporting observers share the native callback residence and browser task
 //! scheduler. Reports in the global buffer are immutable serialized snapshots;
-//! each observer receives separate application-visible dictionaries.
+//! each observer receives separate application-visible records.
 
 use crate::common_runtime::{
     CallbackRegistrationId, CallbackRegistrationKind, CallbackResidence, CommonRuntimeState,
@@ -13,6 +13,8 @@ use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, web_api_object_target};
 
+pub(super) mod records;
+
 const CALLBACK_ID: &str = "__moliReportingCallbackRegistrationId";
 const CALLBACK: &str = "__moliReportingObserverCallback";
 const CALLBACK_RELEVANT: &str = "__moliReportingObserverCallbackRelevant";
@@ -22,7 +24,6 @@ const BUFFERED: &str = "__moliReportingObserverBuffered";
 const PENDING: &str = "__moliReportingObserverPending";
 const REPORT_BUFFER: &str = "__moliReportingObserverReportBuffer";
 const REPORT_TYPE: &str = "__moliReportingObserverReportType";
-const REPORT_JSON: &str = "__moliReportingObserverReportJson";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::ReportingObserver)]
@@ -192,14 +193,9 @@ pub(crate) fn notify_report(
     body: serde_json::Value,
 ) {
     let report = crate::util::new_null_prototype_object(scope);
+    records::initialize_snapshot(scope, report, url, &body);
     let kind = v8_string(scope, report_type).expect("report type should allocate");
-    let json = v8_string(
-        scope,
-        &serde_json::json!({"type":report_type,"url":url,"body":body}).to_string(),
-    )
-    .expect("report should serialize");
     set_private_value(scope, report, REPORT_TYPE, kind.into());
-    set_private_value(scope, report, REPORT_JSON, json.into());
     for observer in registered(scope) {
         add_report(scope, observer, report);
     }
@@ -430,12 +426,8 @@ fn expose_reports<'s>(
             records.get_index(scope, index).expect("dense report queue"),
         )
         .expect("internal report is an object");
-        let json = v8::Local::<v8::String>::try_from(
-            get_private_value(scope, report, REPORT_JSON).expect("internal report JSON"),
-        )
-        .expect("serialized report is a string");
-        let exposed = v8::json::parse(scope, json).expect("native report JSON should parse");
-        append(scope, reports, exposed);
+        let exposed = records::expose(scope, report);
+        append(scope, reports, exposed.into());
     }
     reports
 }

@@ -102,6 +102,7 @@ interfaces! {
     PerformanceEventTiming: PerformanceEntry;
     PerformancePaintTiming: PerformanceEntry;
     PerformanceServerTiming;
+    Report;
     ReportBody;
     ReportingObserver;
     SpeechSynthesisErrorEvent: SpeechSynthesisEvent;

@@ -164,6 +164,10 @@ pub(super) fn install_observer_template_bindings<'s>(
             let proto = template.prototype_template(scope);
             super::reporting_observer::ReportingObserverPrototypeDeclaration::initialize_prototype_template(scope, proto);
         }
+        "ReportBody" => {
+            let proto = template.prototype_template(scope);
+            super::reporting_observer::records::ReportBodyPrototypeDeclaration::initialize_prototype_template(scope, proto);
+        }
         "PerformanceObserver" => {
             let proto = template.prototype_template(scope);
             PerformanceObserverTemplateMethodsDeclaration::initialize_prototype_template(
