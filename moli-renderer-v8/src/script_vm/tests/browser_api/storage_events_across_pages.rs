@@ -38,8 +38,29 @@ async fn drain_storage(
 
 #[tokio::test]
 async fn local_storage_events_cross_pages_with_matching_origin_and_partition() {
+    assert_local_storage_events_cross_pages(crate::RendererWebStorageHandles::ephemeral()).await;
+}
+
+#[tokio::test]
+async fn sqlite_local_storage_events_cross_pages_with_matching_origin_and_partition() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = moli_sqlite::Runtime::new().unwrap();
+    let (local, owner) = moli_web_storage::new_sqlite_web_storage_store(
+        directory.path().join("localstorage.sqlite"),
+        moli_sqlite::OpenMode::Create,
+        runtime.handle(),
+    )
+    .unwrap();
+    assert_local_storage_events_cross_pages(crate::RendererWebStorageHandles::new(
+        local,
+        crate::new_shared_web_storage_store(),
+    ))
+    .await;
+    owner.close().unwrap();
+}
+
+async fn assert_local_storage_events_cross_pages(storage: crate::RendererWebStorageHandles) {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
-    let storage = crate::RendererWebStorageHandles::ephemeral();
     let other_storage = crate::RendererWebStorageHandles::new(
         storage.local_storage(),
         crate::new_shared_web_storage_store(),

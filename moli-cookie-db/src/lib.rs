@@ -35,7 +35,7 @@ impl From<&StoredCookie> for Key {
     }
 }
 enum Change {
-    Put(StoredCookie),
+    Put(Box<StoredCookie>),
     Delete,
 }
 #[derive(Default)]
@@ -48,7 +48,7 @@ impl Batch {
         match change {
             StoredCookieMutation::Upsert { cookie } => Self {
                 clear: false,
-                changes: BTreeMap::from([(Key::from(&cookie), Change::Put(cookie))]),
+                changes: BTreeMap::from([(Key::from(&cookie), Change::Put(Box::new(cookie)))]),
             },
             StoredCookieMutation::Delete(key) => Self {
                 clear: false,

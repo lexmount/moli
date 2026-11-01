@@ -171,6 +171,18 @@ async fn sqlite_areas_follow_window_lifetime_without_storage_wrapper_finalizers(
     .await;
     assert_eq!(
         host.borrow().local_storage_area_count_for_test(),
+        2,
+        "close() queues definite Window closure on the DOM-manipulation source"
+    );
+    assert_eq!(
+        vm.eval_after_selected_page_tasks(
+            "String(storagePopup.closed && storagePopup.opener === null)"
+        )
+        .unwrap(),
+        "true"
+    );
+    assert_eq!(
+        host.borrow().local_storage_area_count_for_test(),
         1,
         "a closed Window releases its area even while its Storage wrapper is retained"
     );
