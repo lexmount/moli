@@ -222,6 +222,7 @@ impl PageScriptHost {
                 request_body: None,
                 resource_type: SubresourceResourceType::WebSocket,
                 request_cookie_report: None,
+                request_include_credentials: false,
                 network_request_headers: None,
                 response_status,
                 response_headers: response_headers.into_iter().collect(),

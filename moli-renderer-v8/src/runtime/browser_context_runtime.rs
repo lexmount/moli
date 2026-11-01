@@ -306,6 +306,7 @@ impl DetachedParserScriptFetchContinuation {
                 status: response_code,
                 headers: response_headers,
                 request_cookie_report: None,
+                request_include_credentials: false,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
                 redirect_chain: Vec::new(),
@@ -1266,7 +1267,10 @@ mod tests {
             1
         );
 
-        runtime.inner.shared_worker_runtime.get_or_init();
+        runtime
+            .inner
+            .shared_worker_runtime
+            .get_or_init(runtime.browser_resource_runtime().task_runner());
         runtime.service_worker_runtime();
         assert_eq!(
             runtime.moli_memory_diagnostics()["sharedWorker"]["runtimeInitialized"],

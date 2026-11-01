@@ -84,6 +84,9 @@ async fn raw_document_body_materialization_uses_the_fetch_deadline() -> Result<(
     // transport startup while exercising the real materializer and deadline.
     let response = StreamingRawResponse::new_with_head(
         ResponseHead {
+            preload_state: Default::default(),
+            request_include_credentials: false,
+
             status_text: None,
             final_url: url.clone(),
             status: 200,
@@ -98,7 +101,6 @@ async fn raw_document_body_materialization_uses_the_fetch_deadline() -> Result<(
             from_cache: false,
             cache_state: Default::default(),
             negotiated_http_version: None,
-            preload_state: Default::default(),
         },
         body_rx,
         cancel_handle.clone(),
@@ -141,6 +143,7 @@ async fn external_raw_bridge_drop_after_body_eof_cancels_pending_fetch_completio
             status: 200,
             headers: vec![("content-type".to_owned(), b"text/html".to_vec())],
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: false,
             redirect_chain: Vec::new(),

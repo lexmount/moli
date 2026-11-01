@@ -22,6 +22,8 @@ fn redirected_head(allow_redirect_timing: bool) -> ResponseHead {
     };
     let tao = vec![("Timing-Allow-Origin".to_owned(), b"*".to_vec())];
     ResponseHead {
+        request_include_credentials: false,
+
         final_url: home.clone(),
         status: 200,
         status_text: None,

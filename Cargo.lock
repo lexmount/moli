@@ -3196,6 +3196,7 @@ version = "0.1.0"
 dependencies = [
  "moli-web-mime",
  "serde",
+ "serde_json",
  "strum",
  "url",
 ]

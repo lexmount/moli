@@ -835,6 +835,7 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
             body_source_id,
             response_head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Basic,
                     timing_allow_passed: true,
                     url_list: (Some(
@@ -956,6 +957,7 @@ async fn service_worker_fetch_event_preload_response_opaqueredirect_exposes_requ
             body_source_id,
             response_head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::OpaqueRedirect,
                     timing_allow_passed: true,
                     url_list: (Some(request_url)).into_iter().collect(),
@@ -1131,6 +1133,7 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
             body_source_id,
             response_head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Basic,
                     timing_allow_passed: true,
                     url_list: (Some(
@@ -1251,6 +1254,7 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
             body_source_id,
             response_head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Basic,
                     timing_allow_passed: true,
                     url_list: (Some(

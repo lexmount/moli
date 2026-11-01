@@ -118,6 +118,7 @@ impl ScriptVm {
                         request_body: challenged_body,
                         resource_type,
                         request_cookie_report: response.request_cookie_report.clone(),
+                        request_include_credentials: response.request_include_credentials,
                         network_request_headers: response
                             .network_request_headers()
                             .map(|headers| headers.to_vec()),
@@ -186,6 +187,7 @@ impl ScriptVm {
                         request_body: request_body.clone(),
                         resource_type,
                         request_cookie_report: response.request_cookie_report.clone(),
+                        request_include_credentials: response.request_include_credentials,
                         network_request_headers: response
                             .network_request_headers()
                             .map(|headers| headers.to_vec()),

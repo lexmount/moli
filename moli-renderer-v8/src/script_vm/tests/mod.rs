@@ -399,6 +399,7 @@ fn register_pending_window_fetch_for_test(
             }
             PendingWindowFetchTestStage::Streaming => {
                 let head = moli_fetch::ResponseHead {
+                    request_include_credentials: false,
                     status_text: None,
                     final_url: url.clone(),
                     status: 200,
@@ -2325,6 +2326,7 @@ mod body_window_handler_receivers;
 mod browser_api;
 mod cache_dictionary_inheritance;
 mod cache_interfaces;
+mod cache_response_credentials;
 
 mod dom_token_list_native_receivers;
 

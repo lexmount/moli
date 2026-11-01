@@ -1,4 +1,6 @@
 pub(crate) use async_fetch::next_redirect_url;
+#[cfg(test)]
+pub(crate) use response::set_response_metadata;
 
 mod async_fetch;
 mod beacon;
@@ -178,6 +180,8 @@ pub(crate) use self::request_scope::{
 };
 #[cfg(test)]
 pub(crate) use self::response::materialize_response_object;
+#[cfg(test)]
+pub(crate) use self::response::response_metadata;
 pub(crate) use self::response::{
     FetchResponseRequest, FetchResponseSecurityViolation, MaterializedResponseBody,
     build_error_response_object, materialize_cache_response_object_head, MaterializedResponseHead, build_fetch_response_object_for_request_mode,
@@ -289,7 +293,5 @@ pub(crate) use response::build_fetch_response_object_for_request_mode;
 
 #[cfg(test)]
 pub(crate) use response::materialize_response_object_head;
-
-pub(crate) use request::build_service_worker_request_object;
 
 pub(crate) use response::set_cached_response_head;

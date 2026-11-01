@@ -3276,6 +3276,7 @@ opening.onsuccess = () => { globalThis.db = opening.result; dbReady = true; };
                     moli_storage_service::StorageBucketCachedResponse {
                         head: moli_fetch_types::FetchResponseHead {
                             metadata: moli_fetch_types::FetchResponseMetadata {
+                                request_include_credentials: false,
                                 response_type: moli_fetch_types::FetchResponseType::Default,
                                 timing_allow_passed: true,
                                 url_list: vec![
@@ -3391,6 +3392,7 @@ fn default_bucket_quota_is_shared_by_cache_indexed_db_and_opfs() {
                     moli_storage_service::StorageBucketCachedResponse {
                         head: moli_fetch_types::FetchResponseHead {
                             metadata: moli_fetch_types::FetchResponseMetadata {
+                                request_include_credentials: false,
                                 response_type: moli_fetch_types::FetchResponseType::Default,
                                 timing_allow_passed: true,
                                 url_list: vec![

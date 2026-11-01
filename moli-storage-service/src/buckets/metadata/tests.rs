@@ -130,6 +130,7 @@ fn metadata_candidates_preserve_cache_payloads_and_handle_identity_without_cloni
             response: StorageBucketCachedResponse {
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: vec![

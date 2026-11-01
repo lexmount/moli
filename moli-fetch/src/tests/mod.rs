@@ -81,6 +81,8 @@ fn test_web_bot_auth_signer() -> WebBotAuthSigner {
 
 fn sample_response_head() -> ResponseHead {
     ResponseHead {
+        request_include_credentials: false,
+
         status_text: None,
         final_url: Url::parse("http://example.test/final").unwrap(),
         status: 203,
@@ -6581,3 +6583,5 @@ mod range_encoding;
 mod referrer_redirects;
 
 mod redirect_cookie_context;
+
+mod response_credentials;

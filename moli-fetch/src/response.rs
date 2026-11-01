@@ -115,6 +115,9 @@ pub struct ResponseHead {
     pub status_text: Option<String>,
     pub headers: Vec<(String, Vec<u8>)>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
+    /// Fetch's credentials flag for this response's final request. It remains
+    /// true even when the cookie jar is empty, and survives opaque filtering.
+    pub request_include_credentials: bool,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
     pub redirected: bool,
     pub redirect_chain: Vec<RedirectInfo>,
@@ -176,13 +179,16 @@ impl ResponseHead {
         mode: crate::RequestMode,
         disabled: bool,
     ) -> crate::FetchResponseMetadata {
-        crate::FetchResponseMetadata {
+        let mut metadata = crate::FetchResponseMetadata {
             cors_exposed_header_names: None,
+            request_include_credentials: self.request_include_credentials,
             response_type: self.fetch_response_type_with_web_security(origin, mode, disabled),
             url_list: self.url_list().to_vec(),
             timing_allow_passed: self.timing_allow_passed(origin),
             redirected: self.redirected,
-        }
+        };
+        metadata.capture_cors_exposed_headers(&self.headers);
+        metadata
     }
 
     /// Classify without allocating response metadata or evaluating TAO.
@@ -514,6 +520,7 @@ pub struct Response {
     pub headers: Vec<(String, Vec<u8>)>,
     body: ResponseBody,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
+    pub request_include_credentials: bool,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
     pub redirected: bool,
     pub redirect_chain: Vec<RedirectInfo>,
@@ -536,6 +543,7 @@ impl Clone for Response {
                 .clone_materialized()
                 .expect("Response body should remain materialized"),
             request_cookie_report: self.request_cookie_report.clone(),
+            request_include_credentials: self.request_include_credentials,
             cookie_set_reports: self.cookie_set_reports.clone(),
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
@@ -592,6 +600,7 @@ impl Response {
             status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             request_cookie_report: self.request_cookie_report.clone(),
+            request_include_credentials: self.request_include_credentials,
             cookie_set_reports: self.cookie_set_reports.clone(),
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
@@ -632,6 +641,7 @@ impl Response {
             headers: head.headers,
             body,
             request_cookie_report: head.request_cookie_report,
+            request_include_credentials: head.request_include_credentials,
             cookie_set_reports: head.cookie_set_reports,
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
@@ -652,6 +662,7 @@ impl Response {
             headers: head.headers,
             body,
             request_cookie_report: head.request_cookie_report,
+            request_include_credentials: head.request_include_credentials,
             cookie_set_reports: head.cookie_set_reports,
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
@@ -670,6 +681,7 @@ impl Response {
             status_text: self.status_text,
             headers: self.headers,
             request_cookie_report: self.request_cookie_report,
+            request_include_credentials: self.request_include_credentials,
             cookie_set_reports: self.cookie_set_reports,
             redirected: self.redirected,
             redirect_chain: self.redirect_chain,
@@ -709,6 +721,7 @@ impl Response {
             status_text: self.status_text,
             headers: self.headers,
             request_cookie_report: self.request_cookie_report,
+            request_include_credentials: self.request_include_credentials,
             cookie_set_reports: self.cookie_set_reports,
             redirected: self.redirected,
             redirect_chain: self.redirect_chain,
@@ -738,6 +751,7 @@ pub struct RawResponse {
     body: ResponseBody,
     body_sizes: Option<crate::FetchResponseBodySizes>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
+    pub request_include_credentials: bool,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
     pub redirected: bool,
     pub redirect_chain: Vec<RedirectInfo>,
@@ -761,6 +775,7 @@ impl Clone for RawResponse {
                 .clone_materialized()
                 .expect("RawResponse body should remain materialized"),
             request_cookie_report: self.request_cookie_report.clone(),
+            request_include_credentials: self.request_include_credentials,
             cookie_set_reports: self.cookie_set_reports.clone(),
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
@@ -820,6 +835,7 @@ impl RawResponse {
             status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             request_cookie_report: self.request_cookie_report.clone(),
+            request_include_credentials: self.request_include_credentials,
             cookie_set_reports: self.cookie_set_reports.clone(),
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
@@ -847,6 +863,7 @@ impl RawResponse {
             body: ResponseBody::materialized_bytes(body),
             body_sizes: None,
             request_cookie_report: head.request_cookie_report,
+            request_include_credentials: head.request_include_credentials,
             cookie_set_reports: head.cookie_set_reports,
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
@@ -868,6 +885,7 @@ impl RawResponse {
             body: ResponseBody::materialized_bytes(body),
             body_sizes: None,
             request_cookie_report: head.request_cookie_report,
+            request_include_credentials: head.request_include_credentials,
             cookie_set_reports: head.cookie_set_reports,
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
@@ -886,6 +904,7 @@ impl RawResponse {
             status_text: self.status_text,
             headers: self.headers,
             request_cookie_report: self.request_cookie_report,
+            request_include_credentials: self.request_include_credentials,
             cookie_set_reports: self.cookie_set_reports,
             redirected: self.redirected,
             redirect_chain: self.redirect_chain,

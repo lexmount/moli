@@ -120,7 +120,11 @@ async fn connected_modulepreload_csp_hash_admission_preserves_integrity_metadata
 #[tokio::test(flavor = "current_thread")]
 async fn child_module_csp_admission_queues_events_and_rejects_replaced_document() {
     for replace in [false, true] {
-        let mut vm = new_storage_test_vm("https://child-module-csp-event.test/");
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://child-module-csp-event.test/",
+            &loader,
+        );
         vm.set_fetch_subresource_interception(
             crate::types::SubresourceInterceptionClasses::for_resource_type(
                 crate::types::SubresourceResourceType::CspReport,
@@ -133,13 +137,27 @@ async fn child_module_csp_admission_queues_events_and_rejects_replaced_document(
           void __queuedModuleCspFrame.contentWindow;
           'frame-ready';
         "#).unwrap();
-        assert_initial_about_blank_child_completed_synchronously_for_test(
+        assert_initial_about_blank_child_completed_through_page_for_test(
             &mut vm,
+            &loader,
             "queued module CSP event",
         )
         .await;
-        let context_id =
-            materialize_single_child_default_realm_for_test(&mut vm, "queued module CSP event");
+        assert!(
+            vm.run_one_child_frame_task_executor_turn(
+                ChildFrameSemanticTurnKind::RealmMaterialization,
+                &loader,
+            )
+            .await
+            .unwrap()
+        );
+        let realms = vm.live_child_default_runtime_realm_inventory();
+        assert_eq!(
+            realms.len(),
+            1,
+            "queued module CSP event: exactly one child Realm"
+        );
+        let context_id = realms[0].context_id;
         let handle = vm
             .child_frame_realm_store
             .get(&context_id)
@@ -172,17 +190,21 @@ async fn child_module_csp_admission_queues_events_and_rejects_replaced_document(
         if replace {
             vm.eval("__queuedModuleCspFrame.srcdoc = '<p>replacement</p>'; 'queued'")
                 .unwrap();
-            assert_eq!(
-                vm.run_next_child_frame_semantic_turn_for_test().await,
-                Some(ChildFrameSemanticTurnKind::NavigationCommit)
+            assert!(
+                vm.run_one_child_frame_task_executor_turn(
+                    ChildFrameSemanticTurnKind::NavigationCommit,
+                    &loader
+                )
+                .await
+                .unwrap()
             );
         }
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await;
         assert_eq!(
             vm.eval("__queuedModuleCspEvents.length").unwrap(),
             if replace { "0" } else { "1" }
         );
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await;
         assert_eq!(
             vm.eval("__queuedModuleCspEvents.length").unwrap(),
             if replace { "0" } else { "1" },
@@ -512,6 +534,7 @@ async fn child_csp_report_keeps_exact_violation_document_without_v8_after_naviga
             status: 204,
             headers: Vec::new(),
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: false,
             redirect_chain: Vec::new(),

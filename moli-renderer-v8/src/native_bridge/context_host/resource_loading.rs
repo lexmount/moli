@@ -3383,6 +3383,7 @@ impl PageScriptHost {
         self.note_subresource_activity();
     }
 
+
     pub(crate) fn record_pending_websocket_response(
         &mut self,
         state: PendingWebSocketResponseState,

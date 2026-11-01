@@ -4,7 +4,8 @@ mod cors;
 mod materialize;
 mod metadata;
 pub(crate) use metadata::fetch_response_metadata;
-pub(crate) use moli_webapi::fetch_response::set_response_metadata;
+#[cfg(test)]
+pub(crate) use moli_webapi::fetch_response::{response_metadata, set_response_metadata};
 
 use super::headers::{HeadersGuard, build_headers_object_with_state, filter_headers_for_guard};
 use super::*;
@@ -48,6 +49,5 @@ pub(crate) use materialize::build_fetch_response_object_from_stream_for_request_
 
 #[cfg(test)]
 pub(crate) use self::materialize::materialize_response_object_head;
-
 
 pub(crate) use self::materialize::set_cached_response_head;

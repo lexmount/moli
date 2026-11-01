@@ -21,6 +21,7 @@ fn operation(
         response: StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     url_list: vec![(url.to_owned()).parse().unwrap()],
                     timing_allow_passed: true,
@@ -502,5 +503,84 @@ fn cache_dom_string_names_persist_distinct_contents_and_deleted_handles() -> Res
         StorageBucketCacheName::from_file_component("emoji%F0%9F%98%80")?,
         StorageBucketCacheName::from("emoji😀")
     );
+    Ok(())
+}
+
+#[test]
+fn cache_query_vary_uses_the_filtered_response_header_list() -> Result<()> {
+    use moli_fetch_types::FetchResponseType::{Basic, Cors, Default, Opaque, OpaqueRedirect};
+    for (kind, credentials, expose, matches) in [
+        (Cors, false, "x-cache", true),
+        (Cors, true, "x-cache", true),
+        (Cors, false, "VaRy", false),
+        (Cors, true, "VaRy", false),
+        (Cors, false, "*", false),
+        (Cors, true, "*", true),
+        (Basic, false, "x-cache", false),
+        (Default, false, "x-cache", false),
+        (Opaque, true, "vary", true),
+        (OpaqueRedirect, true, "vary", true),
+    ] {
+        for vary in ["*", "x-shape"] {
+            let mut store = StorageBucketRegistry::default();
+            let identity = store.open_bucket("https://batch.test", "bucket")?;
+            let id = store
+                .open_cache_handle_for_identity(&identity, "cache")?
+                .unwrap();
+            let mut put = operation("https://batch.test/item", "stored", Some(vary), "body", 4);
+            put.response.head.metadata.response_type = kind;
+            put.response.head.metadata.request_include_credentials = credentials;
+            put.response.head.headers.push((
+                "access-control-expose-headers".to_owned(),
+                expose.as_bytes().to_vec(),
+            ));
+            assert_eq!(
+                store.put_cache_batch_for_handle_and_identity(
+                    &identity,
+                    "cache",
+                    id,
+                    vec![put],
+                    0
+                )?,
+                StorageBucketCachePutOutcome::Stored
+            );
+            let query = StorageBucketCacheQuery {
+                request_url: "https://batch.test/item".to_owned(),
+                method: "GET".to_owned(),
+                headers: vec![("x-shape".to_owned(), "different".to_owned())],
+                ignore_search: false,
+                ignore_method: false,
+                ignore_vary: false,
+            };
+            let found = store
+                .match_cache_entries_for_handle_and_identity(&identity, "cache", id, &query)
+                .unwrap();
+            assert_eq!(
+                found.len(),
+                usize::from(matches),
+                "{kind:?}, credentials={credentials}, expose={expose}, vary={vary}"
+            );
+            let retained = store
+                .cache_entries_for_handle_and_identity(&identity, "cache", id)
+                .unwrap();
+            assert_eq!(retained[0].response.head.headers[0].1, vary.as_bytes());
+            let unfiltered = StorageBucketCacheQuery {
+                ignore_vary: true,
+                ..query
+            };
+            assert_eq!(
+                store
+                    .match_cache_entries_for_handle_and_identity(
+                        &identity,
+                        "cache",
+                        id,
+                        &unfiltered
+                    )
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+    }
     Ok(())
 }

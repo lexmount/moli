@@ -356,6 +356,7 @@ fn external_script_redirect_final_url_obeys_script_src_csp() {
             status: 200,
             headers: Vec::new(),
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: true,
             redirect_chain: Vec::new(),
@@ -431,6 +432,7 @@ async fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_onc
     };
     let response = moli_fetch::Response::from_head_and_text_body(
         moli_fetch::ResponseHead {
+            request_include_credentials: false,
             final_url: final_url.clone(),
             status: 200,
             status_text: None,
@@ -447,7 +449,7 @@ async fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_onc
         "export default 1;".to_owned(),
     );
     let error = context
-        .check_response(&response)
+        .check_response_head(&response.head())
         .expect_err("cached middle hop must be checked by the captured policy");
     assert!(error.to_string().contains("Content Security Policy"));
     assert!(!error.to_string().contains("SECRET"));
@@ -465,7 +467,7 @@ async fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_onc
         )
     );
     assert!(
-        context.check_response(&response).is_err(),
+        context.check_response_head(&response.head()).is_err(),
         "a previously denied cached middle hop must remain denied after its reports are drained"
     );
     vm.dispatch_module_fetch_csp_violations(Some(&context));
@@ -507,6 +509,7 @@ fn module_csp_admission_reports_once_for_service_worker_response_alias() {
     // redirect. It does not turn this request into a fetch of that URL.
     let response = moli_fetch::Response::from_head_and_text_body(
         moli_fetch::ResponseHead {
+            request_include_credentials: false,
             final_url: Url::parse("https://app.test/private.js").unwrap(),
             status: 200,
             status_text: None,
@@ -522,7 +525,7 @@ fn module_csp_admission_reports_once_for_service_worker_response_alias() {
         },
         "export default 42;".to_owned(),
     );
-    context.check_response(&response).unwrap();
+    context.check_response_head(&response.head()).unwrap();
     assert!(
         context.take_violations().is_empty(),
         "completion must not duplicate admission's report"
