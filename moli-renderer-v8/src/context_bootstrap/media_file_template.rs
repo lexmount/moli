@@ -541,8 +541,8 @@ pub(super) fn install_media_file_template_bindings<'s>(
             install_canvas_drawing_state_bindings(scope, proto, spec_name);
             install_canvas_style_state_bindings(scope, proto, spec_name);
             install_canvas_pixel_bindings(scope, proto, spec_name);
-            install_canvas_rect_bindings(scope, proto, spec_name);
             install_canvas_path_bindings(scope, proto, spec_name);
+            install_canvas_rect_bindings(scope, proto, spec_name);
             install_canvas_draw_image_bindings(scope, proto, spec_name);
         }
         "Path2D" => {
