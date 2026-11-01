@@ -166,3 +166,120 @@ document.body.innerHTML = `
     .await
     .expect("inline SVG computed-paint fixture should run");
 }
+
+// Inline SVG text is painted from a `usvg::Tree` reparsed out of the live
+// subtree, so text only survives when the root carries the font that applies
+// to it. Two otherwise identical badges draw the same string: one inherits its
+// `font-family`/`font-weight` from document CSS, the other authors the very
+// same values inside the SVG. Both must produce the same glyph pixels.
+//
+// This isolates the consumer-visible behavior instead of raw pixel presence:
+// once `moli-image` resolves an installed default family, a badge that *lost*
+// its inherited font still paints glyphs, so a "some bright pixels exist"
+// check would pass while the inherited font was silently replaced. Comparing
+// the two badges fails as soon as the serialized root stops carrying the
+// computed font, and it also fails if a quoted family breaks the serialized
+// `style` attribute (the escaped text is what the parse actually consumes).
+// A host that has no installed font at all leaves both badges blank, which
+// the glyph-presence assertion reports.
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_keeps_inherited_inline_svg_font_equal_to_an_authored_one() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/inline-svg-inherited-font.html")?,
+        );
+        // `"DejaVu Sans Mono", monospace` is quoted, so the computed value
+        // serializes with double quotes and must survive the `style` attribute.
+        page_vm.vm_mut().eval(
+            r##"
+document.head.innerHTML = `<style>
+html,body{margin:0;background:white}
+svg{position:absolute;top:0;width:90px;height:40px}
+#inherited{left:0;font-family:"DejaVu Sans Mono",monospace;font-size:18px;font-weight:bold}
+#authored{left:110px;font-size:18px}
+</style>`;
+document.body.innerHTML = `
+<svg id=inherited width=90 height=40 viewBox="0 0 90 40"><rect width=90 height=40 rx=8 fill="#087a65"/><text x=8 y=26 fill="white">SVG OK</text></svg>
+<svg id=authored width=90 height=40 viewBox="0 0 90 40"><rect width=90 height=40 rx=8 fill="#087a65"/><text x=8 y=26 fill="white" font-family='"DejaVu Sans Mono", monospace' font-weight=bold font-size=18>SVG OK</text></svg>`;
+'installed'
+"##,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        // Precondition: the inherited side authors no font at all, so the only
+        // way it can match the second badge is by inheriting the CSS font.
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "String(document.getElementById('inherited').hasAttribute('font-family'))",
+            )?,
+            "false",
+        );
+
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(210, 50, 1.0))?
+            .expect("inline SVG font fixture must retain a layout root");
+        assert_eq!(
+            snapshot.svg_images.len(),
+            2,
+            "both inline SVGs must reach paint as vector resources",
+        );
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| {
+            let index = ((y * raster.width + x) * 4) as usize;
+            <[u8; 4]>::try_from(&raster.rgba[index..index + 4]).expect("RGBA pixel")
+        };
+        // Sample only the interior of each teal rectangle: the rounded corners
+        // and the page background stay outside the ROI, so every lit pixel is
+        // glyph coverage rather than backdrop.
+        let glyph_mask = |left: u32| -> Vec<bool> {
+            (8..32)
+                .flat_map(|y| (18..72).map(move |x| (x + left, y)))
+                .map(|(x, y)| {
+                    let [red, green, blue, alpha] = pixel(x, y);
+                    alpha == 255 && red > 160 && green > 160 && blue > 160
+                })
+                .collect()
+        };
+        for left in [0, 110] {
+            // (45, 37) sits below the 26px baseline and inside the rounded
+            // rectangle, so it must hold the untouched badge fill: every lit
+            // pixel in the ROI above is therefore glyph coverage.
+            assert_eq!(pixel(left + 45, 37), [8, 122, 101, 255], "badge fill");
+        }
+        let inherited = glyph_mask(0);
+        let authored = glyph_mask(110);
+        let lit = |mask: &[bool]| mask.iter().filter(|painted| **painted).count();
+        let (inherited_lit, authored_lit) = (lit(&inherited), lit(&authored));
+        assert!(
+            inherited_lit > 20 && authored_lit > 20,
+            "both badges must paint glyphs; inherited={inherited_lit}, authored={authored_lit}",
+        );
+        let coverage_gap = inherited_lit.abs_diff(authored_lit);
+        assert!(
+            coverage_gap <= authored_lit / 50 + 2,
+            "an inherited font must paint the same glyph coverage as the same \
+             font authored inside the SVG; inherited={inherited_lit}, \
+             authored={authored_lit} means the serialized root lost the \
+             computed font or the quoted family broke its style attribute",
+        );
+        // Glyph outlines, not just their count, must match: the same font at the
+        // same size can only land on the same pixels up to antialiasing
+        // threshold flips.
+        let differing = inherited
+            .iter()
+            .zip(&authored)
+            .filter(|(left, right)| left != right)
+            .count();
+        assert!(
+            differing <= authored_lit / 20 + 2,
+            "inherited and authored glyphs must occupy the same pixels, {differing} differ",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("inline SVG inherited-font fixture should run");
+}
