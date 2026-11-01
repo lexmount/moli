@@ -179,6 +179,9 @@ pub(crate) fn prepare_xhr_send_body<'s>(
     }
 
     if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
+        if let Some(body) = prepare_xhr_document_body(scope, object) {
+            return Ok(body);
+        }
         if let Some(body) = crate::context_bootstrap::url_search_params_request_body(scope, object)
         {
             return Ok(PreparedXhrSendBody::utf8_text(
@@ -209,6 +212,36 @@ pub(crate) fn prepare_xhr_send_body<'s>(
     Ok(PreparedXhrSendBody::utf8_text(
         body.0.into_bytes(),
         TEXT_CONTENT_TYPE,
+    ))
+}
+
+fn prepare_xhr_document_body<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<PreparedXhrSendBody> {
+    let (runtime_ptr, handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, object)
+            .ok()?;
+    // SAFETY: the node bridge supplies the live callback's context host. Neither
+    // serialization nor document classification calls author JavaScript.
+    let runtime = unsafe { &*runtime_ptr };
+    let dom_host = runtime.dom_host();
+    let document = dom_host.node(handle)?.as_document()?;
+    let (body, content_type) = if document.is_html_document() {
+        let scripting_enabled = |node| runtime.node_document_scripting_enabled(node);
+        (
+            dom_host.get_html(handle, &scripting_enabled, false, &[])?,
+            "text/html;charset=UTF-8",
+        )
+    } else {
+        (
+            crate::xml_serializer::serialize_native_handle(dom_host, handle),
+            "application/xml;charset=UTF-8",
+        )
+    };
+    Some(PreparedXhrSendBody::utf8_text(
+        body.into_bytes(),
+        content_type,
     ))
 }
 
