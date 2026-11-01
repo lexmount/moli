@@ -786,6 +786,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         });
         let metadata = ServiceWorkerFetchRequestMetadata {
             mixed_content_policy: Default::default(),
+            body_source_is_null: has_stream_body,
             cache: init.cache.unwrap_or(inherited.cache),
             referrer: inherited.referrer,
             referrer_policy: init.referrer_policy.unwrap_or(inherited.referrer_policy),
@@ -837,6 +838,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         let redirect_mode = init.redirect_mode.unwrap_or(RequestRedirectMode::Follow);
         let metadata = ServiceWorkerFetchRequestMetadata {
             mixed_content_policy: Default::default(),
+            body_source_is_null: has_stream_body,
             cache: init.cache.unwrap_or_else(|| "default".to_owned()),
             referrer: "about:client".to_owned(),
             referrer_policy: init.referrer_policy.unwrap_or_default(),
@@ -1171,6 +1173,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
             worker_fetch_script_metadata(state.borrow().referrer_policy.clone(), &request_metadata);
         let request = Request::new_browser(&method, resolved_url, body, headers, request_origin)
             .with_mixed_content_policy(request_metadata.mixed_content_policy)
+            .with_body_source_is_null(request_metadata.body_source_is_null)
             .with_initiator_url(&document_url)
             .with_request_mode(request_mode)
             .with_credentials_mode(credentials_mode)

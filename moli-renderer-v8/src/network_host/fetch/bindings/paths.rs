@@ -334,6 +334,7 @@ pub(super) fn native_window_fetch_request(
         prepared.request_origin.clone(),
     )
     .with_mixed_content_policy(prepared.mixed_content_policy)
+    .with_body_source_is_null(prepared.body_source_is_null)
     .with_initiator_url(&prepared.document_url)
     .with_request_mode(prepared.request_mode)
     .with_credentials_mode(prepared.credentials_mode)
