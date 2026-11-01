@@ -24,7 +24,7 @@ pub(super) fn response_blob_callback<'s>(
     let Some(consumption) = begin_body_consumption_promise(scope, &args, &mut rv) else {
         return;
     };
-    let mime_type = body_mime_type(scope, &consumption);
+    let mime_type = body_blob_type(scope, &consumption);
     finish_body_consumption(
         scope,
         &mut rv,

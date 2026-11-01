@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
-async fn body_methods_share_mime_extraction_in_windows_and_workers() {
+async fn body_methods_apply_blob_type_and_form_data_mime_rules_in_windows_and_workers() {
     let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_page_task_executor_test_vm_with_loader(
         "https://body-mime-consolidation.test/",
@@ -16,7 +16,7 @@ async fn body_methods_share_mime_extraction_in_windows_and_workers() {
         const form=await create(headers).formData();
         if(form.get('a')!=='1')throw Error('duplicate MIME extraction '+C.name);
         const blob=await create(headers).blob();
-        if(blob.type!=='application/x-www-form-urlencoded;charset=UTF-8')throw Error('shared Blob extraction '+blob.type);
+        if(blob.type!=='text/plain, application/x-www-form-urlencoded; charset=utf-8')throw Error('Blob type '+blob.type);
         const multipart=[['Content-Type','text/plain'],['Content-Type','multipart/form-data; boundary=AaB']];
         const bytes='--AaB\r\nContent-Disposition: form-data; name="field"\r\n\r\nvalue\r\n--AaB--\r\n';
         if((await create(multipart,bytes).formData()).get('field')!=='value')throw Error('multipart boundary case');

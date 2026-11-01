@@ -181,6 +181,25 @@ fn is_urlencoded_content_type(content_type: &str) -> bool {
     is_form_urlencoded_mime(content_type)
 }
 
+fn body_blob_type<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    consumption: &BodyConsumptionPromise<'s>,
+) -> String {
+    // Body.blob() preserves the combined field's syntax, then applies the
+    // File API's printable-ASCII/lowercase normalization. FormData needs a
+    // parsed MIME record instead, especially for case-sensitive boundaries.
+    body_headers(scope, consumption.object, consumption.receiver)
+        .and_then(|headers| {
+            headers
+                .into_iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        })
+        .map(|(_, value)| {
+            moli_file_api::normalize_blob_mime_type(&moli_fetch::decode_header_value(&value))
+        })
+        .unwrap_or_default()
+}
+
 fn body_mime_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     consumption: &BodyConsumptionPromise<'s>,
