@@ -638,6 +638,10 @@ fn worker_policy_context_from_response(headers: &[(String, Vec<u8>)]) -> Subreso
     SubresourcePolicyContext {
         cross_origin_embedder_policy:
             crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers),
+        cross_origin_embedder_policy_report_only:
+            crate::cross_origin_isolation::cross_origin_embedder_policy_report_only_from_headers(
+                headers,
+            ),
         document_isolation_policy:
             crate::cross_origin_isolation::document_isolation_policy_from_headers(headers),
         cross_origin_isolated: false,

@@ -451,6 +451,9 @@ impl ChildBrowsingContextEntry {
         self.document_policy_container.referrer_policy = policy_container.referrer_policy.clone();
         self.document_policy_container.cross_origin_embedder_policy =
             policy_container.cross_origin_embedder_policy;
+        self.document_policy_container
+            .cross_origin_embedder_policy_report_only =
+            policy_container.cross_origin_embedder_policy_report_only;
         self.document_policy_container.document_isolation_policy =
             policy_container.document_isolation_policy;
         self.document_policy_container.cross_origin_isolated =
@@ -507,6 +510,10 @@ impl ChildBrowsingContextEntry {
             snapshot.policy_container.referrer_policy.clone();
         self.document_policy_container.cross_origin_embedder_policy =
             snapshot.policy_container.cross_origin_embedder_policy;
+        self.document_policy_container
+            .cross_origin_embedder_policy_report_only = snapshot
+            .policy_container
+            .cross_origin_embedder_policy_report_only;
         self.document_policy_container.document_isolation_policy =
             snapshot.policy_container.document_isolation_policy;
         self.document_policy_container.cross_origin_isolated =

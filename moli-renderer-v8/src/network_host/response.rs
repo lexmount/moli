@@ -19,7 +19,7 @@ pub(crate) fn response_has_null_body(method: &str, status: u16) -> bool {
 pub(crate) use self::bindings::{build_error_response_object, response_constructor_callback};
 pub(super) use self::body_methods::install_response_body_methods;
 pub(crate) use self::cors::{
-    FetchResponseSecurityViolation, cors_preflight_request_headers,
+    FetchResponseSecurityViolation, check_opaque_response_policy, cors_preflight_request_headers,
     fetch_response_needs_orb_body_validation, filter_cors_exposed_response_headers,
     is_cors_policy_failure_message, validate_cors_preflight_response, validate_cors_response_chain,
     validate_cross_origin_embedder_and_document_isolation_policy,

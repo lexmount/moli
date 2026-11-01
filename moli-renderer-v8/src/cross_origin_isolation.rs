@@ -44,7 +44,20 @@ pub(crate) fn response_headers_enable_coop_coep_isolation(
 pub(crate) fn cross_origin_embedder_policy_from_headers(
     headers: &[(String, Vec<u8>)],
 ) -> CrossOriginEmbedderPolicy {
-    match response_header_policy_value(headers, "cross-origin-embedder-policy").as_deref() {
+    cross_origin_embedder_policy_from_header(headers, "cross-origin-embedder-policy")
+}
+
+pub(crate) fn cross_origin_embedder_policy_report_only_from_headers(
+    headers: &[(String, Vec<u8>)],
+) -> CrossOriginEmbedderPolicy {
+    cross_origin_embedder_policy_from_header(headers, "cross-origin-embedder-policy-report-only")
+}
+
+fn cross_origin_embedder_policy_from_header(
+    headers: &[(String, Vec<u8>)],
+    name: &str,
+) -> CrossOriginEmbedderPolicy {
+    match response_header_policy_value(headers, name).as_deref() {
         Some("require-corp") => CrossOriginEmbedderPolicy::RequireCorp,
         Some("credentialless") => CrossOriginEmbedderPolicy::Credentialless,
         _ => CrossOriginEmbedderPolicy::None,
@@ -212,6 +225,45 @@ mod tests {
                 b"invalid".to_vec()
             )]),
             DocumentIsolationPolicy::None
+        );
+    }
+
+    #[test]
+    fn report_only_embedder_policy_does_not_grant_isolation_or_omit_credentials() {
+        let headers = vec![
+            (
+                "Cross-Origin-Opener-Policy".to_owned(),
+                b"same-origin".to_vec(),
+            ),
+            (
+                "Cross-Origin-Embedder-Policy-Report-Only".to_owned(),
+                b"credentialless; report-to=\"coep\"".to_vec(),
+            ),
+        ];
+        let url = Url::parse("https://example.test/").unwrap();
+        let container =
+            crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+                &headers, &url,
+            );
+        let policy = crate::types::SubresourcePolicyContext::from_document_policy(&container);
+        assert_eq!(
+            policy.cross_origin_embedder_policy_report_only,
+            CrossOriginEmbedderPolicy::Credentialless
+        );
+        assert_eq!(
+            policy.cross_origin_embedder_policy,
+            CrossOriginEmbedderPolicy::None
+        );
+        assert!(!policy.cross_origin_isolated);
+        assert!(!response_headers_enable_cross_origin_isolation(
+            &url, &headers
+        ));
+        assert_eq!(
+            policy.network_credentials_mode(
+                moli_fetch::RequestMode::NoCors,
+                moli_fetch::RequestCredentialsMode::Include
+            ),
+            moli_fetch::RequestCredentialsMode::Include
         );
     }
 }

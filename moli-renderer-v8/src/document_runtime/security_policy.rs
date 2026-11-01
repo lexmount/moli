@@ -447,6 +447,8 @@ impl DocumentPolicyContainer {
             referrer_policy: crate::referrer_policy::response_referrer_policy_from_headers(headers),
             cross_origin_embedder_policy:
                 crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers),
+            cross_origin_embedder_policy_report_only:
+                crate::cross_origin_isolation::cross_origin_embedder_policy_report_only_from_headers(headers),
             document_isolation_policy:
                 crate::cross_origin_isolation::document_isolation_policy_from_headers(headers),
             cross_origin_isolated:

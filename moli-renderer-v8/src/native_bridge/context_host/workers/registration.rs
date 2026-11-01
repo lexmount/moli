@@ -1608,6 +1608,10 @@ fn dedicated_worker_policy_context_from_headers(
     SubresourcePolicyContext {
         cross_origin_embedder_policy:
             crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers),
+        cross_origin_embedder_policy_report_only:
+            crate::cross_origin_isolation::cross_origin_embedder_policy_report_only_from_headers(
+                headers,
+            ),
         // Chromium's DedicatedWorkerHost currently keeps Document-Isolation-Policy
         // aligned with the creator while deriving the worker COEP from the script response.
         document_isolation_policy: creator_policy_context.document_isolation_policy,

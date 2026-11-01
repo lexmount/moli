@@ -2312,6 +2312,7 @@ mod browser_api;
 mod cache_dictionary_inheritance;
 mod cache_interfaces;
 mod cache_response_credentials;
+mod cache_response_policy;
 
 mod dom_token_list_native_receivers;
 

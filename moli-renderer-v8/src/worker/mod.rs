@@ -74,8 +74,9 @@ pub(crate) use global_scope::{
     worker_notification_permission_state, worker_opfs_directory_iterator_registry,
     worker_opfs_handle_registry, worker_realm_secure_context_available, worker_referrer_policy,
     worker_service_worker_control_state, worker_shared_memory_agent_cluster, worker_storage_key,
-    worker_storage_partition_identity, worker_termination_requested,
-    worker_trusted_types_for_script_requirements, worker_websocket_wrapper,
+    worker_storage_partition_identity, worker_subresource_policy_context,
+    worker_termination_requested, worker_trusted_types_for_script_requirements,
+    worker_websocket_wrapper,
 };
 pub(crate) use handle::WorkerMessage;
 pub(crate) use handle::{

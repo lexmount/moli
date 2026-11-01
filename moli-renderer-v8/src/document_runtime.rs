@@ -647,6 +647,8 @@ pub(crate) struct DocumentPolicyContainer {
     pub(crate) referrer_policy: Option<String>,
     pub(crate) cross_origin_embedder_policy:
         crate::cross_origin_isolation::CrossOriginEmbedderPolicy,
+    pub(crate) cross_origin_embedder_policy_report_only:
+        crate::cross_origin_isolation::CrossOriginEmbedderPolicy,
     pub(crate) document_isolation_policy: crate::cross_origin_isolation::DocumentIsolationPolicy,
     pub(crate) cross_origin_isolated: bool,
     /// The response requested a COOP+COEP isolated group. Keep this separate

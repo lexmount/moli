@@ -348,6 +348,12 @@ pub(crate) fn worker_current_script_url(scope: &mut v8::PinScope<'_, '_>) -> Opt
     get_worker_state(scope)?.borrow().current_script_url.clone()
 }
 
+pub(crate) fn worker_subresource_policy_context(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<crate::types::SubresourcePolicyContext> {
+    Some(get_worker_state(scope)?.borrow().policy_context)
+}
+
 pub(crate) fn worker_exception_report_target(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<(mpsc::UnboundedSender<WorkerToParentMessage>, String)> {

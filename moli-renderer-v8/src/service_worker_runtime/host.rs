@@ -1026,6 +1026,10 @@ fn service_worker_script_policy_context(
         crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers);
     SubresourcePolicyContext {
         cross_origin_embedder_policy,
+        cross_origin_embedder_policy_report_only:
+            crate::cross_origin_isolation::cross_origin_embedder_policy_report_only_from_headers(
+                headers,
+            ),
         document_isolation_policy:
             crate::cross_origin_isolation::document_isolation_policy_from_headers(headers),
         // A ServiceWorker's own COEP establishes its independent agent's mode;

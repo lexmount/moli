@@ -249,6 +249,7 @@ pub(crate) use state::{
     worker_current_script_url, worker_exception_report_target, worker_global_is_closed,
     worker_realm_secure_context_available, worker_referrer_policy,
     worker_service_worker_control_state, worker_shared_memory_agent_cluster, worker_storage_key,
-    worker_storage_partition_identity, worker_termination_requested,
+    worker_storage_partition_identity, worker_subresource_policy_context,
+    worker_termination_requested,
 };
 pub(super) use timers::{TimerInfo, WorkerIsolateTimerQueues, worker_isolate_timer_queues};

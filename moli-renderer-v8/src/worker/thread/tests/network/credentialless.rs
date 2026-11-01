@@ -112,6 +112,7 @@ async fn check_worker_credentialless_fetch(intercept: bool) {
                     document_isolation_policy: dip,
                     // Network policy applies even without an isolated agent cluster.
                     cross_origin_isolated: false,
+                    ..Default::default()
                 }),
         );
         if intercept {
