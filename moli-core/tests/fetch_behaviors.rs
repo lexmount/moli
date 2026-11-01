@@ -900,6 +900,38 @@ async fn fetch_with_domcontentloaded_does_not_wait_for_parser_module_tla_dynamic
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn fetch_parser_style_import_is_installed_before_following_classic_script() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    for media in ["all", "only screen", "screen and (min-width: 1px)"] {
+        let markup = format!(
+            r#"<!doctype html><html><head>
+<style media="{media}">@import url('/assets/stylesheet-media-change-load-handler.css');</style>
+<script>
+document.documentElement.setAttribute('data-import-color',
+  getComputedStyle(document.documentElement).color);
+</script></head><body></body></html>"#,
+        );
+        let mut url = url::Url::parse(&server.url("/compat/child-dynamic-markup-document"))?;
+        url.query_pairs_mut().append_pair("markup", &markup);
+        let page = browser
+            .fetch_with_wait_until(
+                url.as_str(),
+                RenderedDomWaitUntil::DomContentLoaded,
+                Duration::from_secs(5),
+            )
+            .await?;
+        let html = page.serialize_html_async().await?;
+        assert!(
+            html.contains("data-import-color=\"rgb(1, 2, 3)\""),
+            "the parser script must observe the installed import, media={media}: {html}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn fetch_with_done_does_not_requeue_stylesheet_load_on_media_change() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
