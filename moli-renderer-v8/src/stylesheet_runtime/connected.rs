@@ -222,6 +222,29 @@ impl ConnectedStyleOwnerKind {
 }
 
 impl DocumentRuntime {
+    /// Parser discovery may need an inline import before the initial scan.
+    /// Reuse connected-owner admission without visiting unrelated DOM nodes.
+    pub(crate) fn prepare_parser_style_import_loads(
+        &mut self,
+        inputs: &[crate::stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput],
+    ) -> Vec<PreparedConnectedStyleLoad> {
+        let handles = inputs
+            .iter()
+            .filter(|input| {
+                matches!(
+                    input.signature(),
+                    DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { .. }
+                )
+            })
+            .map(|input| DomHandle::new(input.node_id().index()))
+            .collect::<Vec<_>>();
+        let mut prepared = self.prepare_connected_style_load_handles(&handles, true);
+        for load in &mut prepared {
+            load.remember_before_initial_scan = !self.initial_connected_style_loads_queued;
+        }
+        prepared
+    }
+
     pub(crate) fn prepare_initial_connected_style_loads(
         &mut self,
     ) -> Vec<PreparedConnectedStyleLoad> {
