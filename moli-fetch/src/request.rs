@@ -156,6 +156,8 @@ pub enum RequestCacheMode {
     #[strum(serialize = "reload")]
     Bypass,
     NoStore,
+    ForceCache,
+    OnlyIfCached,
 }
 
 impl RequestCacheMode {
@@ -185,7 +187,7 @@ impl RequestCacheMode {
     }
 
     pub fn allows_memory_cache_lookup(self) -> bool {
-        matches!(self, Self::Default)
+        matches!(self, Self::Default | Self::ForceCache | Self::OnlyIfCached)
     }
 
     pub fn allows_memory_cache_store(self) -> bool {
@@ -198,6 +200,10 @@ impl RequestCacheMode {
 
     pub fn allows_http_cache_lookup(self) -> bool {
         !matches!(self, Self::Bypass | Self::NoStore)
+    }
+
+    pub fn allows_stale_http_cache_response(self) -> bool {
+        matches!(self, Self::ForceCache | Self::OnlyIfCached)
     }
 }
 
