@@ -3993,9 +3993,15 @@ fn cdp_cookie_overwrite_report_matches_the_canonical_creation_time() {
     use super::normalize::{NormalizedCdpCookieParam, normalize_cookie_param};
     use moli_cookie_jar::{CookieSource, StoredCookieEffectiveSameSite};
 
-    for created in [
-        None,
-        Some(time::OffsetDateTime::now_utc() - time::Duration::minutes(3)),
+    let old = (time::OffsetDateTime::now_utc() - time::Duration::minutes(3))
+        .replace_nanosecond(123_456_789)
+        .unwrap();
+    for (created, expected) in [
+        (None, None),
+        (
+            Some(old),
+            Some(old.replace_nanosecond(123_456_000).unwrap()),
+        ),
     ] {
         let param = serde_json::from_value(json!({
             "name": "sid", "value": "new", "url": "https://example.com/", "secure": true
@@ -4026,7 +4032,7 @@ fn cdp_cookie_overwrite_report_matches_the_canonical_creation_time() {
             "Lax"
         );
         let stored = store.cookies().pop().unwrap();
-        assert_eq!(stored.creation_time, created);
+        assert_eq!(stored.creation_time, expected);
         assert_eq!(
             stored.effective_same_site(),
             StoredCookieEffectiveSameSite::Lax
