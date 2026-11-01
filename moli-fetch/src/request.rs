@@ -326,6 +326,7 @@ pub enum BrowserNavigationRequestKind {
     #[default]
     Navigate,
     Reload,
+    HistoryTraversal,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]

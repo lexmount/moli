@@ -451,17 +451,21 @@ impl PageScriptHost {
             self.sync_existing_child_browsing_context_window_state(scope, handle);
             return None;
         }
-        let pending = PendingChildFrameNavigation {
-            initiator: if self.child_browsing_context_has_pending_cross_document_traversal(handle) {
-                ChildDocumentNavigationInitiator::HistoryTraversal
-            } else {
-                match pending.initiator {
+        let pending = if self.child_browsing_context_has_pending_cross_document_traversal(handle) {
+            PendingChildFrameNavigation {
+                initiator: ChildDocumentNavigationInitiator::HistoryTraversal,
+                browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind::HistoryTraversal,
+                ..pending
+            }
+        } else {
+            PendingChildFrameNavigation {
+                initiator: match pending.initiator {
                     ChildDocumentNavigationInitiator::BrowsingContext(policy) =>
                         ChildDocumentNavigationInitiator::BrowsingContext(entry_snapshot.pending_download_policy.or(policy)),
                     initiator => initiator,
-                }
-            },
-            ..pending
+                },
+                ..pending
+            }
         };
         self.clear_child_browsing_context_pending_navigation(handle);
         self.clear_pending_form_submission_child_target(handle);
