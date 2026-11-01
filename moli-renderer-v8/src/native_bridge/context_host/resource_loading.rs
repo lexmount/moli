@@ -45,11 +45,20 @@ impl JsContextHost {
     }
 
     fn push_pending_subresource_fetch_info(&mut self, info: PendingSubresourceFetchInfo) {
+        self.push_subresource_fetch_pause(info, None);
+    }
+
+    fn push_subresource_fetch_pause(
+        &mut self,
+        info: PendingSubresourceFetchInfo,
+        document_loader_id: Option<String>,
+    ) {
         if let Some(source_document) = self.root_document_lifecycle_identity()
             && self.append_live_turn_owner_action(
                 crate::runtime::RendererOwnerAction::SubresourceFetchPause {
                     source_document,
                     info: Box::new(info.clone()),
+                    document_loader_id,
                 },
             )
         {
@@ -1534,6 +1543,42 @@ impl JsContextHost {
         internal_id
     }
 
+    /// Holds a child frame navigation at the Fetch request stage. The lease
+    /// belongs to the embedding Document, whose retirement aborts the pause.
+    pub(in crate::native_bridge::context_host) fn record_pending_child_document_fetch(
+        &mut self,
+        identity: super::WindowDocumentNetworkRequestIdentity,
+        load: ResourceLoadLease,
+        request_origin: moli_url::WebOrigin,
+        mut info: PendingSubresourceFetchInfo,
+        document_loader_id: String,
+        fetch: super::ChildDocumentFetch,
+    ) -> u64 {
+        self.assign_pending_subresource_fetch_identity(&mut info);
+        let internal_id = info.internal_id;
+        self.push_subresource_fetch_pause(info.clone(), Some(document_loader_id));
+        self.pending_subresource_fetches.insert(
+            internal_id,
+            PendingSubresourceFetchState {
+                redirect_headers: None,
+                request_origin,
+                info,
+                load,
+                execution_context: PendingSubresourceExecutionContext::window_document_network_only(
+                    identity,
+                ),
+                credentials_mode: moli_fetch::RequestCredentialsMode::Include,
+                request_mode: moli_fetch::RequestMode::Navigate,
+                network_partition_key: None,
+                policy_context: Default::default(),
+                continuation: PendingSubresourceContinuation::ChildDocument(Box::new(fetch)),
+                deferred_request_started: false,
+            },
+        );
+        self.note_subresource_activity();
+        internal_id
+    }
+
     pub(crate) fn record_async_subresource_xhr(
         &mut self,
         execution_context: super::WindowExecutionContextBinding,
@@ -2009,28 +2054,39 @@ impl JsContextHost {
             &pending.continuation,
             PendingSubresourceContinuation::EventSource(_)
                 | PendingSubresourceContinuation::Xhr { .. }
+                | PendingSubresourceContinuation::ChildDocument(_)
         ) {
             return;
         }
         let error_text = crate::network_host::ABORTED_ERROR_TEXT.to_owned();
-        if let Some(handle) = pending.info.network_request_handle {
+        let child_document = matches!(
+            pending.continuation,
+            PendingSubresourceContinuation::ChildDocument(_)
+        );
+        if let Some(handle) = pending.info.network_request_handle
+            && !child_document
+        {
             self.record_subresource_body_finished(SubresourceBodyFinished::failed(
                 handle, error_text,
             ));
         } else {
-            self.record_subresource_network(
-                SubresourceNetworkRecord::failure(
-                    pending.info.frame_id.clone(),
-                    pending.info.document_url.clone(),
-                    pending.info.url.clone(),
-                    pending.info.method.clone(),
-                    pending.info.request_headers.clone(),
-                    pending.info.request_body.clone(),
-                    pending.info.resource_type,
-                    error_text,
-                )
-                .with_request_body_bytes(pending.info.request_body_bytes.clone()),
-            );
+            // A paused child navigation was announced by its Fetch pause but
+            // never started a transport, so it fails as a whole request.
+            let mut record = SubresourceNetworkRecord::failure(
+                pending.info.frame_id.clone(),
+                pending.info.document_url.clone(),
+                pending.info.url.clone(),
+                pending.info.method.clone(),
+                pending.info.request_headers.clone(),
+                pending.info.request_body.clone(),
+                pending.info.resource_type,
+                error_text,
+            )
+            .with_request_body_bytes(pending.info.request_body_bytes.clone());
+            if let Some(handle) = pending.info.network_request_handle {
+                record = record.with_request_handle(handle);
+            }
+            self.record_subresource_network(record);
         }
     }
 

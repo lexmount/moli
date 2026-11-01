@@ -116,7 +116,10 @@ impl FetchResourceTypeFilter {
 
     pub fn subresource_type(self) -> Option<SubresourceResourceType> {
         match self {
-            Self::Document | Self::Stylesheet | Self::Media | Self::TextTrack => None,
+            Self::Stylesheet | Self::Media | Self::TextTrack => None,
+            // Top-level navigations pause in the protocol; child frame
+            // navigations pause in the renderer like subresources.
+            Self::Document => Some(SubresourceResourceType::Document),
             Self::Script => Some(SubresourceResourceType::Script),
             Self::Image => Some(SubresourceResourceType::Image),
             Self::Fetch => Some(SubresourceResourceType::Fetch),

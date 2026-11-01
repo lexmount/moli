@@ -813,6 +813,7 @@ impl ScriptVm {
                         | PendingSubresourceContinuation::CspReport { .. }
                         | PendingSubresourceContinuation::EventSource(_)
                         | PendingSubresourceContinuation::WebSocket(_)
+                        | PendingSubresourceContinuation::ChildDocument(_)
                         | PendingSubresourceContinuation::WorkerFetch { .. }
                         | PendingSubresourceContinuation::WorkerXhr { .. }
                         | PendingSubresourceContinuation::WorkerCspReport { .. }
@@ -938,6 +939,7 @@ impl ScriptVm {
                         | PendingSubresourceContinuation::CspReport { .. }
                         | PendingSubresourceContinuation::EventSource(_)
                         | PendingSubresourceContinuation::WebSocket(_)
+                        | PendingSubresourceContinuation::ChildDocument(_)
                         | PendingSubresourceContinuation::WorkerFetch { .. }
                         | PendingSubresourceContinuation::WorkerXhr { .. }
                         | PendingSubresourceContinuation::WorkerCspReport { .. }

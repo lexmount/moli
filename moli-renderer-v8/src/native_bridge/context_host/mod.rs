@@ -175,7 +175,9 @@ use crate::{
     service_worker_runtime::ServiceWorkerClientId,
 };
 pub(crate) use bridge_install::JsContextHostBridgeRef;
-pub(crate) use child_documents::{ChildDocumentLoadApplication, ChildDocumentLoadBodyActivity};
+pub(crate) use child_documents::{
+    ChildDocumentFetch, ChildDocumentLoadApplication, ChildDocumentLoadBodyActivity,
+};
 use child_documents::{ChildDocumentParserStore, PendingChildDocumentNavigation};
 use child_events::ChildWindowEventListenerEntry;
 use child_frame_runtime::ChildWindowProxyRecords;

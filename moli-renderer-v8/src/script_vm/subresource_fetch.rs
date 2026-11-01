@@ -743,6 +743,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",
         PendingSubresourceContinuation::Xhr { .. } => "xhr",
         PendingSubresourceContinuation::WebSocket(_) => "websocket",
+        PendingSubresourceContinuation::ChildDocument(_) => "child_document",
         PendingSubresourceContinuation::WorkerFetch { .. } => "worker_fetch",
         PendingSubresourceContinuation::WorkerXhr { .. } => "worker_xhr",
         PendingSubresourceContinuation::WorkerCspReport { .. } => "worker_csp_report",
