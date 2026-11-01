@@ -91,7 +91,8 @@ use super::global_scope::{
     fulfill_pending_worker_csp_report, fulfill_pending_worker_fetch,
     fulfill_pending_worker_fetch_response, fulfill_pending_worker_xhr,
     fulfill_pending_worker_xhr_response, install_worker_global_scope,
-    prepare_worker_global_scope_templates, service_worker_fetch_handler_type,
+    prepare_worker_global_scope_templates, retire_nested_workers,
+    service_worker_fetch_handler_type,
 };
 use super::handle::{
     WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess,
@@ -1718,7 +1719,7 @@ async fn worker_main(
         websockets: std::collections::HashMap::new(),
         next_websocket_id: 0,
         next_nested_worker_id: 1,
-        nested_worker_wrappers: std::collections::HashMap::new(),
+        nested_workers: std::collections::HashMap::new(),
         webcrypto_completion_tx,
         pending_webcrypto: std::collections::HashMap::new(),
         next_webcrypto_task_id: 1,
@@ -3369,6 +3370,7 @@ async fn worker_main(
     // explicitly keepalive loads are reduced to browser-runtime network-only
     // records and therefore cannot retain this WorkerGlobalScope.
     inspector_task_runner.dispose(crate::runtime::WorkerInspectorError::Exited);
+    retire_nested_workers(&state);
     let resource_loader = state.borrow().loader.clone();
     resource_loader.begin_detach();
     if matches!(state.borrow().global_kind, WorkerGlobalKind::Shared { .. }) {
