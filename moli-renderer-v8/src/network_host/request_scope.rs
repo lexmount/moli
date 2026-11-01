@@ -48,6 +48,7 @@ pub(crate) fn effective_subresource_policy_context(
 ) -> crate::types::SubresourcePolicyContext {
     let policy = match owner {
         crate::native_bridge::OwnerDispatchScope::Top => crate::types::SubresourcePolicyContext {
+            https_state: false,
             mixed_content_policy: Default::default(),
             cross_origin_embedder_policy: host.cross_origin_embedder_policy(),
             document_isolation_policy: host.document_isolation_policy(),
@@ -60,6 +61,7 @@ pub(crate) fn effective_subresource_policy_context(
         crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
             let _ = scope;
             crate::types::SubresourcePolicyContext {
+                https_state: false,
                 mixed_content_policy: Default::default(),
                 cross_origin_embedder_policy: host
                     .lightweight_popup_cross_origin_embedder_policy(popup_id),
@@ -70,6 +72,7 @@ pub(crate) fn effective_subresource_policy_context(
         }
     };
     crate::types::SubresourcePolicyContext {
+        https_state: host.window_has_https_state(owner),
         mixed_content_policy: host.window_mixed_content_policy(owner),
         ..policy
     }

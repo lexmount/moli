@@ -190,6 +190,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
             {
                 Ok(request) => {
                     let mut request = request
+                        .with_mixed_content_policy(request_metadata.mixed_content_policy)
                         .with_redirect_headers(redirect_headers)
                         .with_redirect_chain(redirect_chain)
                         .with_initiator_url(&document_url)
@@ -2039,7 +2040,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         credentials_mode,
         redirect_mode,
         priority,
-        metadata: request_metadata,
+        metadata: mut request_metadata,
         signal,
     } = match convert_fetch_arguments(scope, |scope| {
         resolve_worker_fetch_input(scope, &args, &document_url)
@@ -2050,6 +2051,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             return;
         }
     };
+    request_metadata.mixed_content_policy = state.borrow().mixed_content_policy();
     let headers = merge_worker_request_headers(
         &extra_http_headers,
         &moli_fetch::RequestHeaders::from_byte_strings(&request_headers)
@@ -2099,6 +2101,20 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         return;
     }
 
+    if let Err(message) = request_metadata.mixed_content_policy.check(&resolved_url) {
+        record_worker_subresource_failure(
+            &state.borrow(),
+            document_url,
+            resolved_url,
+            method,
+            headers,
+            request_body_text(&body),
+            SubresourceResourceType::Fetch,
+            message.clone(),
+        );
+        rv.set(make_rejected_promise(scope, &message).into());
+        return;
+    }
     if let Err(error) = moli_url_policy::route_fetch_url(&resolved_url) {
         let message = error.to_string();
         record_worker_subresource_failure(

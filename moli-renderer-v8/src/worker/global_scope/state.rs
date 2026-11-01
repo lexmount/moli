@@ -5,6 +5,9 @@ use crate::content_security_policy::ContentSecurityPolicy;
 use super::*;
 
 impl WorkerGlobalState {
+    pub(in crate::worker) fn mixed_content_policy(&self) -> moli_fetch::RequestMixedContentPolicy {
+        self.policy_context.mixed_content_policy()
+    }
     pub(crate) fn callback_invocation_allowed(&self) -> bool {
         !self.termination_requested.load(Ordering::Acquire)
     }
