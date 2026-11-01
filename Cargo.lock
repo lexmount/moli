@@ -2937,6 +2937,7 @@ dependencies = [
  "moli-dns-resolver",
  "moli-header-field",
  "moli-http-cache",
+ "moli-site",
  "moli-trace",
  "moli-url",
  "moli-url-policy",
