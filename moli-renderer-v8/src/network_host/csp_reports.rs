@@ -500,6 +500,7 @@ fn report_subresource_fetch_info(
                 .expect("CSP reports carry an explicit origin"),
             &request.url,
             &request.method,
+            request.request_mode,
             RequestCredentialsMode::SameOrigin,
         ),
     }

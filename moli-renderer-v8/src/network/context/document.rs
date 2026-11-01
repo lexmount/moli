@@ -3,8 +3,9 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+use crate::types::SubresourcePolicyContext;
 use moli_cookie_jar::BrowserCookieFacadeContext;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 use crate::network::loads::{
     ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease, ResourceLoadRegistry,
@@ -54,6 +55,7 @@ struct DocumentResourceLoaderAuthority {
     preloads: crate::network::preloads::DocumentPreloads,
     owns_preloads: AtomicBool,
     response_link_sender: Mutex<Option<Arc<dyn DocumentResponseLinkDispatcher>>>,
+    client_security_policy: Arc<RwLock<SubresourcePolicyContext>>,
 }
 
 // Keep the transport authority independent of the Page queue's concrete
@@ -250,6 +252,7 @@ impl DocumentResourceLoader {
             ))
             .with_document_preloads(preloads.clone());
         let creation_url = Arc::new(context.document_url().clone());
+        let client_security_policy = Arc::new(RwLock::new(SubresourcePolicyContext::default()));
         let authority = Arc::new(DocumentResourceLoaderAuthority {
             id: NEXT_DOCUMENT_RESOURCE_LOADER_ID
                 .fetch_add(1, Ordering::Relaxed)
@@ -262,10 +265,12 @@ impl DocumentResourceLoader {
             preloads,
             owns_preloads: AtomicBool::new(true),
             response_link_sender: Mutex::new(None),
+            client_security_policy: client_security_policy.clone(),
         });
         Self {
             request_client: request_client
-                .with_document_response_links(DocumentResponseLinkObserver::new(&authority)),
+                .with_document_response_links(DocumentResponseLinkObserver::new(&authority))
+                .with_document_client_policy(client_security_policy),
             creation_url,
             csp_reports: Default::default(),
             authority,
@@ -343,6 +348,7 @@ impl DocumentResourceLoader {
         // document.open() rotates Moli's load owner, but keeps the Document's
         // CSP. In-flight requests and new requests must share its report history.
         replacement.csp_reports = previous.csp_reports.clone();
+        replacement.set_client_security_policy(previous.client_security_policy());
         replacement.creation_url = previous.creation_url.clone();
         // document.open() replaces the load owner, not the Document. Transfer
         // retirement authority along with its one-shot preload map.
@@ -357,6 +363,14 @@ impl DocumentResourceLoader {
         &self,
     ) -> &crate::content_security_policy::ContentSecurityPolicyReports {
         &self.csp_reports
+    }
+
+    pub(crate) fn set_client_security_policy(&self, policy: SubresourcePolicyContext) {
+        *self.authority.client_security_policy.write() = policy;
+    }
+
+    pub(crate) fn client_security_policy(&self) -> SubresourcePolicyContext {
+        *self.authority.client_security_policy.read()
     }
 
     pub(crate) fn bind_response_link_sender(
@@ -396,7 +410,8 @@ impl DocumentResourceLoader {
                 self.authority.lifecycle.lock().context.origin(),
             ))
             .with_document_preloads(self.authority.preloads.clone())
-            .with_document_response_links(DocumentResponseLinkObserver::new(&self.authority));
+            .with_document_response_links(DocumentResponseLinkObserver::new(&self.authority))
+            .with_document_client_policy(self.authority.client_security_policy.clone());
         Self {
             request_client,
             authority: Arc::clone(&self.authority),

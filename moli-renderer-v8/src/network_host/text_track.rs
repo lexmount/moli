@@ -102,6 +102,7 @@ pub(crate) fn start_text_track_resource_fetch(
         &request_origin,
         &request_url,
         "GET",
+        request_mode,
         credentials_mode,
     );
     let request = Request::new("GET", request_url.as_str(), None, Vec::new())

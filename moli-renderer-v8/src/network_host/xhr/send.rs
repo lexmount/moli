@@ -338,6 +338,7 @@ fn send_synchronous_network_xhr(
         &prepared.request_origin,
         &prepared.resolved_url,
         &prepared.method,
+        moli_fetch::RequestMode::Cors,
         prepared.credentials_mode,
     );
     let request_url = prepared.resolved_url.clone();

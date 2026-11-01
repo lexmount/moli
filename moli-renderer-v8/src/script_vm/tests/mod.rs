@@ -2383,6 +2383,7 @@ mod eme_owner_interface_exposure_interfaces;
 mod encoded_video_chunk;
 mod event_receivers;
 mod extracted;
+mod fetch_credentialless;
 mod fetch_integrity;
 mod fetch_keepalive_quota;
 mod fetch_referrer;

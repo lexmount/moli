@@ -8,6 +8,7 @@ pub(in crate::network_host) fn observe_subresource_request_cookie_report(
     request_origin: &moli_url::WebOrigin,
     request_url: &url::Url,
     method: &str,
+    request_mode: moli_fetch::RequestMode,
     credentials_mode: moli_fetch::RequestCredentialsMode,
 ) -> Option<moli_cookie_jar::StoredCookieQueryReport> {
     let mut request = Request::new_browser(
@@ -18,7 +19,8 @@ pub(in crate::network_host) fn observe_subresource_request_cookie_report(
         request_origin.clone(),
     )
     .with_initiator_url(document_url)
-    .with_credentials_mode(credentials_mode);
+    .with_request_mode(request_mode)
+    .with_credentials_mode(loader.network_credentials_mode(request_mode, credentials_mode));
     if let Some(context) = loader.browser_site_context() {
         request = request.with_browser_site_context(context.clone());
     }

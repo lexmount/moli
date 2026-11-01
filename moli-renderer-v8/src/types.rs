@@ -708,6 +708,11 @@ pub(super) struct PendingSubresourceFetchState {
 }
 
 impl PendingSubresourceFetchState {
+    pub(super) fn network_credentials_mode(&self) -> moli_fetch::RequestCredentialsMode {
+        self.policy_context
+            .network_credentials_mode(self.request_mode, self.credentials_mode)
+    }
+
     pub(super) fn request_origin(&self) -> moli_url::WebOrigin {
         self.request_origin.clone()
     }

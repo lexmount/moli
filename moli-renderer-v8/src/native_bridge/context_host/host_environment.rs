@@ -446,6 +446,11 @@ impl JsContextHost {
         loader: &DocumentResourceLoader,
     ) {
         let loader = loader.clone();
+        loader.set_client_security_policy(
+            crate::types::SubresourcePolicyContext::from_document_policy(
+                self.document_policy_container(),
+            ),
+        );
         self.apply_page_network_policy_to_document_loader(&loader);
         let owner = self
             .current_main_document_task_owner()
@@ -698,9 +703,11 @@ impl JsContextHost {
         &mut self,
         context: crate::network::context::DocumentFetchContext,
         source: crate::network::context::DocumentResourceAuthoritySource,
+        policy_context: crate::types::SubresourcePolicyContext,
     ) -> DocumentResourceLoader {
         let owner = context.owner();
         let document_loader = DocumentResourceLoader::for_committed_document(context, source);
+        document_loader.set_client_security_policy(policy_context);
         self.document_resource_loaders
             .register(owner, document_loader.clone());
         document_loader

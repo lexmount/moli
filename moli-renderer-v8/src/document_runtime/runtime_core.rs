@@ -417,6 +417,17 @@ impl DocumentRuntime {
             "DocumentRuntime resource binding requires a registered authority"
         );
         self.resource_loader_binding = Some(DocumentResourceLoaderBinding { registry, owner });
+        self.sync_document_resource_client_policy();
+    }
+
+    pub(super) fn sync_document_resource_client_policy(&self) {
+        if let Some(loader) = self.current_document_resource_loader() {
+            loader.set_client_security_policy(
+                crate::types::SubresourcePolicyContext::from_document_policy(
+                    &self.policy_container,
+                ),
+            );
+        }
     }
 
     pub(crate) fn current_document_resource_loader(

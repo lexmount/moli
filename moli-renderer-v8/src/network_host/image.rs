@@ -114,6 +114,8 @@ pub(crate) fn start_scanned_image_preload(
     let loader = resource_loader.request_client().clone();
     let decode_runner = task_runner.clone();
     let cancel_handle = load.cancel_handle();
+    let network_credentials_mode =
+        loader.network_credentials_mode(RequestMode::NoCors, RequestCredentialsMode::Include);
     task_runner.spawn(async move {
         let result = match crate::network_host::fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
             &loader, request, Some(cancel_handle), Vec::new())
@@ -143,7 +145,7 @@ pub(crate) fn start_scanned_image_preload(
                     &response.head(),
                     &snapshot,
                     RequestMode::NoCors,
-                    RequestCredentialsMode::Include,
+                    network_credentials_mode,
                     policy_context,
                 )
                 .is_ok()
@@ -282,6 +284,7 @@ pub(crate) fn start_image_element_resource_fetch(
         &request_origin,
         &request_url,
         "GET",
+        request_mode,
         credentials_mode,
     );
     let request_headers = merge_subresource_request_headers(host.extra_http_headers(), &[]);

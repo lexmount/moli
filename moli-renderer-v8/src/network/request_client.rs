@@ -19,6 +19,7 @@ use moli_http_cache::{
 };
 use moli_parkable_image::ParkableImageManager;
 
+use crate::types::SubresourcePolicyContext;
 use crate::{protocol_types::OptionalResourceFetchMask, types::SubresourceResourceType};
 
 use super::{
@@ -43,9 +44,50 @@ pub struct ResourceRequestClient {
 }
 
 #[derive(Clone, Default)]
+enum ClientSecurityPolicy {
+    #[default]
+    None,
+    // Cached Document client views can precede header-policy installation.
+    // A load lease instead captures the policy before dispatch and carries no
+    // mutable Document state into its IO lifetime.
+    Document(Arc<parking_lot::RwLock<SubresourcePolicyContext>>),
+    Captured(SubresourcePolicyContext),
+}
+
+impl ClientSecurityPolicy {
+    fn snapshot(&self) -> SubresourcePolicyContext {
+        match self {
+            Self::None => SubresourcePolicyContext::default(),
+            Self::Document(policy) => *policy.read(),
+            Self::Captured(policy) => *policy,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
 struct DocumentRequestContext {
     preloads: super::preloads::DocumentPreloads,
     response_links: Option<super::context::DocumentResponseLinkObserver>,
+    client_security_policy: ClientSecurityPolicy,
+}
+
+impl DocumentRequestContext {
+    fn security_policy(&self) -> SubresourcePolicyContext {
+        self.client_security_policy.snapshot()
+    }
+
+    fn frozen_request_view(context: &Arc<Self>) -> Arc<Self> {
+        if !matches!(
+            context.client_security_policy,
+            ClientSecurityPolicy::Document(_)
+        ) {
+            return Arc::clone(context);
+        }
+        Arc::new(Self {
+            client_security_policy: ClientSecurityPolicy::Captured(context.security_policy()),
+            ..context.as_ref().clone()
+        })
+    }
 }
 
 /// Thread-affine lifetime root for a standalone resource request client.
@@ -169,6 +211,27 @@ impl ResourceRequestClient {
             script_request_origin: None,
             document_requests: None,
         }
+    }
+
+    pub(crate) fn with_document_client_policy(
+        mut self,
+        policy: Arc<parking_lot::RwLock<SubresourcePolicyContext>>,
+    ) -> Self {
+        self.document_request_context_mut().client_security_policy =
+            ClientSecurityPolicy::Document(policy);
+        self
+    }
+
+    pub(crate) fn network_credentials_mode(
+        &self,
+        mode: moli_fetch::RequestMode,
+        credentials: moli_fetch::RequestCredentialsMode,
+    ) -> moli_fetch::RequestCredentialsMode {
+        self.document_requests
+            .as_deref()
+            .map(DocumentRequestContext::security_policy)
+            .unwrap_or_default()
+            .network_credentials_mode(mode, credentials)
     }
 
     pub(crate) fn with_script_request_origin(mut self, origin: moli_url::WebOrigin) -> Self {
@@ -386,7 +449,10 @@ impl ResourceRequestClient {
         );
         client.browser_site_context = self.browser_site_context.clone();
         client.script_request_origin = self.script_request_origin.clone();
-        client.document_requests = self.document_requests.clone();
+        client.document_requests = self
+            .document_requests
+            .as_ref()
+            .map(DocumentRequestContext::frozen_request_view);
         client
     }
 
@@ -1675,6 +1741,8 @@ impl ResourceRequestClient {
 
     fn apply_network_policy(&self, mut request: Request) -> Result<Request> {
         request.browser_origin()?;
+        request.credentials_mode =
+            self.network_credentials_mode(request.request_mode, request.credentials_mode);
         if let Some(browser_site_context) = self.browser_site_context.as_deref() {
             let mut browser_site_context = browser_site_context.clone();
             // Child navigations bind the destination frame's partition before

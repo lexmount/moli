@@ -32,6 +32,7 @@ pub(super) fn dispatch_service_worker_fetch(
         &prepared.request_origin,
         &prepared.resolved_url,
         &prepared.method,
+        prepared.request_mode,
         prepared.credentials_mode,
     );
     let cancel_handle = FetchCancelHandle::new();

@@ -359,6 +359,7 @@ fn prepare_event_source_request<'s>(
         &request_origin,
         &resolved_url,
         "GET",
+        moli_fetch::RequestMode::Cors,
         credentials_mode,
     );
     Ok(PreparedEventSourceRequest {

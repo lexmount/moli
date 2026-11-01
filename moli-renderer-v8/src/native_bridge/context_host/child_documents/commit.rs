@@ -432,6 +432,11 @@ impl JsContextHost {
                     .expect("synthetic child Document must capture its parent authority"),
             ),
         };
+        let client_policy = self
+            .frame_owner_current_child_snapshot(handle)
+            .expect("committed child Document must retain its policy snapshot")
+            .settings
+            .subresource_policy_context;
         self.register_committed_document_resource_loader(
             crate::network::context::DocumentFetchContext::new(
                 crate::native_bridge::WindowDocumentOwner::Frame(current_owner),
@@ -440,6 +445,7 @@ impl JsContextHost {
                 resource_context_origin,
             ),
             resource_authority,
+            client_policy,
         );
         if matches!(
             owner_transition.local_window_owner_transition(),

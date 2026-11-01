@@ -21,6 +21,7 @@ pub(super) fn record_intercepted_xhr(
         &prepared.request_origin,
         &prepared.resolved_url,
         &prepared.method,
+        moli_fetch::RequestMode::Cors,
         prepared.credentials_mode,
     );
     let xhr = v8::Global::new(scope, xhr);
@@ -72,6 +73,7 @@ pub(super) fn dispatch_service_worker_xhr(
         &prepared.request_origin,
         &prepared.resolved_url,
         &prepared.method,
+        moli_fetch::RequestMode::Cors,
         prepared.credentials_mode,
     );
     let cancel_handle = FetchCancelHandle::new();
@@ -334,6 +336,7 @@ pub(super) fn spawn_network_xhr_fetch(
         &prepared.request_origin,
         &prepared.resolved_url,
         &prepared.method,
+        moli_fetch::RequestMode::Cors,
         prepared.credentials_mode,
     );
     let network_context = AsyncSubresourceNetworkContext {

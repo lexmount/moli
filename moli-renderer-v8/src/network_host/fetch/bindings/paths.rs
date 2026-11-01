@@ -17,6 +17,7 @@ pub(super) fn record_intercepted_fetch(
         &prepared.request_origin,
         &prepared.resolved_url,
         &prepared.method,
+        prepared.request_mode,
         prepared.credentials_mode,
     );
     host.record_pending_subresource_fetch(
@@ -279,6 +280,7 @@ pub(super) fn spawn_network_fetch(
         &prepared.request_origin,
         &prepared.resolved_url,
         &prepared.method,
+        prepared.request_mode,
         prepared.credentials_mode,
     );
     let network_context = AsyncSubresourceNetworkContext {
