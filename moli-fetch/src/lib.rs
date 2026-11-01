@@ -15,6 +15,7 @@ mod dns;
 mod error;
 mod fetch_url_list;
 mod headers;
+mod mixed_content;
 mod network_fetch_result;
 mod proxy;
 mod proxy_connect;
@@ -54,6 +55,7 @@ pub use headers::{
     is_forbidden_response_header_name, is_no_cors_safelisted_request_header,
     split_http_header_list,
 };
+pub use mixed_content::RequestMixedContentPolicy;
 pub use moli_cookie_jar::SharedBrowserCookieStore as SharedCookieStore;
 pub use moli_curl::websocket::CurlWebSocketConnector;
 pub use moli_curl::{CurlTlsConfig, validate_http_host_resolve_entries};

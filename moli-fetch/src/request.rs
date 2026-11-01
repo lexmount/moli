@@ -47,6 +47,7 @@ pub struct Request {
     additional_cookies: Option<String>,
     cookie_header_policy: CookieHeaderPolicy,
     cache_mode: RequestCacheMode,
+    mixed_content_policy: crate::RequestMixedContentPolicy,
     pub resource_type: RequestResourceType,
     subresource_request_metadata: Option<SubresourceRequestMetadata>,
     script_scheduler_priority: Option<ScriptFetchSchedulerPriority>,
@@ -518,6 +519,7 @@ impl Request {
             additional_cookies: None,
             cookie_header_policy: CookieHeaderPolicy::default(),
             cache_mode: RequestCacheMode::Default,
+            mixed_content_policy: crate::RequestMixedContentPolicy::default(),
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
             script_scheduler_priority: None,
@@ -553,6 +555,7 @@ impl Request {
             additional_cookies: None,
             cookie_header_policy: CookieHeaderPolicy::default(),
             cache_mode: RequestCacheMode::Default,
+            mixed_content_policy: crate::RequestMixedContentPolicy::default(),
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
             script_scheduler_priority: None,
@@ -621,6 +624,7 @@ impl Request {
             additional_cookies: None,
             cookie_header_policy: CookieHeaderPolicy::default(),
             cache_mode: RequestCacheMode::Default,
+            mixed_content_policy: crate::RequestMixedContentPolicy::default(),
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
             script_scheduler_priority: None,
@@ -720,6 +724,26 @@ impl Request {
     pub fn with_resource_type(mut self, resource_type: RequestResourceType) -> Self {
         self.resource_type = resource_type;
         self
+    }
+
+    pub fn with_mixed_content_policy(mut self, policy: crate::RequestMixedContentPolicy) -> Self {
+        self.mixed_content_policy = policy;
+        self
+    }
+
+    pub fn mixed_content_policy(&self) -> crate::RequestMixedContentPolicy {
+        self.mixed_content_policy
+    }
+
+    pub fn check_mixed_content(&self) -> std::result::Result<(), String> {
+        self.mixed_content_policy.check(&self.url)
+    }
+
+    pub(crate) fn validate_network_target(&self, target: &Url) -> Result<()> {
+        self.mixed_content_policy
+            .check(target)
+            .map_err(anyhow::Error::msg)?;
+        self.validate_request_mode_for_url(target)
     }
 
     pub fn with_cache_mode(mut self, cache_mode: RequestCacheMode) -> Self {
@@ -1022,7 +1046,7 @@ impl Request {
 
     /// Follows an authorized redirect without rebuilding the Fetch request.
     pub fn follow_redirect(&mut self, redirect: RedirectInfo) -> Result<()> {
-        self.validate_request_mode_for_url(&redirect.to_url)?;
+        self.validate_network_target(&redirect.to_url)?;
         self.apply_redirect_status(redirect.status);
         self.url = redirect.to_url.clone();
         self.record_redirect(redirect);
