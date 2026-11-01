@@ -53,8 +53,46 @@ pub(super) async fn json_list(State(state): State<AppState>, uri: Uri) -> impl I
 pub(super) async fn json_protocol() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/json")],
-        CDP_PROTOCOL_JSON,
+        advertised_protocol_json(),
     )
+}
+
+/// V8's `js_protocol` schema plus every domain / command the dispatcher
+/// implements (`moli_protocol::implemented_cdp_commands`). V8 domains keep
+/// their full schemas; Moli-implemented domains list command names only.
+fn advertised_protocol_json() -> &'static str {
+    static JSON: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    JSON.get_or_init(|| {
+        let mut protocol: serde_json::Value =
+            serde_json::from_str(CDP_PROTOCOL_JSON).expect("embedded CDP protocol is valid JSON");
+        let domains = protocol["domains"]
+            .as_array_mut()
+            .expect("embedded CDP protocol has a domains array");
+        for (domain, commands) in moli_protocol::implemented_cdp_commands() {
+            let existing = domains
+                .iter_mut()
+                .find(|entry| entry["domain"] == serde_json::json!(domain));
+            match existing {
+                Some(entry) => {
+                    let listed = entry["commands"]
+                        .as_array_mut()
+                        .expect("V8 protocol domains list commands");
+                    for command in commands {
+                        if !listed.iter().any(|known| known["name"] == serde_json::json!(command)) {
+                            listed.push(serde_json::json!({ "name": command }));
+                        }
+                    }
+                }
+                None => domains.push(serde_json::json!({
+                    "domain": domain,
+                    "description": "Implemented by Moli; parameter schemas are not published.",
+                    "commands": commands.iter().map(|name| serde_json::json!({ "name": name })).collect::<Vec<_>>(),
+                    "events": [],
+                })),
+            }
+        }
+        serde_json::to_string(&protocol).expect("advertised protocol serializes")
+    })
 }
 
 pub(super) async fn json_new_target(State(state): State<AppState>, uri: Uri) -> Response {

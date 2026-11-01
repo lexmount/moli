@@ -1,5 +1,5 @@
 pub mod accessibility;
-pub(crate) mod actions;
+pub mod actions;
 pub(crate) mod activity;
 pub mod audits;
 pub(crate) mod audits_output_state;
