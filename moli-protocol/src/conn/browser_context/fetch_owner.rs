@@ -1105,7 +1105,7 @@ impl CdpConnection {
             .browser_context
             .start_page_policy_update(
                 &owner.target_id,
-                moli_core::RendererPageCommand::SetFetchSubresourceInterception {
+                moli_core::RendererPageNetworkPolicyUpdate::FetchSubresourceInterception {
                     enabled: subresource_enabled,
                     resource_type: subresource_resource_type,
                 },
@@ -1143,7 +1143,7 @@ impl CdpConnection {
             .browser_context
             .start_page_policy_update(
                 &owner.target_id,
-                moli_core::RendererPageCommand::SetFetchSubresourceInterception {
+                moli_core::RendererPageNetworkPolicyUpdate::FetchSubresourceInterception {
                     enabled: subresource_enabled,
                     resource_type: subresource_resource_type,
                 },
@@ -1178,7 +1178,7 @@ impl CdpConnection {
             .browser_context
             .start_page_policy_update(
                 &owner.target_id,
-                moli_core::RendererPageCommand::SetFetchSubresourceInterception {
+                moli_core::RendererPageNetworkPolicyUpdate::FetchSubresourceInterception {
                     enabled: subresource_enabled,
                     resource_type: subresource_resource_type,
                 },

@@ -595,6 +595,21 @@ impl Default for NavigationEngine {
 }
 
 impl NavigationEngine {
+    /// Update a prepared native Page before protocol observes its Document token.
+    /// The renderer rechecks the navigation's agent before applying the policy.
+    pub fn start_pending_document_policy_update(
+        &self,
+        renderer_owner: moli_renderer_v8::RendererOwnerLocalHostId,
+        page_id: moli_renderer_v8::PageId,
+        expected_agent: moli_renderer_v8::RendererDevToolsAgentToken,
+        update: moli_renderer_v8::RendererPageNetworkPolicyUpdate,
+    ) -> Result<crate::page::PendingPageCommand> {
+        self.js_runtime
+            .renderer_owner_handle()
+            .start_pending_document_policy_update(renderer_owner, page_id, expected_agent, update)
+            .map(crate::page::PendingPageCommand::from_renderer)
+    }
+
     /// Captures a weak command target for one native Document, including the
     /// interval before the navigation result installs its Page handle.
     pub fn document_command_target(

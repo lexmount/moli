@@ -583,6 +583,15 @@ impl TargetRuntimeSlot {
         self.devtools_renderer_channel.current()
     }
 
+    pub(crate) fn prepared_document_policy_target(
+        &self,
+    ) -> Option<(RendererPageResidenceIdentity, RendererDevToolsAgentToken)> {
+        let (renderer_page, attachment_id) =
+            self.page_slot.prepared_document_policy_attachment()?;
+        let attachment = self.current_renderer_attachment()?;
+        (attachment.id() == attachment_id).then_some((renderer_page, attachment.agent_token()))
+    }
+
     pub(crate) fn routes_current_renderer_page_owner(
         &self,
         renderer_page: RendererPageResidenceIdentity,
