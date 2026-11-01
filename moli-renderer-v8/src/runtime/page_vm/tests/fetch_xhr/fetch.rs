@@ -1556,7 +1556,7 @@ async fn window_fetch_revoked_blob_url_records_file_not_found_failure() {
 #[tokio::test]
 async fn window_fetch_dns_failure_rejects_and_records_network_failure() {
     run_page_vm_async_test(async move {
-            let fetch_url = "http://moli-dns-failure.invalid./fetch-dns-failure";
+            let fetch_url = "https://moli-dns-failure.invalid./fetch-dns-failure";
             let mut page_vm = test_page_vm_with_config(dns_failure_fetch_config(), Vec::new());
             let local_executor = page_vm.local_executor.clone();
             let fetch_url_literal = serde_json::to_string(fetch_url).expect("serialize fetch url");

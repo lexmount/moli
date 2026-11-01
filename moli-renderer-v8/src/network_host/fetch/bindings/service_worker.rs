@@ -89,6 +89,7 @@ pub(super) fn dispatch_service_worker_fetch(
         prepared.redirect_mode,
         prepared.priority,
         ServiceWorkerFetchRequestMetadata {
+            mixed_content_policy: prepared.mixed_content_policy,
             cache: prepared.cache.clone(),
             referrer: prepared.referrer.clone(),
             referrer_policy: prepared.referrer_policy.clone(),

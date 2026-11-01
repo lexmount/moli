@@ -445,6 +445,7 @@ async fn run_cors_preflight_if_needed(
     preflight_request_headers: &[(String, String)],
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<(), String> {
+    request.check_mixed_content()?;
     let request_origin = request
         .browser_origin()
         .map_err(|error| error.to_string())?;

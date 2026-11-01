@@ -2071,3 +2071,30 @@ fn url_search_params_subclasses_retain_their_webidl_brand() {
         r#"{"directPrototypeIsSubclass":true,"get":"fr","getAll":"fr,de","has":true,"size":3,"entries":"loc:fr,loc:de,empty:","seen":["loc:fr:true","loc:de:true","empty::true"],"serialized":"loc=fr&loc=de&empty="}"#
     );
 }
+
+#[test]
+fn window_fetch_mixed_content_uses_native_owner_instead_of_base_or_referrer() {
+    let mut vm = new_storage_html_test_vm("https://mixed-content.test/");
+    vm.eval(
+        r#"
+        globalThis.mixedResults = [];
+        document.head.innerHTML = '<base href="http://author-base.test/">';
+        const frame = document.createElement('iframe');
+        document.body.appendChild(frame);
+        for (const [owner, input] of [
+            [window, 'http://remote.test/direct'],
+            [window, new Request('http://remote.test/empty-referrer', {referrer: ''})],
+            [frame.contentWindow, 'http://remote.test/inherited'],
+        ]) {
+            owner.fetch(input, {headers: {'X-Probe': 'must-not-preflight'}}).then(
+                () => mixedResults.push('allowed'),
+                error => mixedResults.push(`${error.name}:${String(error.message).includes('Mixed content')}`));
+        }
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(mixedResults)").unwrap(),
+        r#"["TypeError:true","TypeError:true","TypeError:true"]"#
+    );
+}

@@ -239,6 +239,12 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         return;
     }
 
+    if let Err(message) = prepared.mixed_content_policy.check(&prepared.resolved_url) {
+        let message = reject_url_policy_fetch(host, prepared, message);
+        rv.set(make_rejected_promise(scope, &message).into());
+        return;
+    }
+
     if let Err(error) = moli_url_policy::route_fetch_url(&prepared.resolved_url) {
         let message = reject_url_policy_fetch(host, prepared, error.to_string());
         rv.set(make_rejected_promise(scope, &message).into());

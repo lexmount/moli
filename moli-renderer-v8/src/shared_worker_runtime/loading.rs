@@ -615,6 +615,7 @@ fn worker_policy_context_from_response(
     headers: &[(String, Vec<u8>)],
 ) -> SubresourcePolicyContext {
     SubresourcePolicyContext {
+        mixed_content_policy: Default::default(),
         cross_origin_embedder_policy:
             crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers),
         document_isolation_policy:

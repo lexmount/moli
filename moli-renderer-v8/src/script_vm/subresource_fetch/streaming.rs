@@ -8,6 +8,11 @@ impl ScriptVm {
         state: RunningSubresourceFetchState,
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
     ) {
+        let request = if state.pending.info.resource_type == SubresourceResourceType::Fetch {
+            request.with_mixed_content_policy(state.pending.policy_context.mixed_content_policy())
+        } else {
+            request
+        };
         let task_runner = state.pending.load.task_runner();
         let internal_id = state.pending.info.internal_id;
         let request_url = state.request_url.clone();
