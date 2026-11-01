@@ -162,8 +162,8 @@ pub(crate) fn request_constructor_callback<'s>(
         state.priority.as_ref().to_owned(),
         signal,
         state.duplex,
-        false,
-        false,
+        state.is_history_navigation,
+        state.is_reload_navigation,
         body_value,
     )
     .initialize(scope, obj)
