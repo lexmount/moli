@@ -2,6 +2,63 @@ use super::*;
 use time::Duration;
 
 #[test]
+fn document_query_filters_same_site_cookies_without_requiring_storage_access() {
+    let mut store = CookieStore::default();
+    let url = test_utils::url("https://example.com/");
+    let mut privileged_write = InsertContext::cdp(&url);
+    privileged_write.same_site_context = SameSiteContext::cross_site();
+    for line in [
+        "strict=1; Secure; SameSite=Strict",
+        "lax=1; Secure; SameSite=Lax",
+        "none=1; Secure; SameSite=None",
+        "unspecified=1; Secure",
+        "secret=1; Secure; SameSite=None; HttpOnly",
+    ] {
+        inserted!(store.insert_response_cookie_str_with_context(line, &privileged_write));
+    }
+
+    for storage_access_status in [StorageAccessStatus::None, StorageAccessStatus::Granted] {
+        let mut context = QueryContext::document(&url);
+        context.browser_context.storage_access_status = storage_access_status;
+        let same_site = store.get_cookie_query_result(&context);
+        assert_eq!(same_site.included_cookies.len(), 4);
+        assert_eq!(same_site.excluded_cookies.len(), 1);
+        assert_eq!(
+            same_site.excluded_cookies[0].reason,
+            CookieExclusionReason::HttpOnly
+        );
+
+        context.same_site_context = SameSiteContext::cross_site();
+        let cross_site = store.get_cookie_query_result(&context);
+        assert_eq!(cross_site.included_cookies.len(), 1);
+        assert_eq!(cross_site.included_cookies[0].name(), "none");
+        assert_eq!(cross_site.excluded_cookies.len(), 4);
+        for (name, reason) in [
+            ("strict", CookieExclusionReason::SameSiteStrict),
+            ("lax", CookieExclusionReason::SameSiteLax),
+            (
+                "unspecified",
+                CookieExclusionReason::SameSiteUnspecifiedTreatedAsLax,
+            ),
+            ("secret", CookieExclusionReason::HttpOnly),
+        ] {
+            let excluded = cross_site
+                .excluded_cookies
+                .iter()
+                .find(|entry| entry.cookie.name() == name)
+                .unwrap();
+            assert_eq!(excluded.reason, reason);
+        }
+    }
+
+    let mut cdp = QueryContext::cdp(&url);
+    cdp.same_site_context = SameSiteContext::cross_site();
+    let privileged = store.get_cookie_query_result(&cdp);
+    assert_eq!(privileged.included_cookies.len(), 5);
+    assert!(privileged.excluded_cookies.is_empty());
+}
+
+#[test]
 fn default_same_site_mode_has_the_chromium_two_minute_boundary() {
     let now = OffsetDateTime::from_unix_timestamp(2_000_000_000).unwrap();
     for (created, expected) in [
@@ -352,7 +409,7 @@ fn same_site_http_query_still_includes_explicit_lax_and_strict_cookies() {
 }
 
 #[test]
-fn document_query_ignores_same_site_request_context() {
+fn document_query_applies_same_site_request_context() {
     let mut store = CookieStore::default();
     let request_url = test_utils::url("https://example.com/foo/bar");
 
@@ -366,9 +423,13 @@ fn document_query_ignores_same_site_request_context() {
     context.request_type = HttpRequestType::TopLevelNavigation;
     context.is_method_safe = false;
     let result = store.get_cookie_query_result(&context);
-    assert_eq!(result.included_cookies.len(), 1);
-    assert_eq!(result.included_cookies[0].name(), "strict");
-    assert!(result.excluded_cookies.is_empty());
+    assert!(result.included_cookies.is_empty());
+    assert_eq!(result.excluded_cookies.len(), 1);
+    assert_eq!(result.excluded_cookies[0].cookie.name(), "strict");
+    assert_eq!(
+        result.excluded_cookies[0].reason,
+        CookieExclusionReason::SameSiteStrict
+    );
 }
 
 #[test]

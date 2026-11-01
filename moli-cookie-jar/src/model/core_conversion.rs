@@ -257,6 +257,13 @@ fn stored_set_rejection_reason_from_core(
         CoreCookieSetRejectionReason::SameSiteNoneRequiresSecure => {
             StoredCookieSetRejectionReason::SameSiteNoneRequiresSecure
         }
+        CoreCookieSetRejectionReason::SameSiteStrict => {
+            StoredCookieSetRejectionReason::SameSiteStrict
+        }
+        CoreCookieSetRejectionReason::SameSiteLax => StoredCookieSetRejectionReason::SameSiteLax,
+        CoreCookieSetRejectionReason::SameSiteUnspecifiedTreatedAsLax => {
+            StoredCookieSetRejectionReason::SameSiteUnspecifiedTreatedAsLax
+        }
         CoreCookieSetRejectionReason::PrefixViolation => {
             StoredCookieSetRejectionReason::PrefixViolation
         }

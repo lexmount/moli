@@ -5,7 +5,7 @@ use crate::dom::native::DocumentReadyState;
 use moli_cookie_jar::{
     BrowserCookieFacadeContext, BrowserCookieStorageAccessStatus,
     StoredCookieBrowserContextValueSource, StoredCookieExclusionReason, StoredCookieFacadeStatus,
-    StoredCookieSetRejectionReason, StoredCookieSetReport, StoredCookieSetStatus, same_site_urls,
+    StoredCookieSetRejectionReason, StoredCookieSetReport, StoredCookieSetStatus,
 };
 use moli_cookie_jar::{BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides};
 
@@ -395,7 +395,6 @@ impl DocumentCookieBrowserContextState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DocumentCookieReadSource {
     Disabled,
-    StorageAccessBlocked,
     StoreUnavailable,
     Store,
     Cache,
@@ -410,32 +409,9 @@ pub(super) struct DocumentCookieReadResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DocumentCookieSetOutcome {
     Disabled,
-    StorageAccessBlocked,
     StoreUnavailable,
     Applied,
     Rejected,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DocumentCookiePolicyBlockReason {
-    CookiesDisabled,
-    StorageAccessBlocked,
-}
-
-impl DocumentCookiePolicyBlockReason {
-    fn read_source(self) -> DocumentCookieReadSource {
-        match self {
-            Self::CookiesDisabled => DocumentCookieReadSource::Disabled,
-            Self::StorageAccessBlocked => DocumentCookieReadSource::StorageAccessBlocked,
-        }
-    }
-
-    fn exclusion_reason(self) -> StoredCookieExclusionReason {
-        match self {
-            Self::CookiesDisabled => StoredCookieExclusionReason::CookiesDisabled,
-            Self::StorageAccessBlocked => StoredCookieExclusionReason::StorageAccessBlocked,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -551,11 +527,11 @@ impl HostDocumentState {
         &self,
         url: &Url,
     ) -> Result<DocumentCookieReadResult, moli_cookie_jar::CookieStoreError> {
-        if let Some(block_reason) = self.document_cookie_policy_block_reason_for_url(url) {
+        if !self.cookies_enabled() {
             self.cookie_facade.telemetry.record_blocked_read();
             return Ok(DocumentCookieReadResult {
                 value: String::new(),
-                source: block_reason.read_source(),
+                source: DocumentCookieReadSource::Disabled,
             });
         }
         let Some(cookie_store) = self.cookie_store.as_ref() else {
@@ -628,9 +604,6 @@ impl HostDocumentState {
                     StoredCookieSetRejectionReason::CookiesDisabled => {
                         DocumentCookieSetOutcome::Disabled
                     }
-                    StoredCookieSetRejectionReason::StorageAccessBlocked => {
-                        DocumentCookieSetOutcome::StorageAccessBlocked
-                    }
                     StoredCookieSetRejectionReason::StoreUnavailable => {
                         DocumentCookieSetOutcome::StoreUnavailable
                     }
@@ -669,16 +642,9 @@ impl HostDocumentState {
     }
 
     pub fn document_cookie_capability_snapshot(&self) -> DocumentCookieCapabilitySnapshot {
-        self.document_cookie_capability_snapshot_for_url(&self.url)
-    }
-
-    pub(crate) fn document_cookie_capability_snapshot_for_url(
-        &self,
-        url: &Url,
-    ) -> DocumentCookieCapabilitySnapshot {
         DocumentCookieCapabilitySnapshot {
             cookies_enabled_preference: self.cookies_enabled(),
-            facade_status: self.document_cookie_facade_status_for_url(url),
+            facade_status: self.document_cookie_facade_status(),
             view_generation: self.cookie_facade.view_generation(),
         }
     }
@@ -710,10 +676,7 @@ impl HostDocumentState {
         let cached_store_generation = cache.as_ref().map(|entry| entry.generation);
         let cached_facade_generation = cache.as_ref().map(|entry| entry.facade_generation);
 
-        if self
-            .document_cookie_policy_block_reason_for_url(url)
-            .is_some()
-        {
+        if !self.cookies_enabled() {
             return DocumentCookieCacheSnapshot {
                 status: DocumentCookieCacheStatus::PolicyBlocked,
                 cached_url,
@@ -814,21 +777,6 @@ impl HostDocumentState {
         self.clear_document_cookie_cache();
     }
 
-    fn document_cookie_policy_block_reason_for_url(
-        &self,
-        url: &Url,
-    ) -> Option<DocumentCookiePolicyBlockReason> {
-        if !self.cookies_enabled() {
-            return Some(DocumentCookiePolicyBlockReason::CookiesDisabled);
-        }
-
-        if self.document_cookie_storage_access_blocked_for_url(url) {
-            return Some(DocumentCookiePolicyBlockReason::StorageAccessBlocked);
-        }
-
-        None
-    }
-
     fn apply_cookie_facade_update(
         &mut self,
         update: impl FnOnce(&mut DocumentCookieFacadeState) -> bool,
@@ -844,18 +792,14 @@ impl HostDocumentState {
         *self.document_cookie_cache.borrow_mut() = None;
     }
 
-    fn document_cookie_facade_status_for_url(&self, url: &Url) -> StoredCookieFacadeStatus {
-        let policy_block_reason = self.document_cookie_policy_block_reason_for_url(url);
+    fn document_cookie_facade_status(&self) -> StoredCookieFacadeStatus {
         let store_available = self.cookie_store.as_ref().is_some();
         let mut blocked_reasons = Vec::new();
         if !store_available {
             blocked_reasons.push(StoredCookieExclusionReason::StoreUnavailable);
         }
-        if let Some(policy_block_reason) = policy_block_reason {
-            let exclusion_reason = policy_block_reason.exclusion_reason();
-            if !blocked_reasons.contains(&exclusion_reason) {
-                blocked_reasons.push(exclusion_reason);
-            }
+        if !self.cookies_enabled() {
+            blocked_reasons.push(StoredCookieExclusionReason::CookiesDisabled);
         }
 
         StoredCookieFacadeStatus {
@@ -863,26 +807,6 @@ impl HostDocumentState {
             store_available,
             blocked_reasons,
         }
-    }
-
-    fn document_cookie_storage_access_blocked_for_url(&self, url: &Url) -> bool {
-        let browser_context = self.cookie_browser_context();
-        if browser_context.storage_access_status == BrowserCookieStorageAccessStatus::Granted {
-            return false;
-        }
-
-        // Blink treats Storage Access / site-for-cookies policy as facade
-        // ownership, not backend storage policy. Keep the same split here:
-        // `document.cookie` is blocked when the embedding browser context is
-        // cross-site, but the underlying cookie jar and diagnostics remain
-        // observable to the facade for tooling and cache invalidation.
-        [
-            browser_context.site_for_cookies_url.as_ref(),
-            browser_context.top_frame_origin_url.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .any(|context_url| !same_site_urls(url, context_url, true))
     }
 
     pub fn cookie_browser_context(&self) -> BrowserCookieFacadeContext {
@@ -928,5 +852,102 @@ fn rejected_document_cookie_set_report(
         rejection_reasons: vec![rejection_reason],
         warning_reasons: Vec::new(),
         effective_same_site: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_cookie_context_controls_visibility_without_blocking_the_facade() {
+        let top = Url::parse("https://top.test/").unwrap();
+        let child = Url::parse("https://child.test/").unwrap();
+        let store = moli_cookie_jar::new_shared_browser_cookie_store();
+        for url in [&top, &child] {
+            store.lock().unwrap().store_response_headers(
+                url,
+                &[
+                    (
+                        "Set-Cookie".into(),
+                        b"strict=1; Secure; SameSite=Strict; Path=/".to_vec(),
+                    ),
+                    (
+                        "Set-Cookie".into(),
+                        b"lax=1; Secure; SameSite=Lax; Path=/".to_vec(),
+                    ),
+                    (
+                        "Set-Cookie".into(),
+                        b"none=1; Secure; SameSite=None; Path=/".to_vec(),
+                    ),
+                    (
+                        "Set-Cookie".into(),
+                        b"secret=1; Secure; SameSite=None; HttpOnly; Path=/".to_vec(),
+                    ),
+                ],
+            );
+        }
+        let mut document = HostDocumentState::new(top.clone());
+        document.cookie_store = Some(store.clone());
+
+        assert_eq!(
+            document.cookie_for_url(&top).unwrap(),
+            "strict=1; lax=1; none=1"
+        );
+        assert_eq!(document.cookie_for_url(&child).unwrap(), "none=1");
+        assert!(
+            document
+                .document_cookie_capability_snapshot()
+                .facade_status
+                .cookie_access_enabled
+        );
+        assert_eq!(
+            document
+                .document_cookie_cache_snapshot_for_url(&child)
+                .status,
+            DocumentCookieCacheStatus::Reusable
+        );
+        assert_eq!(document.cookie_for_url(&child).unwrap(), "none=1");
+
+        document.apply_cookie_facade_overrides(&BrowserCookieFacadeOverrides {
+            cookies_enabled: Some(false),
+            ..Default::default()
+        });
+        assert_eq!(document.cookie_for_url(&child).unwrap(), "");
+        assert_eq!(
+            document
+                .document_cookie_cache_snapshot_for_url(&child)
+                .status,
+            DocumentCookieCacheStatus::PolicyBlocked
+        );
+        let generation = store.lock().unwrap().document_cookie_generation();
+        assert_eq!(
+            document
+                .set_cookie_with_result_for_url(
+                    &child,
+                    "none=blocked; Secure; SameSite=None; Path=/"
+                )
+                .unwrap()
+                .outcome,
+            DocumentCookieSetOutcome::Disabled
+        );
+        assert_eq!(
+            store.lock().unwrap().document_cookie_generation(),
+            generation
+        );
+
+        store.lock().unwrap().store_response_headers(
+            &child,
+            &[(
+                "Set-Cookie".into(),
+                b"none=updated; Secure; SameSite=None; Path=/".to_vec(),
+            )],
+        );
+        document.clear_cookie_facade_overrides();
+        assert_eq!(document.cookie_for_url(&child).unwrap(), "none=updated");
+        assert_eq!(
+            document.cookie_for_url(&top).unwrap(),
+            "strict=1; lax=1; none=1"
+        );
     }
 }

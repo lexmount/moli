@@ -80,10 +80,8 @@ pub(super) fn query_context_access_result(
         status.add_exclusion(CookieExclusionReason::PartitionKeyMismatch);
     }
 
-    // SameSite gates request inclusion, not raw cookie visibility. Keep the
-    // first version scoped to network reads so `document.cookie` and browser
-    // introspection continue to expose the stored value while request paths can
-    // model cross-site exclusions explicitly. The default mode also retains
+    // Network and script reads both apply SameSite restrictions; only privileged
+    // browser introspection bypasses them. The default mode also retains
     // Chromium's age-limited allowance for unsafe top-level navigation. Keep
     // accumulating exclusion reasons instead of returning early: Chromium's
     // `CookieInclusionStatus` is a set, and higher layers should be able to
@@ -160,7 +158,7 @@ pub(super) fn same_site_exclusion_reason(
     same_site_context: SameSiteRequestContext,
     effective_same_site: CookieEffectiveSameSite,
 ) -> Option<CookieExclusionReason> {
-    if context.source != CookieAccessSource::Http {
+    if context.source == CookieAccessSource::Cdp {
         return None;
     }
 

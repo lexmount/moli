@@ -109,6 +109,12 @@ pub enum Error {
     DomainMismatch,
     /// `SameSite=None` cookies must also be marked Secure
     SameSiteNoneRequiresSecure,
+    /// A cross-site write attempted to create a `SameSite=Strict` cookie.
+    SameSiteStrict,
+    /// A cross-site write attempted to create a `SameSite=Lax` cookie.
+    SameSiteLax,
+    /// A cross-site write attempted to create a default-Lax cookie.
+    SameSiteUnspecifiedTreatedAsLax,
     /// Cookie violated one of the browser prefix rules
     PrefixViolation,
     /// An insecure write attempted to overlap an existing secure cookie
@@ -156,6 +162,10 @@ impl fmt::Display for Error {
                 Error::DomainMismatch => "request-uri does not domain-match the cookie",
                 Error::SameSiteNoneRequiresSecure =>
                     "SameSite=None cookies must also specify Secure",
+                Error::SameSiteStrict => "SameSite=Strict cookie cannot be set in this context",
+                Error::SameSiteLax => "SameSite=Lax cookie cannot be set in this context",
+                Error::SameSiteUnspecifiedTreatedAsLax =>
+                    "default-Lax cookie cannot be set in this context",
                 Error::PrefixViolation => "cookie violates a protected prefix rule",
                 Error::SecureOverlay => "insecure cookie cannot overlay an existing secure cookie",
                 Error::NameValueTooLarge => "cookie name and value exceed the supported size limit",
