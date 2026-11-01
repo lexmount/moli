@@ -283,3 +283,168 @@ document.body.innerHTML = `
     .await
     .expect("inline SVG inherited-font fixture should run");
 }
+
+// The SVG decoder caches system fonts process-wide. Give this Linux regression
+// a child-only Fontconfig containing three checked-in, distinguishable faces;
+// neither host fonts nor other parallel tests can change the selected outlines.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_inline_svg_variant_faces_isolate_system_fonts() -> anyhow::Result<()> {
+    const CHILD: &str = "MOLI_SVG_VARIANT_RASTER_CHILD";
+    const COMPLETED: &str = "svg-variant-raster-child: completed";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let directory = tempfile::tempdir()?;
+        let fonts = directory.path().join("fonts");
+        std::fs::create_dir(&fonts)?;
+        let fixtures: [(&str, &[u8]); 3] = [
+            (
+                "regular.ttf",
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../moli-layout/tests/fixtures/moli-svg-regular.ttf"
+                )),
+            ),
+            (
+                "italic.ttf",
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../moli-layout/tests/fixtures/moli-svg-italic.ttf"
+                )),
+            ),
+            (
+                "condensed.ttf",
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../moli-layout/tests/fixtures/moli-svg-condensed.ttf"
+                )),
+            ),
+        ];
+        for (name, bytes) in fixtures {
+            std::fs::write(fonts.join(name), bytes)?;
+        }
+        let xml_path = |path: &std::path::Path| {
+            path.to_string_lossy()
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+        };
+        let aliases = ["serif", "sans-serif", "monospace"]
+            .map(|generic| {
+                format!(
+                    "<alias><family>{generic}</family><prefer>\
+                <family>Moli SVG Variants</family></prefer></alias>"
+                )
+            })
+            .join("");
+        let config = directory.path().join("fonts.conf");
+        std::fs::write(
+            &config,
+            format!(
+                "<fontconfig><dir>{}</dir><cachedir>{}</cachedir>{aliases}</fontconfig>",
+                xml_path(&fonts),
+                xml_path(directory.path()),
+            ),
+        )?;
+        let module = module_path!().split_once("::").expect("test module").1;
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                &format!("{module}::screenshot_inline_svg_variant_faces_isolate_system_fonts"),
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("FONTCONFIG_FILE", &config)
+            .env_remove("FONTCONFIG_PATH")
+            .env_remove("FONTCONFIG_SYSROOT")
+            .env_remove("XDG_CONFIG_HOME")
+            .output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "variant raster child failed:\n{stdout}\n{stderr}"
+        );
+        // An incorrect --exact filter can exit successfully without a test.
+        assert!(
+            stdout.contains(COMPLETED),
+            "variant assertions did not run:\n{stdout}"
+        );
+        for line in stdout
+            .lines()
+            .filter(|line| line.starts_with("svg-variant "))
+        {
+            println!("{line}");
+        }
+        return Ok(());
+    }
+
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.com/svg-font-variants.html")?,
+        );
+        let fixture = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/inline-svg-font-variants.html",
+        ));
+        page_vm.vm_mut().eval(&format!(
+            "document.documentElement.innerHTML = {}; 'installed'",
+            serde_json::to_string(fixture)?,
+        ))?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm.vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(300, 140, 1.0))?
+            .expect("variant layout root");
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| {
+            let index = ((y * raster.width + x) * 4) as usize;
+            <[u8; 4]>::try_from(&raster.rgba[index..index + 4]).expect("RGBA pixel")
+        };
+        let ink = |x, y| {
+            let [r, g, b, a] = pixel(x, y);
+            a == 255 && r > 200 && g > 200 && b > 200
+        };
+        let mask = |left: u32, top: u32| -> Vec<bool> {
+            (2..58).flat_map(|y| (2..88).map(move |x| (left + x, top + y)))
+                .map(|(x, y)| ink(x, y)).collect()
+        };
+        let lit = |mask: &[bool]| mask.iter().filter(|painted| **painted).count();
+        const BADGE: [u8; 4] = [15, 118, 110, 255];
+        for (variant, top, empty, painted) in [
+            ("italic", 0, (12, 18), (30, 30)),
+            ("condensed", 70, (30, 30), (12, 18)),
+        ] {
+            let inherited = mask(0, top);
+            let authored = mask(100, top);
+            let normal = mask(200, top);
+            let normal_ink = lit(&normal);
+            assert!((900..1_300).contains(&normal_ink), "{variant}: regular outline missing");
+            assert!(ink(200 + empty.0, top + empty.1)
+                && ink(200 + painted.0, top + painted.1), "{variant}: normal control");
+            for left in [0, 100, 200] {
+                assert_eq!(pixel(left + 45, top + 57), BADGE, "{variant}: badge background");
+            }
+            // A triangle and a half-width rectangle prove real face selection:
+            // normal fallback (including synthetic normal-face scaling) cannot
+            // satisfy both the outline probes and the 35%..65% coverage bound.
+            for (label, left, glyph) in [
+                ("inherited", 0, &inherited), ("authored", 100, &authored),
+            ] {
+                assert_eq!(pixel(left + empty.0, top + empty.1), BADGE,
+                    "{variant}-{label}: wrong variant face; normal paints this pixel");
+                assert!(ink(left + painted.0, top + painted.1),
+                    "{variant}-{label}: requested outline missing");
+                let coverage = lit(glyph);
+                assert!(coverage * 20 >= normal_ink * 7 && coverage * 20 <= normal_ink * 13,
+                    "{variant}-{label}: variant {coverage} must differ from normal {normal_ink}");
+            }
+            let differing = inherited.iter().zip(&authored).filter(|(a, b)| a != b).count();
+            assert!(differing <= normal_ink / 50 + 2,
+                "{variant}: inherited/authored glyphs differ in {differing} pixels");
+            println!("svg-variant {variant}: normal={normal_ink}, inherited={}, authored={}, mismatch={differing}",
+                lit(&inherited), lit(&authored));
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("isolated SVG variant raster");
+    println!("{COMPLETED}");
+    Ok(())
+}
