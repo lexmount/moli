@@ -2111,6 +2111,10 @@ impl DomHost {
             .map(|state| state.init.adopted_style_sheets().map(str::to_owned))
     }
 
+    pub fn has_shadow_roots(&self) -> bool {
+        !self.shadow_roots_by_host.borrow().is_empty()
+    }
+
     pub fn shadow_root_uses_null_custom_element_registry(&self, root: DomHandle) -> Option<bool> {
         let host = self.shadow_hosts_by_root.borrow().get(&root).copied()?;
         self.shadow_roots_by_host

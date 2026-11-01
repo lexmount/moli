@@ -6,6 +6,11 @@ pub(crate) fn registry_association_retargets_before_removal(
     root: DomHandle,
 ) -> Vec<RegistryAssociationRetarget> {
     let host = unsafe { &*host_ptr };
+    if !host.has_explicit_custom_element_registry_associations()
+        && !host.dom_host().has_shadow_roots()
+    {
+        return Vec::new();
+    }
     let mut retargets = Vec::new();
     for handle in host.dom_host().shadow_including_subtree(root) {
         if !should_record_import_clone_registry_association(host.dom_host(), handle) {
