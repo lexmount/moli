@@ -161,6 +161,7 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
         child_handle,
         next_url.as_str(),
         entry_seed,
+        moli_fetch::BrowserNavigationRequestKind::Navigate,
         None,
         request_initiator,
         Some(initiator),

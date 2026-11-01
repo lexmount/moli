@@ -582,6 +582,7 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
             participant.handle,
             participant.url.as_str(),
             participant.seed.clone(),
+            moli_fetch::BrowserNavigationRequestKind::HistoryTraversal,
             None,
             None,
             Some(crate::native_bridge::OwnerDispatchScope::Child(

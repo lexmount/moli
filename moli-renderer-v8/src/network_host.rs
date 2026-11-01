@@ -129,7 +129,7 @@ pub(crate) use self::fetch_surface::{
     consume_webassembly_streaming_response_value, install_request_bindings,
     install_response_bindings, set_request_destination_for_service_worker_fetch_event,
     set_request_mode_for_service_worker_fetch_event,
-    set_request_reload_navigation_for_service_worker_fetch_event,
+    set_request_navigation_flags_for_service_worker_fetch_event,
 };
 pub(in crate::network_host) use self::fetch_surface::{
     mark_request_object, request_slot_bool, request_slot_object, request_slot_value,

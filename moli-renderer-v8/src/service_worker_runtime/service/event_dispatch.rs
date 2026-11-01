@@ -51,11 +51,7 @@ fn navigation_preload_request_for_job(
     request.request_headers = headers;
     Ok(request
         .with_redirect_mode(moli_fetch::RequestRedirectMode::Manual)
-        .with_browser_navigation_kind(if job.is_reload {
-            moli_fetch::BrowserNavigationRequestKind::Reload
-        } else {
-            moli_fetch::BrowserNavigationRequestKind::Navigate
-        })
+        .with_browser_navigation_kind(job.metadata.navigation_kind(job.is_reload))
         .with_page_network_policy())
 }
 
@@ -256,6 +252,7 @@ impl ServiceWorkerRuntimeService {
                     origin,
                 )
                 .with_initiator_url(&dispatch.network_context.document_url)
+                .with_browser_navigation_kind(request.metadata.navigation_kind(request.is_reload))
                 .with_request_mode(request.request_mode)
                 .with_credentials_mode(request.credentials_mode)
                 .with_redirect_mode(request.redirect_mode)

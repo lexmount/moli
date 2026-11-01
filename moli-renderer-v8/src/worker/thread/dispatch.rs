@@ -26,7 +26,7 @@ use crate::network_host::{
     materialize_response_object_internal_head, materialized_body_bytes_from_value,
     new_network_body_source_id, set_request_destination_for_service_worker_fetch_event,
     set_request_mode_for_service_worker_fetch_event,
-    set_request_reload_navigation_for_service_worker_fetch_event,
+    set_request_navigation_flags_for_service_worker_fetch_event,
 };
 use crate::runtime::{
     MaterializedServiceWorkerFetchResponseHead, ServiceWorkerEventId, ServiceWorkerFetchCompletion,
@@ -1783,10 +1783,11 @@ fn new_service_worker_fetch_request<'s>(
         request,
         event.request.request_mode.into(),
     );
-    set_request_reload_navigation_for_service_worker_fetch_event(
+    set_request_navigation_flags_for_service_worker_fetch_event(
         scope,
         request,
         event.request.is_reload,
+        event.request.metadata.is_history_navigation,
     );
     let request_signal_id = request
         .get(scope, v8str(scope, "signal").into())

@@ -451,13 +451,14 @@ impl JsContextHost {
             self.sync_existing_child_browsing_context_window_state(scope, handle);
             return None;
         }
-        let pending = PendingChildFrameNavigation {
-            initiator: if self.child_browsing_context_has_pending_cross_document_traversal(handle) {
-                ChildDocumentNavigationInitiator::HistoryTraversal
-            } else {
-                pending.initiator
-            },
-            ..pending
+        let pending = if self.child_browsing_context_has_pending_cross_document_traversal(handle) {
+            PendingChildFrameNavigation {
+                initiator: ChildDocumentNavigationInitiator::HistoryTraversal,
+                browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind::HistoryTraversal,
+                ..pending
+            }
+        } else {
+            pending
         };
         self.clear_child_browsing_context_pending_navigation(handle);
         self.clear_pending_form_submission_child_target(handle);

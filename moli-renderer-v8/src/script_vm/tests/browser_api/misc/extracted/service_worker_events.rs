@@ -1,6 +1,100 @@
 use super::*;
 
 #[tokio::test]
+async fn service_worker_navigation_fallback_preserves_reload_validation_on_wire() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut navigations = Vec::new();
+        for path in [
+            "/app/worker.js",
+            "/app/frame.html",
+            "/app/frame.html",
+            "/app/other.html",
+            "/app/frame.html",
+        ] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_storage_bucket_partition_request_head(&mut stream)
+                .await
+                .unwrap();
+            assert_eq!(
+                request.lines().next().unwrap(),
+                format!("GET {path} HTTP/1.1")
+            );
+            let (content_type, body) = if path.ends_with("worker.js") {
+                (
+                    "text/javascript",
+                    "self.addEventListener('fetch', () => {});",
+                )
+            } else {
+                navigations.push(request);
+                ("text/plain", "network-fallback")
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+        navigations
+    });
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+    vm.eval(
+        r#"
+        globalThis.navigationFallbackResult = 'pending';
+        (async () => {
+            const registration = await navigator.serviceWorker.register('worker.js', {scope: './'});
+            await navigator.serviceWorker.ready;
+            const frame = document.createElement('iframe');
+            const load = action => new Promise(resolve => {
+                frame.onload = resolve;
+                action();
+            });
+            await load(() => { frame.src = 'frame.html'; document.body.appendChild(frame); });
+            await load(() => frame.contentWindow.location.reload());
+            await new Promise(resolve => setTimeout(resolve, 0));
+            await load(() => { frame.src = 'other.html'; });
+            await new Promise(resolve => setTimeout(resolve, 0));
+            await load(() => frame.contentWindow.history.back());
+            if (frame.contentDocument.body.textContent !== 'network-fallback') {
+                throw new Error('history navigation did not use the network fallback response');
+            }
+            frame.remove();
+            await registration.unregister();
+            return 'done';
+        })().then(value => navigationFallbackResult = value,
+                  error => navigationFallbackResult = String(error));
+    "#,
+    )
+    .unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(navigationFallbackResult !== 'pending')",
+        "true",
+    )
+    .await;
+    assert_eq!(vm.eval("navigationFallbackResult").unwrap(), "done");
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 4);
+    for (index, request) in requests.iter().enumerate() {
+        let lower = request.to_ascii_lowercase();
+        assert!(lower.contains("sec-fetch-mode: navigate"), "{request}");
+        assert_eq!(
+            lower.contains("cache-control: max-age=0"),
+            index == 1,
+            "only reload must validate the cached navigation response: {request}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn navigator_service_worker_shim_controls_window_fetch() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
         "/app/worker.js",

@@ -104,6 +104,7 @@ pub(super) fn dispatch_service_worker_fetch(
             referrer_policy: prepared.referrer_policy.clone(),
             integrity: prepared.integrity.clone(),
             keepalive: prepared.keepalive,
+            is_history_navigation: false,
             use_cors_preflight: false,
             link_preload: false,
         },

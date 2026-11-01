@@ -21,6 +21,7 @@ impl JsContextHost {
     ) -> Option<ChildDocumentCommitResult> {
         let PendingChildFrameNavigation {
             bootstrap,
+            browser_navigation_kind,
             blob_resource,
             initiator,
             initiator_url,
@@ -193,6 +194,7 @@ impl JsContextHost {
                         target_snapshot,
                         blob_resource,
                     )
+                    .with_browser_navigation_kind(browser_navigation_kind)
                     .with_source_policy(source_policy)
                     .with_request_initiator(request_initiator),
                 )

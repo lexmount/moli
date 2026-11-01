@@ -108,6 +108,7 @@ pub(super) struct PendingChildAttributeNavigation {
 #[derive(Debug, Clone)]
 pub(super) struct PendingChildFrameNavigation {
     pub(super) bootstrap: ChildBrowsingContextBootstrap,
+    pub(super) browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
     pub(super) blob_resource: Option<crate::network_host::CapturedBlobResource>,
     pub(super) initiator_url: Option<Url>,
     pub(super) initiator: ChildDocumentNavigationInitiator,
@@ -129,12 +130,21 @@ impl PendingChildFrameNavigation {
         Self {
             blob_resource,
             bootstrap,
+            browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind::Navigate,
             initiator_url,
             initiator,
             target_snapshot,
             source_policy: None,
             request_initiator: None,
         }
+    }
+
+    pub(super) fn with_browser_navigation_kind(
+        mut self,
+        kind: moli_fetch::BrowserNavigationRequestKind,
+    ) -> Self {
+        self.browser_navigation_kind = kind;
+        self
     }
 
     pub(super) fn with_source_policy(

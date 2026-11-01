@@ -489,6 +489,7 @@ pub(crate) struct ServiceWorkerFetchRequestMetadata {
     pub(crate) referrer_policy: String,
     pub(crate) integrity: String,
     pub(crate) keepalive: bool,
+    pub(crate) is_history_navigation: bool,
     pub(crate) use_cors_preflight: bool,
     /// Native preload producers must not consume their own pending response.
     /// This flag is not exposed on the worker's JavaScript Request.
@@ -503,8 +504,24 @@ impl Default for ServiceWorkerFetchRequestMetadata {
             referrer_policy: String::new(),
             integrity: String::new(),
             keepalive: false,
+            is_history_navigation: false,
             use_cors_preflight: false,
             link_preload: false,
+        }
+    }
+}
+
+impl ServiceWorkerFetchRequestMetadata {
+    pub(crate) fn navigation_kind(
+        &self,
+        is_reload: bool,
+    ) -> moli_fetch::BrowserNavigationRequestKind {
+        if is_reload {
+            moli_fetch::BrowserNavigationRequestKind::Reload
+        } else if self.is_history_navigation {
+            moli_fetch::BrowserNavigationRequestKind::HistoryTraversal
+        } else {
+            moli_fetch::BrowserNavigationRequestKind::Navigate
         }
     }
 }
@@ -523,6 +540,8 @@ pub(crate) fn service_worker_fetch_request_metadata(
             .and_then(|metadata| metadata.integrity.clone())
             .unwrap_or_default(),
         keepalive: false,
+        is_history_navigation: request.browser_navigation_kind()
+            == moli_fetch::BrowserNavigationRequestKind::HistoryTraversal,
         use_cors_preflight: request.use_cors_preflight(),
         link_preload: request.priority_hints.link_preload,
     }

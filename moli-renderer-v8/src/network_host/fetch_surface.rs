@@ -248,12 +248,19 @@ pub(crate) fn set_request_mode_for_service_worker_fetch_event(
     set_request_slot_value(scope, request, REQUEST_MODE_SLOT, mode.into());
 }
 
-pub(crate) fn set_request_reload_navigation_for_service_worker_fetch_event(
+pub(crate) fn set_request_navigation_flags_for_service_worker_fetch_event(
     scope: &mut v8::PinScope<'_, '_>,
     request: v8::Local<'_, v8::Object>,
     is_reload: bool,
+    is_history: bool,
 ) {
     set_request_slot_bool(scope, request, REQUEST_IS_RELOAD_NAVIGATION_SLOT, is_reload);
+    set_request_slot_bool(
+        scope,
+        request,
+        REQUEST_IS_HISTORY_NAVIGATION_SLOT,
+        is_history,
+    );
 }
 
 pub(in crate::network_host) fn set_request_slot_bool(

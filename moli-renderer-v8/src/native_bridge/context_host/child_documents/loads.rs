@@ -121,6 +121,7 @@ impl JsContextHost {
     ) -> Option<u64> {
         let PendingChildFrameNavigation {
             bootstrap,
+            browser_navigation_kind,
             blob_resource,
             initiator,
             initiator_url,
@@ -241,6 +242,7 @@ impl JsContextHost {
                                 )
                             }),
                     )
+                    .with_browser_navigation_kind(browser_navigation_kind)
                     .with_page_network_policy()
                     .with_network_partition_key(network_partition_key);
                 let request_snapshot = ChildDocumentRequestSnapshot {

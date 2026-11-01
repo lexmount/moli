@@ -54,6 +54,7 @@ impl JsContextHost {
                 handle,
                 request.url.as_str(),
                 entry_seed,
+                moli_fetch::BrowserNavigationRequestKind::Navigate,
                 None,
                 request_initiator,
                 initiator,
@@ -210,6 +211,7 @@ impl JsContextHost {
         handle: DomHandle,
         resolved_url: &str,
         entry_seed: NavigationHistoryEntrySeed,
+        browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
         initiator_url: Option<Url>,
         request_initiator: Option<crate::runtime::RendererNavigationInitiator>,
         initiator: Option<super::super::OwnerDispatchScope>,
@@ -246,6 +248,7 @@ impl JsContextHost {
                     self.snapshot_child_navigation_target(handle, &url),
                     blob_resource,
                 )
+                .with_browser_navigation_kind(browser_navigation_kind)
                 .with_source_policy(source_policy)
                 .with_request_initiator(request_initiator),
                 false,

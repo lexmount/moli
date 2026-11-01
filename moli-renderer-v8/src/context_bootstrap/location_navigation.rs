@@ -1008,6 +1008,11 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                         handle,
                         resolved.as_str(),
                         entry_seed,
+                        if matches!(kind, LocationNavigationKind::Reload) {
+                            moli_fetch::BrowserNavigationRequestKind::Reload
+                        } else {
+                            moli_fetch::BrowserNavigationRequestKind::Navigate
+                        },
                         initiator_url,
                         navigation_source
                             .as_ref()

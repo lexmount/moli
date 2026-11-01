@@ -230,7 +230,8 @@ impl PreparedRendererNavigation {
                         moli_fetch::BrowserNavigationRequestKind::Reload => {
                             moli_core::page::RendererAuxiliaryNavigationKind::Reload
                         }
-                        moli_fetch::BrowserNavigationRequestKind::Navigate => {
+                        moli_fetch::BrowserNavigationRequestKind::Navigate
+                        | moli_fetch::BrowserNavigationRequestKind::HistoryTraversal => {
                             match navigation.history_mutation() {
                                 moli_page_types::NavigationHistoryMutation::Push => {
                                     moli_core::page::RendererAuxiliaryNavigationKind::Assign

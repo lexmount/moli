@@ -572,6 +572,87 @@ async fn service_worker_fetch_respond_with_locked_response_body_fails_fetch() {
 }
 
 #[tokio::test]
+async fn service_worker_navigation_requests_preserve_native_flags_until_init_overrides_them() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        self.addEventListener('fetch', event => {
+            const state = request => [request.mode, request.isReloadNavigation, request.isHistoryNavigation];
+            const copy = new Request(event.request);
+            const clone = event.request.clone();
+            const reset = new Request(event.request, {cache: 'no-store'});
+            event.respondWith(new Response(JSON.stringify({
+                eventIsReload: event.isReload,
+                original: state(event.request),
+                copy: state(copy),
+                clone: state(clone),
+                reset: state(reset)
+            })));
+        });
+        "#,
+    );
+    for (id, kind, reload, history) in [
+        (
+            810,
+            moli_fetch::BrowserNavigationRequestKind::Navigate,
+            false,
+            false,
+        ),
+        (
+            811,
+            moli_fetch::BrowserNavigationRequestKind::Reload,
+            true,
+            false,
+        ),
+        (
+            812,
+            moli_fetch::BrowserNavigationRequestKind::HistoryTraversal,
+            false,
+            true,
+        ),
+    ] {
+        let url = url::Url::parse("https://example.test/app/document.html").unwrap();
+        let native =
+            moli_fetch::Request::get_with_url(url.clone()).with_browser_navigation_kind(kind);
+        let request = ServiceWorkerFetchRequest {
+            client_id: crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(7),
+            resulting_client_id: None,
+            url,
+            method: "GET".to_owned(),
+            headers: Vec::new(),
+            body: None,
+            destination: ServiceWorkerRequestDestination::Iframe,
+            request_mode: moli_fetch::RequestMode::Navigate,
+            credentials_mode: moli_fetch::RequestCredentialsMode::Include,
+            redirect_mode: moli_fetch::RequestRedirectMode::Manual,
+            priority: None,
+            is_reload: reload,
+            metadata: crate::service_worker_runtime::service_worker_fetch_request_metadata(&native),
+        };
+        let completion =
+            dispatch_service_worker_fetch_event_with_request_for_test(&mut handle, id, request)
+                .await;
+        let ServiceWorkerFetchResult::Response(response) = completion.result else {
+            panic!("expected navigation flag response for {kind:?}");
+        };
+        assert_eq!(response.status, 200);
+        let observed: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(
+            observed,
+            serde_json::json!({
+                "eventIsReload": reload,
+                "original": ["navigate", reload, history],
+                "copy": ["navigate", reload, history],
+                "clone": ["navigate", reload, history],
+                "reset": ["same-origin", false, false],
+            }),
+            "{kind:?}"
+        );
+    }
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
 async fn service_worker_fetch_event_request_exposes_destination_metadata() {
     ensure_v8();
     let mut handle = spawn_service_worker_for_test(
@@ -616,6 +697,7 @@ async fn service_worker_fetch_event_request_exposes_destination_metadata() {
             referrer_policy: "origin".to_owned(),
             integrity: "sha256-test".to_owned(),
             keepalive: true,
+            is_history_navigation: false,
             use_cors_preflight: false,
             link_preload: false,
         },

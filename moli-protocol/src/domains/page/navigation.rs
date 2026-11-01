@@ -1981,7 +1981,8 @@ pub(super) fn start_session_owner_navigation_from_renderer(
             // that navigation's network load or Document commit.
             true,
             match browser_navigation_kind {
-                moli_fetch::BrowserNavigationRequestKind::Navigate => {
+                moli_fetch::BrowserNavigationRequestKind::Navigate
+                | moli_fetch::BrowserNavigationRequestKind::HistoryTraversal => {
                     NavigationRequestLoadPolicy::DocumentInitiated
                 }
                 moli_fetch::BrowserNavigationRequestKind::Reload => {
