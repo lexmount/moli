@@ -74,10 +74,10 @@ pub(in crate::network_host) use self::body_source::{
     take_network_body_bytes_from_object, try_network_body_bytes_from_object,
 };
 pub(crate) use self::body_source::{
-    PendingNetworkBodySourceState, close_pending_network_body_stream,
-    enqueue_pending_network_body_chunk, error_pending_network_body_stream,
-    error_pending_network_body_stream_with_reason, new_network_body_source_id,
-    pending_network_body_stream, release_pending_opaque_response_body,
+    PendingNetworkBodySourceState, abort_pending_network_body_stream,
+    close_pending_network_body_stream, enqueue_pending_network_body_chunk,
+    error_pending_network_body_stream, error_pending_network_body_stream_with_reason,
+    new_network_body_source_id, pending_network_body_stream, release_pending_opaque_response_body,
     retain_pending_network_body_state_in_retired_realm,
 };
 #[cfg(test)]

@@ -219,6 +219,108 @@ fn error_response_for_teardown_test(
 }
 
 #[test]
+fn aborted_fetch_body_methods_preserve_reason_without_starting_consumption() {
+    for reason in [
+        "undefined",
+        "null",
+        "42",
+        "({marker: true})",
+        "new Error('abort reason')",
+        "new DOMException('aborted', 'AbortError')",
+    ] {
+        let (mut vm, id) = new_vm_with_pending_response_for_teardown_test();
+        vm.eval(&format!(
+            "globalThis.bodyFailure = {reason}; globalThis.cloneBeforeAbort = response.clone();"
+        ))
+        .unwrap();
+        vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let reason = global
+                .get(scope, crate::util::v8str(scope, "bodyFailure").into())
+                .unwrap();
+            crate::network_host::abort_pending_network_body_stream(scope, id, reason);
+            Ok(())
+        })
+        .unwrap();
+        vm.eval(
+            r#"
+globalThis.bodyResults = [];
+globalThis.abortBodies = [response, cloneBeforeAbort, response.clone()];
+for (const body of abortBodies) {
+  for (const method of ['arrayBuffer', 'blob', 'bytes', 'formData', 'json', 'text']) {
+    for (let repeat = 0; repeat < 2; repeat++) {
+      body[method]().then(
+        () => bodyResults.push(false),
+        error => bodyResults.push(error === bodyFailure)
+      );
+    }
+  }
+}
+Promise.resolve().then(() => bodyResults.push('next-microtask'));
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            vm.eval(
+                r#"JSON.stringify({
+  rejections: bodyResults.slice(0, -1).length,
+  identities: bodyResults.slice(0, -1).every(value => value === true),
+  last: bodyResults.at(-1),
+  unused: abortBodies.every(body => !body.bodyUsed && !body.body.locked)
+})"#
+            )
+            .unwrap(),
+            r#"{"rejections":36,"identities":true,"last":"next-microtask","unused":true}"#,
+            "abort reason: {reason}"
+        );
+    }
+}
+
+#[test]
+fn aborted_fetch_body_consumption_checks_locks_and_distinguishes_author_streams() {
+    let (mut vm, id) = new_vm_with_pending_response_for_teardown_test();
+    vm.eval("globalThis.bodyFailure = {}; globalThis.bodyReader = response.body.getReader();")
+        .unwrap();
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let reason = global
+            .get(scope, crate::util::v8str(scope, "bodyFailure").into())
+            .unwrap();
+        crate::network_host::abort_pending_network_body_stream(scope, id, reason);
+        Ok(())
+    })
+    .unwrap();
+    vm.eval(
+        r#"
+globalThis.bodyResults = [];
+response.text().catch(error => bodyResults.push(error instanceof TypeError));
+bodyReader.releaseLock();
+response.text().catch(error => bodyResults.push(error === bodyFailure));
+globalThis.authorResponse = new Response(response.body);
+globalThis.authorConsumption = authorResponse.text();
+authorConsumption.catch(() => {});
+response.text().catch(error => bodyResults.push(error instanceof TypeError));
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([bodyResults, response.bodyUsed, authorResponse.bodyUsed])")
+            .unwrap(),
+        "[[true,true,true],true,true]"
+    );
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let promise = global
+            .get(scope, crate::util::v8str(scope, "authorConsumption").into())
+            .unwrap();
+        let promise = v8::Local::<v8::Promise>::try_from(promise).unwrap();
+        assert_eq!(promise.state(), v8::PromiseState::Pending);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn pending_response_body_releases_native_host_on_context_teardown() {
     let (mut vm, _) = new_vm_with_pending_response_for_teardown_test();
     vm.eval("globalThis.bodyPromise = response.json(); 1")
