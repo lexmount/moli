@@ -11,10 +11,11 @@ use crate::{
 use super::super::{
     JsContextHost, node::node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
 };
+use super::popover::popover_is_open;
 use super::toggle_event::queue_element_toggle_event;
 use super::{
-    element_has_attribute, html_element_getter_receiver, html_element_setter_receiver,
-    property_dom_string_value, set_reflected_boolean_attribute,
+    dispatch_public_event, element_has_attribute, html_element_getter_receiver,
+    html_element_setter_receiver, property_dom_string_value, set_reflected_boolean_attribute,
 };
 
 pub(crate) fn queue_details_toggle_event_for_attribute_change(
@@ -378,6 +379,58 @@ pub(super) fn dialog_return_value_setter_function<'s>(
     rv.set_undefined();
 }
 
+fn dispatch_dialog_toggle_events(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    opening: bool,
+    as_modal: bool,
+) -> bool {
+    let (old_state, new_state) = if opening {
+        (
+            RendererPageElementToggleEventState::Closed,
+            RendererPageElementToggleEventState::Open,
+        )
+    } else {
+        (
+            RendererPageElementToggleEventState::Open,
+            RendererPageElementToggleEventState::Closed,
+        )
+    };
+    if let Some(event) = super::events::construct_toggle_event(
+        scope,
+        "beforetoggle",
+        old_state.as_str(),
+        new_state.as_str(),
+        opening,
+        v8::null(scope).into(),
+    ) {
+        let outcome = dispatch_public_event(scope, runtime_ptr, handle, event);
+        if opening && !outcome.allows_default() {
+            return false;
+        }
+    }
+    if opening {
+        let runtime = unsafe { &*runtime_ptr };
+        if element_has_attribute(runtime, handle, "open")
+            || (as_modal
+                && (!runtime.dom_host().is_connected(handle) || popover_is_open(runtime, handle)))
+        {
+            return false;
+        }
+    }
+    queue_element_toggle_event(
+        scope,
+        runtime_ptr,
+        RendererPageElementToggleEventKind::Dialog,
+        handle,
+        old_state,
+        new_state,
+        None,
+    );
+    true
+}
+
 pub(super) fn dialog_show_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -397,6 +450,9 @@ pub(super) fn dialog_show_callback<'s>(
                 "The dialog is already open as a modal dialog.",
             );
         }
+        return;
+    }
+    if !dispatch_dialog_toggle_events(scope, runtime_ptr, handle, true, false) {
         return;
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, false);
@@ -432,6 +488,18 @@ pub(super) fn dialog_show_modal_callback<'s>(
         );
         return;
     }
+    if popover_is_open(runtime, handle) {
+        throw_dom_exception(
+            scope,
+            "InvalidStateError",
+            11,
+            "The dialog is already open as a popover.",
+        );
+        return;
+    }
+    if !dispatch_dialog_toggle_events(scope, runtime_ptr, handle, true, true) {
+        return;
+    }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, true);
 }
 
@@ -463,6 +531,9 @@ pub(in crate::native_bridge::element) fn close_dialog_element(
         return false;
     }
 
+    if !dispatch_dialog_toggle_events(scope, runtime_ptr, handle, false, false) {
+        return false;
+    }
     set_reflected_boolean_attribute(scope, runtime_ptr, handle, "open", false);
     let runtime = unsafe { &mut *runtime_ptr };
     let _ = runtime.dom_host_mut().set_dialog_modal(handle, false);

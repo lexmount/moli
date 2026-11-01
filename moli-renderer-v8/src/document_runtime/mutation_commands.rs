@@ -212,6 +212,33 @@ impl DocumentRuntime {
         Vec::new()
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn handle_builtin_element_attribute_change(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        local_name: &str,
+        old_value: Option<&str>,
+        new_value: Option<&str>,
+        reaction_policy: AttributeChangedReactionPolicy,
+    ) {
+        self.handle_details_attribute_change(
+            scope,
+            host_ptr,
+            handle,
+            namespace,
+            local_name,
+            old_value,
+            new_value,
+            reaction_policy,
+        );
+        crate::native_bridge::element::handle_popover_attribute_change(
+            scope, host_ptr, handle, namespace, local_name, old_value, new_value,
+        );
+    }
+
     pub(crate) fn set_text_content(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -647,7 +674,7 @@ impl DocumentRuntime {
         let changed =
             self.apply_runtime_mutation_effects(scope, host_ptr, effects, mutation_options);
         if changed {
-            self.handle_details_attribute_change(
+            self.handle_builtin_element_attribute_change(
                 scope,
                 host_ptr,
                 handle,
@@ -821,7 +848,7 @@ impl DocumentRuntime {
             RuntimeMutationOptions::js_dom_api(),
         );
         if changed {
-            self.handle_details_attribute_change(
+            self.handle_builtin_element_attribute_change(
                 scope,
                 host_ptr,
                 handle,
@@ -956,7 +983,7 @@ impl DocumentRuntime {
             RuntimeMutationOptions::js_dom_api(),
         );
         if changed {
-            self.handle_details_attribute_change(
+            self.handle_builtin_element_attribute_change(
                 scope,
                 host_ptr,
                 handle,
@@ -1096,7 +1123,7 @@ impl DocumentRuntime {
             RuntimeMutationOptions::js_dom_api(),
         );
         if changed {
-            self.handle_details_attribute_change(
+            self.handle_builtin_element_attribute_change(
                 scope,
                 host_ptr,
                 handle,
