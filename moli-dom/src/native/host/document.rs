@@ -2111,6 +2111,14 @@ impl DomHost {
             .map(|state| state.init.adopted_style_sheets().map(str::to_owned))
     }
 
+    /// Whether any installed ShadowRoot intrinsically has a null registry.
+    pub fn has_null_custom_element_registry_shadow_roots(&self) -> bool {
+        self.shadow_roots_by_host
+            .borrow()
+            .values()
+            .any(|root| root.init.null_custom_element_registry())
+    }
+
     pub fn shadow_root_uses_null_custom_element_registry(&self, root: DomHandle) -> Option<bool> {
         let host = self.shadow_hosts_by_root.borrow().get(&root).copied()?;
         self.shadow_roots_by_host
