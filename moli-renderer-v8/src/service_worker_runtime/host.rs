@@ -968,15 +968,16 @@ fn service_worker_script_policy_context(
     final_url: &url::Url,
     headers: &[(String, Vec<u8>)],
 ) -> SubresourcePolicyContext {
+    let cross_origin_embedder_policy =
+        crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers);
     SubresourcePolicyContext {
-        cross_origin_embedder_policy:
-            crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers),
+        cross_origin_embedder_policy,
         document_isolation_policy:
             crate::cross_origin_isolation::document_isolation_policy_from_headers(headers),
-        cross_origin_isolated:
-            crate::cross_origin_isolation::response_headers_enable_cross_origin_isolation(
-                final_url, headers,
-            ),
+        // A ServiceWorker's own COEP establishes its independent agent's mode;
+        // document COOP, DIP and Permissions-Policy do not grant this capability.
+        cross_origin_isolated: moli_url::is_potentially_trustworthy_url(final_url)
+            && cross_origin_embedder_policy.enables_cross_origin_isolation(),
     }
 }
 
@@ -1061,5 +1062,22 @@ mod tests {
             crate::cross_origin_isolation::DocumentIsolationPolicy::IsolateAndRequireCorp
         );
         assert!(!policy_context.cross_origin_isolated);
+    }
+
+    #[test]
+    fn service_worker_script_dip_does_not_grant_isolation() {
+        let url = url::Url::parse("https://worker.test/service-worker.js").unwrap();
+        let policy = service_worker_script_policy_context(
+            &url,
+            &[(
+                "Document-Isolation-Policy".into(),
+                b"isolate-and-require-corp".to_vec(),
+            )],
+        );
+        assert_eq!(
+            policy.document_isolation_policy,
+            crate::cross_origin_isolation::DocumentIsolationPolicy::IsolateAndRequireCorp,
+        );
+        assert!(!policy.cross_origin_isolated);
     }
 }
