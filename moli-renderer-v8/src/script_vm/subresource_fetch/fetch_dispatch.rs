@@ -47,7 +47,7 @@ impl ScriptVm {
                         &response.head(),
                         response.body_bytes(),
                         pending.request_mode,
-                        pending.credentials_mode,
+                        pending.network_credentials_mode(),
                         pending.policy_context,
                         pending.load.request_client().web_security_disabled(),
                     )?;
@@ -251,7 +251,7 @@ impl ScriptVm {
                                         &response.head(),
                                         response.body_bytes(),
                                         pending.request_mode,
-                                        pending.credentials_mode,
+                                        pending.network_credentials_mode(),
                                         pending.policy_context,
                                     pending.load.request_client().web_security_disabled(),)
                                     .err()
@@ -691,7 +691,7 @@ impl ScriptVm {
                         &response.head(),
                         response_body,
                         pending.request_mode,
-                        pending.credentials_mode,
+                        pending.network_credentials_mode(),
                         pending.policy_context,
                     pending.load.request_client().web_security_disabled(),);
                     match validation {

@@ -1072,6 +1072,7 @@ impl DocumentRuntime {
         policy: DocumentPolicyContainer,
     ) {
         self.policy_container = policy;
+        self.sync_document_resource_client_policy();
     }
 
     /// Install inherited delivery state exactly once for a newly allocated
@@ -1097,6 +1098,7 @@ impl DocumentRuntime {
             &policy.response_content_security_policies,
         );
         self.policy_container = policy;
+        self.sync_document_resource_client_policy();
     }
 
     pub(crate) fn set_bypass_content_security_policy(&mut self, bypass: bool) {

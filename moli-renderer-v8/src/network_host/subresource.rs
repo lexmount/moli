@@ -117,6 +117,7 @@ impl PreparedSubresourceFetch {
             &request_origin,
             &request_url,
             "GET",
+            options.request_mode,
             options.credentials_mode,
         );
         let request = Request::new_browser(

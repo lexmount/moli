@@ -479,6 +479,11 @@ impl PageScriptHost {
         loader: &DocumentResourceLoader,
     ) {
         let loader = loader.clone();
+        loader.set_client_security_policy(
+            crate::types::SubresourcePolicyContext::from_document_policy(
+                self.document_policy_container(),
+            ),
+        );
         // Initial Window reuse installs a new Document authority in an
         // existing host. Its target policy must replace the retired binding;
         // a transport-only replacement instead retains the same policy.
@@ -739,9 +744,11 @@ impl PageScriptHost {
         &mut self,
         context: crate::network::context::DocumentFetchContext,
         source: crate::network::context::DocumentResourceAuthoritySource,
+        policy_context: crate::types::SubresourcePolicyContext,
     ) -> DocumentResourceLoader {
         let owner = context.owner();
         let document_loader = DocumentResourceLoader::for_committed_document(context, source);
+        document_loader.set_client_security_policy(policy_context);
         self.document_resource_loaders
             .register(owner, document_loader.clone());
         document_loader

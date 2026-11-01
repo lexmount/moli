@@ -77,6 +77,78 @@ fn document_loader(
     )
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn document_client_security_policy_tracks_authority_and_captured_loads() {
+    use crate::cross_origin_isolation::CrossOriginEmbedderPolicy;
+    use crate::types::SubresourcePolicyContext;
+    use moli_fetch::{RequestCredentialsMode, RequestMode};
+
+    let transport = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let first = document_loader(transport.handle(), 1, "https://example.test/page");
+    let cached_view = first.request_client().clone();
+    let before_policy = cached_view.frozen_request_client();
+    let policy = SubresourcePolicyContext {
+        cross_origin_embedder_policy: CrossOriginEmbedderPolicy::Credentialless,
+        ..Default::default()
+    };
+    let credentials = |client: &ResourceRequestClient| {
+        client.network_credentials_mode(RequestMode::NoCors, RequestCredentialsMode::Include)
+    };
+    first.set_client_security_policy(policy);
+    assert_eq!(
+        credentials(&cached_view),
+        RequestCredentialsMode::SameOrigin
+    );
+    assert_eq!(credentials(&before_policy), RequestCredentialsMode::Include);
+    let accepted = first
+        .register_load(
+            ResourceLoadKind::Fetch,
+            ResourceLoadDisposition::Ordinary,
+            None,
+        )
+        .unwrap();
+    first.set_client_security_policy(Default::default());
+    assert_eq!(credentials(&cached_view), RequestCredentialsMode::Include);
+    assert_eq!(
+        credentials(&accepted.request_client()),
+        RequestCredentialsMode::SameOrigin
+    );
+
+    first.set_client_security_policy(policy);
+    let replacement_transport = first.with_replacement_transport(transport.handle());
+    assert!(replacement_transport.shares_authority_with(&first));
+    assert_eq!(
+        credentials(replacement_transport.request_client()),
+        RequestCredentialsMode::SameOrigin
+    );
+    let opened = DocumentResourceLoader::for_document_open(
+        context(2, "https://example.test/page"),
+        super::document::DocumentResourceAuthoritySource::Inherited(replacement_transport),
+        &first,
+    );
+    assert_eq!(
+        credentials(opened.request_client()),
+        RequestCredentialsMode::SameOrigin
+    );
+    let next_document = first.fork_for_document(context(3, "https://example.test/next"));
+    assert_eq!(
+        credentials(next_document.request_client()),
+        RequestCredentialsMode::Include
+    );
+    let worker = first
+        .request_client()
+        .fork_with_isolated_worker_network_policy();
+    assert_eq!(credentials(&worker), RequestCredentialsMode::Include);
+    assert_eq!(
+        cached_view.network_credentials_mode(RequestMode::Cors, RequestCredentialsMode::Include),
+        RequestCredentialsMode::Include
+    );
+    assert_eq!(
+        cached_view.network_credentials_mode(RequestMode::NoCors, RequestCredentialsMode::Omit),
+        RequestCredentialsMode::Omit
+    );
+}
+
 #[test]
 fn synthetic_document_context_preserves_its_inherited_origin() {
     let document_url = Url::parse("about:blank").expect("about:blank URL");

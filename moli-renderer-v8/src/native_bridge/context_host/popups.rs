@@ -1116,6 +1116,9 @@ impl PageScriptHost {
             initial_policy_container,
             secure_context,
         );
+        let initial_client_policy = crate::types::SubresourcePolicyContext::from_document_policy(
+            &initial_document_state.policy_container,
+        );
         let initial_resource_origin = initial_origin.serialized_origin();
         let initial_domain = if !initial_forces_opaque_origin
             && moli_url::is_about_blank(&initial_url)
@@ -1193,6 +1196,7 @@ impl PageScriptHost {
             crate::network::context::DocumentResourceAuthoritySource::Inherited(
                 creator_resource_authority,
             ),
+            initial_client_policy,
         );
         let context = match self.ensure_popup_default_context(scope, popup_id) {
             Ok(context) => context,
@@ -2548,6 +2552,10 @@ impl PageScriptHost {
                         .expect("synthetic popup Document must capture its previous authority"),
                 ),
             };
+            let client_policy = crate::types::SubresourcePolicyContext::from_document_policy(
+                self.lightweight_popup_policy_container(popup_id)
+                    .expect("committed popup Document must retain its policy"),
+            );
             self.register_committed_document_resource_loader(
                 crate::network::context::DocumentFetchContext::new(
                     super::WindowDocumentOwner::LightweightPopup(commit.owner),
@@ -2556,6 +2564,7 @@ impl PageScriptHost {
                     resource_context_origin,
                 ),
                 resource_authority,
+                client_policy,
             );
         }
         if let Some(retired_local_window_id) = transition.retired_local_window_id {

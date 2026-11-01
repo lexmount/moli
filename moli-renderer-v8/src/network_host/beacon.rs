@@ -120,6 +120,7 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
         request_origin,
         &resolved_url,
         "POST",
+        request_mode,
         RequestCredentialsMode::Include,
     );
 
@@ -232,6 +233,7 @@ pub(crate) fn send_link_audit_ping(
         request_origin,
         &ping_url,
         "POST",
+        moli_fetch::RequestMode::NoCors,
         RequestCredentialsMode::Include,
     );
 

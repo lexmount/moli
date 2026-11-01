@@ -381,6 +381,7 @@ fn request_referrers_use_captured_document_origin() {
                     origin,
                 ),
                 crate::network::context::DocumentResourceAuthoritySource::Inherited(loader),
+                Default::default(),
             );
         }
         let result = vm
@@ -799,6 +800,7 @@ requestBaseFrame.remove();
                 "https://other-origin.test",
             ),
             crate::network::context::DocumentResourceAuthoritySource::Inherited(loader),
+            Default::default(),
         );
     }
     assert_eq!(
