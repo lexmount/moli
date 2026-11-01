@@ -5,6 +5,7 @@ mod file;
 mod headers;
 mod media;
 mod media_capabilities;
+mod navigation;
 mod parse;
 mod resource;
 mod response_policy;
@@ -35,6 +36,7 @@ pub use headers::{
 };
 pub use media::{MediaMimeSupport, is_media_source_type_supported, media_mime_support};
 pub use media_capabilities::{MediaKind, is_valid_media_capabilities_mime_type};
+pub use navigation::{NAVIGATION_MIME_PREFIX_LIMIT, NavigationMimeSniffer};
 pub use parse::{
     mime_charset, mime_essence, mime_parameter, normalize_web_api_mime_type, parse_mime,
     parse_mime_type, request_header_content_type_essence,
