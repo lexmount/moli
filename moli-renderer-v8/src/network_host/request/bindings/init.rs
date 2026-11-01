@@ -19,6 +19,8 @@ pub(super) struct RequestConstructionState {
     pub(super) referrer_policy: String,
     pub(super) integrity: String,
     pub(super) keepalive: bool,
+    pub(super) is_history_navigation: bool,
+    pub(super) is_reload_navigation: bool,
     pub(super) priority: moli_fetch::FetchPriorityHint,
     pub(super) duplex: String,
     pub(super) body: Option<bytes::Bytes>,
@@ -76,6 +78,12 @@ pub(super) fn request_initial_state<'s>(
         .as_ref()
         .map(|snapshot| snapshot.keepalive)
         .unwrap_or(false);
+    let is_history_navigation = inherited
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.is_history_navigation);
+    let is_reload_navigation = inherited
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.is_reload_navigation);
     let priority = inherited
         .as_ref()
         .map(|snapshot| snapshot.priority)
@@ -107,6 +115,8 @@ pub(super) fn request_initial_state<'s>(
         referrer_policy,
         integrity,
         keepalive,
+        is_history_navigation,
+        is_reload_navigation,
         priority,
         duplex,
         body,
@@ -122,6 +132,15 @@ pub(super) fn apply_request_init_overrides<'s>(
     parsed: RequestInitMembers<'s>,
     state: &mut RequestConstructionState,
 ) -> Result<(), webidl::WebIdlError> {
+    if parsed.has_any_member() {
+        if state.mode == "navigate" {
+            state.mode = "same-origin".to_owned();
+        }
+        state.is_history_navigation = false;
+        state.is_reload_navigation = false;
+        state.referrer = "about:client".to_owned();
+        state.referrer_policy.clear();
+    }
     let method_overridden = parsed.method.is_some();
     if let Some(method) = parsed.method {
         state.method = normalize_request_method(&method)?;

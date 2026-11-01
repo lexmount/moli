@@ -96,7 +96,7 @@ pub(super) struct RequestPriorityWebIdl(pub(super) FetchPriorityHint);
 #[webidl(prefix = "RequestInit")]
 pub(crate) struct RequestInitMembers<'s> {
     // Keep the opaque BodyInit value until native extraction, matching Blink.
-    #[webidl(nullable, converter = "raw")]
+    #[webidl(converter = "raw")]
     pub(super) body: Option<v8::Local<'s, v8::Value>>,
     #[webidl(with = request_init_signal_member)]
     pub(super) signal: Option<Option<v8::Global<v8::Object>>>,
@@ -117,6 +117,28 @@ pub(crate) struct RequestInitMembers<'s> {
     #[webidl(converter = "enum")]
     pub(super) priority: Option<RequestPriorityWebIdl>,
     pub(super) keepalive: Option<bool>,
+}
+
+impl RequestInitMembers<'_> {
+    // Match Blink's AreAnyMembersPresent after dictionary conversion. In
+    // particular, null body/signal members count, undefined and unknown ones
+    // do not, and checking presence must not run JavaScript getters again.
+    pub(super) fn has_any_member(&self) -> bool {
+        self.body.is_some()
+            || self.signal.is_some()
+            || self.method.is_some()
+            || self.cache.is_some()
+            || self.mode.is_some()
+            || self.redirect.is_some()
+            || self.referrer.is_some()
+            || self.referrer_policy.is_some()
+            || self.integrity.is_some()
+            || self.duplex.is_some()
+            || self.headers.is_some()
+            || self.credentials_mode.is_some()
+            || self.priority.is_some()
+            || self.keepalive.is_some()
+    }
 }
 
 fn request_init_signal_member<'s>(
@@ -177,7 +199,7 @@ pub(crate) fn parse_fetch_init<'s>(
         .transpose()?
         .unwrap_or_else(|| "GET".to_owned());
 
-    let body_present = init.body.is_some();
+    let body_present = init.body.is_some_and(|body| !body.is_null());
     if init.keepalive == Some(true)
         && init
             .body
