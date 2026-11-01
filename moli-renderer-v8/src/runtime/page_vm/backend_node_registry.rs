@@ -1,4 +1,9 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use crate::document_runtime::DomHandle;
 use crate::frame_owner_model::DocumentId;
@@ -17,16 +22,36 @@ struct RendererBackendNodeRecord {
     resolves_while_detached: bool,
 }
 
+/// Where a registry draws new ids from.
+///
+/// Every Document gets its own registry. With a per-registry counter each new
+/// Document restarts at `RENDERER_BACKEND_NODE_ID_START`, so an id handed out
+/// for the previous Document silently names a different node after navigation
+/// (Chromium's DOMNodeIds are unique for the renderer's lifetime). Production
+/// registries therefore share one process-wide counter; `Local` keeps unit
+/// tests deterministic.
+#[derive(Debug)]
+enum IdSource {
+    Local(u32),
+    ProcessWide,
+}
+
+static NEXT_PROCESS_WIDE_BACKEND_NODE_ID: AtomicU32 =
+    AtomicU32::new(moli_page_types::RENDERER_BACKEND_NODE_ID_START);
+
 pub(crate) struct RendererBackendNodeRegistry {
     node_ids: HashMap<RendererBackendNodeKey, u32>,
     nodes: HashMap<u32, RendererBackendNodeRecord>,
-    next_id: u32,
+    ids: IdSource,
 }
 
 pub(crate) type SharedRendererBackendNodeRegistry = Rc<RefCell<RendererBackendNodeRegistry>>;
 
 pub(crate) fn new_shared_renderer_backend_node_registry() -> SharedRendererBackendNodeRegistry {
-    Rc::new(RefCell::new(RendererBackendNodeRegistry::default()))
+    Rc::new(RefCell::new(RendererBackendNodeRegistry {
+        ids: IdSource::ProcessWide,
+        ..RendererBackendNodeRegistry::default()
+    }))
 }
 
 impl Default for RendererBackendNodeRegistry {
@@ -34,7 +59,7 @@ impl Default for RendererBackendNodeRegistry {
         Self {
             node_ids: HashMap::new(),
             nodes: HashMap::new(),
-            next_id: moli_page_types::RENDERER_BACKEND_NODE_ID_START,
+            ids: IdSource::Local(moli_page_types::RENDERER_BACKEND_NODE_ID_START),
         }
     }
 }
@@ -67,11 +92,23 @@ impl RendererBackendNodeRegistry {
             return backend_node_id;
         }
 
-        let backend_node_id = self.next_id;
-        self.next_id = self
-            .next_id
-            .checked_add(1)
-            .expect("renderer backend node id namespace exhausted");
+        let backend_node_id = match &mut self.ids {
+            IdSource::Local(next) => {
+                let id = *next;
+                *next = next
+                    .checked_add(1)
+                    .expect("renderer backend node id namespace exhausted");
+                id
+            }
+            IdSource::ProcessWide => {
+                let id = NEXT_PROCESS_WIDE_BACKEND_NODE_ID.fetch_add(1, Ordering::Relaxed);
+                assert!(
+                    id != u32::MAX,
+                    "renderer backend node id namespace exhausted"
+                );
+                id
+            }
+        };
         self.node_ids.insert(key, backend_node_id);
         self.nodes.insert(
             backend_node_id,
@@ -127,6 +164,24 @@ mod tests {
 
     fn dom_handle(value: usize) -> DomHandle {
         DomHandle::new(value)
+    }
+
+    #[test]
+    fn production_registries_never_reuse_ids_across_documents() {
+        // One registry per Document; if each restarted at the same base,
+        // the previous Document's ids would name nodes of the next one.
+        let first = new_shared_renderer_backend_node_registry();
+        let second = new_shared_renderer_backend_node_registry();
+        let a = first
+            .borrow_mut()
+            .id_for_node(document_id(1), dom_handle(7));
+        let b = second
+            .borrow_mut()
+            .id_for_node(document_id(2), dom_handle(7));
+        assert_ne!(a, b);
+        assert!(moli_page_types::is_renderer_backend_node_id(a));
+        assert!(moli_page_types::is_renderer_backend_node_id(b));
+        assert!(second.borrow().key_for_id(a).is_none());
     }
 
     #[test]
