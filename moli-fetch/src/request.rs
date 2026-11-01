@@ -72,6 +72,8 @@ pub struct Request {
     /// Optional protocol view supplied by the body serializer (e.g. multipart
     /// with file contents omitted). Never used as the transport upload.
     body_text: Option<std::sync::Arc<str>>,
+    body_source_is_null: bool,
+    pub(crate) new_connection_fetch: bool,
     /// Wire bytes, with the source encoding resolved before header merging.
     pub request_headers: crate::RequestHeaders,
     redirect_headers: Option<crate::RequestHeaders>,
@@ -650,6 +652,8 @@ impl Request {
             method: "GET".to_owned(),
             body: None,
             body_text: None,
+            body_source_is_null: false,
+            new_connection_fetch: false,
             request_headers: crate::RequestHeaders::default(),
             redirect_headers: None,
             interception_authorization_url: None,
@@ -697,6 +701,8 @@ impl Request {
             method: "GET".to_owned(),
             body: None,
             body_text: None,
+            body_source_is_null: false,
+            new_connection_fetch: false,
             request_headers: crate::RequestHeaders::default(),
             redirect_headers: None,
             interception_authorization_url: None,
@@ -777,6 +783,8 @@ impl Request {
             method: method.to_owned(),
             body,
             body_text: None,
+            body_source_is_null: false,
+            new_connection_fetch: false,
             request_headers: request_headers.into(),
             redirect_headers: None,
             interception_authorization_url: None,
@@ -1166,6 +1174,22 @@ impl Request {
         self
     }
 
+    /// Preserve Fetch's distinction between an immutable body source and an
+    /// author ReadableStream. Buffering stream bytes does not make its source
+    /// replayable for a 421 retry.
+    pub fn with_body_source_is_null(mut self, is_null: bool) -> Self {
+        self.body_source_is_null = is_null;
+        self
+    }
+
+    pub fn body_source_is_null(&self) -> bool {
+        self.body_source_is_null
+    }
+
+    pub(crate) fn can_retry_misdirected_request(&self) -> bool {
+        !self.new_connection_fetch && !self.body_source_is_null
+    }
+
     /// Sets the browser's redirect policy and its default transport handling.
     /// `Follow` enables runtime following, including after `with_single_hop()`.
     /// Caller-owned redirect loops must apply [`Self::with_single_hop`] last.
@@ -1335,6 +1359,7 @@ impl Request {
                     .push(("Content-Length".to_owned(), length.to_string().into_bytes()));
             }
         }
+        self.new_connection_fetch = false;
         if let Some(headers) = self.redirect_headers.take() {
             self.request_headers = headers;
         }
@@ -1342,6 +1367,7 @@ impl Request {
             self.method = "GET".to_owned();
             self.body = None;
             self.body_text = None;
+            self.body_source_is_null = false;
             self.request_headers
                 .retain(|(name, _)| !is_request_body_header_name(name));
         }

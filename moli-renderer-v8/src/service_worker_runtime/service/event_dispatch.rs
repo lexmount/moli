@@ -252,6 +252,7 @@ impl ServiceWorkerRuntimeService {
                 origin,
             )
             .with_mixed_content_policy(request.metadata.mixed_content_policy)
+            .with_body_source_is_null(request.metadata.body_source_is_null)
             .with_initiator_url(&dispatch.network_context.document_url)
             .with_request_mode(request.request_mode)
             .with_credentials_mode(request.credentials_mode)
