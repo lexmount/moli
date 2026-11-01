@@ -221,6 +221,33 @@ impl JsContextHost {
         top.can_access(&child)
     }
 
+    /// Compares the Window's origin with its top-level origin without applying
+    /// `document.domain` relaxation. Algorithms that require "same origin"
+    /// use this rather than the broader Window access check.
+    pub(crate) fn child_window_has_same_origin_with_its_top_level_origin(
+        &self,
+        handle: DomHandle,
+    ) -> bool {
+        let mut top_child = handle;
+        for _ in 0..=self.child_browsing_contexts.len() {
+            let Some(parent) = self.child_browsing_context_parent_handle(top_child) else {
+                break;
+            };
+            top_child = parent;
+        }
+        let top = match self.child_browsing_context_popup_owner_id(top_child) {
+            Some(popup_id) => self.lightweight_popup_window_access_origin(popup_id),
+            None => self.main_window_access_origin(),
+        };
+        let Some(top) = top else {
+            return false;
+        };
+        let Some(child) = self.child_window_access_origin(handle) else {
+            return false;
+        };
+        top.is_same_origin(&child)
+    }
+
     pub(crate) fn frame_owner_can_access_content_document(&self, handle: DomHandle) -> bool {
         let Some(document) = self.dom_host().owner_document_handle(handle) else {
             return false;
