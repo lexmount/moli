@@ -45,7 +45,7 @@ fn detached_document_clones_keep_url_and_document_uri_in_sync_with_native_metada
 }
 
 #[test]
-fn document_clone_base_uri_survives_base_element_removal() {
+fn document_clone_base_uri_falls_back_to_copied_url_after_base_removal() {
     let mut vm = new_storage_test_vm("https://document-clone-base.test/path/page.html");
     let result = vm
         .eval(
@@ -80,8 +80,26 @@ fn document_clone_base_uri_survives_base_element_removal() {
 "#,
         )
         .expect("document clone base URI probe should evaluate");
-    let row = r#"["https://cdn.example/assets/","https://other.example/","https://cdn.example/assets/","https://cdn.example/assets/image.png","https://cdn.example/assets/"]"#;
-    assert_eq!(result, format!("[{row},{row}]"));
+    let fallback = "https://document-clone-base.test/path/page.html";
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!([
+            [
+                fallback,
+                "https://other.example/",
+                fallback,
+                "https://document-clone-base.test/path/image.png",
+                fallback
+            ],
+            [
+                "https://cdn.example/assets/",
+                "https://other.example/",
+                fallback,
+                "https://document-clone-base.test/path/image.png",
+                fallback
+            ],
+        ])
+    );
 }
 
 #[test]
