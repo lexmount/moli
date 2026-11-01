@@ -32,6 +32,50 @@ fn default_same_site_mode_has_the_chromium_two_minute_boundary() {
 }
 
 #[test]
+fn default_cookie_age_uses_microseconds_in_memory_and_after_timestamp_roundtrip() {
+    let created = OffsetDateTime::from_unix_timestamp(2_000_000_000).unwrap()
+        + Duration::nanoseconds(123_456_789);
+    let request_url = test_utils::url("https://example.com/");
+    let mut cookie = Cookie::parse("sid=value; Secure; Path=/", &request_url).unwrap();
+    cookie.set_creation_time(Some(created));
+    let canonical = cookie.creation_time().unwrap();
+    assert_eq!(canonical.nanosecond(), 123_456_000);
+    let restored = crate::cookie_creation_time::from_unix_micros(
+        crate::cookie_creation_time::to_unix_micros(canonical).unwrap(),
+    )
+    .unwrap();
+    for stamp in [created, canonical, restored] {
+        for (now, expected) in [
+            (
+                canonical + Duration::minutes(2) + Duration::nanoseconds(999),
+                CookieEffectiveSameSite::LaxAllowUnsafe,
+            ),
+            (
+                canonical + Duration::minutes(2) + Duration::microseconds(1),
+                CookieEffectiveSameSite::Lax,
+            ),
+        ] {
+            assert_eq!(
+                CookieEffectiveSameSite::for_cookie(None, Some(stamp), now),
+                expected
+            );
+        }
+    }
+    let mut store = CookieStore::default();
+    inserted!(store.insert_response_cookie_str("new=value; Secure; Path=/", &request_url));
+    assert_eq!(
+        store
+            .get("example.com", "/", "new")
+            .unwrap()
+            .creation_time()
+            .unwrap()
+            .nanosecond()
+            % 1_000,
+        0
+    );
+}
+
+#[test]
 fn default_cookie_navigation_allowance_is_limited_by_age_and_request_type() {
     let mut store = CookieStore::default();
     let request_url = test_utils::url("https://example.com/");
@@ -94,7 +138,9 @@ fn default_cookie_navigation_allowance_is_limited_by_age_and_request_type() {
 fn overwriting_a_default_cookie_keeps_its_age_but_recreation_starts_a_new_allowance() {
     let mut store = CookieStore::default();
     let request_url = test_utils::url("https://example.com/");
-    let old_time = OffsetDateTime::now_utc() - Duration::minutes(3);
+    let old_time = (OffsetDateTime::now_utc() - Duration::minutes(3))
+        .replace_nanosecond(123_456_000)
+        .unwrap();
     let mut cookie = Cookie::parse("sid=old; Path=/; Secure", &request_url)
         .unwrap()
         .into_owned();
@@ -138,7 +184,9 @@ fn overwriting_a_default_cookie_keeps_its_age_but_recreation_starts_a_new_allowa
 fn cloning_and_rebuilding_a_store_preserve_default_cookie_age() {
     let mut store = CookieStore::default();
     let request_url = test_utils::url("https://example.com/");
-    let old_time = OffsetDateTime::now_utc() - Duration::minutes(3);
+    let old_time = (OffsetDateTime::now_utc() - Duration::minutes(3))
+        .replace_nanosecond(123_456_000)
+        .unwrap();
     let mut cookie = Cookie::parse("sid=old; Path=/; Secure", &request_url)
         .unwrap()
         .into_owned();
@@ -925,7 +973,9 @@ fn query_result_projects_from_access_query_result() {
 #[test]
 fn overwrite_reports_use_the_stored_age_for_http_and_chained_cdp_writes() {
     let request_url = test_utils::url("https://example.com/");
-    let now = OffsetDateTime::now_utc();
+    let now = OffsetDateTime::now_utc()
+        .replace_nanosecond(123_456_000)
+        .unwrap();
     for (created, expected) in [
         (
             Some(now - Duration::minutes(3)),

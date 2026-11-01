@@ -19,14 +19,22 @@ use crate::{atomic_file::write_file_atomically, netscape::parse_netscape_cookie_
 fn cookie_cache_preserves_the_creation_time_used_by_default_same_site_policy() -> Result<()> {
     let temp = TempDir::new("same-site-age");
     let file = temp.path.join("cookies.json");
-    let created =
-        OffsetDateTime::from_unix_timestamp(1_000_000_000)? + time::Duration::nanoseconds(123);
+    let created = OffsetDateTime::from_unix_timestamp(1_000_000_000)?
+        + time::Duration::nanoseconds(123_456_789);
+    let expected =
+        OffsetDateTime::from_unix_timestamp(1_000_000_000)? + time::Duration::microseconds(123_456);
     let mut cookie = stored_cookie("sid", "old");
     cookie.creation_time = Some(created);
     save_cookie_cache(&file, vec![cookie])?;
+    let json: serde_json::Value = serde_json::from_slice(&fs::read(&file)?)?;
+    assert_eq!(
+        json["cookies"][0]["creation_unix_micros"],
+        1_000_000_000_123_456_i64
+    );
+    assert!(json["cookies"][0].get("creation_unix_nanos").is_none());
     let restored = load_cookie_cache(&file)?;
     assert_eq!(restored.len(), 1);
-    assert_eq!(restored[0].creation_time, Some(created));
+    assert_eq!(restored[0].creation_time, Some(expected));
     let mut store = BrowserCookieStore::default();
     let url = "http://example.com/".parse()?;
     assert!(
@@ -42,12 +50,56 @@ fn cookie_cache_preserves_the_creation_time_used_by_default_same_site_policy() -
     assert_eq!(report.excluded_cookies.len(), 1);
     assert_eq!(
         report.excluded_cookies[0].cookie.creation_time,
-        Some(created)
+        Some(expected)
     );
     assert_eq!(
         report.excluded_cookies[0].exclusion_reasons,
         vec![StoredCookieExclusionReason::SameSiteUnspecifiedTreatedAsLax]
     );
+    Ok(())
+}
+
+#[test]
+fn cookie_cache_reads_legacy_nanoseconds_and_rewrites_only_microseconds() -> Result<()> {
+    let temp = TempDir::new("legacy-nanosecond-age");
+    let file = temp.path.join("cookies.json");
+    save_cookie_cache(&file, vec![stored_cookie("sid", "legacy")])?;
+    let mut json: serde_json::Value = serde_json::from_slice(&fs::read(&file)?)?;
+    for (nanos, micros) in [
+        (1_000_000_000_123_456_789_i128, 1_000_000_000_123_456_i64),
+        (-1, -1),
+    ] {
+        let row = json["cookies"][0].as_object_mut().unwrap();
+        row.remove("creation_unix_micros");
+        row.insert("creation_unix_nanos".into(), serde_json::json!(nanos));
+        fs::write(&file, serde_json::to_vec(&json)?)?;
+        let restored = load_cookie_cache(&file)?;
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].value, "legacy");
+        assert_eq!(
+            restored[0].creation_time.unwrap().unix_timestamp_nanos(),
+            i128::from(micros) * 1_000
+        );
+        save_cookie_cache(&file, restored)?;
+        let rewritten: serde_json::Value = serde_json::from_slice(&fs::read(&file)?)?;
+        assert_eq!(rewritten["cookies"][0]["creation_unix_micros"], micros);
+        assert!(rewritten["cookies"][0].get("creation_unix_nanos").is_none());
+    }
+    Ok(())
+}
+
+#[test]
+fn cookie_cache_prefers_the_microsecond_field_when_both_formats_are_present() -> Result<()> {
+    let temp = TempDir::new("mixed-creation-time-formats");
+    let file = temp.path.join("cookies.json");
+    save_cookie_cache(&file, vec![stored_cookie("sid", "mixed")])?;
+    let mut json: serde_json::Value = serde_json::from_slice(&fs::read(&file)?)?;
+    json["cookies"][0]["creation_unix_micros"] = serde_json::json!(0);
+    json["cookies"][0]["creation_unix_nanos"] = serde_json::json!(1_000_000_000_i128);
+    fs::write(&file, serde_json::to_vec(&json)?)?;
+    let restored = load_cookie_cache(&file)?;
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].creation_time, Some(OffsetDateTime::UNIX_EPOCH));
     Ok(())
 }
 

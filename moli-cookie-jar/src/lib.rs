@@ -8,6 +8,7 @@ mod jar;
 mod model;
 
 pub use cookie_store::CookiePriority;
+pub use cookie_store::cookie_creation_time;
 pub use jar::{
     BrowserCookieObserver, BrowserCookieStore, BrowserCookieStoreHandle, CookieStoreError,
     SharedBrowserCookieStore, StoredCookieIdentity, StoredCookieMutation,

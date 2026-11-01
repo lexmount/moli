@@ -9,8 +9,7 @@ pub(crate) fn from_browser_micros(
 ) -> Option<OffsetDateTime> {
     let micros = micros.filter(|micros| *micros > 0)?;
     let unix_micros = micros.checked_sub(epoch_offset_micros)?;
-    OffsetDateTime::from_unix_timestamp_nanos(i128::from(unix_micros) * 1_000)
-        .ok()
+    moli_cookie_jar::cookie_creation_time::from_unix_micros(unix_micros)
         .filter(|created| *created <= OffsetDateTime::now_utc())
 }
 

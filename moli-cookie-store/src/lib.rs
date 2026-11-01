@@ -13,6 +13,7 @@
 pub use ::cookie::{Cookie as RawCookie, ParseError as RawCookieParseError, SameSite};
 
 mod cookie;
+pub mod cookie_creation_time;
 mod cookie_date;
 pub use crate::cookie::Error as CookieError;
 pub use crate::cookie::{

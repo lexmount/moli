@@ -337,7 +337,7 @@ impl<'a> Cookie<'a> {
     }
 
     pub(crate) fn set_creation_time(&mut self, creation_time: Option<OffsetDateTime>) {
-        self.creation_time = match creation_time {
+        self.creation_time = match creation_time.and_then(crate::cookie_creation_time::normalize) {
             Some(created) => CreationTime::Known(created),
             None => CreationTime::Unknown,
         };
@@ -345,14 +345,12 @@ impl<'a> Cookie<'a> {
 
     pub(crate) fn initialize_creation_time(&mut self) {
         if self.creation_time == CreationTime::Pending {
-            self.creation_time = CreationTime::Known(OffsetDateTime::now_utc());
+            self.set_creation_time(Some(OffsetDateTime::now_utc()));
         }
     }
 
     pub(crate) fn restore_creation_time(&mut self) {
-        if self.creation_time == CreationTime::Pending {
-            self.creation_time = CreationTime::Unknown;
-        }
+        self.set_creation_time(self.creation_time());
     }
 
     pub(crate) fn touch_with_access_index(&mut self, access_index: u64) {

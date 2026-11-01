@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result};
 use moli_cookie_jar::{
     CookiePriority, StoredCookie, StoredCookiePartitionKey, StoredCookieSameSite,
-    StoredCookieSourceScheme,
+    StoredCookieSourceScheme, cookie_creation_time,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -30,6 +30,9 @@ struct CachedCookie {
     http_only: bool,
     expires_unix: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    creation_unix_micros: Option<i64>,
+    // Read compatibility only. New caches always use microseconds.
+    #[serde(default, skip_serializing)]
     creation_unix_nanos: Option<i128>,
     same_site: CachedSameSite,
     priority: Option<CachedCookiePriority>,
@@ -123,9 +126,12 @@ impl CachedCookie {
         if self.partitioned && self.partition_key.is_none() {
             return None;
         }
-        let creation_time = match self.creation_unix_nanos {
-            Some(timestamp) => Some(OffsetDateTime::from_unix_timestamp_nanos(timestamp).ok()?),
-            None => None,
+        let creation_time = match (self.creation_unix_micros, self.creation_unix_nanos) {
+            (Some(timestamp), _) => Some(cookie_creation_time::from_unix_micros(timestamp)?),
+            (None, Some(timestamp)) => Some(cookie_creation_time::from_unix_micros(
+                cookie_creation_time::legacy_unix_nanos_to_micros(timestamp)?,
+            )?),
+            (None, None) => None,
         };
 
         Some(StoredCookie {
@@ -173,9 +179,10 @@ impl CachedCookie {
             secure: cookie.secure,
             http_only: cookie.http_only,
             expires_unix: cookie.expires.map(|expires| expires.unix_timestamp()),
-            creation_unix_nanos: cookie
+            creation_unix_micros: cookie
                 .creation_time
-                .map(|created| created.unix_timestamp_nanos()),
+                .and_then(cookie_creation_time::to_unix_micros),
+            creation_unix_nanos: None,
             same_site: cookie.same_site.into(),
             priority: cookie.priority.map(Into::into),
             partitioned: partition_key.is_some(),

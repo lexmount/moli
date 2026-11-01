@@ -301,11 +301,16 @@ impl CookieEffectiveSameSite {
         creation_time: Option<OffsetDateTime>,
         now: OffsetDateTime,
     ) -> Self {
+        let creation_time = creation_time.and_then(crate::cookie_creation_time::normalize);
+        let now = crate::cookie_creation_time::normalize(now);
         match same_site {
             Some(SameSite::None) => Self::NoRestriction,
             Some(SameSite::Lax) => Self::Lax,
             Some(SameSite::Strict) => Self::Strict,
-            None if creation_time.is_some_and(|created| now - created <= Duration::minutes(2)) => {
+            None if creation_time
+                .zip(now)
+                .is_some_and(|(created, now)| now - created <= Duration::minutes(2)) =>
+            {
                 Self::LaxAllowUnsafe
             }
             None => Self::Lax,
