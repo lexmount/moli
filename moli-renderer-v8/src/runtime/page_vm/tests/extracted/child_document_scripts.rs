@@ -311,6 +311,15 @@ globalThis.__childClassicWaitValue = 91;
 }
 #[tokio::test]
 async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() {
+    child_parser_blocking_classic_waits_for_stylesheet("").await;
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_blocking_classic_waits_for_screen_print_stylesheet() {
+    child_parser_blocking_classic_waits_for_stylesheet(r#"media="screen,print""#).await;
+}
+
+async fn child_parser_blocking_classic_waits_for_stylesheet(media: &'static str) {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_concurrent_path_response_http_server(vec![(
             "/parser-blocking.css",
@@ -342,7 +351,7 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
   const frame = document.createElement("iframe");
   frame.onload = () => globalThis.__childParserStylesheetEvents.push("load");
   frame.srcdoc = `
-    <link rel="stylesheet" href="{base_url}/parser-blocking.css">
+    <link rel="stylesheet" href="{base_url}/parser-blocking.css" {media}>
     <script>
       parent.__childParserStylesheetEvents.push(
         "script:" + getComputedStyle(document.documentElement)
