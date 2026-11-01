@@ -624,6 +624,7 @@ fn module_graph_network_result_records_staged_response_started_with_cache_state(
     let request_url = Url::parse("https://example.com/module.js").expect("request URL");
     let response = crate::types::NavigationResponse::from_head_and_text_body(
         moli_fetch::ResponseHead {
+            request_include_credentials: false,
             status_text: None,
             final_url: request_url.clone(),
             status: 200,

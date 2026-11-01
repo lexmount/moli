@@ -101,6 +101,7 @@ pub struct RendererNetworkResourceLoadResponse {
 impl RendererNetworkResourceLoadResponse {
     pub fn head(&self) -> moli_fetch::ResponseHead {
         moli_fetch::ResponseHead {
+            request_include_credentials: false,
             final_url: self.final_url.clone(),
             status: self.status,
             status_text: self.status_text.clone(),
