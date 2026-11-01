@@ -1,5 +1,6 @@
 mod baseline_drag_views;
 mod beforeinput_target_validation;
+mod fetch_cache_modes;
 
 mod child_document_web_fonts;
 mod credential_container;
