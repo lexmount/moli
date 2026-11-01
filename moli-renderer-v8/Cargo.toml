@@ -39,6 +39,7 @@ stylo_static_prefs = "0.22"
 moli-action-window = { path = "../moli-action-window" }
 moli-broadcast-channel = { path = "../moli-broadcast-channel" }
 moli-browser-profile = { path = "../moli-browser-profile" }
+moli-content-type = { path = "../moli-content-type" }
 moli-crypto = { path = "../moli-crypto" }
 moli-csp = { path = "../moli-csp" }
 moli-css-parse = { path = "../moli-css-parse" }

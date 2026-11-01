@@ -3393,6 +3393,7 @@ dependencies = [
  "moli-broadcast-channel",
  "moli-browser-profile",
  "moli-canvas",
+ "moli-content-type",
  "moli-cookie-jar",
  "moli-crypto",
  "moli-csp",
