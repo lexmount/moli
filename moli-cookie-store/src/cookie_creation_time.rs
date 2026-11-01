@@ -19,11 +19,6 @@ pub fn from_unix_micros(micros: i64) -> Option<OffsetDateTime> {
     OffsetDateTime::from_unix_timestamp_nanos(i128::from(micros) * 1_000).ok()
 }
 
-/// Convert the previous nanosecond format without overflowing the new encoding.
-pub fn legacy_unix_nanos_to_micros(nanos: i128) -> Option<i64> {
-    to_unix_micros(OffsetDateTime::from_unix_timestamp_nanos(nanos).ok()?)
-}
-
 pub(crate) fn normalize(created: OffsetDateTime) -> Option<OffsetDateTime> {
     from_unix_micros(to_unix_micros(created)?)
 }
@@ -49,14 +44,11 @@ mod tests {
             assert_eq!(to_unix_micros(original), Some(micros));
             let restored = from_unix_micros(micros).unwrap();
             assert_eq!(restored.unix_timestamp_nanos(), i128::from(micros) * 1_000);
-            assert_eq!(legacy_unix_nanos_to_micros(nanos), Some(micros));
         }
     }
 
     #[test]
     fn out_of_range_creation_times_are_rejected_without_overflow() {
-        assert!(legacy_unix_nanos_to_micros(i128::MIN).is_none());
-        assert!(legacy_unix_nanos_to_micros(i128::MAX).is_none());
         // The workspace also enables time's large-dates feature. Whether its
         // calendar accepts an i64 endpoint or not, decoding must never wrap.
         for micros in [i64::MIN, i64::MAX] {

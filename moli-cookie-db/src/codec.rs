@@ -1,13 +1,10 @@
 use super::*;
 use moli_cookie_jar::cookie_creation_time;
-use rusqlite::{
-    Connection, params, params_from_iter,
-    types::{Type, Value},
-};
+use rusqlite::{Connection, params, types::Type};
 use time::{Duration, OffsetDateTime};
 
 pub(super) const APPLICATION_ID: i32 = 0x4d4c434b; // MLCK
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 2;
 const CREATE_COOKIES: &str = "CREATE TABLE cookies(
     partition_key BLOB NOT NULL,domain TEXT NOT NULL,path TEXT NOT NULL,name TEXT NOT NULL,value TEXT NOT NULL,
     host_only INTEGER NOT NULL CHECK(host_only IN (0,1)),secure INTEGER NOT NULL CHECK(secure IN (0,1)),http_only INTEGER NOT NULL CHECK(http_only IN (0,1)),
@@ -43,8 +40,6 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<(), WritebackErr
         tx.execute_batch("ALTER TABLE cookies ADD COLUMN creation_unix_micros INTEGER;")?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
-    } else if application == APPLICATION_ID && version == 2 {
-        migrate_creation_time_to_micros(connection)?;
     } else if application != APPLICATION_ID || version != SCHEMA_VERSION {
         return Err(WritebackError::new(format!(
             "unsupported Cookie database identity/version {application}/{version}"
@@ -54,43 +49,6 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<(), WritebackErr
     Ok(())
 }
 
-fn migrate_creation_time_to_micros(connection: &mut Connection) -> Result<(), WritebackError> {
-    let tx = connection.transaction()?;
-    // Rebuild because the old pair-wise CHECK constraint refers to both columns.
-    // Keep conversion in Rust: SQLite integer overflow can promote to REAL.
-    tx.execute_batch("ALTER TABLE cookies RENAME TO cookies_before_micros;")?;
-    tx.execute_batch(CREATE_COOKIES)?;
-    {
-        let mut source = tx.prepare("SELECT partition_key,domain,path,name,value,host_only,secure,http_only,expires_seconds,expires_nanos,same_site,priority,source_scheme,source_port,creation_index,last_access_index,creation_seconds,creation_nanos FROM cookies_before_micros")?;
-        let mut destination = tx.prepare(UPSERT_COOKIE)?;
-        let mut rows = source.query([])?;
-        while let Some(row) = rows.next()? {
-            let micros = match (
-                row.get::<_, Option<i64>>(16)?,
-                row.get::<_, Option<i64>>(17)?,
-            ) {
-                (None, None) => None,
-                (Some(seconds), Some(nanos)) if (0..1_000_000_000).contains(&nanos) => Some(
-                    cookie_creation_time::legacy_unix_nanos_to_micros(
-                        i128::from(seconds) * 1_000_000_000 + i128::from(nanos),
-                    )
-                    .ok_or_else(|| invalid("invalid legacy Cookie creation time"))?,
-                ),
-                _ => return Err(invalid("invalid legacy Cookie creation time fields").into()),
-            };
-            let mut values = Vec::with_capacity(17);
-            for index in 0..16 {
-                values.push(row.get::<_, Value>(index)?);
-            }
-            values.push(micros.map_or(Value::Null, Value::Integer));
-            destination.execute(params_from_iter(values))?;
-        }
-    }
-    tx.execute_batch("DROP TABLE cookies_before_micros;")?;
-    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-    tx.commit()?;
-    Ok(())
-}
 pub(super) fn partition_bytes(key: Option<&StoredCookiePartitionKey>) -> Vec<u8> {
     match key {
         None => vec![0],
