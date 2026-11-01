@@ -10,7 +10,8 @@ use std::sync::{Arc, Weak};
 
 use indexmap::IndexMap;
 use moli_fetch::{
-    BrowserRequestMetadata, RawResponse, Request, RequestHeaders, RequestResourceType, Response,
+    BrowserRequestMetadata, RawResponse, Request, RequestHeaders, RequestMode, RequestResourceType,
+    Response,
 };
 use moli_http_cache::{
     HttpCacheRequestPolicy, cacheable_response_parts_policy, response_date, unix_now_ms,
@@ -598,13 +599,14 @@ impl SharedMemoryResourceCache {
             .map(|(index, _)| index)?;
         let policy = HttpCacheRequestPolicy::from_headers(request_headers);
         let variant = &variants[index];
-        let reusable = policy.allows_reuse_at(
-            &variant.response.headers,
-            variant.stored_at_unix_ms,
-            Some(variant.expires_at_unix_ms),
-            request.cache_mode().requires_http_cache_validation(),
-            unix_now_ms(),
-        );
+        let reusable = request.cache_mode().allows_stale_http_cache_response()
+            || policy.allows_reuse_at(
+                &variant.response.headers,
+                variant.stored_at_unix_ms,
+                Some(variant.expires_at_unix_ms),
+                request.cache_mode().requires_http_cache_validation(),
+                unix_now_ms(),
+            );
         if !reusable && policy.only_if_cached {
             // A cache-only miss must not retire a representation that a
             // subsequent request with different constraints can still use.
@@ -867,6 +869,19 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
     }
     let mut target_url = request.url.clone();
     target_url.set_fragment(None);
+    // These policies authorize the same untainted same-origin HTTP hop. Each
+    // consumer still checks its redirects and response policy, and Vary still
+    // distinguishes their mode-specific wire headers.
+    let request_mode = if request.request_mode == RequestMode::Cors
+        && request
+            .request_origin()
+            .is_some_and(|origin| origin.same_origin_url(&request.url))
+        && !request.has_cross_origin_url(&request.url)
+    {
+        RequestMode::SameOrigin
+    } else {
+        request.request_mode
+    };
     Some(RawSubresourceCacheKey {
         page_cache_partition_id: 0,
         url: target_url.into(),
@@ -876,7 +891,7 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
         request_origin: request
             .request_origin()
             .map(|origin| origin.ascii_serialization().to_owned()),
-        request_mode: request.request_mode.as_ref().to_owned(),
+        request_mode: request_mode.as_ref().to_owned(),
         // Policies and explicit Fetch referrers can select different headers
         // without changing the origin or cookie initiator in this cache key.
         referrer: request.referrer_header_value(&request.url),

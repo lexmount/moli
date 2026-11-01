@@ -16,6 +16,10 @@ mod redirect_tests;
 #[path = "async_fetch/preflight_cache_tests.rs"]
 mod preflight_cache_tests;
 
+#[cfg(test)]
+#[path = "async_fetch/cache_mode_tests.rs"]
+mod cache_mode_tests;
+
 /// Script fetches need CORS authorization before following every redirect,
 /// even though their browser-generated GET requests do not require preflight.
 pub(crate) async fn fetch_cors_script_text(
