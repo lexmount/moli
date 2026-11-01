@@ -34,10 +34,10 @@ use tokio::sync::{mpsc, oneshot};
 use url::{Host, Url};
 
 use crate::{
-    FetchCancelHandle, FetchConfig, NegotiatedHttpVersion, NetworkFetchFailureContext,
-    NetworkFetchFailureRequestContext, NetworkRequestExtraInfo, NetworkResponseExtraInfo,
-    RawResponse, RedirectInfo, Request, Response, ResponseHead, StreamingHtmlResponse,
-    StreamingRawResponse,
+    FetchCacheMiss, FetchCancelHandle, FetchConfig, NegotiatedHttpVersion,
+    NetworkFetchFailureContext, NetworkFetchFailureRequestContext, NetworkRequestExtraInfo,
+    NetworkResponseExtraInfo, RawResponse, RedirectInfo, Request, RequestCacheMode, Response,
+    ResponseHead, StreamingHtmlResponse, StreamingRawResponse,
     blocking::{
         CachedStreamingResponseLookup, RawStreamingResponseCollector, RequestHttpVersion,
         RequestTransferMetrics, ResponseCollector, StreamingCachePlan, StreamingHtmlResponseStart,
@@ -951,6 +951,9 @@ impl RuntimeOwner {
         if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
             return Err((job.response_tx, error));
         }
+        if job.request.cache_mode() == RequestCacheMode::OnlyIfCached {
+            return Err((job.response_tx, anyhow::Error::new(FetchCacheMiss)));
+        }
         if request_cache_policy_for_url(&self.config, &job.request, &job.current_url).only_if_cached
         {
             let head = cache_only_miss_start(&job.request, &job.current_url).into_head();
@@ -1165,6 +1168,9 @@ impl RuntimeOwner {
             Err(error) => return Err((Box::new(job), None, error)),
         }
 
+        if prepared_request.request.cache_mode() == RequestCacheMode::OnlyIfCached {
+            return Err((Box::new(job), None, anyhow::Error::new(FetchCacheMiss)));
+        }
         if request_cache_policy_for_url(&self.config, &prepared_request.request, &job.current_url)
             .only_if_cached
         {
@@ -1397,6 +1403,9 @@ impl RuntimeOwner {
             Err(error) => return Err((Box::new(job), None, error)),
         }
 
+        if prepared_request.request.cache_mode() == RequestCacheMode::OnlyIfCached {
+            return Err((Box::new(job), None, anyhow::Error::new(FetchCacheMiss)));
+        }
         if request_cache_policy_for_url(&self.config, &prepared_request.request, &job.current_url)
             .only_if_cached
         {

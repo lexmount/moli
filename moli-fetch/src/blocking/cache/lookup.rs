@@ -57,8 +57,8 @@ pub(crate) fn load_cached_streaming_response_lookup(
     // Normalized cache keys should not leak the first request's fragment into
     // later streaming hits.
     cached.metadata.final_url = request_url.to_string();
-    let needs_validation = !request_cache_policy_for_url(config, request, request_url)
-        .allows_reuse_at(
+    let needs_validation = !request.cache_mode().allows_stale_http_cache_response()
+        && !request_cache_policy_for_url(config, request, request_url).allows_reuse_at(
             &cached.metadata.headers,
             cached.metadata.stored_at_unix_ms,
             cached.metadata.expires_at_unix_ms,

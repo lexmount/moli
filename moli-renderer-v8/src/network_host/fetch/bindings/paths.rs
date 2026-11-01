@@ -264,7 +264,13 @@ pub(super) fn spawn_network_fetch(
     .with_credentials_mode(prepared.credentials_mode)
     .with_network_partition_key(prepared.network_partition_key.clone())
     .with_redirect_mode(prepared.redirect_mode)
-    .with_cache_mode(window_fetch_cache_mode(&prepared.cache))
+    .with_cache_mode(
+        prepared
+            .cache
+            .parse::<RequestCacheMode>()
+            .unwrap_or_default()
+            .for_fetch_headers(&prepared.request_headers),
+    )
     .with_fetch_priority_hint(prepared.priority)
     .with_fetch_referrer(&prepared.referrer)?;
     if let Some(metadata) = window_fetch_subresource_metadata(&prepared) {
@@ -353,14 +359,6 @@ pub(super) fn spawn_network_fetch(
         host.window_redirect_owner(internal_id),
     );
     Ok(internal_id)
-}
-
-fn window_fetch_cache_mode(cache: &str) -> RequestCacheMode {
-    match cache {
-        "no-store" => RequestCacheMode::NoStore,
-        "no-cache" | "reload" => RequestCacheMode::Validate,
-        _ => RequestCacheMode::Default,
-    }
 }
 
 fn window_fetch_subresource_metadata(

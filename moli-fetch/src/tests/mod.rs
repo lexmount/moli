@@ -1,5 +1,6 @@
 mod cache_request_controls;
 mod cache_request_directives;
+mod cache_request_modes;
 mod cache_vary_encoding;
 mod compression_dictionary;
 mod connection_timing;
