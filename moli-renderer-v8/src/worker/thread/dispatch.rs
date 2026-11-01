@@ -3957,6 +3957,11 @@ pub(super) fn fire_timer_callback(
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
 ) {
+    let _nesting_scope = crate::timer_nesting::TimerNestingScope::enter(isolate);
+    if let Some(level) = timer.nesting_level {
+        level.activate(isolate, crate::timer_nesting::TimerNestingOwner::Worker);
+    }
+
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
     let ctx = timer.callback.target_context(scope);

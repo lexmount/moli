@@ -300,6 +300,11 @@ impl DocumentRuntime {
     }
 
     #[cfg(test)]
+    pub(crate) fn take_next_timeout_delay_for_test(&mut self) -> Option<u64> {
+        self.timeouts.take_next_timeout_delay_for_test()
+    }
+
+    #[cfg(test)]
     pub(crate) fn has_ready_timeout(&self) -> bool {
         self.timeouts.has_ready_timer()
     }

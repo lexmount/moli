@@ -364,9 +364,12 @@ impl PageVm {
                 deadline,
                 selection,
             } => {
+                let nesting_scope = self.vm().timer_nesting_scope_for_task();
                 let outcome = self.apply_selected_page_timer_turn(deadline, selection)?;
                 if matches!(outcome.action, PageTimerTurnAction::Consumed { .. }) {
-                    self.finish_selected_page_callback_task(loader).await?;
+                    self.vm_mut()
+                        .finish_selected_page_timer_callback_task(loader, nesting_scope)
+                        .await?;
                 }
                 Ok(())
             }

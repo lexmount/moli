@@ -94,6 +94,7 @@ pub(in crate::worker) fn schedule_worker_xhr_timeout<'s>(
         ),
         delay_ms,
         is_interval: false,
+        nesting_level: None,
         extra_args: Vec::new(),
     };
     if let Some(timers) = worker_isolate_timer_queues(scope) {
