@@ -14,7 +14,7 @@ mod types;
 
 pub use discovery::{
     DocumentBlockingStylesheetSignature, DocumentOwnedBlockingStylesheet,
-    DocumentOwnedBlockingStylesheetCandidate, DocumentOwnedBlockingStylesheetDiscoveryInput,
+    DocumentOwnedBlockingStylesheetCandidate, DocumentOwnedStylesheetDiscoveryInput,
     StylesheetBlockingReadView, StylesheetElementRead, StylesheetLinkDisposition,
     StylesheetPreloadLinkRequest, collect_blocking_stylesheet_nodes_before,
     collect_document_owned_blocking_stylesheet_candidates,
@@ -23,8 +23,10 @@ pub use discovery::{
     collect_document_owned_blocking_stylesheets,
     collect_document_owned_blocking_stylesheets_before,
     collect_document_owned_blocking_stylesheets_before_in_view, connected_preload_like_link_url,
-    document_node_precedes, document_owned_blocking_stylesheet_candidate_for_node,
-    link_rel_includes_token, preload_like_link_loads_stylesheet, stylesheet_link_disposition,
+    default_screen_media_query_matches, document_node_precedes,
+    document_owned_blocking_stylesheet_candidate_for_node,
+    document_owned_stylesheet_discovery_input_for_node, link_rel_includes_token,
+    preload_like_link_loads_stylesheet, stylesheet_link_disposition,
     stylesheet_preload_link_request,
 };
 pub use fetcher::{

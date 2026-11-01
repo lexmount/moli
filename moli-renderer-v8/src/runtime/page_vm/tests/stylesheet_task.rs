@@ -112,7 +112,7 @@ document.head.append(cachedPreload);
 fn parser_captured_stylesheet_input_for_test(
     page_vm: &PageVm,
     id: &str,
-) -> crate::DocumentOwnedBlockingStylesheetDiscoveryInput {
+) -> crate::DocumentOwnedStylesheetDiscoveryInput {
     let link = page_vm
         .vm()
         .document_runtime
@@ -133,17 +133,17 @@ fn parser_captured_stylesheet_input_for_test(
         url: disposition.url().clone(),
         options: disposition.options().clone(),
     };
-    crate::DocumentOwnedBlockingStylesheetDiscoveryInput::from(&candidate)
+    crate::DocumentOwnedStylesheetDiscoveryInput::from(&candidate)
 }
 
 fn note_parser_captured_stylesheet_inputs_for_test(
     page_vm: &mut PageVm,
-    inputs: &[crate::DocumentOwnedBlockingStylesheetDiscoveryInput],
+    inputs: &[crate::DocumentOwnedStylesheetDiscoveryInput],
 ) {
     let completed_clients = page_vm
         .vm_mut()
         .document_runtime
-        .note_discovered_document_owned_blocking_stylesheet_inputs(inputs);
+        .note_discovered_document_owned_stylesheet_inputs(inputs);
     page_vm
         .vm_mut()
         .settle_stylesheet_link_clients(completed_clients);

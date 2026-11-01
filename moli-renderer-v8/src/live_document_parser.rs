@@ -1,5 +1,5 @@
 use crate::{
-    DocumentOwnedBlockingStylesheetDiscoveryInput,
+    DocumentOwnedStylesheetDiscoveryInput,
     dom::native::{DomHost, NativeNodeId},
     parser::{
         DocumentStream, HtmlParser, ParserBlockingStylesheetPause,
@@ -76,7 +76,7 @@ pub(crate) struct LiveDocumentParserDiscoverySignals {
     pub(crate) async_prefetch_scripts: Vec<PreparedScript>,
     pub(crate) modulepreload_link_candidates: Vec<NativeNodeId>,
     pub(crate) parser_meta_csp_candidates: Vec<NativeNodeId>,
-    pub(crate) blocking_stylesheet_inputs: Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>,
+    pub(crate) stylesheet_inputs: Vec<DocumentOwnedStylesheetDiscoveryInput>,
 }
 
 pub(crate) struct DocumentParserFinishSignals {
@@ -92,8 +92,7 @@ impl LiveDocumentParserDiscoverySignals {
             .extend(other.modulepreload_link_candidates);
         self.parser_meta_csp_candidates
             .extend(other.parser_meta_csp_candidates);
-        self.blocking_stylesheet_inputs
-            .extend(other.blocking_stylesheet_inputs);
+        self.stylesheet_inputs.extend(other.stylesheet_inputs);
     }
 }
 
@@ -144,13 +143,13 @@ fn live_document_parser_advance_from_outcome(
         result,
         discovered_async_prefetch_scripts,
         discovered_modulepreload_link_candidates,
-        discovered_blocking_stylesheet_inputs,
+        discovered_stylesheet_inputs,
     } = outcome;
     let discovery_signals = LiveDocumentParserDiscoverySignals {
         async_prefetch_scripts: discovered_async_prefetch_scripts,
         modulepreload_link_candidates: discovered_modulepreload_link_candidates,
         parser_meta_csp_candidates: discovered_parser_meta_csp_candidates,
-        blocking_stylesheet_inputs: discovered_blocking_stylesheet_inputs,
+        stylesheet_inputs: discovered_stylesheet_inputs,
     };
     let outcome = match result {
         // An interrupted outer feed has no new handoff to deliver. Its owning
@@ -1231,14 +1230,14 @@ fn finish_live_document_parser(
         parser_created_null_registry_elements,
         discovered_modulepreload_link_candidates,
         discovered_parser_meta_csp_candidates,
-        discovered_blocking_stylesheet_inputs,
+        discovered_stylesheet_inputs,
     } = stream.finish_with_runtime_dom_consumer(owner);
     DocumentParserFinishSignals {
         parser_created_null_registry_elements,
         discovery_signals: LiveDocumentParserDiscoverySignals {
             modulepreload_link_candidates: discovered_modulepreload_link_candidates,
             parser_meta_csp_candidates: discovered_parser_meta_csp_candidates,
-            blocking_stylesheet_inputs: discovered_blocking_stylesheet_inputs,
+            stylesheet_inputs: discovered_stylesheet_inputs,
             ..LiveDocumentParserDiscoverySignals::default()
         },
     }
@@ -1252,14 +1251,14 @@ fn finish_live_xml_document_parser(
         parser_created_null_registry_elements,
         discovered_modulepreload_link_candidates,
         discovered_parser_meta_csp_candidates,
-        discovered_blocking_stylesheet_inputs,
+        discovered_stylesheet_inputs,
     } = stream.finish_with_runtime_dom_consumer(owner);
     DocumentParserFinishSignals {
         parser_created_null_registry_elements,
         discovery_signals: LiveDocumentParserDiscoverySignals {
             modulepreload_link_candidates: discovered_modulepreload_link_candidates,
             parser_meta_csp_candidates: discovered_parser_meta_csp_candidates,
-            blocking_stylesheet_inputs: discovered_blocking_stylesheet_inputs,
+            stylesheet_inputs: discovered_stylesheet_inputs,
             ..LiveDocumentParserDiscoverySignals::default()
         },
     }

@@ -48,7 +48,7 @@ impl DocumentRuntime {
             shadow_bindings.extend(parked_bindings);
         }
         dom_host.restore_shadow_root_bindings(shadow_bindings);
-        self.dom_host = LiveRuntimeDomHost::from_dom_host(dom_host);
+        self.dom_host.dom_host = dom_host;
         self.style_source_document_sync_pending = true;
         for handle in started_scripts {
             let _ = self.dom_host.set_script_already_started(handle, true);

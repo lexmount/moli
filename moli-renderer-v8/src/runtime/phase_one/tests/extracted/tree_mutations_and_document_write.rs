@@ -1113,7 +1113,7 @@ fn parser_connected_head_document_write_keeps_later_head_tokens_in_head() {
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
                 panic!("expected parser step to stop at inline script handoff");

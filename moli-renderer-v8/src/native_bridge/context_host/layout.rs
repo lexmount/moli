@@ -138,7 +138,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn layout_viewport_for_document(&self, document: DomHandle) -> LayoutViewport {
-        let surface = self.viewport_surface;
+        let surface = self.viewport_surface();
         let device_pixel_ratio = surface
             .map(|surface| surface.device_pixel_ratio as f32)
             .unwrap_or(DEFAULT_WINDOW_SURFACE_PROFILE.device_pixel_ratio as f32);

@@ -19,7 +19,7 @@ use moli_dom::native::{
 };
 use moli_page_types::{ScriptMode, ScriptRun};
 use moli_stylesheet_blocking::{
-    DocumentBlockingStylesheetSignature, DocumentOwnedBlockingStylesheetDiscoveryInput,
+    DocumentBlockingStylesheetSignature, DocumentOwnedStylesheetDiscoveryInput,
 };
 
 use super::live_target::new_live_fragment_root_html_tree_sink_stream;
@@ -83,7 +83,8 @@ pub struct ParserPumpOutcome {
     pub result: ParserPumpStep,
     pub discovered_async_prefetch_scripts: Vec<PreparedScript>,
     pub discovered_modulepreload_link_candidates: Vec<NativeNodeId>,
-    pub discovered_blocking_stylesheet_inputs: Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>,
+    /// Parser-created loads, including stylesheets whose media does not block scripts.
+    pub discovered_stylesheet_inputs: Vec<DocumentOwnedStylesheetDiscoveryInput>,
 }
 
 #[derive(Debug, Default)]
@@ -91,7 +92,8 @@ pub struct ParserFinishDiscoverySignals {
     pub parser_created_null_registry_elements: Vec<NativeNodeId>,
     pub discovered_modulepreload_link_candidates: Vec<NativeNodeId>,
     pub discovered_parser_meta_csp_candidates: Vec<NativeNodeId>,
-    pub discovered_blocking_stylesheet_inputs: Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>,
+    /// Parser-created loads, including stylesheets whose media does not block scripts.
+    pub discovered_stylesheet_inputs: Vec<DocumentOwnedStylesheetDiscoveryInput>,
 }
 
 #[derive(Debug, Clone)]
@@ -1634,12 +1636,12 @@ impl DocumentSink {
         self.target.borrow_mut().begin_tree_builder_finish();
     }
 
-    pub(super) fn drain_discovered_blocking_stylesheet_inputs(
+    pub(super) fn drain_discovered_stylesheet_inputs(
         &self,
-    ) -> Vec<DocumentOwnedBlockingStylesheetDiscoveryInput> {
+    ) -> Vec<DocumentOwnedStylesheetDiscoveryInput> {
         self.target
             .borrow_mut()
-            .drain_discovered_blocking_stylesheet_inputs()
+            .drain_discovered_stylesheet_inputs()
     }
 
     pub(super) fn captured_blocking_stylesheet_signatures(

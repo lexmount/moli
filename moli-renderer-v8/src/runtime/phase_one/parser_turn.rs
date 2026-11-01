@@ -87,6 +87,10 @@ impl ParserMutationEffectConsumer for PhaseOneParserOwner<'_> {
 }
 
 impl ParserDomReadConsumer for PhaseOneParserOwner<'_> {
+    fn stylesheet_media_matches(&mut self, media: &str) -> bool {
+        self.vm.document_runtime.stylesheet_media_matches(media)
+    }
+
     fn snapshot_parser_document(&mut self) -> Option<crate::dom::native::NativeDom> {
         Some(self.vm.document_runtime.snapshot_document())
     }
@@ -1514,10 +1518,10 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             async_prefetch_scripts,
             modulepreload_link_candidates,
             parser_meta_csp_candidates,
-            blocking_stylesheet_inputs,
+            stylesheet_inputs,
         } = discovery_signals;
         self.buffered_document_preloads
-            .claim_pending_stylesheet_preloads_for_parser(&blocking_stylesheet_inputs);
+            .claim_pending_stylesheet_preloads_for_parser(&stylesheet_inputs);
         for handle in &parser_meta_csp_candidates {
             page_vm
                 .vm()
@@ -1578,10 +1582,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         }
         page_vm
             .vm_mut()
-            .accept_main_document_blocking_stylesheet_inputs(
-                parser_document_owner,
-                &blocking_stylesheet_inputs,
-            );
+            .accept_main_document_stylesheet_inputs(parser_document_owner, &stylesheet_inputs);
     }
 
     async fn advance_next_parser_step_for_owner(

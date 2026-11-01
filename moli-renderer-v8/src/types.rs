@@ -1226,13 +1226,20 @@ pub(super) struct ChildBlockingStylesheetLoadCompletion {
     pub(super) owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     pub(super) signature: crate::DocumentBlockingStylesheetSignature,
     pub(super) network_results: Vec<ChildBlockingStylesheetNetworkResult>,
+    pub(super) import_graph:
+        Option<std::sync::Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>>,
 }
 
 impl ChildBlockingStylesheetLoadCompletion {
     pub(super) fn successful(&self) -> bool {
-        self.network_results
-            .iter()
-            .all(|result| result.terminal.is_ready())
+        self.import_graph.as_ref().map_or_else(
+            || {
+                self.network_results
+                    .iter()
+                    .all(|result| result.terminal.is_ready())
+            },
+            |graph| graph.successful(),
+        )
     }
 }
 

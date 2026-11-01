@@ -849,7 +849,7 @@ document.body.setAttribute('data-result', `${before}|${style.color}`);
             result,
             discovered_async_prefetch_scripts: _,
             discovered_modulepreload_link_candidates: _,
-            discovered_blocking_stylesheet_inputs: _,
+            discovered_stylesheet_inputs: _,
         } = driver
             .parser_session
             .stream_handle()
@@ -918,7 +918,7 @@ fn phase_transition_syncs_parser_created_style_sources_for_later_reads() {
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
             } = state.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             assert!(
                 matches!(result, ParserPumpStep::InputDrained),
@@ -1000,7 +1000,7 @@ fn parser_connected_head_script_does_not_push_later_head_tokens_into_body() {
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
                 panic!("expected parser step to stop at inline script handoff");
@@ -1169,7 +1169,7 @@ fn parser_connected_external_head_script_with_live_head_and_body_mutation_keeps_
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(&html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
                 panic!("expected parser step to stop at external script handoff");

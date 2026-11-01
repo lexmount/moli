@@ -9,7 +9,7 @@ use std::sync::Arc;
 use super::super::{ConnectedLoadNetworkResult, DocumentRuntime, DomHandle};
 use crate::dom::NodeId;
 use crate::stylesheet_blocking::{
-    DocumentBlockingStylesheetSignature, DocumentOwnedBlockingStylesheetDiscoveryInput,
+    DocumentBlockingStylesheetSignature, DocumentOwnedStylesheetDiscoveryInput,
     StylesheetBlockingReadView, StylesheetFetch, StylesheetFetchOptions,
     collect_document_owned_blocking_stylesheets,
 };
@@ -88,7 +88,7 @@ impl DocumentRuntime {
             &document_url,
             blockers
                 .iter()
-                .map(DocumentOwnedBlockingStylesheetDiscoveryInput::from),
+                .map(DocumentOwnedStylesheetDiscoveryInput::from),
         );
     }
 
@@ -106,25 +106,25 @@ impl DocumentRuntime {
             &document_url,
             blockers
                 .iter()
-                .map(DocumentOwnedBlockingStylesheetDiscoveryInput::from),
+                .map(DocumentOwnedStylesheetDiscoveryInput::from),
         );
     }
 
-    pub(crate) fn note_discovered_document_owned_blocking_stylesheet_inputs<'a>(
+    pub(crate) fn note_discovered_document_owned_stylesheet_inputs<'a>(
         &mut self,
-        inputs: impl IntoIterator<Item = &'a DocumentOwnedBlockingStylesheetDiscoveryInput>,
+        inputs: impl IntoIterator<Item = &'a DocumentOwnedStylesheetDiscoveryInput>,
     ) -> Vec<super::StylesheetLinkClientTerminal> {
         let document_url = self.document_url().clone();
-        self.note_discovered_document_owned_blocking_stylesheet_inputs_for_document_url(
+        self.note_discovered_document_owned_stylesheet_inputs_for_document_url(
             &document_url,
             inputs,
         )
     }
 
-    pub(crate) fn note_discovered_document_owned_blocking_stylesheet_inputs_for_document_url<'a>(
+    pub(crate) fn note_discovered_document_owned_stylesheet_inputs_for_document_url<'a>(
         &mut self,
         document_url: &url::Url,
-        inputs: impl IntoIterator<Item = &'a DocumentOwnedBlockingStylesheetDiscoveryInput>,
+        inputs: impl IntoIterator<Item = &'a DocumentOwnedStylesheetDiscoveryInput>,
     ) -> Vec<super::StylesheetLinkClientTerminal> {
         let inputs = inputs.into_iter().cloned().collect::<Vec<_>>();
         let fetcher = self.stylesheet_fetcher();
@@ -140,8 +140,8 @@ impl DocumentRuntime {
         &mut self,
         fetcher: &crate::stylesheet_blocking::RendererStylesheetFetcher,
         document_url: &url::Url,
-        inputs: impl IntoIterator<Item = DocumentOwnedBlockingStylesheetDiscoveryInput>,
-    ) -> Vec<DocumentOwnedBlockingStylesheetDiscoveryInput> {
+        inputs: impl IntoIterator<Item = DocumentOwnedStylesheetDiscoveryInput>,
+    ) -> Vec<DocumentOwnedStylesheetDiscoveryInput> {
         let inputs = inputs
             .into_iter()
             .filter(|input| {
@@ -163,10 +163,10 @@ impl DocumentRuntime {
         let blockers = collect_document_owned_blocking_stylesheets(&self.dom_host);
         let inputs = blockers
             .iter()
-            .map(DocumentOwnedBlockingStylesheetDiscoveryInput::from)
+            .map(DocumentOwnedStylesheetDiscoveryInput::from)
             .collect::<Vec<_>>();
         let completed_clients =
-            self.note_discovered_document_owned_blocking_stylesheet_inputs(inputs.iter());
+            self.note_discovered_document_owned_stylesheet_inputs(inputs.iter());
         loop {
             self.drain_blocking_stylesheet_completions();
             if !self

@@ -52,7 +52,7 @@ impl ScriptVm {
 
         match work {
             MainDocumentPostParseWork::SeedDocumentOwnedBlockingStylesheets(inputs) => {
-                let accepted = self.accept_main_document_blocking_stylesheet_inputs(
+                let accepted = self.accept_main_document_stylesheet_inputs(
                     selected_owner.document_owner(),
                     &inputs,
                 );

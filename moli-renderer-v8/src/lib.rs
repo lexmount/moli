@@ -161,7 +161,7 @@ pub(crate) fn parse_html_test_fixture_with_parser_outputs(
 ) -> (
     dom::native::NativeDom,
     Vec<parser::ParserScriptHandoff>,
-    Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>,
+    Vec<DocumentOwnedStylesheetDiscoveryInput>,
 ) {
     let stream = parser::HtmlParser::SCRIPTING_ENABLED.start_document(final_url);
     stream.append_to_end(html);
@@ -169,7 +169,7 @@ pub(crate) fn parse_html_test_fixture_with_parser_outputs(
     let mut blocking_stylesheets = Vec::new();
     while stream.has_pending_input() {
         let outcome = stream.pump_next_parser_step(0);
-        blocking_stylesheets.extend(outcome.discovered_blocking_stylesheet_inputs);
+        blocking_stylesheets.extend(outcome.discovered_stylesheet_inputs);
         if let parser::ParserPumpStep::Yield(parser::ParserYield::Script(script)) = outcome.result {
             scripts.push(*script);
         }
@@ -184,7 +184,7 @@ pub(crate) use crate::script_planning::{
 };
 #[allow(unused_imports)]
 pub(crate) use crate::stylesheet_blocking::{
-    DocumentBlockingStylesheetSignature, DocumentOwnedBlockingStylesheetDiscoveryInput,
+    DocumentBlockingStylesheetSignature, DocumentOwnedStylesheetDiscoveryInput,
     StylesheetBlockingReadView, StylesheetElementRead,
     collect_document_owned_blocking_stylesheet_discovery_inputs_before_in_view,
     collect_document_owned_blocking_stylesheets_before_in_view,

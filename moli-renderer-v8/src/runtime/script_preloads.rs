@@ -32,7 +32,7 @@ use crate::runtime::page_vm::{
 };
 use crate::service_worker_runtime::ServiceWorkerClientId;
 use crate::stylesheet_blocking::{
-    DocumentBlockingStylesheetSignature, DocumentOwnedBlockingStylesheetDiscoveryInput,
+    DocumentBlockingStylesheetSignature, DocumentOwnedStylesheetDiscoveryInput,
     StylesheetFetchOptions, StylesheetResourceKey, link_rel_includes_token,
 };
 use crate::types::SharedNavigationResponseResult;
@@ -525,7 +525,7 @@ impl BufferedDocumentPreloadState {
 
     pub(super) fn claim_pending_stylesheet_preloads_for_parser(
         &mut self,
-        inputs: &[DocumentOwnedBlockingStylesheetDiscoveryInput],
+        inputs: &[DocumentOwnedStylesheetDiscoveryInput],
     ) {
         let claimed_resources = inputs
             .iter()
