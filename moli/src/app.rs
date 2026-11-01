@@ -274,9 +274,20 @@ pub async fn run_cli_with_config<W: Write>(
                 Arc::clone(&storage_partition),
                 NavigationRuntimeConfig::from(&config.browser),
             );
-            let result = server.serve().await;
+            #[cfg(unix)]
+            let result = if args.remote_debugging_pipe {
+                let (input, output) = take_inherited_pipe_descriptors()?;
+                server
+                    .serve_pipe(input, output)
+                    .await
+                    .context("protocol pipe failed")
+            } else {
+                server.serve().await.context("protocol server failed")
+            };
+            #[cfg(not(unix))]
+            let result = server.serve().await.context("protocol server failed");
             finalize_serve_cookies(&storage_partition, args.cookie_jar.as_deref(), stdout);
-            result.context("protocol server failed")?;
+            result?;
         }
         Commands::Import(args) => {
             let summary =
@@ -563,6 +574,27 @@ fn finalize_serve_cookies(
         Err(error) => tracing::warn!(error = %error, "failed to save cookie jar"),
         Ok(_) => {}
     }
+}
+
+/// Claims descriptors 3 and 4, which Chromium's pipe protocol makes the parent
+/// pass to the child, as the CDP input and output.
+#[cfg(unix)]
+fn take_inherited_pipe_descriptors() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+
+    for fd in [3, 4] {
+        // SAFETY: `fstat` only writes to the zeroed buffer it is given.
+        let mut status: libc::stat = unsafe { std::mem::zeroed() };
+        let kind =
+            (unsafe { libc::fstat(fd, &mut status) } == 0).then_some(status.st_mode & libc::S_IFMT);
+        anyhow::ensure!(
+            matches!(kind, Some(libc::S_IFIFO | libc::S_IFSOCK)),
+            "--remote-debugging-pipe needs the parent to pass pipes as file descriptors 3 and 4"
+        );
+    }
+    // SAFETY: both descriptors are open pipes or sockets (checked above) and
+    // this runs once per process, so each gets exactly one owner.
+    Ok(unsafe { (OwnedFd::from_raw_fd(3), OwnedFd::from_raw_fd(4)) })
 }
 
 #[cfg(test)]
