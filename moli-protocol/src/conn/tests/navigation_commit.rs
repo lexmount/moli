@@ -84,6 +84,84 @@ async fn independent_command(ctx: &mut TestContext, id: u64) {
     assert!(ctx.take_response_by_id(id)["result"]["product"].is_string());
 }
 
+#[tokio::test]
+async fn prepared_network_policy_reaches_native_document_before_commit_publication() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for replace_existing in [false, true] {
+                for fetch in [false, true] {
+                    let CommitFixture {
+                        ctx,
+                        token,
+                        navigation,
+                        prepared,
+                        mut completions,
+                    } = commit_fixture(replace_existing).await;
+                    ctx.with_fixture(|conn| {
+                        conn.start_background_prepared_navigation_commit(
+                            token,
+                            navigation.clone(),
+                            prepared,
+                        )
+                    });
+                    // Keep the native result and its output unpublished. The
+                    // Document exists, but protocol has not learned its token.
+                    let completion = tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        completions.recv(),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                    let BackgroundNavigationCompletion::PreparedDocument(completion) = completion else {
+                        panic!("native commit result expected");
+                    };
+                    assert!(completion.navigation.is_ok(), "native Document must exist before updating its policy");
+                    ctx.with_fixture(|conn| {
+                        assert!(conn
+                            .runtime_session_owner_slot_for_owner(&navigation.owner)
+                            .unwrap()
+                            .page_slot()
+                            .prepared_document_output_binding()
+                            .is_none());
+                    });
+                    let pending = ctx.with_fixture(|conn| {
+                        if fetch {
+                            conn.start_enable_fetch_for_owner(&navigation.owner, false, Vec::new())
+                        } else {
+                            conn.start_set_blocked_url_patterns_for_session_owner(
+                                Some("SID-1"),
+                                vec!["*/blocked".into()],
+                            )
+                        }
+                    })
+                    .unwrap()
+                    .unwrap_or_else(|| {
+                        panic!("{replace_existing}/{fetch}: policy ACK needs a native update even before commit publication")
+                    });
+                    // Do not drive the test protocol scheduler while waiting:
+                    // processing commit output would hide the routing window.
+                    tokio::time::timeout(std::time::Duration::from_secs(10), pending.wait())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .into_unit_reply()
+                        .unwrap();
+                    ctx.with_fixture(|conn| {
+                        assert!(conn
+                            .runtime_session_owner_slot_for_owner(&navigation.owner)
+                            .unwrap()
+                            .page_slot()
+                            .prepared_document_output_binding()
+                            .is_none());
+                    });
+                    drop(completion);
+                }
+            }
+        })
+        .await;
+}
+
 async fn project_child_fact_during_handoff(
     handle: &crate::conn::ProtocolStateHandle,
     owner: &CommandOwnerScope,

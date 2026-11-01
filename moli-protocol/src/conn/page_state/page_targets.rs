@@ -22,7 +22,7 @@ impl BrowserContext {
     pub(crate) fn start_page_policy_update(
         &self,
         target_id: &str,
-        command: moli_core::RendererPageCommand,
+        update: moli_core::RendererPageNetworkPolicyUpdate,
         loaded: impl FnOnce(&moli_core::page::Page) -> Result<moli_core::page::PendingPageCommand>,
     ) -> Result<Option<moli_core::page::PendingPageCommand>> {
         let target = self
@@ -30,6 +30,18 @@ impl BrowserContext {
             .ok_or(crate::conn::NoDocumentLoaded)?;
         let slot = target.runtime_slot();
         let Some((source, binding)) = slot.page_slot().prepared_document_output_binding() else {
+            if let Some((source, agent)) = slot.prepared_document_policy_target() {
+                return self
+                    .page_navigation_engine(target_id)
+                    .ok_or(crate::conn::NoDocumentLoaded)?
+                    .start_pending_document_policy_update(
+                        source.owner_local_host_id(),
+                        source.page_id(),
+                        agent,
+                        update,
+                    )
+                    .map(Some);
+            }
             return slot.loaded_page().map(loaded).transpose();
         };
         let document = binding.renderer_document_identity();
@@ -42,7 +54,7 @@ impl BrowserContext {
                 .ok_or(crate::conn::NoDocumentLoaded)?
                 .document_command_target(source.owner_local_host_id(), document)?
         };
-        capability.start(command).map(Some)
+        capability.start(update.into()).map(Some)
     }
 
     pub(crate) fn take_page_target_for_close(&mut self, target_id: &str) -> Option<PageTargetHost> {

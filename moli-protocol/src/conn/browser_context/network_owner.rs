@@ -192,7 +192,9 @@ impl TargetSessionOwnerMut<'_> {
         self.browser_context
             .start_page_policy_update(
                 &self.target_id,
-                moli_core::RendererPageCommand::SetBlockedUrlPatterns(effective_patterns.clone()),
+                moli_core::RendererPageNetworkPolicyUpdate::BlockedUrlPatterns(
+                    effective_patterns.clone(),
+                ),
                 |page| page.start_set_blocked_url_patterns(&effective_patterns),
             )
             .context("failed to update page blocked URLs")

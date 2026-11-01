@@ -1,3 +1,4 @@
+mod pending_document_policy;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
