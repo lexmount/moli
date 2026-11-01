@@ -461,7 +461,7 @@ fn spawn_worker_fetch_service_worker(
                 body,
                 headers,
                 request_mode,
-                credentials_mode,
+                policy_context.network_credentials_mode(request_mode, credentials_mode),
                 redirect_mode,
                 priority,
                 request_metadata,
@@ -2048,6 +2048,8 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             return;
         }
     };
+    let network_credentials_mode =
+        policy_context.network_credentials_mode(request_mode, credentials_mode);
     let headers = merge_worker_request_headers(
         &extra_http_headers,
         &moli_fetch::RequestHeaders::from_byte_strings(&request_headers)
@@ -2209,7 +2211,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                 PendingWorkerFetch {
                     resolver: v8::Global::new(scope, resolver),
                     document_url: document_url.clone(),
-                    credentials_mode,
+                    credentials_mode: network_credentials_mode,
                     request_mode,
                     redirect_mode,
                     request_priority: priority,
@@ -2250,7 +2252,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                 WorkerPendingSubresourceFetch {
                     fetch_id,
                     load,
-                    credentials_mode,
+                    credentials_mode: network_credentials_mode,
                     request_mode,
                     network_partition_key: state.borrow().network_partition_key.clone(),
                     info,
@@ -2306,7 +2308,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                 PendingWorkerFetch {
                     resolver: v8::Global::new(scope, resolver),
                     document_url: document_url.clone(),
-                    credentials_mode,
+                    credentials_mode: network_credentials_mode,
                     request_mode,
                     redirect_mode,
                     request_priority: priority,
@@ -2373,7 +2375,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                 body,
                 headers,
                 request_mode,
-                credentials_mode,
+                network_credentials_mode,
                 redirect_mode,
                 priority,
                 request_metadata,

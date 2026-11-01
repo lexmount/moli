@@ -16,6 +16,7 @@ fn assert_initial_worker_auth_network_headers(headers: Option<&[(String, String)
     );
 }
 
+mod credentialless;
 mod fetch_network;
 mod file_and_xhr;
 mod opfs_storage;
