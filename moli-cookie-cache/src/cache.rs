@@ -123,10 +123,9 @@ impl CachedCookie {
         if self.partitioned && self.partition_key.is_none() {
             return None;
         }
-        let creation_time = match self.creation_unix_micros {
-            Some(timestamp) => Some(cookie_creation_time::from_unix_micros(timestamp)?),
-            None => None,
-        };
+        let creation_time = self
+            .creation_unix_micros
+            .and_then(cookie_creation_time::from_unix_micros);
 
         Some(StoredCookie {
             name: self.name,

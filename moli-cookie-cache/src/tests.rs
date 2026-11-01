@@ -58,6 +58,28 @@ fn cookie_cache_preserves_the_creation_time_used_by_default_same_site_policy() -
     Ok(())
 }
 
+#[test]
+fn cookie_cache_keeps_cookies_when_the_creation_time_exceeds_the_calendar_range() -> Result<()> {
+    let temp = TempDir::new("creation-time-calendar-range");
+    let file = temp.path.join("cookies.json");
+    let mut original = stored_cookie("sid", "keep");
+    original.creation_time = Some(OffsetDateTime::UNIX_EPOCH);
+    for micros in [i64::MIN, i64::MAX] {
+        save_cookie_cache(&file, vec![original.clone()])?;
+        let mut json: serde_json::Value = serde_json::from_slice(&fs::read(&file)?)?;
+        json["cookies"][0]["creation_unix_micros"] = serde_json::json!(micros);
+        fs::write(&file, serde_json::to_vec(&json)?)?;
+
+        // time's optional large-dates feature can represent these endpoints.
+        // Without it, only the invalid age should be discarded.
+        let mut expected = original.clone();
+        expected.creation_time =
+            OffsetDateTime::from_unix_timestamp_nanos(i128::from(micros) * 1_000).ok();
+        assert_eq!(load_cookie_cache(&file)?, vec![expected]);
+    }
+    Ok(())
+}
+
 struct TempDir {
     path: PathBuf,
 }
