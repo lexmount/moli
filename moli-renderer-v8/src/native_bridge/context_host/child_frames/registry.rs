@@ -539,6 +539,9 @@ impl PageScriptHost {
                     cross_origin_embedder_policy: refresh_policy_source
                         .map(|policy| policy.cross_origin_embedder_policy)
                         .unwrap_or_default(),
+                    cross_origin_embedder_policy_report_only: refresh_policy_source
+                        .map(|policy| policy.cross_origin_embedder_policy_report_only)
+                        .unwrap_or_default(),
                     document_isolation_policy: refresh_policy_source
                         .map(|policy| policy.document_isolation_policy)
                         .unwrap_or_default(),
