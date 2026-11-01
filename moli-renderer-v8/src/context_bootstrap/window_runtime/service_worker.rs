@@ -463,6 +463,14 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
             return;
         }
     };
+    if let Err(message) = crate::service_worker_runtime::verify_service_worker_registration_urls(
+        &scope_url,
+        &script_url,
+    ) {
+        reject_service_worker_promise_with_type_error(scope, resolver, &message);
+        rv.set(promise.into());
+        return;
+    }
     let host = unsafe { &mut *host_ptr };
     let Some(request_client) = host
         .document_resource_loader_for_window_owner(request_context.owner().window_document_owner())
