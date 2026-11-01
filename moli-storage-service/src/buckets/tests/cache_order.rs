@@ -7,6 +7,7 @@ const URL: &str = "https://cache-order.test/item";
 fn response(body: &[u8]) -> StorageBucketCachedResponse {
     StorageBucketCachedResponse {
         cors_exposed_header_names: None,
+        request_include_credentials: false,
         response_type: "default".to_owned(),
         url: URL.to_owned(),
         redirected: false,

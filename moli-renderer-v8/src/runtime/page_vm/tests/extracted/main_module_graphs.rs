@@ -629,6 +629,7 @@ fn module_graph_network_result_records_staged_response_started_with_cache_state(
             status: 200,
             headers: vec![("content-type".to_owned(), b"text/javascript".to_vec())],
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: false,
             redirect_chain: Vec::new(),

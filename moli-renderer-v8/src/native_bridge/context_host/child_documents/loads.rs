@@ -1179,6 +1179,7 @@ mod tests {
                         status_text: None,
                         headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
                         request_cookie_report: None,
+                        request_include_credentials: false,
                         cookie_set_reports: Vec::new(),
                         redirected: true,
                         redirect_chain: vec![
@@ -1233,6 +1234,7 @@ mod tests {
                 status_text: None,
                 headers: vec![("Content-Encoding".to_owned(), b"gzip".to_vec())],
                 request_cookie_report: None,
+                request_include_credentials: false,
                 cookie_set_reports: Vec::new(),
                 redirected: !hops.is_empty(),
                 redirect_chain: hops
@@ -1310,6 +1312,7 @@ mod tests {
                 status: 200,
                 headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
                 request_cookie_report: None,
+                request_include_credentials: false,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
                 redirect_chain: Vec::new(),

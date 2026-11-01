@@ -29,6 +29,7 @@ fn request(reload: bool) -> StorageBucketCachedRequest {
 fn response(body: &[u8]) -> StorageBucketCachedResponse {
     StorageBucketCachedResponse {
         cors_exposed_header_names: None,
+        request_include_credentials: false,
         response_type: "default".to_owned(),
         url: URL.to_owned(),
         redirected: false,
@@ -50,13 +51,15 @@ fn cache_request_metadata_survives_profile_reopen_with_independent_contents() ->
         let identity = store.open_bucket(ORIGIN, "bucket")?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         for (index, request) in requests.iter().enumerate() {
+            let mut response = response(&[index as u8]);
+            response.request_include_credentials = index != 0;
             assert_eq!(
                 store.put_cache_entry_with_request_for_identity(
                     &identity,
                     "cache",
                     &format!("{URL}?index={index}"),
                     request.clone(),
-                    response(&[index as u8]),
+                    response,
                     request.metadata.estimated_size_bytes() + 1,
                     0,
                 )?,
@@ -75,6 +78,7 @@ fn cache_request_metadata_survives_profile_reopen_with_independent_contents() ->
         assert_eq!(entry.request_url, format!("{URL}?index={index}"));
         assert_eq!(entry.request, requests[index]);
         assert_eq!(entry.response.body, [index as u8]);
+        assert_eq!(entry.response.request_include_credentials, index != 0);
     }
     let mut local = entries[0].request.clone();
     local.metadata.mode = "cors".to_owned();
@@ -116,6 +120,10 @@ fn legacy_cache_request_metadata_defaults_without_losing_headers_or_body() -> Re
         assert_eq!(value["version"], 2);
         let record = value["entries"][0].as_object_mut().unwrap();
         assert!(record.remove("requestMetadata").is_some());
+        assert_eq!(
+            record.remove("requestIncludeCredentials"),
+            Some(false.into())
+        );
         fs::write(path, serde_json::to_vec(&value)?)?;
     }
     let expected = StorageBucketCachedRequest {
@@ -131,6 +139,7 @@ fn legacy_cache_request_metadata_defaults_without_losing_headers_or_body() -> Re
             .unwrap();
         assert_eq!(entries[0].request, expected);
         assert_eq!(entries[0].response.body, b"legacy");
+        assert!(entries[0].response.request_include_credentials);
         store.put_cache_entry_with_request_for_identity(
             &identity,
             "cache",
@@ -157,8 +166,10 @@ fn legacy_cache_request_metadata_defaults_without_losing_headers_or_body() -> Re
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].request, expected);
     assert_eq!(entries[0].response.body, b"legacy");
+    assert!(entries[0].response.request_include_credentials);
     assert_eq!(entries[1].request, request(false));
     assert_eq!(entries[1].response.body, b"new");
+    assert!(!entries[1].response.request_include_credentials);
     Ok(())
 }
 

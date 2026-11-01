@@ -34,6 +34,8 @@ pub(in crate::network_host) const REQUEST_IS_RELOAD_NAVIGATION_SLOT: &str =
 pub(in crate::network_host) const REQUEST_BODY_SLOT: &str = "__lmRequestBody";
 pub(in crate::network_host) const REQUEST_BODY_USED_SLOT: &str = "__lmRequestBodyUsed";
 pub(crate) const RESPONSE_TYPE_SLOT: &str = "__lmResponseType";
+pub(crate) const RESPONSE_REQUEST_INCLUDE_CREDENTIALS_SLOT: &str =
+    "__lmResponseRequestIncludeCredentials";
 pub(crate) const RESPONSE_URL_SLOT: &str = "__lmResponseUrl";
 pub(crate) const RESPONSE_INTERNAL_URL_SLOT: &str = "__lmResponseInternalUrl";
 pub(crate) const RESPONSE_INTERNAL_STATUS_SLOT: &str = "__lmResponseInternalStatus";
@@ -943,6 +945,7 @@ fn copy_response_surface_slots<'s>(
         RESPONSE_INTERNAL_STATUS_TEXT_SLOT,
         RESPONSE_REDIRECTED_SLOT,
         RESPONSE_TYPE_SLOT,
+        RESPONSE_REQUEST_INCLUDE_CREDENTIALS_SLOT,
     ] {
         if let Some(value) = response_slot_value(scope, from, slot) {
             set_response_slot_value(scope, to, slot, value);

@@ -270,6 +270,7 @@ impl PendingFetchAuthNavigation {
                         b"Basic realm=\"test\"".to_vec(),
                     )],
                     request_cookie_report: None,
+                    request_include_credentials: false,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
                     redirect_chain: Vec::new(),

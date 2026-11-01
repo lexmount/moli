@@ -1160,6 +1160,7 @@ fn navigation_preload_completion_keeps_response_started_preload_alive() {
         result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
             body_is_null: false,
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             status: 200,
             status_text: "OK".to_owned(),
             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
@@ -1459,6 +1460,7 @@ fn abort_controlled_fetch_drops_direct_worker_completion_and_ignores_late_comple
         result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
             body_is_null: false,
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             status: 200,
             status_text: "OK".to_owned(),
             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],

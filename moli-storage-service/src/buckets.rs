@@ -145,6 +145,7 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorageBucketCachedResponse {
     pub cors_exposed_header_names: Option<Vec<String>>,
+    pub request_include_credentials: bool,
     pub response_type: String,
     pub url: String,
     pub redirected: bool,
@@ -511,6 +512,8 @@ struct StorageBucketCacheJsonRecord {
 struct StorageBucketCacheJsonEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cors_exposed_header_names: Option<Vec<String>>,
+    #[serde(default = "default_cached_response_credentials")]
+    request_include_credentials: bool,
     usage_bytes: u64,
     #[serde(
         default = "default_cache_request_method",
@@ -556,6 +559,12 @@ fn is_zero(value: &u64) -> bool {
 
 fn default_cached_response_type() -> String {
     "default".to_owned()
+}
+
+// Old entries did not record the flag. Never grant the credentialless CORP
+// exemption without evidence that the original response omitted credentials.
+fn default_cached_response_credentials() -> bool {
+    true
 }
 
 fn is_default_cached_response_type(value: &String) -> bool {
@@ -2401,6 +2410,7 @@ fn load_storage_bucket_cache_file(path: &Path) -> Result<StorageBucketCacheFile>
                     },
                     response: StorageBucketCachedResponse {
                         cors_exposed_header_names: entry.cors_exposed_header_names,
+                        request_include_credentials: entry.request_include_credentials,
                         response_type: entry.response_type,
                         url: entry.url,
                         redirected: entry.redirected,
@@ -2440,6 +2450,7 @@ fn save_storage_bucket_cache_file(
                     request_url: entry.request_url.clone(),
                     entry: StorageBucketCacheJsonEntry {
                         cors_exposed_header_names: entry.response.cors_exposed_header_names.clone(),
+                        request_include_credentials: entry.response.request_include_credentials,
                         usage_bytes: entry.usage_bytes,
                         request_method: entry.request.method.clone(),
                         request_headers: entry.request.headers.clone(),
@@ -3174,6 +3185,7 @@ mod tests {
                 "request",
                 StorageBucketCachedResponse {
                     cors_exposed_header_names: None,
+                    request_include_credentials: false,
                     response_type: "default".to_owned(),
                     url: "https://quota.test/resource".to_owned(),
                     redirected: false,
@@ -3252,6 +3264,7 @@ mod tests {
                 "request",
                 StorageBucketCachedResponse {
                     cors_exposed_header_names: None,
+                    request_include_credentials: false,
                     response_type: "default".to_owned(),
                     url: "https://default-quota.test/resource".to_owned(),
                     redirected: false,
@@ -3488,6 +3501,7 @@ mod tests {
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let response = StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3534,6 +3548,7 @@ mod tests {
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let first_response = StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3591,6 +3606,7 @@ mod tests {
 
         let replacement_response = StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3646,6 +3662,7 @@ mod tests {
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let response = |body: &str, headers: Vec<(String, Vec<u8>)>| StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3740,6 +3757,7 @@ mod tests {
             .expect("bucket should remain current");
         let response = StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3805,6 +3823,7 @@ mod tests {
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let original = StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3815,6 +3834,7 @@ mod tests {
         };
         let oversized = StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3925,6 +3945,7 @@ mod tests {
                     "/entry",
                     StorageBucketCachedResponse {
                         cors_exposed_header_names: None,
+                        request_include_credentials: false,
                         response_type: "default".to_owned(),
                         url: "https://a.test/entry".to_owned(),
                         redirected: false,
@@ -4164,6 +4185,7 @@ mod tests {
                         "/cached.txt",
                         StorageBucketCachedResponse {
                             cors_exposed_header_names: None,
+                            request_include_credentials: false,
                             response_type: "default".to_owned(),
                             url: String::new(),
                             redirected: false,
@@ -4258,6 +4280,7 @@ mod tests {
             let cache_root = temp.cache_root();
             let mut response = StorageBucketCachedResponse {
                 cors_exposed_header_names: cors.then(|| vec!["x-cache".to_owned()]),
+                request_include_credentials: false,
                 response_type: if cors { "cors" } else { "default" }.to_owned(),
                 url: if cors {
                     "https://remote.test/cached.txt"
@@ -4354,6 +4377,7 @@ mod tests {
     fn json_storage_bucket_cache_crash_points_recover_one_committed_root() -> Result<()> {
         let old_response = StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4364,6 +4388,7 @@ mod tests {
         };
         let new_response = StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4449,6 +4474,7 @@ mod tests {
         let cache_root = temp.cache_root();
         let response = StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4502,6 +4528,7 @@ mod tests {
         let cache_root = temp.cache_root();
         let response = StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4558,6 +4585,7 @@ mod tests {
         let storage_service = StorageService::on_disk(temp.opfs_root())?;
         let response = StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4918,6 +4946,7 @@ mod tests {
         let bucket_id = StorageBucketId::new(17).unwrap();
         let response = StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: "https://a.test/cached".to_owned(),
             redirected: false,

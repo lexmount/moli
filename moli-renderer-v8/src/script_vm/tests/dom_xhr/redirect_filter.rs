@@ -57,6 +57,7 @@ async fn redirect_filter_completion_keeps_status_text_and_explicit_filters() {
                                     status_text: Some("Original Text".to_owned()),
                                     headers: vec![("X-Visible".to_owned(), b"present".to_vec())],
                                     request_cookie_report: None,
+                                    request_include_credentials: false,
                                     cookie_set_reports: Vec::new(),
                                     redirected: false,
                                     redirect_chain: Vec::new(),

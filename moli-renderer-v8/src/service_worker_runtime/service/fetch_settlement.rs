@@ -116,6 +116,7 @@ fn service_worker_fetch_stream_response_head(
         status: response_head.status,
         headers: response_head.headers.clone(),
         request_cookie_report: job.request_cookie_report.clone(),
+        request_include_credentials: response_head.request_include_credentials,
         cookie_set_reports: Vec::new(),
         redirected: response_head.redirected || !job.request.redirect_chain().is_empty(),
         redirect_chain: job.request.redirect_chain().to_vec(),
@@ -643,6 +644,7 @@ impl ServiceWorkerRuntimeService {
                 status: response.status,
                 headers: response.headers,
                 request_cookie_report: job.request_cookie_report,
+                request_include_credentials: response.request_include_credentials,
                 cookie_set_reports: Vec::new(),
                 redirected: response.redirected || !job.request.redirect_chain().is_empty(),
                 redirect_chain: job.request.redirect_chain().to_vec(),
@@ -1334,6 +1336,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1402,6 +1405,7 @@ mod tests {
                     result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                         body_is_null,
                         cors_exposed_header_names: None,
+                        request_include_credentials: false,
                         final_url: Some(final_url),
                         response_type: "default".to_owned(),
                         redirected: false,
@@ -1448,6 +1452,7 @@ mod tests {
             body_source_id: 77,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1469,6 +1474,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(final_url),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1560,6 +1566,7 @@ mod tests {
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1600,6 +1607,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(final_url),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1648,6 +1656,7 @@ mod tests {
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(final_url),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1727,6 +1736,7 @@ mod tests {
                     result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                         body_is_null: false,
                         cors_exposed_header_names: None,
+                        request_include_credentials: false,
                         final_url: None,
                         response_type: "default".to_owned(),
                         redirected: false,
@@ -1793,6 +1803,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: None,
                 response_type: "opaque".to_owned(),
                 redirected: false,
@@ -1840,6 +1851,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: None,
                 response_type: "opaqueredirect".to_owned(),
                 redirected: false,
@@ -1886,6 +1898,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
                 redirected: true,
@@ -1931,6 +1944,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://example.test/app/manual-final.txt")),
                 response_type: "default".to_owned(),
                 redirected: true,
@@ -1981,6 +1995,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: None,
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2106,6 +2121,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: None,
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2169,6 +2185,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: None,
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2253,6 +2270,7 @@ mod tests {
         let redirect = || ServiceWorkerFetchResponse {
             body_is_null: false,
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             final_url: None,
             response_type: "default".to_owned(),
             redirected: false,
@@ -2339,6 +2357,7 @@ mod tests {
         let response = ServiceWorkerFetchResponse {
             body_is_null: false,
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             final_url: Some(request_url.clone()),
             response_type: "default".to_owned(),
             redirected: false,
@@ -2438,6 +2457,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: None,
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2487,6 +2507,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(response_url.clone()),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2556,6 +2577,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: None,
                 response_type: "error".to_owned(),
                 redirected: false,
@@ -2605,6 +2627,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cross-origin.test/data.txt")),
                 response_type: "cors".to_owned(),
                 redirected: false,
@@ -2653,6 +2676,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: None,
                 response_type: "opaque".to_owned(),
                 redirected: false,
@@ -2717,6 +2741,7 @@ mod tests {
                 result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                     body_is_null: false,
                     cors_exposed_header_names: None,
+                    request_include_credentials: false,
                     final_url: None,
                     response_type: "opaque".to_owned(),
                     redirected: false,
@@ -2766,6 +2791,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/image.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2821,6 +2847,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/image.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2886,6 +2913,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2947,6 +2975,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3007,6 +3036,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3067,6 +3097,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3128,6 +3159,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3183,6 +3215,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3243,6 +3276,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3302,6 +3336,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3355,6 +3390,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3415,6 +3451,7 @@ mod tests {
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3484,6 +3521,7 @@ mod tests {
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3550,6 +3588,7 @@ mod tests {
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3603,6 +3642,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: None,
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3653,6 +3693,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/data.json")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3702,6 +3743,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 body_is_null: false,
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: None,
                 response_type: "opaqueredirect".to_owned(),
                 redirected: false,

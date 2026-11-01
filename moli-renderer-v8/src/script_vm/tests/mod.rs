@@ -399,6 +399,7 @@ fn register_pending_window_fetch_for_test(
                             status: 200,
                             headers: Vec::new(),
                             request_cookie_report: None,
+                            request_include_credentials: false,
                             cookie_set_reports: Vec::new(),
                             redirected: false,
                             redirect_chain: Vec::new(),
@@ -2310,6 +2311,7 @@ mod body_window_handler_receivers;
 mod browser_api;
 mod cache_dictionary_inheritance;
 mod cache_interfaces;
+mod cache_response_credentials;
 
 mod dom_token_list_native_receivers;
 

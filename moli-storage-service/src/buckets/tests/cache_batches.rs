@@ -20,6 +20,7 @@ fn operation(
         },
         response: StorageBucketCachedResponse {
             cors_exposed_header_names: None,
+            request_include_credentials: false,
             response_type: "default".to_owned(),
             url: url.to_owned(),
             redirected: false,

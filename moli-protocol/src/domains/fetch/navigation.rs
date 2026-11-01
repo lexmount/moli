@@ -224,6 +224,7 @@ pub(super) fn pause_data_url_response_stage_navigation_into_buffer(
                     .expect("serialized MIME types contain ByteStrings"),
             )],
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: false,
             redirect_chain: Vec::new(),

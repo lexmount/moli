@@ -319,6 +319,7 @@ async fn child_csp_report_keeps_exact_violation_document_without_v8_after_naviga
             status: 204,
             headers: Vec::new(),
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: false,
             redirect_chain: Vec::new(),

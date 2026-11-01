@@ -82,6 +82,8 @@ struct FetchResponseHeadDeclaration {
     redirected: bool,
     #[webapi(slot = RESPONSE_TYPE_SLOT)]
     r#type: &'static str,
+    #[webapi(slot = RESPONSE_REQUEST_INCLUDE_CREDENTIALS_SLOT)]
+    request_include_credentials: bool,
 }
 
 #[derive(WebApiObject)]
@@ -428,6 +430,7 @@ fn build_fetch_response_object_head<'s>(
             .to_owned(),
         filtered_response_exposes_redirected(filter) && head.redirected,
         response_type,
+        head.request_include_credentials,
     )
     .bind(scope)
     .expect("Fetch Response head declaration should bind");
@@ -544,9 +547,10 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
     } else {
         String::new()
     };
-    let obj = FetchResponseHeadDeclaration::new(0.0, false, visible_url, false, response_type)
-        .bind(scope)
-        .ok()?;
+    let obj =
+        FetchResponseHeadDeclaration::new(0.0, false, visible_url, false, response_type, false)
+            .bind(scope)
+            .ok()?;
     if !internal_url.is_empty() {
         FetchResponseInternalUrlDeclaration::new(internal_url.to_owned())
             .initialize(scope, obj)
@@ -569,6 +573,7 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
 #[derive(Debug, Clone)]
 pub(crate) struct MaterializedResponseObject {
     pub(crate) cors_exposed_header_names: Option<Vec<String>>,
+    pub(crate) request_include_credentials: bool,
     pub(crate) final_url: Option<url::Url>,
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
@@ -581,6 +586,7 @@ pub(crate) struct MaterializedResponseObject {
 #[derive(Debug, Clone)]
 pub(crate) struct MaterializedResponseHead {
     pub(crate) cors_exposed_header_names: Option<Vec<String>>,
+    pub(crate) request_include_credentials: bool,
     pub(crate) final_url: Option<url::Url>,
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
@@ -593,6 +599,7 @@ impl MaterializedResponseHead {
     pub(crate) fn with_body(self, body: Vec<u8>) -> MaterializedResponseObject {
         MaterializedResponseObject {
             cors_exposed_header_names: self.cors_exposed_header_names,
+            request_include_credentials: self.request_include_credentials,
             final_url: self.final_url,
             response_type: self.response_type,
             redirected: self.redirected,
@@ -735,6 +742,11 @@ fn materialize_response_head_for_purpose<'s>(
         MaterializedResponseHead {
             cors_exposed_header_names: (response_type == "cors")
                 .then(|| headers.iter().map(|(name, _)| name.clone()).collect()),
+            request_include_credentials: response_slot_bool(
+                scope,
+                response,
+                RESPONSE_REQUEST_INCLUDE_CREDENTIALS_SLOT,
+            ),
             final_url,
             response_type,
             redirected: response_slot_bool(scope, response, RESPONSE_REDIRECTED_SLOT),

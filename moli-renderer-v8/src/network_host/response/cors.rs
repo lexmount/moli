@@ -585,6 +585,7 @@ mod tests {
             status_text: None,
             headers,
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: false,
             redirect_chain: Vec::new(),
@@ -604,6 +605,7 @@ mod tests {
                 status_text: None,
                 headers: vec![("Access-Control-Allow-Origin".to_owned(), b"*".to_vec())],
                 request_cookie_report: None,
+                request_include_credentials: false,
                 cookie_set_reports: Vec::new(),
                 redirected: true,
                 redirect_chain: vec![moli_fetch::RedirectInfo {

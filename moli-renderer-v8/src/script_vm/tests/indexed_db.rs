@@ -3281,6 +3281,7 @@ opening.onsuccess = () => { globalThis.db = opening.result; dbReady = true; };
                         status_text: "OK".into(),
                         headers: Vec::new(),
                         cors_exposed_header_names: None,
+                        request_include_credentials: false,
                         body: vec![0],
                     },
                     cache_usage,
@@ -3381,6 +3382,7 @@ fn default_bucket_quota_is_shared_by_cache_indexed_db_and_opfs() {
                     "/reserved",
                     moli_storage_service::StorageBucketCachedResponse {
                         cors_exposed_header_names: None,
+                        request_include_credentials: false,
                         response_type: "default".to_owned(),
                         url: format!("{page_url}reserved"),
                         redirected: false,

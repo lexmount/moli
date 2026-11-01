@@ -356,6 +356,7 @@ fn external_script_redirect_final_url_obeys_script_src_csp() {
             status: 200,
             headers: Vec::new(),
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: true,
             redirect_chain: Vec::new(),

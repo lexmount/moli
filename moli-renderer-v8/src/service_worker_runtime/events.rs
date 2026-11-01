@@ -637,6 +637,7 @@ pub(crate) struct ServiceWorkerFetchEvent {
 #[derive(Clone, Debug)]
 pub(crate) struct ServiceWorkerFetchResponse {
     pub(crate) cors_exposed_header_names: Option<Vec<String>>,
+    pub(crate) request_include_credentials: bool,
     pub(crate) final_url: Option<Url>,
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
@@ -705,6 +706,7 @@ pub(crate) struct ServiceWorkerNavigationPreloadFailure {
 #[derive(Clone, Debug)]
 pub(crate) struct MaterializedServiceWorkerFetchResponseHead {
     pub(crate) cors_exposed_header_names: Option<Vec<String>>,
+    pub(crate) request_include_credentials: bool,
     pub(crate) final_url: Option<Url>,
     pub(crate) response_type: String,
     pub(crate) redirected: bool,

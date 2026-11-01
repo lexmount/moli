@@ -14,6 +14,7 @@ mod redirect_auth;
 mod redirect_cookie_context;
 mod referrer_redirects;
 mod request_security;
+mod response_credentials;
 mod response_progress;
 mod response_timing;
 mod support;
@@ -83,6 +84,7 @@ fn sample_response_head() -> ResponseHead {
         status: 203,
         headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
         request_cookie_report: None,
+        request_include_credentials: false,
         cookie_set_reports: Vec::new(),
         redirected: false,
         redirect_chain: Vec::new(),

@@ -167,6 +167,7 @@ impl CdpConnection {
             status: response_status,
             headers: response_headers,
             request_cookie_report: initial_request_cookie_report,
+            request_include_credentials: false,
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: false,

@@ -2836,6 +2836,7 @@ fn service_worker_fetch_response_from_materialized(
     ServiceWorkerFetchResponse {
         body_is_null,
         cors_exposed_header_names: response.cors_exposed_header_names,
+        request_include_credentials: response.request_include_credentials,
         final_url: response.final_url,
         response_type: response.response_type,
         redirected: response.redirected,
@@ -2851,6 +2852,7 @@ fn service_worker_fetch_response_head_from_materialized(
 ) -> MaterializedServiceWorkerFetchResponseHead {
     MaterializedServiceWorkerFetchResponseHead {
         cors_exposed_header_names: head.cors_exposed_header_names.clone(),
+        request_include_credentials: head.request_include_credentials,
         status_text: head.status_text.clone(),
         final_url: head.final_url.clone(),
         response_type: head.response_type.clone(),
@@ -3052,6 +3054,7 @@ fn start_service_worker_navigation_preload_response_in_context(
         status: started.response_head.status,
         headers: started.response_head.headers.clone(),
         request_cookie_report: None,
+        request_include_credentials: false,
         cookie_set_reports: Vec::new(),
         redirected: started.response_head.redirected,
         redirect_chain: Vec::new(),

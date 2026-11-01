@@ -819,6 +819,7 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(
                     url::Url::parse("https://example.test/app/navigation.html")
                         .expect("navigation preload response URL"),
@@ -936,6 +937,7 @@ async fn service_worker_fetch_event_preload_response_opaqueredirect_exposes_requ
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(request_url),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1109,6 +1111,7 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(
                     url::Url::parse("https://example.test/app/navigation.html")
                         .expect("navigation preload response URL"),
@@ -1225,6 +1228,7 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 final_url: Some(
                     url::Url::parse("https://example.test/app/navigation.html")
                         .expect("navigation preload response URL"),

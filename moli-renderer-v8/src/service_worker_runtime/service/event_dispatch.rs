@@ -64,6 +64,7 @@ fn navigation_preload_response_head(
 ) -> MaterializedServiceWorkerFetchResponseHead {
     MaterializedServiceWorkerFetchResponseHead {
         cors_exposed_header_names: None,
+        request_include_credentials: false,
         status_text: head.status_text().to_owned(),
         final_url: Some(head.final_url),
         response_type: "default".to_owned(),

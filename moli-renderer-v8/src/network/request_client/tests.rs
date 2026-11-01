@@ -332,6 +332,7 @@ async fn memory_cache_tee_drop_after_body_eof_cancels_pending_completion_and_rel
             status: 200,
             headers: vec![("cache-control".to_owned(), b"max-age=60".to_vec())],
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: false,
             redirect_chain: Vec::new(),
@@ -1640,6 +1641,7 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
             status: 200,
             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: true,
             redirect_chain: vec![RedirectInfo {

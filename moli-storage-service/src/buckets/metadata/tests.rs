@@ -130,6 +130,7 @@ fn metadata_candidates_preserve_cache_payloads_and_handle_identity_without_cloni
             request: StorageBucketCachedRequest::default(),
             response: StorageBucketCachedResponse {
                 cors_exposed_header_names: None,
+                request_include_credentials: false,
                 response_type: "default".into(),
                 url: "https://a.test/resource".into(),
                 redirected: false,

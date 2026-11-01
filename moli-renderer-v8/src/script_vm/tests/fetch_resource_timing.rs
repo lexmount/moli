@@ -342,6 +342,7 @@ fn xhr_resource_timing_reads_internal_headers_before_cors_exposure() {
                 status_text: None,
                 headers,
                 request_cookie_report: None,
+                request_include_credentials: false,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
                 redirect_chain: Vec::new(),
