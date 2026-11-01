@@ -189,6 +189,11 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
             .and_then(|request| request.with_fetch_referrer(&request_metadata.referrer))
             {
                 Ok(request) => {
+                    let cache_mode = request_metadata
+                        .cache
+                        .parse::<moli_fetch::RequestCacheMode>()
+                        .unwrap_or_default()
+                        .for_fetch_headers(&request.request_headers);
                     let mut request = request
                         .with_redirect_headers(redirect_headers)
                         .with_redirect_chain(redirect_chain)
@@ -196,7 +201,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                         .with_request_mode(request_mode)
                         .with_credentials_mode(credentials_mode)
                         .with_redirect_mode(redirect_mode)
-                        .with_cache_mode(worker_fetch_cache_mode(&request_metadata.cache))
+                        .with_cache_mode(cache_mode)
                         .with_fetch_priority_hint(priority)
                         .with_network_partition_key(network_partition_key.clone())
                         .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
@@ -337,13 +342,6 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
             },
         )));
     });
-}
-
-fn worker_fetch_cache_mode(cache: &str) -> moli_fetch::RequestCacheMode {
-    match cache {
-        "no-cache" | "no-store" | "reload" => moli_fetch::RequestCacheMode::Validate,
-        _ => moli_fetch::RequestCacheMode::Default,
-    }
 }
 
 fn worker_fetch_script_metadata(
