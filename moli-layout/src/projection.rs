@@ -778,12 +778,8 @@ where
                         self.assign_fragment_paint_metadata(fragment, self.background_clips[index]);
                     }
                 }
-                PaintOrderEvent::BoxContents(id) => {
-                    let index = id.index();
-                    for fragment in self.owner_paint_fragments[index].clone() {
-                        self.assign_fragment_paint_metadata(fragment, self.content_clips[index]);
-                    }
-                }
+                PaintOrderEvent::BoxContents(id) => self.assign_owner_paint_metadata(id, false),
+                PaintOrderEvent::BoxText(id) => self.assign_owner_paint_metadata(id, true),
                 PaintOrderEvent::BoxOutline(id) => {
                     let index = id.index();
                     let extent = &self.scroll_extents[index];
@@ -798,6 +794,19 @@ where
                 | PaintOrderEvent::PushStackingContext(_)
                 | PaintOrderEvent::TableCollapsedBorders(_)
                 | PaintOrderEvent::PopStackingContext(_) => {}
+            }
+        }
+    }
+
+    fn assign_owner_paint_metadata(&mut self, id: LayoutBoxId, text: bool) {
+        let index = id.index();
+        for fragment in self.owner_paint_fragments[index].clone() {
+            let is_text = matches!(
+                self.fragments[fragment.index()].kind,
+                LayoutFragmentKind::Text { .. }
+            );
+            if is_text == text {
+                self.assign_fragment_paint_metadata(fragment, self.content_clips[index]);
             }
         }
     }
