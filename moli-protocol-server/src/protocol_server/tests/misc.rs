@@ -105,6 +105,32 @@ async fn discovery_endpoints_accept_trailing_slashes() {
     assert_eq!(protocol["version"]["major"], json!("1"));
     assert_eq!(protocol["version"]["minor"], json!("3"));
     assert!(protocol["domains"].is_array());
+    let domains: Vec<&str> = protocol["domains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|domain| domain["domain"].as_str())
+        .collect();
+    for implemented in ["Page", "DOM", "Network", "Target", "Runtime", "Input"] {
+        assert!(
+            domains.contains(&implemented),
+            "/json/protocol must advertise {implemented}: {domains:?}"
+        );
+    }
+    let page = protocol["domains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|domain| domain["domain"] == json!("Page"))
+        .unwrap();
+    assert!(
+        page["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| command["name"] == json!("navigate")),
+        "Page.navigate must be advertised"
+    );
 
     assert_eq!(
         request_status("/json/new").await,
