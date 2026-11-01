@@ -785,6 +785,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
                 .then_some(inherited.priority)
         });
         let metadata = ServiceWorkerFetchRequestMetadata {
+            mixed_content_policy: Default::default(),
             cache: init.cache.unwrap_or(inherited.cache),
             referrer: inherited.referrer,
             referrer_policy: init.referrer_policy.unwrap_or(inherited.referrer_policy),
@@ -835,6 +836,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             .unwrap_or(RequestCredentialsMode::SameOrigin);
         let redirect_mode = init.redirect_mode.unwrap_or(RequestRedirectMode::Follow);
         let metadata = ServiceWorkerFetchRequestMetadata {
+            mixed_content_policy: Default::default(),
             cache: init.cache.unwrap_or_else(|| "default".to_owned()),
             referrer: "about:client".to_owned(),
             referrer_policy: init.referrer_policy.unwrap_or_default(),
@@ -995,9 +997,10 @@ pub(super) fn start_worker_resource_fetch<'s>(
         credentials_mode,
         redirect_mode,
         priority,
-        metadata: request_metadata,
+        metadata: mut request_metadata,
         signal,
     } = input;
+    request_metadata.mixed_content_policy = state.borrow().mixed_content_policy();
     let blob_environment = BlobUrlFetchEnvironment::for_worker(scope);
     let blob_url_entry =
         blob_url_entry.map(|entry| entry.for_environment(blob_environment.as_ref()));
@@ -1063,6 +1066,20 @@ pub(super) fn start_worker_resource_fetch<'s>(
 
     if let Err(error) = moli_url_policy::route_fetch_url(&resolved_url) {
         let message = error.to_string();
+        record_worker_subresource_failure(
+            &state.borrow(),
+            document_url,
+            resolved_url,
+            method,
+            headers,
+            request_body_text(&body),
+            kind.resource_type(),
+            message.clone(),
+        );
+        return Some(make_rejected_promise(scope, &message));
+    }
+
+    if let Err(message) = request_metadata.mixed_content_policy.check(&resolved_url) {
         record_worker_subresource_failure(
             &state.borrow(),
             document_url,
@@ -1153,6 +1170,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
         let metadata =
             worker_fetch_script_metadata(state.borrow().referrer_policy.clone(), &request_metadata);
         let request = Request::new_browser(&method, resolved_url, body, headers, request_origin)
+            .with_mixed_content_policy(request_metadata.mixed_content_policy)
             .with_initiator_url(&document_url)
             .with_request_mode(request_mode)
             .with_credentials_mode(credentials_mode)

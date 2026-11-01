@@ -665,6 +665,7 @@ async fn run_cors_preflight_if_needed(
     preflight_request_headers: &[(String, String)],
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<(), String> {
+    request.check_mixed_content()?;
     if loader.web_security_disabled() {
         return Ok(());
     }

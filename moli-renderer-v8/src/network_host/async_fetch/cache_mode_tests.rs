@@ -243,3 +243,81 @@ async fn cache_modes_cached_redirects_cannot_bypass_same_origin_policy() -> Resu
     assert!(!error.to_string().contains("ERR_CACHE_MISS"), "{error:#}");
     Ok(())
 }
+
+#[tokio::test]
+async fn mixed_content_blocks_before_preflight_and_cached_response() -> Result<()> {
+    let allow = [
+        ("Access-Control-Allow-Origin", "*"),
+        ("Access-Control-Allow-Headers", "x-probe"),
+        ("Access-Control-Max-Age", "600"),
+        ("Cache-Control", "max-age=600"),
+    ];
+    let (loopback, server) =
+        server(vec![reply(200, &allow, b""), reply(200, &allow, b"cached")]).await?;
+    let mut url = loopback.clone();
+    url.set_host(Some("mixed-content.test"))?;
+    let mut config = FetchConfig::default();
+    config.set_http_no_proxy(Some("*".to_owned()));
+    config.set_http_host_resolve(vec![format!(
+        "mixed-content.test:{}:127.0.0.1",
+        url.port().unwrap()
+    )]);
+    let owner = crate::network::ResourceRequestClient::new(&config)?;
+    let loader = owner.handle();
+    let origin = url::Url::parse("https://client.test/")?;
+    let headers = vec![("X-Probe".to_owned(), "unsafe".to_owned())];
+    let seed = Request::new_browser("GET", url, None, headers.clone(), (&origin).into())
+        .with_initiator_url(&origin)
+        .with_request_mode(RequestMode::Cors)
+        .with_credentials_mode(RequestCredentialsMode::Omit)
+        .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+    let warm = fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
+        &loader,
+        seed.clone(),
+        None,
+        headers.clone(),
+        None,
+        None,
+    )
+    .await
+    .map_err(anyhow::Error::msg)?
+    .into_response()
+    .into_materialized_raw_response()
+    .await?;
+    assert_eq!(warm.body_bytes(), b"cached");
+    let requests = server.await??;
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with("OPTIONS "));
+    assert!(requests[1].starts_with("GET "));
+    let blocked = seed.with_mixed_content_policy(moli_fetch::RequestMixedContentPolicy::Block);
+    for cache in [RequestCacheMode::Default, RequestCacheMode::ForceCache] {
+        let error = fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
+            &loader,
+            blocked.clone().with_cache_mode(cache),
+            None,
+            headers.clone(),
+            None,
+            None,
+        )
+        .await
+        .expect_err("mixed content must not reuse the warmed preflight or response");
+        assert!(error.contains("Mixed content"), "{error}");
+    }
+    let error = loader.fetch_raw(blocked).await.unwrap_err();
+    assert!(format!("{error:#}").contains("Mixed content"), "{error:#}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn mixed_content_allows_loopback_but_blocks_remote_redirect_before_connect() -> Result<()> {
+    let target = "http://mixed-content.test:81/blocked";
+    let (url, server) = server(vec![reply(302, &[("Location", target)], b"")]).await?;
+    let owner = client()?;
+    let loader = owner.handle();
+    let blocked = request(&url, RequestMode::Cors)
+        .with_mixed_content_policy(moli_fetch::RequestMixedContentPolicy::Block);
+    let error = load(&loader, blocked).await.unwrap_err();
+    assert!(format!("{error:#}").contains("Mixed content"), "{error:#}");
+    assert_eq!(server.await??.len(), 1);
+    Ok(())
+}

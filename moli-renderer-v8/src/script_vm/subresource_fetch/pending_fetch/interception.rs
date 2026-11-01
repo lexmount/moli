@@ -1131,6 +1131,10 @@ impl ScriptVm {
         mut state: RunningSubresourceFetchState,
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
     ) {
+        if state.pending.info.resource_type == SubresourceResourceType::Fetch {
+            request = request
+                .with_mixed_content_policy(state.pending.policy_context.mixed_content_policy());
+        }
         let intercepted_window = state
             .pending
             .continuation
