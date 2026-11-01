@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::{
     dom::native::{DomHost, NativeNodeId, NodeType},
     native_bridge::node_runtime_and_handle_from_object_or_detached,
+    web_api_interfaces, webidl,
 };
 
 use super::util::{throw_type_error, v8_string, v8str};
@@ -30,12 +31,22 @@ pub(super) fn xml_serializer_constructor_callback(
     rv.set(args.this().into());
 }
 
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "XMLSerializer.serializeToString")]
+struct SerializeToStringArgs<'s> {
+    #[webidl(required, interface = web_api_interfaces::Node)]
+    root: v8::Local<'s, v8::Object>,
+}
+
 pub(super) fn xml_serializer_serialize_to_string_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = args.get(0);
+    let Some(parsed) = webidl::parse_args::<SerializeToStringArgs>(scope, &args) else {
+        return;
+    };
+    let value = parsed.root.into();
     let serialized =
         serialize_native_value(scope, value).unwrap_or_else(|| serialize_value(scope, value));
     if let Some(serialized) = v8_string(scope, &serialized) {
