@@ -505,10 +505,24 @@ fn stylesheet_type_is_supported(value: Option<&str>) -> bool {
 }
 
 fn media_blocks_scripts(media: Option<&str>) -> bool {
-    let Some(media) = media.map(str::trim) else {
+    let Some(media) = media else {
         return true;
     };
-    media.is_empty() || media.eq_ignore_ascii_case("all") || media.eq_ignore_ascii_case("screen")
+    // Keep this device-independent gate limited to unconditional screen/all queries.
+    // CSS tokenization keeps commas inside strings and blocks out of the list.
+    let mut parser = cssparser::Parser::new(media);
+    if parser.is_exhausted() {
+        return true;
+    }
+    parser
+        .parse_comma_separated_ignoring_errors(|query| {
+            let media_type = query.expect_ident()?;
+            Ok::<_, cssparser::ParseError<()>>(
+                media_type.eq_ignore_ascii_case("all") || media_type.eq_ignore_ascii_case("screen"),
+            )
+        })
+        .into_iter()
+        .any(|matches| matches)
 }
 
 pub fn collect_blocking_stylesheet_nodes_before(
@@ -762,6 +776,42 @@ mod tests {
         document_owned_blocking_stylesheet_candidate_for_node, extract_css_import_urls,
         stylesheet_link_disposition, stylesheet_preload_link_request,
     };
+
+    #[test]
+    fn stylesheet_media_lists_recognize_screen_and_all_members() {
+        let document_url = url::Url::parse("https://example.com/page.html").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(document_url));
+        let link = host.create_element("link");
+        assert!(host.set_attribute(link, "rel", "stylesheet"));
+        assert!(host.set_attribute(link, "href", "/style.css"));
+        assert!(host.append_child(host.document_handle(), link));
+        let node_id = moli_dom::NodeId::new(link.index());
+
+        for (media, blocking) in [
+            ("", true),
+            ("screen", true),
+            ("screen,print", true),
+            ("print, screen", true),
+            (" PRINT , ScReEn ", true),
+            ("speech, ALL", true),
+            ("print, /* screen media */ screen", true),
+            (r"\73 creen,print", true),
+            ("/* an empty media list */", true),
+            ("print", false),
+            ("print, speech", false),
+            ("not screen, print", false),
+            ("screen and (color), print", false),
+            ("not all, screen", true),
+            (",print", false),
+            (r#""print,screen,speech""#, false),
+            ("(unknown: print,screen,speech)", false),
+        ] {
+            assert!(host.set_attribute(link, "media", media));
+            let disposition = stylesheet_link_disposition(&host, node_id)
+                .expect("the connected stylesheet should retain its load operation");
+            assert_eq!(disposition.is_blocking(), blocking, "media={media:?}");
+        }
+    }
 
     #[test]
     fn parser_created_style_imports_join_against_document_url() {

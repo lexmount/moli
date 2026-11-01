@@ -3584,6 +3584,7 @@ version = "0.1.0"
 name = "moli-stylesheet-blocking"
 version = "0.1.0"
 dependencies = [
+ "cssparser",
  "futures-util",
  "moli-dom",
  "moli-fetch",
