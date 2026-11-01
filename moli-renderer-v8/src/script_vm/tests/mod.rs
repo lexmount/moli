@@ -1,5 +1,6 @@
 mod baseline_drag_views;
 mod beforeinput_target_validation;
+mod child_coep_isolation;
 
 mod child_document_web_fonts;
 mod credential_container;

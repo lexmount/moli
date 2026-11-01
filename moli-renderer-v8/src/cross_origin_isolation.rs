@@ -26,6 +26,16 @@ pub(crate) fn response_headers_enable_cross_origin_isolation(
     if document_isolation_policy_from_headers(headers).enables_cross_origin_isolation() {
         return true;
     }
+    response_headers_enable_coop_coep_isolation(final_url, headers)
+}
+
+pub(crate) fn response_headers_enable_coop_coep_isolation(
+    final_url: &Url,
+    headers: &[(String, Vec<u8>)],
+) -> bool {
+    if !moli_url::is_potentially_trustworthy_url(final_url) {
+        return false;
+    }
     let coop = response_header_policy_value(headers, "cross-origin-opener-policy");
     matches!(coop.as_deref(), Some("same-origin"))
         && cross_origin_embedder_policy_from_headers(headers).enables_cross_origin_isolation()
