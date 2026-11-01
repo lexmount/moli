@@ -155,6 +155,7 @@ impl PageScriptHost {
             crate::network::context::DocumentResourceAuthoritySource::Inherited(
                 init.resource_authority,
             ),
+            subresource_policy_context,
         );
         self.child_browsing_contexts
             .get_mut(&handle)

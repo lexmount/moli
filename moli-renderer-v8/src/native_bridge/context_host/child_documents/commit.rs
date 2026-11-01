@@ -445,7 +445,12 @@ impl PageScriptHost {
                     .expect("synthetic child Document must capture its parent authority"),
             ),
         };
-        self.register_committed_document_resource_loader(
+        let client_policy = self
+            .frame_owner_current_child_snapshot(handle)
+            .expect("committed child Document must retain its policy snapshot")
+            .settings
+            .subresource_policy_context;
+        let document_loader = self.register_committed_document_resource_loader(
             crate::network::context::DocumentFetchContext::new(
                 crate::native_bridge::WindowDocumentOwner::Frame(current_owner),
                 self.document_url_for_handle(document_handle),
@@ -453,6 +458,7 @@ impl PageScriptHost {
                 resource_context_origin,
             ),
             resource_authority,
+            client_policy,
         );
         if matches!(
             owner_transition.local_window_owner_transition(),
