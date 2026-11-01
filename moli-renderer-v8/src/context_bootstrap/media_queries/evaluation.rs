@@ -97,7 +97,7 @@ fn media_query_list_attribute_getter_callback<'s>(
         let media = media_query_list_media_slot(scope, args.this()).unwrap_or_default();
         let matches = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             let host = unsafe { &*host_ptr };
-            evaluate_match_media_query_list_with_viewport(
+            evaluate_media_query_list(
                 &media,
                 Some(host.emulated_media()),
                 current_window_style_viewport(scope, host),
@@ -166,11 +166,7 @@ pub(crate) fn window_match_media_callback<'s>(
         } else {
             (None, match_media_style_viewport(None))
         };
-    let matches = evaluate_match_media_query_list_with_viewport(
-        &serialized_query,
-        emulated_media.as_ref(),
-        viewport,
-    );
+    let matches = evaluate_media_query_list(&serialized_query, emulated_media.as_ref(), viewport);
     let mql = MediaQueryListObjectDeclaration::new(serialized_query, matches)
         .bind(scope)
         .expect("MediaQueryList declaration should bind");
@@ -224,11 +220,8 @@ pub(crate) fn dispatch_media_query_list_change_events<'s>(
         }
         let previous_matches = get_private_value(scope, mql, MEDIA_QUERY_LIST_MATCHES_SLOT)
             .is_some_and(|value| value.boolean_value(scope));
-        let current_matches = evaluate_match_media_query_list_with_viewport(
-            &media,
-            Some(&current_media),
-            current_viewport,
-        );
+        let current_matches =
+            evaluate_media_query_list(&media, Some(&current_media), current_viewport);
         set_media_query_list_bool_slot(scope, mql, MEDIA_QUERY_LIST_MATCHES_SLOT, current_matches);
         if previous_matches == current_matches {
             continue;
@@ -294,22 +287,11 @@ pub(crate) fn evaluate_match_media_query_list_with_viewport_width(
     emulated_media: Option<&crate::protocol_types::EmulatedMediaOverrides>,
     viewport_width: Option<f64>,
 ) -> bool {
-    evaluate_match_media_query_list_with_viewport(
+    evaluate_media_query_list(
         query,
         emulated_media,
         match_media_style_viewport(viewport_width),
     )
-}
-
-pub(crate) fn evaluate_match_media_query_list_with_viewport(
-    query: &str,
-    emulated_media: Option<&crate::protocol_types::EmulatedMediaOverrides>,
-    viewport: StyleViewport,
-) -> bool {
-    if query.trim().is_empty() {
-        return true;
-    }
-    evaluate_media_query_list(query, emulated_media, viewport)
 }
 
 fn match_media_style_viewport(viewport_width: Option<f64>) -> StyleViewport {

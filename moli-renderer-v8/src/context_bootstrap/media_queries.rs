@@ -4,7 +4,6 @@ pub(in crate::context_bootstrap) use event::build_media_query_list_event_templat
 mod events;
 
 pub(crate) use self::evaluation::dispatch_media_query_list_change_events;
-pub(crate) use self::evaluation::evaluate_match_media_query_list_with_viewport;
 pub(super) use self::evaluation::{
     install_media_query_list_template_bindings, window_match_media_callback,
 };

@@ -2836,6 +2836,7 @@ name = "moli-css-parse"
 version = "0.1.0"
 dependencies = [
  "cssparser",
+ "euclid",
  "stylo",
  "stylo_traits",
  "unicode-case-mapping",
