@@ -226,7 +226,7 @@ impl HostDocumentState {
         &self,
         url: &Url,
     ) -> DocumentCookieOwnerSnapshot {
-        let capability = self.document_cookie_capability_snapshot_for_url(url);
+        let capability = self.document_cookie_capability_snapshot();
         let cache = self.document_cookie_cache_snapshot_for_url(url);
         let browser_context = self.document_cookie_browser_context_snapshot();
         let telemetry = self.document_cookie_telemetry_snapshot();

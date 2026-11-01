@@ -55,6 +55,10 @@ pub struct InsertContext<'a> {
     pub source: CookieAccessSource,
     /// Additional browser-side context associated with this write.
     pub browser_context: BrowserSiteContext,
+    /// SameSite relationship used to decide whether a cookie may be created.
+    pub same_site_context: SameSiteContext,
+    /// Top-level HTTP responses may create SameSite cookies across sites.
+    pub request_type: HttpRequestType,
     pub(super) enforce_browser_policy: bool,
 }
 
@@ -65,6 +69,8 @@ impl<'a> InsertContext<'a> {
             url,
             source: CookieAccessSource::Http,
             browser_context: BrowserSiteContext::empty(),
+            same_site_context: SameSiteContext::same_site(),
+            request_type: HttpRequestType::Subresource,
             enforce_browser_policy: true,
         }
     }
@@ -75,6 +81,8 @@ impl<'a> InsertContext<'a> {
             url,
             source: CookieAccessSource::Document,
             browser_context: BrowserSiteContext::empty(),
+            same_site_context: SameSiteContext::same_site(),
+            request_type: HttpRequestType::Subresource,
             enforce_browser_policy: true,
         }
     }
@@ -85,6 +93,8 @@ impl<'a> InsertContext<'a> {
             url,
             source: CookieAccessSource::Cdp,
             browser_context: BrowserSiteContext::empty(),
+            same_site_context: SameSiteContext::same_site(),
+            request_type: HttpRequestType::Subresource,
             enforce_browser_policy: true,
         }
     }
