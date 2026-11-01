@@ -4323,31 +4323,15 @@ fn cli_dump_json_keeps_transport_failures_as_process_errors() -> Result<()> {
 
 #[test]
 fn cli_connection_failure_reports_curl_code_and_cause() -> Result<()> {
-    // A bound, non-listening socket times out on macOS. Release the port before
-    // connecting, and retry only if another fixture claimed it in the meantime.
-    let mut attempts = 0;
-    let (url, output, _reservation) = loop {
-        attempts += 1;
-        let socket = tokio::net::TcpSocket::new_v4()?;
-        socket.bind("127.0.0.1:0".parse()?)?;
-        let address = socket.local_addr()?;
-        let url = format!("http://{address}/connection-refused");
-        drop(socket);
-
-        let output = run_fetch_cli(&url)?;
-        match std::net::TcpListener::bind(address) {
-            Ok(reservation) => break (url, output, reservation),
-            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse && attempts < 3 => {
-                continue;
-            }
-            Err(error) => return Err(error.into()),
-        }
-    };
+    // TCP cannot connect to the IPv4 limited-broadcast address. Unlike releasing
+    // an ephemeral loopback port, this cannot connect to a concurrent fixture.
+    let url = "http://255.255.255.255:54321/connection-failure";
+    let output = run_fetch_cli(url)?;
     let stdout = clean_output(&output.stdout);
     let stderr = clean_output(&output.stderr);
     assert!(!output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert!(stdout.is_empty(), "stdout={stdout}");
-    assert_single_fetch_failure_reason(&stderr, &url, "curl request failed");
+    assert_single_fetch_failure_reason(&stderr, url, "curl request failed");
     assert!(stderr.contains("[7]"), "stderr={stderr}");
     assert!(stderr.contains("Failed to connect"), "stderr={stderr}");
     Ok(())
