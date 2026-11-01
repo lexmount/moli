@@ -3409,8 +3409,7 @@ fn redirected_subresource_post_with_cross_site_initiator_and_same_site_frame_pro
 }
 
 #[test]
-fn redirected_top_level_get_with_same_site_chain_but_cross_site_final_stays_cross_site_like_chromium()
- {
+fn redirected_top_level_get_with_cross_site_final_keeps_lax_allowance_like_chromium() {
     let mut store = BrowserCookieStore::default();
     let original_request_url = parse("https://cdn.example.com/start");
     let request_url = parse("https://other.test/final");
@@ -3419,10 +3418,20 @@ fn redirected_top_level_get_with_same_site_chain_but_cross_site_final_stays_cros
 
     store.store_response_headers(
         &request_url,
-        &[(
-            "set-cookie".to_owned(),
-            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
-        )],
+        &[
+            (
+                "set-cookie".to_owned(),
+                b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
+            ),
+            (
+                "set-cookie".to_owned(),
+                b"lax=1; Path=/; Secure; SameSite=Lax".to_vec(),
+            ),
+            (
+                "set-cookie".to_owned(),
+                b"unspecified=1; Path=/; Secure".to_vec(),
+            ),
+        ],
     );
 
     let initial_request_context = NetworkCookieRequestContext::top_level_navigation("GET")
@@ -3436,6 +3445,14 @@ fn redirected_top_level_get_with_same_site_chain_but_cross_site_final_stays_cros
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);
+    assert_eq!(
+        report
+            .included_cookies
+            .iter()
+            .map(|entry| entry.cookie.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["lax", "unspecified"],
+    );
     let strict = find_cookie(&report, "strict")
         .expect("strict cookie should still be represented in report");
 
@@ -3445,11 +3462,11 @@ fn redirected_top_level_get_with_same_site_chain_but_cross_site_final_stays_cros
     );
     assert_eq!(
         strict.same_site_context,
-        StoredCookieRequestSameSiteContext::CrossSite
+        StoredCookieRequestSameSiteContext::SameSiteLax
     );
     assert_eq!(
         strict.schemeful_same_site_context,
-        StoredCookieRequestSameSiteContext::CrossSite
+        StoredCookieRequestSameSiteContext::SameSiteLax
     );
     assert_eq!(
         strict.same_site_context_redirect_type,
@@ -3515,8 +3532,7 @@ fn redirected_subresource_get_with_same_site_chain_but_cross_site_final_stays_cr
 }
 
 #[test]
-fn redirected_top_level_post_with_same_site_chain_but_cross_site_final_stays_cross_site_like_chromium()
- {
+fn redirected_top_level_post_with_cross_site_final_keeps_unsafe_allowance_like_chromium() {
     let mut store = BrowserCookieStore::default();
     let original_request_url = parse("https://cdn.example.com/start");
     let request_url = parse("https://other.test/final");
@@ -3525,10 +3541,20 @@ fn redirected_top_level_post_with_same_site_chain_but_cross_site_final_stays_cro
 
     store.store_response_headers(
         &request_url,
-        &[(
-            "set-cookie".to_owned(),
-            b"lax=1; Path=/; Secure; SameSite=Lax".to_vec(),
-        )],
+        &[
+            (
+                "set-cookie".to_owned(),
+                b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
+            ),
+            (
+                "set-cookie".to_owned(),
+                b"lax=1; Path=/; Secure; SameSite=Lax".to_vec(),
+            ),
+            (
+                "set-cookie".to_owned(),
+                b"unspecified=1; Path=/; Secure".to_vec(),
+            ),
+        ],
     );
 
     let initial_request_context = NetworkCookieRequestContext::top_level_navigation("POST")
@@ -3542,6 +3568,14 @@ fn redirected_top_level_post_with_same_site_chain_but_cross_site_final_stays_cro
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);
+    assert_eq!(
+        report
+            .included_cookies
+            .iter()
+            .map(|entry| entry.cookie.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["unspecified"],
+    );
     let lax = find_cookie(&report, "lax").expect("lax cookie should still be represented");
 
     assert_eq!(
@@ -3550,11 +3584,11 @@ fn redirected_top_level_post_with_same_site_chain_but_cross_site_final_stays_cro
     );
     assert_eq!(
         lax.same_site_context,
-        StoredCookieRequestSameSiteContext::CrossSite
+        StoredCookieRequestSameSiteContext::SameSiteLaxMethodUnsafe
     );
     assert_eq!(
         lax.schemeful_same_site_context,
-        StoredCookieRequestSameSiteContext::CrossSite
+        StoredCookieRequestSameSiteContext::SameSiteLaxMethodUnsafe
     );
     assert_eq!(
         lax.same_site_context_http_method,
