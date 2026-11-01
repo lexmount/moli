@@ -9,7 +9,7 @@ use crate::types::{ImageRequestCorsMode, ImageRequestKey, SubresourceRequestInit
 use crate::util::v8_string;
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 
-use crate::context_bootstrap::evaluate_match_media_query_list_with_viewport;
+use crate::style_engine::media_list::evaluate_media_query_list;
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
 use super::super::geometry::compute_mock_client_rect;
@@ -341,7 +341,7 @@ fn image_selected_picture_source(
         }
         if let Some(media) = source.attribute("media")
             && !media.trim().is_empty()
-            && !evaluate_match_media_query_list_with_viewport(
+            && !evaluate_media_query_list(
                 media,
                 Some(runtime.emulated_media()),
                 runtime.style_viewport(),
