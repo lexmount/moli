@@ -111,6 +111,7 @@ impl ScriptVm {
             pending.info.request_body_bytes.clone(),
         );
         let head = ResponseHead {
+            request_include_credentials: request.allows_credentials_for_url(&request.url),
             final_url: request.url.clone(),
             status,
             status_text: None,

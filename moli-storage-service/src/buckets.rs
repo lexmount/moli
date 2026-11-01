@@ -499,6 +499,10 @@ struct StorageBucketCacheJsonRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StorageBucketCacheJsonEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cors_exposed_header_names: Option<Vec<String>>,
+    #[serde(default = "default_cached_response_credentials")]
+    request_include_credentials: bool,
     usage_bytes: u64,
     #[serde(
         default = "default_cache_request_method",
@@ -529,6 +533,11 @@ struct StorageBucketCacheJsonEntry {
     #[serde(deserialize_with = "moli_header_field::deserialize_headers")]
     headers: Vec<(String, Vec<u8>)>,
     body_base64: String,
+}
+
+// A legacy entry cannot establish that the response omitted credentials.
+fn default_cached_response_credentials() -> bool {
+    true
 }
 
 fn default_cache_request_method() -> String {
@@ -2027,7 +2036,7 @@ fn cache_entry_matches_query(
     }
     query.ignore_vary
         // Opaque public headers are empty even though Cache retains the internal head.
-        || matches!(entry.response.head.metadata.response_type.as_str(), "opaque" | "opaqueredirect")
+        || !entry.response.head.exposes_header("vary")
         || cached_response_vary_matches_request(
             &entry.response.head.headers,
             &entry.request.headers,
@@ -2368,6 +2377,8 @@ fn load_storage_bucket_cache_file(path: &Path) -> Result<StorageBucketCacheFile>
             |(index, StorageBucketCacheJsonRecord { request_url, entry })| {
                 let response_type = entry.response_type;
                 let metadata = moli_fetch_types::FetchResponseMetadata {
+                    cors_exposed_header_names: entry.cors_exposed_header_names,
+                    request_include_credentials: entry.request_include_credentials,
                     response_type,
                     timing_allow_passed: entry
                         .timing_allow_passed
@@ -2385,7 +2396,6 @@ fn load_storage_bucket_cache_file(path: &Path) -> Result<StorageBucketCacheFile>
                         .map(|url| url.parse())
                         .collect::<std::result::Result<_, _>>()?,
                     redirected: entry.redirected,
-                    cors_exposed_header_names: None,
                 };
                 let body = BASE64_STANDARD
                     .decode(entry.body_base64.as_bytes())
@@ -2440,6 +2450,17 @@ fn save_storage_bucket_cache_file(
                 .map(|entry| StorageBucketCacheJsonRecord {
                     request_url: entry.request_url.clone(),
                     entry: StorageBucketCacheJsonEntry {
+                        cors_exposed_header_names: entry
+                            .response
+                            .head
+                            .metadata
+                            .cors_exposed_header_names
+                            .clone(),
+                        request_include_credentials: entry
+                            .response
+                            .head
+                            .metadata
+                            .request_include_credentials,
                         usage_bytes: entry.usage_bytes,
                         request_method: entry.request.method.clone(),
                         request_headers: entry.request.headers.clone(),
@@ -3194,6 +3215,7 @@ mod tests {
                 StorageBucketCachedResponse {
                     head: moli_fetch_types::FetchResponseHead {
                         metadata: moli_fetch_types::FetchResponseMetadata {
+                            request_include_credentials: false,
                             response_type: moli_fetch_types::FetchResponseType::Default,
                             timing_allow_passed: true,
                             url_list: vec![
@@ -3281,6 +3303,7 @@ mod tests {
                 StorageBucketCachedResponse {
                     head: moli_fetch_types::FetchResponseHead {
                         metadata: moli_fetch_types::FetchResponseMetadata {
+                            request_include_credentials: false,
                             response_type: moli_fetch_types::FetchResponseType::Default,
                             timing_allow_passed: true,
                             url_list: vec![
@@ -3526,6 +3549,7 @@ mod tests {
         let response = StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: Vec::new(),
@@ -3577,6 +3601,7 @@ mod tests {
         let first_response = StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: Vec::new(),
@@ -3639,6 +3664,7 @@ mod tests {
         let replacement_response = StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: Vec::new(),
@@ -3699,6 +3725,7 @@ mod tests {
         let response = |body: &str, headers: Vec<(String, Vec<u8>)>| StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: Vec::new(),
@@ -3798,6 +3825,7 @@ mod tests {
         let response = StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: Vec::new(),
@@ -3868,6 +3896,7 @@ mod tests {
         let original = StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: Vec::new(),
@@ -3883,6 +3912,7 @@ mod tests {
         let oversized = StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: Vec::new(),
@@ -3977,6 +4007,11 @@ mod tests {
                 response: StorageBucketCachedResponse {
                     head: moli_fetch_types::FetchResponseHead {
                         metadata: moli_fetch_types::FetchResponseMetadata {
+                            cors_exposed_header_names: (response_type == "cors")
+                                .then(|| vec!["content-type".to_owned(), "x-visible".to_owned()]),
+
+                            request_include_credentials: false,
+
                             response_type: (response_type.to_owned())
                                 .parse()
                                 .expect("valid response type"),
@@ -3986,7 +4021,6 @@ mod tests {
                                 format!("https://cross.test/{index}").parse().unwrap(),
                             ],
                             redirected: true,
-                            cors_exposed_header_names: None,
                         },
                         status: if response_type == "opaque" { 0 } else { 200 },
                         status_text: String::new(),
@@ -4098,6 +4132,7 @@ mod tests {
                     StorageBucketCachedResponse {
                         head: moli_fetch_types::FetchResponseHead {
                             metadata: moli_fetch_types::FetchResponseMetadata {
+                                request_include_credentials: false,
                                 response_type: moli_fetch_types::FetchResponseType::Default,
                                 timing_allow_passed: true,
                                 url_list: vec![
@@ -4346,6 +4381,7 @@ mod tests {
                         StorageBucketCachedResponse {
                             head: moli_fetch_types::FetchResponseHead {
                                 metadata: moli_fetch_types::FetchResponseMetadata {
+                                    request_include_credentials: false,
                                     response_type: moli_fetch_types::FetchResponseType::Default,
                                     timing_allow_passed: true,
                                     url_list: Vec::new(),
@@ -4439,86 +4475,118 @@ mod tests {
 
     #[test]
     fn json_storage_bucket_store_persists_cache_entries() -> Result<()> {
-        let temp = TempStorePath::new("cache-persist");
-        let cache_root = temp.cache_root();
-        let response = StorageBucketCachedResponse {
-            head: moli_fetch_types::FetchResponseHead {
-                metadata: moli_fetch_types::FetchResponseMetadata {
-                    response_type: moli_fetch_types::FetchResponseType::Default,
-                    timing_allow_passed: true,
-                    url_list: Vec::new(),
-                    redirected: false,
-                    cors_exposed_header_names: None,
-                },
-                status: 202,
-                status_text: "Accepted".to_owned(),
-                headers: vec![
-                    ("x-cache".to_owned(), b"persisted".to_vec()),
-                    ("x-bytes".to_owned(), b"\xff\x80\xa0".to_vec()),
-                    ("x-bytes".to_owned(), b"\xc3\xbf".to_vec()),
-                    ("x-empty".to_owned(), Vec::new()),
-                ],
-            },
-            body: b"profile cache body".to_vec(),
-        };
-        {
-            let store =
-                new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
-            let mut store = store.lock();
-            let identity = store.open_bucket("https://a.test", "bucket")?;
-            assert!(store.open_cache_for_identity(&identity, "cache")?);
-            assert_eq!(
-                store.put_cache_entry_for_identity(
-                    &identity,
-                    "cache",
-                    "/cached.txt",
-                    response.clone(),
-                    64,
-                    0,
-                )?,
-                StorageBucketCachePutOutcome::Stored
-            );
+        for cors in [false, true] {
+            for credentials in [false, true] {
+                let temp = TempStorePath::new("cache-persist");
+                let cache_root = temp.cache_root();
+                let mut response = StorageBucketCachedResponse {
+                    head: moli_fetch_types::FetchResponseHead {
+                        metadata: moli_fetch_types::FetchResponseMetadata {
+                            cors_exposed_header_names: None,
+
+                            response_type: if cors {
+                                moli_fetch_types::FetchResponseType::Cors
+                            } else {
+                                moli_fetch_types::FetchResponseType::Default
+                            },
+                            request_include_credentials: credentials,
+                            timing_allow_passed: true,
+                            url_list: if cors {
+                                vec!["https://remote.test/cached.txt".parse().unwrap()]
+                            } else {
+                                Vec::new()
+                            },
+                            redirected: false,
+                        },
+                        status: 202,
+                        status_text: "Accepted".to_owned(),
+                        headers: vec![
+                            ("x-cache".to_owned(), b"persisted".to_vec()),
+                            ("x-bytes".to_owned(), b"\xff\x80\xa0".to_vec()),
+                            ("x-bytes".to_owned(), b"\xc3\xbf".to_vec()),
+                            ("x-empty".to_owned(), Vec::new()),
+                        ],
+                    },
+                    body: b"profile cache body".to_vec(),
+                };
+                if cors {
+                    response.head.headers.extend([
+                        (
+                            "access-control-expose-headers".to_owned(),
+                            b"x-cache".to_vec(),
+                        ),
+                        (
+                            "cross-origin-resource-policy".to_owned(),
+                            b"same-origin".to_vec(),
+                        ),
+                        ("vary".to_owned(), b"*".to_vec()),
+                    ]);
+                }
+                {
+                    let store = new_shared_json_storage_bucket_store_with_cache_root(
+                        &temp.path,
+                        &cache_root,
+                    )?;
+                    let mut store = store.lock();
+                    let identity = store.open_bucket("https://a.test", "bucket")?;
+                    assert!(store.open_cache_for_identity(&identity, "cache")?);
+                    assert_eq!(
+                        store.put_cache_entry_for_identity(
+                            &identity,
+                            "cache",
+                            "/cached.txt",
+                            response.clone(),
+                            64,
+                            0,
+                        )?,
+                        StorageBucketCachePutOutcome::Stored
+                    );
+                }
+
+                assert!(
+                    cache_root.exists(),
+                    "profile-backed CacheStorage root should be written"
+                );
+                let (next, previous) = storage_bucket_cache_replacement_paths(&cache_root)?;
+                assert!(
+                    !next.exists(),
+                    "profile-backed CacheStorage replacement root should not be left after save"
+                );
+                assert!(
+                    !previous.exists(),
+                    "profile-backed CacheStorage previous root should not be left after save"
+                );
+
+                {
+                    let store = new_shared_json_storage_bucket_store_with_cache_root(
+                        &temp.path,
+                        &cache_root,
+                    )?;
+                    let mut store = store.lock();
+                    let identity = store.open_bucket("https://a.test", "bucket")?;
+                    assert_eq!(
+                        store.cache_names_for_identity(&identity),
+                        Some(vec!["cache".into()])
+                    );
+                    let matched = store
+                        .match_cache_entry_for_identity(&identity, "cache", "/cached.txt")
+                        .flatten()
+                        .expect("cache entry should persist across reopen");
+                    assert_eq!(matched, response);
+                    assert_eq!(store.cache_usage_for_identity(&identity), Some(64));
+                    assert_eq!(
+                        store.delete_cache_for_identity(&identity, "cache")?,
+                        Some(true)
+                    );
+                }
+
+                let store =
+                    new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
+                let mut store = store.lock();
+                let identity = store.open_bucket("https://a.test", "bucket")?;
+                assert_eq!(store.cache_names_for_identity(&identity), Some(Vec::new()));
+            }
         }
-
-        assert!(
-            cache_root.exists(),
-            "profile-backed CacheStorage root should be written"
-        );
-        let (next, previous) = storage_bucket_cache_replacement_paths(&cache_root)?;
-        assert!(
-            !next.exists(),
-            "profile-backed CacheStorage replacement root should not be left after save"
-        );
-        assert!(
-            !previous.exists(),
-            "profile-backed CacheStorage previous root should not be left after save"
-        );
-
-        {
-            let store =
-                new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
-            let mut store = store.lock();
-            let identity = store.open_bucket("https://a.test", "bucket")?;
-            assert_eq!(
-                store.cache_names_for_identity(&identity),
-                Some(vec!["cache".into()])
-            );
-            let matched = store
-                .match_cache_entry_for_identity(&identity, "cache", "/cached.txt")
-                .flatten()
-                .expect("cache entry should persist across reopen");
-            assert_eq!(matched, response);
-            assert_eq!(store.cache_usage_for_identity(&identity), Some(64));
-            assert_eq!(
-                store.delete_cache_for_identity(&identity, "cache")?,
-                Some(true)
-            );
-        }
-
-        let store = new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
-        let mut store = store.lock();
-        let identity = store.open_bucket("https://a.test", "bucket")?;
-        assert_eq!(store.cache_names_for_identity(&identity), Some(Vec::new()));
         Ok(())
     }
 
@@ -4527,6 +4595,7 @@ mod tests {
         let old_response = StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: Vec::new(),
@@ -4542,6 +4611,7 @@ mod tests {
         let new_response = StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: Vec::new(),
@@ -4632,6 +4702,7 @@ mod tests {
         let response = StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: Vec::new(),
@@ -4690,6 +4761,7 @@ mod tests {
         let response = StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: Vec::new(),
@@ -4751,6 +4823,7 @@ mod tests {
         let response = StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: Vec::new(),
@@ -5116,6 +5189,7 @@ mod tests {
         let response = StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: vec![

@@ -125,6 +125,7 @@ fn service_worker_fetch_stream_response_head(
         status: response_head.status,
         headers: response_head.headers.clone(),
         request_cookie_report: job.request_cookie_report.clone(),
+        request_include_credentials: response_head.metadata.request_include_credentials,
         cookie_set_reports: Vec::new(),
         redirected: response_head.metadata.redirected || !job.request.redirect_chain().is_empty(),
         redirect_chain: job.request.redirect_chain().to_vec(),
@@ -672,6 +673,7 @@ impl ServiceWorkerRuntimeService {
                 status: response.head.status,
                 headers: response.head.headers,
                 request_cookie_report: job.request_cookie_report,
+                request_include_credentials: response.head.metadata.request_include_credentials,
                 cookie_set_reports: Vec::new(),
                 redirected: response.head.metadata.redirected
                     || !job.request.redirect_chain().is_empty(),
@@ -1376,6 +1378,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(final_url.clone())).into_iter().collect(),
@@ -1454,6 +1457,7 @@ mod tests {
                         body_is_null,
                         head: moli_fetch_types::FetchResponseHead {
                             metadata: moli_fetch_types::FetchResponseMetadata {
+                                request_include_credentials: false,
                                 response_type: moli_fetch_types::FetchResponseType::Default,
                                 timing_allow_passed: true,
                                 url_list: (Some(final_url)).into_iter().collect(),
@@ -1504,6 +1508,7 @@ mod tests {
             body_source_id: 77,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: (Some(final_url.clone())).into_iter().collect(),
@@ -1529,6 +1534,7 @@ mod tests {
                 body_is_null: false,
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(final_url)).into_iter().collect(),
@@ -1624,6 +1630,7 @@ mod tests {
             body_source_id,
             response_head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: (Some(final_url.clone())).into_iter().collect(),
@@ -1668,6 +1675,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(final_url)).into_iter().collect(),
@@ -1719,6 +1727,7 @@ mod tests {
             body_source_id,
             response_head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: (Some(final_url)).into_iter().collect(),
@@ -1801,6 +1810,7 @@ mod tests {
                         body_is_null: false,
                         head: moli_fetch_types::FetchResponseHead {
                             metadata: moli_fetch_types::FetchResponseMetadata {
+                                request_include_credentials: false,
                                 response_type: moli_fetch_types::FetchResponseType::Default,
                                 timing_allow_passed: true,
                                 url_list: (None).into_iter().collect(),
@@ -1883,6 +1893,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Opaque,
                         timing_allow_passed: false,
                         url_list: (None).into_iter().collect(),
@@ -1941,6 +1952,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::OpaqueRedirect,
                         timing_allow_passed: false,
                         url_list: (None).into_iter().collect(),
@@ -1998,6 +2010,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(final_url.clone())).into_iter().collect(),
@@ -2048,6 +2061,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://example.test/app/manual-final.txt")))
@@ -2105,6 +2119,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (None).into_iter().collect(),
@@ -2235,6 +2250,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (None).into_iter().collect(),
@@ -2309,6 +2325,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (None).into_iter().collect(),
@@ -2397,6 +2414,7 @@ mod tests {
             body_is_null: false,
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: (None).into_iter().collect(),
@@ -2491,6 +2509,7 @@ mod tests {
 
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: (Some(request_url.clone())).into_iter().collect(),
@@ -2598,6 +2617,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (None).into_iter().collect(),
@@ -2652,6 +2672,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(response_url.clone())).into_iter().collect(),
@@ -2726,6 +2747,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Error,
                         timing_allow_passed: false,
                         url_list: (None).into_iter().collect(),
@@ -2780,6 +2802,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Cors,
                         timing_allow_passed: false,
                         url_list: (Some(url("https://cross-origin.test/data.txt")))
@@ -2835,6 +2858,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Opaque,
                         timing_allow_passed: false,
                         url_list: (None).into_iter().collect(),
@@ -2904,6 +2928,7 @@ mod tests {
 
                     head: moli_fetch_types::FetchResponseHead {
                         metadata: moli_fetch_types::FetchResponseMetadata {
+                            request_include_credentials: false,
                             response_type: moli_fetch_types::FetchResponseType::Opaque,
                             timing_allow_passed: false,
                             url_list: (None).into_iter().collect(),
@@ -2958,6 +2983,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://cdn.example.test/app/image.png")))
@@ -3020,6 +3046,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://cdn.example.test/app/image.png")))
@@ -3092,6 +3119,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://cdn.example.test/app/pixel.png")))
@@ -3160,6 +3188,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://cdn.example.test/app/pixel.png")))
@@ -3227,6 +3256,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://cdn.example.test/app/pixel.png")))
@@ -3294,6 +3324,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://cdn.example.test/app/pixel.png")))
@@ -3362,6 +3393,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://cdn.example.test/app/pixel.png")))
@@ -3424,6 +3456,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://cdn.example.test/app/pixel.png")))
@@ -3491,6 +3524,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://cdn.example.test/app/pixel.png")))
@@ -3557,6 +3591,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://cdn.example.test/app/pixel.png")))
@@ -3617,6 +3652,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://cdn.example.test/app/pixel.png")))
@@ -3682,6 +3718,7 @@ mod tests {
             body_source_id,
             response_head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: (Some(url("https://cdn.example.test/app/pixel.png")))
@@ -3755,6 +3792,7 @@ mod tests {
             body_source_id,
             response_head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: (Some(url("https://cdn.example.test/app/pixel.png")))
@@ -3825,6 +3863,7 @@ mod tests {
             body_source_id,
             response_head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     timing_allow_passed: true,
                     url_list: (Some(url("https://cdn.example.test/app/pixel.png")))
@@ -3884,6 +3923,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://cdn.example.test/app/data.json")))
@@ -3939,6 +3979,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (Some(url("https://cdn.example.test/app/data.json")))
@@ -4001,6 +4042,7 @@ mod tests {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::OpaqueRedirect,
                         timing_allow_passed: false,
                         url_list: (None).into_iter().collect(),

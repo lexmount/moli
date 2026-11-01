@@ -1236,6 +1236,7 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
     }
 }
 
+
 pub(in crate::worker) fn drain_worker_fetch_completion(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
@@ -1357,6 +1358,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
     state: &Rc<RefCell<WorkerGlobalState>>,
     completion: WorkerFetchCompletion,
 ) {
+
 
     let Some(pending) = state
         .borrow_mut()

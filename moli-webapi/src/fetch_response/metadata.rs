@@ -4,6 +4,7 @@ use moli_v8_util::{get_private_object, get_private_value, set_private_value, v8_
 use moli_webapi_declare::WebApiObject;
 
 pub(super) const RESPONSE_METADATA_SLOT: &str = "__moliResponseMetadata";
+const CREDENTIALS_SLOT: &str = "__moliResponseMetadataCredentials";
 const CORS_HEADERS_SLOT: &str = "__moliResponseMetadataCorsHeaders";
 const TYPE_SLOT: &str = "__moliResponseMetadataType";
 const URL_LIST_SLOT: &str = "__moliResponseMetadataUrls";
@@ -13,6 +14,8 @@ const REDIRECTED_SLOT: &str = "__moliResponseMetadataRedirected";
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct ResponseMetadataDeclaration<'scope> {
+    #[webapi(slot = CREDENTIALS_SLOT)]
+    request_include_credentials: bool,
     #[webapi(slot = CORS_HEADERS_SLOT)]
     cors_exposed_header_names: v8::Local<'scope, v8::Value>,
     #[webapi(slot = TYPE_SLOT)]
@@ -59,6 +62,7 @@ pub fn set_response_metadata<'s>(
             v8::null(scope).into()
         };
     let value = ResponseMetadataDeclaration::new(
+        metadata.request_include_credentials,
         cors_headers,
         metadata.response_type.as_str(),
         urls,
@@ -102,6 +106,8 @@ pub fn response_metadata<'s>(
     };
     Some(FetchResponseMetadata {
         cors_exposed_header_names,
+        request_include_credentials: get_private_value(scope, metadata, CREDENTIALS_SLOT)?
+            .boolean_value(scope),
         response_type,
         url_list,
         timing_allow_passed: get_private_value(scope, metadata, TIMING_SLOT)?.boolean_value(scope),

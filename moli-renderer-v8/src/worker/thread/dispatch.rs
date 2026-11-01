@@ -2715,6 +2715,7 @@ fn start_service_worker_navigation_preload_response_in_context(
         status: started.response_head.status,
         headers: started.response_head.headers.clone(),
         request_cookie_report: None,
+        request_include_credentials: started.response_head.metadata.request_include_credentials,
         cookie_set_reports: Vec::new(),
         redirected: started.response_head.metadata.redirected,
         redirect_chain: Vec::new(),

@@ -111,6 +111,7 @@ fn queued_controlled_fetch(
             resource_task_runner: test_resource_task_runner(),
             cancel_handle: moli_fetch::FetchCancelHandle::new(),
             direct_completion_tx: None,
+            request_body_owner: None,
             redirect_check: None,
         })
     );
@@ -173,6 +174,7 @@ async fn controlled_network_fallback_enforces_blocked_and_offline_policy() {
 
                     head: moli_fetch_types::FetchResponseHead {
                         metadata: moli_fetch_types::FetchResponseMetadata {
+                            request_include_credentials: false,
                             response_type: moli_fetch_types::FetchResponseType::Default,
                             timing_allow_passed: true,
                             url_list: (None).into_iter().collect(),
@@ -392,7 +394,11 @@ async fn event_source_network_fallback_preserves_no_store_with_cache_disabled() 
                     }
                     AsyncSubresourceFetchEvent::ObservedNetworkRecord(_)
                     | AsyncSubresourceFetchEvent::RequestExtraInfo { .. } => {}
-                    unexpected @ (AsyncSubresourceFetchEvent::DocumentAbort { .. }
+                    unexpected @ (AsyncSubresourceFetchEvent::RequestBodyProducer { .. }
+                    | AsyncSubresourceFetchEvent::RequestUploadReady { .. }
+                    | AsyncSubresourceFetchEvent::RedirectAdmission { .. }
+                    | AsyncSubresourceFetchEvent::ResourceTiming { .. }
+                    | AsyncSubresourceFetchEvent::DocumentAbort { .. }
                     | AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation { .. }
                     | AsyncSubresourceFetchEvent::Upload { .. }
                     | AsyncSubresourceFetchEvent::ResponseLinks(_)) => {
@@ -450,6 +456,7 @@ async fn direct_network_fallback_after_synthetic_redirect_enforces_page_policy()
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Basic,
                         timing_allow_passed: true,
                         url_list: (None).into_iter().collect(),

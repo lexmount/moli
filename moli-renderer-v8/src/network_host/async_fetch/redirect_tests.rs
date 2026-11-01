@@ -180,6 +180,7 @@ fn cors_redirect_referrer_never_recovers_stripped_information() -> Result<()> {
                     ("Access-Control-Allow-Origin".to_owned(), b"*".to_vec()),
                 ],
                 request_cookie_report: None,
+                request_include_credentials: false,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
                 redirect_chain: Vec::new(),
@@ -234,6 +235,7 @@ fn cors_redirect_modes_precede_location_parsing() -> Result<()> {
                         .map(|value| vec![("Location".to_owned(), value.as_bytes().to_vec())])
                         .unwrap_or_default(),
                     request_cookie_report: None,
+                    request_include_credentials: false,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
                     redirect_chain: Vec::new(),

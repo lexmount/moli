@@ -351,6 +351,7 @@ fn controlled_fetch_prepares_page_headers_while_offline_or_blocked() {
 
                 head: moli_fetch_types::FetchResponseHead {
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        request_include_credentials: false,
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: (None).into_iter().collect(),
@@ -1538,6 +1539,7 @@ fn navigation_preload_completion_keeps_response_started_preload_alive() {
 
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
                     response_type: moli_fetch_types::FetchResponseType::Basic,
                     timing_allow_passed: true,
                     url_list: (None).into_iter().collect(),
@@ -1843,6 +1845,8 @@ fn abort_controlled_fetch_drops_direct_worker_completion_and_ignores_late_comple
 
             head: moli_fetch_types::FetchResponseHead {
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    request_include_credentials: false,
+
                     response_type: moli_fetch_types::FetchResponseType::Basic,
                     timing_allow_passed: true,
                     url_list: (None).into_iter().collect(),

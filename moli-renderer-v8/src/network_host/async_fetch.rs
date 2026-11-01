@@ -1248,6 +1248,7 @@ mod tests {
                     status: 303,
                     headers: vec![("Location".to_owned(), b"https://target.test/final".to_vec())],
                     request_cookie_report: None,
+                    request_include_credentials: false,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
                     redirect_chain: Vec::new(),
@@ -1298,6 +1299,8 @@ mod tests {
         let error = redirects
             .advance(
                 ResponseHead {
+                    request_include_credentials: false,
+
                     final_url: current_url.clone(),
                     status: 302,
                     status_text: None,
@@ -1372,6 +1375,7 @@ mod tests {
                     status_text: Some("Temporary Redirect".to_owned()),
                     headers: vec![("location".to_owned(), b"/final".to_vec())],
                     request_cookie_report: None,
+                    request_include_credentials: false,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
                     redirect_chain: Vec::new(),

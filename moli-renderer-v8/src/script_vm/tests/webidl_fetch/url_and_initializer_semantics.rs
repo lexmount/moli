@@ -751,6 +751,7 @@ async fn response_clone_tees_pending_network_body_after_parent_consumption() {
                         mode: moli_fetch::RequestMode::Cors,
                     },
                     moli_fetch::ResponseHead {
+                        request_include_credentials: false,
                         status_text: None,
                         final_url: response_url,
                         status: 200,
@@ -866,6 +867,7 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
                         mode: moli_fetch::RequestMode::Cors,
                     },
                     moli_fetch::ResponseHead {
+                        request_include_credentials: false,
                         status_text: None,
                         final_url: response_url,
                         status: 200,
@@ -995,6 +997,7 @@ fn materialize_response_object_preserves_redirected_slot() {
                 },
                 moli_fetch::Response::from_head_and_text_body(
                     moli_fetch::ResponseHead {
+                        request_include_credentials: false,
                         status_text: None,
                         final_url: final_url.clone(),
                         status: 200,
@@ -1053,21 +1056,20 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
                     scope,
                     "GET",
                     moli_fetch::ResponseHead {
-                        status_text: None,
-                        final_url: final_url.clone(),
-                        status: 302,
-
-                        headers: vec![("location".to_owned(), b"target.html".to_vec())],
-                        request_cookie_report: None,
-                        cookie_set_reports: Vec::new(),
-                        redirected: false,
-                        redirect_chain: Vec::new(),
-                        from_cache: false,
-                        cache_state: Default::default(),
-                        negotiated_http_version: None, preload_state: Default::default(),
-                    },
+ request_include_credentials: false, status_text: None,
+final_url: final_url.clone(),
+status: 302,
+headers: vec![("location".to_owned(), b"target.html".to_vec())],
+request_cookie_report: None,
+cookie_set_reports: Vec::new(),
+redirected: false,
+redirect_chain: Vec::new(),
+from_cache: false,
+cache_state: Default::default(),
+negotiated_http_version: None,
+ preload_state: Default::default(), },
                     moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
-                    &moli_fetch_types::FetchResponseMetadata { response_type: filter, url_list: vec![final_url.clone()], timing_allow_passed: false, redirected: false, cors_exposed_header_names: None },
+                    &moli_fetch_types::FetchResponseMetadata { response_type: filter, url_list: vec![final_url.clone()], timing_allow_passed: false, redirected: false, cors_exposed_header_names: None, request_include_credentials: false },
                 );
                 let global = context.global(scope);
                 let _ = global.set(
@@ -1545,6 +1547,8 @@ redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                             mode: if opaque { moli_fetch::RequestMode::NoCors } else { moli_fetch::RequestMode::Cors },
                         };
                         let head = moli_fetch::ResponseHead {
+request_include_credentials: false,
+
                             status_text: None,
                             final_url: Url::parse("https://cross-null-response.test/data").unwrap(),
                             status,
@@ -1669,6 +1673,8 @@ fn opaque_window_fetch_keeps_blocked_bytes_out_of_internal_clone_consumers() {
                 body_source_id: id,
                 network_request_headers: None,
                 head: moli_fetch::ResponseHead {
+                    request_include_credentials: false,
+
                     status_text: None,
                     final_url: pending.url.clone(),
                     status: 200,
@@ -1783,6 +1789,7 @@ async fn filtered_response_materialization_preserves_internal_head_across_clone_
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let head = moli_fetch::ResponseHead {
+request_include_credentials: false,
 
 
                         status_text: Some("Internal Status".to_owned()),

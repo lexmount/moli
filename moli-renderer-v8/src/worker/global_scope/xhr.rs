@@ -800,6 +800,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
     }
 
 
+
     let Some(pending) = state.borrow_mut().pending_xhrs.remove(&completion.xhr_id) else {
         return;
     };

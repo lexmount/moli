@@ -207,6 +207,8 @@ mod tests {
             };
             let loaded = super::super::LoadedResponse {
                 head: moli_fetch::ResponseHead {
+                    request_include_credentials: false,
+
                     final_url: url,
                     status: 200,
                     status_text: Some("OK".into()),

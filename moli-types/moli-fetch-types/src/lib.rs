@@ -145,9 +145,14 @@ impl std::str::FromStr for FetchResponseType {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FetchResponseMetadata {
-    /// Frozen CORS exposed-name list, retained through filtering, cloning and cache storage.
+    /// Exposed names captured when the CORS filter is created. Header mutation
+    /// on a later interception or cache adapter cannot widen this filter.
     #[serde(default)]
     pub cors_exposed_header_names: Option<Vec<String>>,
+    /// Credentials flag of the final request, independent of cookie presence
+    /// and retained by filtered responses.
+    #[serde(default = "unknown_response_credentials")]
+    pub request_include_credentials: bool,
     pub response_type: FetchResponseType,
     /// Internal URLs, including those hidden by an opaque response's public URL.
     pub url_list: Vec<Url>,
@@ -157,11 +162,17 @@ pub struct FetchResponseMetadata {
     pub redirected: bool,
 }
 
+// Older serialized metadata cannot prove a credentialless response.
+fn unknown_response_credentials() -> bool {
+    true
+}
+
 impl Default for FetchResponseMetadata {
     fn default() -> Self {
         Self {
             cors_exposed_header_names: None,
             response_type: FetchResponseType::Default,
+            request_include_credentials: false,
             url_list: Vec::new(),
             timing_allow_passed: true,
             redirected: false,
@@ -184,6 +195,11 @@ pub struct FetchResponseHead {
 }
 
 impl FetchResponseHead {
+    /// Whether this filtered response exposes an internal header. Cache query
+    /// matching uses the filtered list while retaining the full internal head.
+    pub fn exposes_header(&self, name: &str) -> bool {
+        self.metadata.exposes_header(&self.headers, name)
+    }
     pub fn with_body(self, body: Vec<u8>) -> FetchResponse {
         FetchResponse { head: self, body }
     }
@@ -234,8 +250,6 @@ impl FetchResponseMetadata {
 }
 
 impl FetchResponseMetadata {
-    // This earlier phase has no captured request credentials fact. A raw wildcard
-    // cannot prove credentialless exposure; explicit frozen names remain authoritative.
     pub fn exposes_header(&self, headers: &[(String, Vec<u8>)], name: &str) -> bool {
         if !self.response_type.is_readable() {
             return false;
@@ -273,6 +287,57 @@ impl FetchResponseMetadata {
             .filter(|(field, _)| field.eq_ignore_ascii_case("access-control-expose-headers"))
             .flat_map(|(_, value)| value.split(|byte| *byte == b','))
             .map(|token| token.trim_ascii())
-            .any(|token| token.eq_ignore_ascii_case(name.as_bytes()))
+            .any(|token| {
+                token.eq_ignore_ascii_case(name.as_bytes())
+                    || (token == b"*" && !self.request_include_credentials)
+            })
+    }
+}
+
+#[cfg(test)]
+mod response_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn captured_cors_exposure_survives_changed_headers_and_serialization() {
+        for credentials in [false, true] {
+            let mut metadata = FetchResponseMetadata {
+                response_type: FetchResponseType::Cors,
+                request_include_credentials: credentials,
+                ..Default::default()
+            };
+            let original = vec![
+                (
+                    "Access-Control-Expose-Headers".into(),
+                    b"*, X-Visible".to_vec(),
+                ),
+                ("Content-Type".into(), b"text/plain".to_vec()),
+                ("X-Visible".into(), b"visible".to_vec()),
+                ("X-Hidden".into(), b"hidden".to_vec()),
+                ("Set-Cookie".into(), b"secret=value".to_vec()),
+            ];
+            metadata.capture_cors_exposed_headers(&original);
+            let changed = vec![
+                (
+                    "Access-Control-Expose-Headers".into(),
+                    b"X-New, Set-Cookie".to_vec(),
+                ),
+                ("X-New".into(), b"new".to_vec()),
+                (
+                    "Last-Modified".into(),
+                    b"Wed, 01 Jan 2020 00:00:00 GMT".to_vec(),
+                ),
+            ];
+            assert!(metadata.exposes_header(&changed, "content-type"));
+            assert!(metadata.exposes_header(&changed, "x-visible"));
+            assert_eq!(metadata.exposes_header(&changed, "x-hidden"), !credentials);
+            assert!(!metadata.exposes_header(&changed, "x-new"));
+            assert!(metadata.exposes_header(&changed, "last-modified"));
+            assert!(!metadata.exposes_header(&changed, "set-cookie"));
+            let saved = serde_json::to_vec(&metadata).unwrap();
+            let mut restored: FetchResponseMetadata = serde_json::from_slice(&saved).unwrap();
+            restored.capture_cors_exposed_headers(&changed);
+            assert_eq!(restored, metadata);
+        }
     }
 }
