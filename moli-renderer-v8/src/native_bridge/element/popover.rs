@@ -13,7 +13,7 @@ use super::super::node::{
 };
 use super::super::throw_dom_exception;
 use super::focus::{focus_element, is_focusable, update_focus};
-use super::toggle_event::queue_element_toggle_event;
+use super::toggle_event::{cancel_element_toggle_event, queue_element_toggle_event};
 use super::{
     JsContextHost, dispatch_public_event, element_attribute, element_has_attribute,
     remove_reflected_attribute, set_reflected_attribute,
@@ -35,7 +35,7 @@ fn is_manual_popover(runtime: &JsContextHost, handle: DomHandle) -> bool {
         .is_some_and(|value| canonical_popover_state(value) == "manual")
 }
 
-fn popover_is_open(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(super) fn popover_is_open(runtime: &JsContextHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)
@@ -73,6 +73,26 @@ fn ensure_popover_connected(
         "InvalidStateError",
         11,
         "Popover methods require a connected element.",
+    );
+    false
+}
+
+fn ensure_popover_connected_to_document(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    expected_document: Option<DomHandle>,
+) -> bool {
+    if runtime.dom_host().is_connected(handle)
+        && runtime.dom_host().owner_document_handle(handle) == expected_document
+    {
+        return true;
+    }
+    throw_dom_exception(
+        scope,
+        "InvalidStateError",
+        11,
+        "A popover being shown must remain connected to its original document.",
     );
     false
 }
@@ -145,6 +165,7 @@ fn set_popover_open_state(
     if was_open == open {
         return open;
     }
+    let owner_document = runtime.dom_host().owner_document_handle(handle);
     let old_style_state = runtime.retained_current_element_state(handle);
     let (old_state, new_state) = if open {
         (
@@ -170,13 +191,27 @@ fn set_popover_open_state(
             return false;
         }
     }
-    if open && !ensure_popover_connected(scope, unsafe { &*runtime_ptr }, handle) {
+    if open
+        && !ensure_popover_connected_to_document(
+            scope,
+            unsafe { &*runtime_ptr },
+            handle,
+            owner_document,
+        )
+    {
         return false;
     }
     if open && !is_manual_popover(unsafe { &*runtime_ptr }, handle) {
         close_open_auto_popovers(scope, runtime_ptr, handle, source);
     }
-    if open && !ensure_popover_connected(scope, unsafe { &*runtime_ptr }, handle) {
+    if open
+        && !ensure_popover_connected_to_document(
+            scope,
+            unsafe { &*runtime_ptr },
+            handle,
+            owner_document,
+        )
+    {
         return false;
     }
     if open && !is_manual_popover(unsafe { &*runtime_ptr }, handle) {
@@ -213,6 +248,38 @@ fn set_popover_open_state(
         );
     }
     open
+}
+
+pub(crate) fn handle_popover_attribute_change(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    namespace: Option<&str>,
+    local_name: &str,
+    old_value: Option<&str>,
+    new_value: Option<&str>,
+) {
+    if namespace.is_some() || !local_name.eq_ignore_ascii_case("popover") {
+        return;
+    }
+    let old_type = old_value.map(canonical_popover_state);
+    let new_type = new_value.map(canonical_popover_state);
+    if old_type == new_type {
+        return;
+    }
+    if popover_is_open(unsafe { &*runtime_ptr }, handle) {
+        let _ = set_popover_open_state(scope, runtime_ptr, handle, false, None);
+    }
+    if new_value.is_none() {
+        // Blink drops PopoverData when the attribute is removed. Its task
+        // handle owns and cancels any coalesced toggle event at that point.
+        cancel_element_toggle_event(
+            scope,
+            runtime_ptr,
+            RendererPageElementToggleEventKind::Popover,
+            handle,
+        );
+    }
 }
 
 fn autofocus_popover_descendant(
