@@ -228,7 +228,10 @@ impl DocumentRuntime {
         // Preserve registry identity while the source parent is still known.
         // Detaching must not make an inherited document registry start using
         // the destination shadow root's scoped registry on reinsertion.
-        if let Some(document) = roots
+        if custom_elements::removal_may_need_registry_association_retargets(
+            unsafe { &*host_ptr },
+            roots,
+        ) && let Some(document) = roots
             .first()
             .and_then(|root| self.dom_host.owner_document_handle(*root))
         {

@@ -118,7 +118,9 @@ pub(crate) use registry::{
     CustomElementRegistryKey, CustomElementRegistryKind, RegistryAssociationRetarget,
 };
 mod registry_adoption_retarget;
-pub(crate) use registry_adoption_retarget::adoption_plan_before_adoption;
+pub(crate) use registry_adoption_retarget::{
+    adoption_plan_before_adoption, removal_may_need_registry_association_retargets,
+};
 mod registry_clone_association;
 mod registry_clone_retarget;
 pub(crate) use registry_clone_retarget::{

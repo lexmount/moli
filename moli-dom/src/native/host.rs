@@ -24,6 +24,7 @@ mod parser;
 mod query_index;
 mod retarget;
 mod stylesheet_candidates;
+mod subtree;
 mod svg_user_transform;
 mod transfer;
 mod types;
