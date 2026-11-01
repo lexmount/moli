@@ -84,6 +84,15 @@ async fn assert_immediate_close_keepalive(shared: bool, post: bool, nested: bool
     let method = if post { "POST" } else { "GET" };
     assert!(request.starts_with(&format!("{method} /keepalive HTTP/1.1\r\n")));
     assert!(request.ends_with(&format!("\r\n\r\n{body}")));
+    // Joining the parent does not join its nested workers. Their asynchronous
+    // teardown must detach the pending load before we inspect the registry.
+    timeout(TIMEOUT, async {
+        while runtime.detached_keepalive_diagnostics().active_load_count == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the closing worker must detach its pending keepalive request");
     assert_eq!(
         runtime.detached_keepalive_diagnostics().active_load_count,
         1
