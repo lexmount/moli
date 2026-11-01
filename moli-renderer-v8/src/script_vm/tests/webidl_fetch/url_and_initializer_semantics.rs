@@ -556,7 +556,7 @@ fn response_body_consumers_use_shared_content_type_helpers() {
 
     assert_eq!(
         result,
-        r#"["a,1|b,two","value|true|blob|application/json|{\"ok\":true}","application/json","text/plain;charset=UTF-8","application/json"]"#
+        r#"["a,1|b,two","value|true|blob|application/json|{\"ok\":true}","application/json","text/plain; charset=utf-8","text/plain, application/json"]"#
     );
 }
 
