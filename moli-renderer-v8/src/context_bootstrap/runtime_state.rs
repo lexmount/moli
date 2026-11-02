@@ -428,7 +428,7 @@ struct WindowAdditionalReplaceableAccessorsDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(plain)]
+#[webapi(plain, enumerable)]
 struct ConsoleObjectDeclaration {
     #[webapi(method, callback = console_log_callback)]
     log: (),
@@ -450,6 +450,10 @@ struct ConsoleObjectDeclaration {
     exception: (),
     #[webapi(method, callback = console_table_callback)]
     table: (),
+    #[webapi(method, callback = console_dir_callback)]
+    dir: (),
+    #[webapi(method, callback = console_dirxml_callback)]
+    dirxml: (),
     #[webapi(method, callback = console_noop_callback)]
     time: (),
     #[webapi(method, callback = console_noop_callback)]
@@ -1895,6 +1899,7 @@ fn install_window_runtime_state<'s>(
     let console = ConsoleObjectDeclaration::default()
         .bind(scope)
         .map_err(|error| anyhow!("failed to create console object: {error}"))?;
+    initialize_console_namespace(scope, console)?;
     let webkit_storage_info = build_legacy_storage_info_object(scope)?;
     WindowBootstrapGlobalSlotsDeclaration::new(
         console,
