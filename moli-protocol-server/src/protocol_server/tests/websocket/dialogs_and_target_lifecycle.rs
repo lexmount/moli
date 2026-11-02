@@ -1887,7 +1887,16 @@ async fn websocket_cdp_javascript_dialog_is_reported_to_and_resolvable_by_every_
         .await
         .expect("send cross-session confirm");
 
-    let observed = recv_cdp_messages_for(&mut socket, Duration::from_secs(3)).await;
+    let mut opened_a = false;
+    let mut opened_b = false;
+    let observed = recv_until_match(&mut socket, |message| {
+        if message["method"] == "Page.javascriptDialogOpening" {
+            opened_a |= message["sessionId"] == session_a_id;
+            opened_b |= message["sessionId"] == session_b_id;
+        }
+        opened_a && opened_b
+    })
+    .await;
     assert!(
         observed.iter().any(|message| {
             message["sessionId"].as_str() == Some(session_b_id.as_str())
@@ -1918,6 +1927,63 @@ async fn websocket_cdp_javascript_dialog_is_reported_to_and_resolvable_by_every_
         "a session without Page.enable must not receive Page dialog events: {observed:#?}"
     );
 
+    let rejected = send_cdp_command(
+        &mut socket,
+        21,
+        "Page.handleJavaScriptDialog",
+        Some(&session_c_id),
+        json!({"accept": true}),
+    )
+    .await;
+    assert!(
+        rejected
+            .iter()
+            .any(|message| message["id"] == 21
+                && message["error"]["message"] == "No dialog is showing"),
+        "a session without Page.enable cannot consume another session's dialog: {rejected:?}"
+    );
+    let _ = send_cdp_command(
+        &mut socket,
+        23,
+        "Page.enable",
+        Some(&session_c_id),
+        json!({}),
+    )
+    .await;
+    let late = send_cdp_command(
+        &mut socket,
+        25,
+        "Page.handleJavaScriptDialog",
+        Some(&session_c_id),
+        json!({"accept": true}),
+    )
+    .await;
+    assert!(
+        late.iter()
+            .any(|message| message["id"] == 25
+                && message["error"]["message"] == "No dialog is showing"),
+        "Page.enable after opening cannot acquire the existing dialog callback: {late:?}"
+    );
+    let disabled = send_cdp_command(
+        &mut socket,
+        27,
+        "Page.disable",
+        Some(&session_c_id),
+        json!({}),
+    )
+    .await;
+    assert!(
+        disabled
+            .iter()
+            .any(|message| message["id"] == 27 && message["result"] == json!({}))
+    );
+    assert!(
+        !disabled.iter().any(
+            |message| message["id"] == 20 || message["method"] == "Page.javascriptDialogClosed"
+        ),
+        "disabling a session without a pending callback must leave the dialog open: {disabled:?}"
+    );
+
     // Session A — the session that did NOT open the dialog — resolves it.
     send_cdp_command_without_wait(
         &mut socket,
@@ -1927,7 +1993,20 @@ async fn websocket_cdp_javascript_dialog_is_reported_to_and_resolvable_by_every_
         json!({ "accept": true }),
     )
     .await;
-    let handled = recv_cdp_messages_for(&mut socket, Duration::from_secs(3)).await;
+    let mut handled_response = false;
+    let mut evaluate_response = false;
+    let mut closed_a = false;
+    let mut closed_b = false;
+    let handled = recv_until_match(&mut socket, |message| {
+        handled_response |= message["id"] == 22;
+        evaluate_response |= message["id"] == 20;
+        if message["method"] == "Page.javascriptDialogClosed" {
+            closed_a |= message["sessionId"] == session_a_id;
+            closed_b |= message["sessionId"] == session_b_id;
+        }
+        handled_response && evaluate_response && closed_a && closed_b
+    })
+    .await;
     assert!(
         handled
             .iter()

@@ -710,8 +710,9 @@ pub(crate) use state::{
     RendererCommandCorrelation, RendererCommandDescriptor, RendererCommandReplay,
     RendererMainDocumentCommitSeed, RendererPageResidenceIdentity,
     ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
-    SiteDataClearOptions, TargetIdentityState, TargetInitialEmptyDocumentCreator, TargetOwnerState,
-    TargetPageAttachmentId, TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity,
+    SiteDataClearOptions, TargetIdentityState, TargetInitialEmptyDocumentCreator,
+    TargetJavaScriptDialogState, TargetOwnerState, TargetPageAttachmentId,
+    TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity,
     TargetPageResidenceObservation, TargetPageResidenceToken, TargetPageSessionState,
     TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
     TargetRootDocumentProtocolAttachmentIdentity, TargetRuntimeSlot,
@@ -2220,27 +2221,10 @@ impl CdpConnection {
     }
 
     fn retire_javascript_dialogs_for_owner(&mut self, owner: &CommandOwnerScope) {
-        let _event_session_ids = self.page_event_session_ids_for_owner(owner);
         if let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) {
             slot.retire_javascript_dialog_scope();
         }
-        // Dialog state is canonical per Page residence (the primary session
-        // key), so a document replacement clears it there. Clear any residual
-        // attached-session state as well for sessions created before this
-        // canonicalization.
-        let _ = self
-            .with_target_page_primary_devtools_session_state_for_owner_mut(owner, |state| {
-                state.page_session_state.javascript_dialog_state.clear()
-            });
-        for event_session_id in _event_session_ids {
-            let event_owner = event_session_id
-                .as_deref()
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| owner.clone());
-            let _ = self.with_target_devtools_session_state_for_owner_mut(&event_owner, |state| {
-                state.page_session_state.javascript_dialog_state.clear()
-            });
-        }
+        self.with_target_javascript_dialog_state_for_owner_mut(owner, |state| state.clear());
     }
 
     pub(crate) fn begin_renderer_document_load_visibility_barrier_for_owner(

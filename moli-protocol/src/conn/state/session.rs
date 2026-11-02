@@ -1,5 +1,4 @@
 use super::devtools_session::DevToolsNetworkSessionState;
-use super::javascript_dialog::TargetJavaScriptDialogState;
 use super::page_target_host::PageTargetHost;
 use crate::domains::audits_output_state::TargetAuditsSessionState;
 use moli_core::page::V8InspectorSessionState;
@@ -165,16 +164,16 @@ impl PageTargetHost {
     }
 
     pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
-        self.devtools_sessions.states().any(|session| {
-            !session
-                .page_session_state
-                .javascript_dialog_state
-                .is_empty()
-        })
+        !self.javascript_dialog_state.is_empty()
+    }
+
+    pub(crate) fn clear_loaded_document_context_state(&mut self) {
+        self.javascript_dialog_state.clear();
     }
 
     pub(crate) fn has_non_default_session_state(&self) -> bool {
         self.devtools_sessions.has_non_default_state()
+            || self.has_pending_javascript_dialog()
             || self.runtime_slot.primary_network_events_enabled()
             || self.network_policy != TargetNetworkPolicyState::default()
             || self.http_proxy_override.is_some()
@@ -438,7 +437,6 @@ pub(crate) struct TargetPageSessionState {
     pub(crate) page_file_chooser_opened_event_enabled: bool,
     pub(crate) page_intercept_file_chooser_dialog_enabled: bool,
     pub(crate) page_screencast: PageScreencastSessionState,
-    pub(crate) javascript_dialog_state: TargetJavaScriptDialogState,
 }
 
 impl Default for TargetPageSessionState {
@@ -457,7 +455,6 @@ impl Default for TargetPageSessionState {
             page_file_chooser_opened_event_enabled: false,
             page_intercept_file_chooser_dialog_enabled: false,
             page_screencast: PageScreencastSessionState::default(),
-            javascript_dialog_state: TargetJavaScriptDialogState::default(),
         }
     }
 }
@@ -482,10 +479,6 @@ impl TargetPageSessionState {
     pub(crate) fn page_domain_subscription_is_current(&self, generation: u64) -> bool {
         self.page_domain_enabled && self.page_domain_subscription_generation == generation
     }
-
-    pub(crate) fn clear_loaded_document_context_state(&mut self) {
-        self.javascript_dialog_state.clear();
-    }
 }
 
 impl PartialEq for TargetPageSessionState {
@@ -504,7 +497,6 @@ impl PartialEq for TargetPageSessionState {
             && self.page_intercept_file_chooser_dialog_enabled
                 == other.page_intercept_file_chooser_dialog_enabled
             && self.page_screencast == other.page_screencast
-            && self.javascript_dialog_state == other.javascript_dialog_state
     }
 }
 

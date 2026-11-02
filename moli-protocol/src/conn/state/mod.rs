@@ -79,7 +79,7 @@ pub(crate) use inspector::InspectorCommandDispatch;
 #[cfg(test)]
 pub(crate) use javascript_dialog::TargetJavaScriptDialog;
 pub(crate) use javascript_dialog::{
-    TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver,
+    TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver, TargetJavaScriptDialogState,
     TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
 };
 pub(crate) use pending_renderer_command::{

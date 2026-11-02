@@ -194,18 +194,6 @@ fn mark_page_domain_enabled(state: &mut crate::conn::TargetPageSessionState) {
     state
         .page_screencast
         .start(crate::conn::PageScreencastConfig::default());
-    state.javascript_dialog_state.push(target_dialog_for_test(
-        crate::conn::TargetPageResidenceIdentity::new_for_test(
-            "BID-dialog".to_owned(),
-            Some("TID-dialog".to_owned()),
-            1,
-        ),
-        "TID-dialog",
-        "alert",
-        "pending",
-        "",
-        None,
-    ));
 }
 
 fn assert_page_domain_enabled(state: &crate::conn::TargetPageSessionState) {
@@ -220,7 +208,6 @@ fn assert_page_domain_enabled(state: &crate::conn::TargetPageSessionState) {
     assert!(state.page_intercept_file_chooser_dialog_enabled);
     assert!(state.page_screencast.is_active());
     assert!(state.page_screencast.generation() > 0);
-    assert!(!state.javascript_dialog_state.is_empty());
 }
 
 fn assert_page_domain_disabled(state: &crate::conn::TargetPageSessionState) {
@@ -231,7 +218,6 @@ fn assert_page_domain_disabled(state: &crate::conn::TargetPageSessionState) {
     assert!(!state.page_file_chooser_opened_event_enabled);
     assert!(!state.page_intercept_file_chooser_dialog_enabled);
     assert!(!state.page_screencast.is_active());
-    assert!(state.javascript_dialog_state.is_empty());
 }
 
 fn enable_page_domain_for_session(conn: &mut crate::conn::CdpConnection, session_id: &str) {
@@ -260,23 +246,6 @@ fn enable_page_domain_for_session(conn: &mut crate::conn::CdpConnection, session
         )
         .is_some()
     );
-    conn.with_target_devtools_session_state_for_session_mut(Some(session_id), |state| {
-        state
-            .page_session_state
-            .javascript_dialog_state
-            .push(target_dialog_for_test(
-                crate::conn::TargetPageResidenceIdentity::new_for_test(
-                    "BID-dialog".to_owned(),
-                    Some("TID-dialog".to_owned()),
-                    1,
-                ),
-                "TID-dialog",
-                "alert",
-                "pending",
-                "",
-                None,
-            ));
-    });
 }
 
 async fn install_runtime_document_replacement_test_page(ctx: &mut TestContext) -> i64 {
