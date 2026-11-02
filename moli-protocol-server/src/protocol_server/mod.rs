@@ -34,6 +34,7 @@ mod cdp_socket;
 mod instance_control;
 mod instance_shutdown;
 mod protocol_local_executor;
+mod request_guard;
 mod tcp_options;
 mod trailing_slash;
 mod webdriver_bidi;
@@ -42,6 +43,7 @@ mod webdriver_files;
 
 use cdp_agent_host::SharedCdpAgentHostDirectory;
 use cdp_owner::SharedCdpOwnerRegistry;
+use request_guard::RequestGuard;
 use webdriver_bidi::SharedBidiSessionRegistry;
 use webdriver_classic::SharedClassicSessionRegistry;
 
@@ -149,13 +151,14 @@ impl ProtocolServer {
 
         info!(%addr, "protocol server listening");
 
-        let app_state = AppState::new_with_storage_partition_and_runtime_config(
+        let mut app_state = AppState::new_with_storage_partition_and_runtime_config(
             addr,
             self.storage_partition.clone(),
             self.navigation_runtime_config.clone(),
             self.config.screencast_interval_ms,
             control,
         )?;
+        app_state.remote_allow_origins = self.config.remote_allow_origins.clone();
 
         serve_listener(listener, app_state).await
     }
@@ -221,10 +224,12 @@ impl ProtocolRoutes for Router<AppState> {
     }
 }
 
-type ProtocolRouter = trailing_slash::TrailingSlash<Router>;
+type ProtocolRouter = RequestGuard<trailing_slash::TrailingSlash<Router>>;
 
 fn build_router(app_state: AppState) -> ProtocolRouter {
+    let addr = app_state.addr;
     let control = app_state.control.clone();
+    let remote_allow_origins = app_state.remote_allow_origins.clone();
     let browser_ws_path = format!("/devtools/browser/{}", app_state.browser_id);
     let router = Router::new()
         .protocol_route("/status", get(webdriver_classic::webdriver_classic_status))
@@ -485,7 +490,8 @@ fn build_router(app_state: AppState) -> ProtocolRouter {
         .layer(middleware::from_fn_with_state(control, instance_admission));
     // The outer make-service wrapper bypasses Router's own eager finalization.
     let router = router.with_state(());
-    trailing_slash::TrailingSlashLayer::new(&[JSON_DISCOVERY_PATH]).layer(router)
+    let router = trailing_slash::TrailingSlashLayer::new(&[JSON_DISCOVERY_PATH]).layer(router);
+    RequestGuard::new(router, addr, &remote_allow_origins)
 }
 
 async fn instance_admission(
@@ -550,6 +556,7 @@ fn is_websocket_upgrade_request(request: &Request<Body>) -> bool {
 struct AppState {
     addr: SocketAddr,
     control: BrowserInstanceControl,
+    remote_allow_origins: Vec<String>,
     debugger_enabled: bool,
     browser_id: Uuid,
     browser_ws_url: String,
@@ -607,6 +614,7 @@ impl AppState {
         Ok(Self {
             addr,
             control,
+            remote_allow_origins: Vec::new(),
             browser_id,
             browser_ws_url: format!("ws://{addr}/devtools/browser/{browser_id}"),
             debugger_enabled: navigation_runtime_config.debugger_enabled(),

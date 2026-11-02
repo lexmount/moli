@@ -123,6 +123,7 @@ async fn assert_instance_shutdown(native: bool) {
     let classic = build_router(state.clone())
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .method(Method::POST)
                 .uri("/session")
                 .header(header::CONTENT_TYPE, "application/json")

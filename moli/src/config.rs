@@ -72,6 +72,7 @@ impl AppConfig {
                 config.server.host = args.host.clone();
                 config.server.port = args.port;
                 config.server.timeout_secs = args.timeout;
+                config.server.remote_allow_origins = args.remote_allow_origins.clone();
                 if let Some(interval_ms) = args.screencast_interval {
                     config.server.screencast_interval_ms = interval_ms;
                 }

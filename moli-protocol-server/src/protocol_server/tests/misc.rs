@@ -255,7 +255,13 @@ async fn browser_websocket_uuid_changes_between_instances_at_the_same_address() 
     ] {
         let response = router
             .clone()
-            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .header(header::HOST, "localhost")
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
@@ -641,6 +647,7 @@ async fn closed_default_target_is_not_readvertised_by_discovery() {
         .clone()
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .uri("/json/list?for_tab")
                 .body(Body::empty())
                 .expect("list request"),
@@ -673,6 +680,7 @@ async fn closed_default_target_is_not_readvertised_by_discovery() {
         .clone()
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .uri(format!("/json/close/{default_target_id}"))
                 .body(Body::empty())
                 .expect("close request"),
@@ -684,6 +692,7 @@ async fn closed_default_target_is_not_readvertised_by_discovery() {
     let second_list = app
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .uri("/json/list?for_tab")
                 .body(Body::empty())
                 .expect("second list request"),
