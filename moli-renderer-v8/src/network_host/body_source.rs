@@ -261,11 +261,36 @@ pub(crate) struct PendingNetworkBodySourceState {
     streaming: bool,
     pull_requested: bool,
     closed: bool,
-    error: Option<String>,
+    error: Option<PendingNetworkBodyError>,
     materializations: Vec<PendingBodyMaterialization>,
 }
 
+#[derive(Clone)]
+enum PendingNetworkBodyError {
+    Network(String),
+    Aborted,
+}
+
+impl PendingNetworkBodyError {
+    fn message(&self) -> &str {
+        match self {
+            Self::Network(message) => message,
+            Self::Aborted => "The operation was aborted.",
+        }
+    }
+}
+
 impl PendingNetworkBodySourceState {
+    fn abort_reason<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        if !matches!(self.error, Some(PendingNetworkBodyError::Aborted)) {
+            return None;
+        }
+        self.error_reason(scope)
+    }
+
     fn error_reason<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -780,13 +805,35 @@ pub(crate) fn error_pending_network_body_stream_with_reason<'s>(
     error_text: String,
     reason: v8::Local<'s, v8::Value>,
 ) {
+    fail_pending_network_body_stream(
+        scope,
+        id,
+        PendingNetworkBodyError::Network(error_text),
+        reason,
+    );
+}
+
+pub(crate) fn abort_pending_network_body_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    id: NetworkBodySourceId,
+    reason: v8::Local<'s, v8::Value>,
+) {
+    fail_pending_network_body_stream(scope, id, PendingNetworkBodyError::Aborted, reason);
+}
+
+fn fail_pending_network_body_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    id: NetworkBodySourceId,
+    error: PendingNetworkBodyError,
+    reason: v8::Local<'s, v8::Value>,
+) {
     let materializations = if let Some(host) = context_host_mut(scope) {
         error_pending_network_body_stream_in_maps(
             scope,
             &mut host.pending_network_body_sources,
             &mut host.pending_network_body_clones,
             id,
-            &error_text,
+            &error,
             reason,
         )
     } else if let Some(worker_state) = get_worker_state(scope) {
@@ -798,7 +845,7 @@ pub(crate) fn error_pending_network_body_stream_with_reason<'s>(
             &mut worker_state.pending_network_body_sources,
             id,
             clone_ids,
-            &error_text,
+            &error,
             reason,
         )
     } else {
@@ -812,13 +859,11 @@ fn error_pending_network_body_stream_in_maps<'s>(
     sources: &mut HashMap<NetworkBodySourceId, PendingNetworkBodySourceState>,
     clones: &mut HashMap<NetworkBodySourceId, Vec<NetworkBodySourceId>>,
     id: NetworkBodySourceId,
-    error_text: &str,
+    error: &PendingNetworkBodyError,
     reason: v8::Local<'s, v8::Value>,
 ) -> Vec<PendingBodyMaterialization> {
     let clone_ids = take_pending_body_clone_descendants(clones, id);
-    error_pending_network_body_stream_with_clone_ids(
-        scope, sources, id, clone_ids, error_text, reason,
-    )
+    error_pending_network_body_stream_with_clone_ids(scope, sources, id, clone_ids, error, reason)
 }
 
 fn pending_body_clone_descendants(
@@ -936,7 +981,7 @@ fn error_pending_network_body_stream_with_clone_ids<'s>(
     sources: &mut HashMap<NetworkBodySourceId, PendingNetworkBodySourceState>,
     id: NetworkBodySourceId,
     clone_ids: Vec<NetworkBodySourceId>,
-    error_text: &str,
+    error: &PendingNetworkBodyError,
     reason: v8::Local<'s, v8::Value>,
 ) -> Vec<PendingBodyMaterialization> {
     let mut materializations = if let Some(state) = sources.get_mut(&id) {
@@ -948,7 +993,7 @@ fn error_pending_network_body_stream_with_clone_ids<'s>(
             return Vec::new();
         }
         state.closed = true;
-        state.error = Some(error_text.to_owned());
+        state.error = Some(error.clone());
         if let Some(stream) = state.stream.to_local(scope) {
             error_stream(scope, stream, reason);
         }
@@ -966,7 +1011,7 @@ fn error_pending_network_body_stream_with_clone_ids<'s>(
                 continue;
             }
             clone.closed = true;
-            clone.error = Some(error_text.to_owned());
+            clone.error = Some(error.clone());
             if let Some(stream) = clone.stream.to_local(scope) {
                 error_stream(scope, stream, reason);
             }
@@ -1162,13 +1207,15 @@ fn clone_pending_network_body_source_and_stream<'s>(
         }
         return None;
     }
-    if let Some(error_text) = error_now {
-        if let Some(reason) = error_reason_now {
-            let reason = v8::Local::new(scope, &reason);
-            error_pending_network_body_stream_with_reason(scope, clone_id, error_text, reason);
+    if let Some(error) = error_now {
+        let reason = if let Some(reason) = error_reason_now {
+            v8::Local::new(scope, &reason)
         } else {
-            error_pending_network_body_stream(scope, clone_id, error_text);
-        }
+            v8_string(scope, error.message())
+                .map(|message| v8::Exception::type_error(scope, message))
+                .unwrap_or_else(|| v8::undefined(scope).into())
+        };
+        fail_pending_network_body_stream(scope, clone_id, error, reason);
     } else if close_now {
         close_pending_network_body_stream(scope, clone_id);
     } else if let Some(host) = context_host_mut(scope) {
@@ -1218,7 +1265,7 @@ pub(in crate::network_host) fn clone_filtered_response_internal_body_source<'s>(
 struct ClonePendingBodySourceOutcome {
     found_original: bool,
     close_now: bool,
-    error_now: Option<String>,
+    error_now: Option<PendingNetworkBodyError>,
     error_reason_now: Option<v8::Global<v8::Value>>,
 }
 
@@ -1255,6 +1302,25 @@ pub(in crate::network_host) fn consume_network_body_value_from_object<'s>(
     kind: NetworkBodyConsumptionKind,
 ) -> NetworkBodyConsumption<'s> {
     consume_network_body_value_from_object_inner(scope, object, kind, None).0
+}
+
+pub(in crate::network_host) fn aborted_network_body_reason<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let source = network_body_source_from_object(scope, object)?;
+    if network_body_source_kind(scope, source).as_deref() != Some(BODY_SOURCE_KIND_PENDING_STREAM) {
+        return None;
+    }
+    let id = registry_body_source_id(scope, source)?;
+    if let Some(host) = context_host_mut(scope) {
+        let state = host.pending_network_body_sources.get(&id)?;
+        return state.abort_reason(scope);
+    }
+    let worker_state = get_worker_state(scope)?;
+    let worker_state = worker_state.borrow();
+    let state = worker_state.pending_network_body_sources.get(&id)?;
+    state.abort_reason(scope)
 }
 
 pub(in crate::network_host) fn consume_network_body_value_from_object_with_chunk_callback<'s>(
@@ -1546,12 +1612,12 @@ fn inspect_pending_body_source_for_materialization<'s>(
     rejected: &mut Option<PendingBodyRejection>,
 ) {
     if let Some(state) = sources.get_mut(&id) {
-        if let Some(error_text) = state.error.clone() {
+        if let Some(error) = state.error.as_ref() {
             *rejected = Some(
                 state
                     .error_reason(scope)
                     .map(|reason| PendingBodyRejection::Reason(v8::Global::new(scope, reason)))
-                    .unwrap_or(PendingBodyRejection::Message(error_text)),
+                    .unwrap_or_else(|| PendingBodyRejection::Message(error.message().to_owned())),
             );
             sources.remove(&id);
         } else if state.closed {
