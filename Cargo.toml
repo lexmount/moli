@@ -1,4 +1,5 @@
 [workspace]
+exclude = ["vendor/quinn-0.11.12"]
 resolver = "3"
 members = [
     "moli",
@@ -102,6 +103,8 @@ members = [
 license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
+# Backport terminal-reader waker cleanup for passive RESET observers.
+quinn = { path = "vendor/quinn-0.11.12" }
 # Share glyph preparation between CPU rendering and PDF ink measurement.
 glifo = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3df09316c4ef1299ba" }
 vello_common = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3df09316c4ef1299ba" }
