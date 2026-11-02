@@ -93,7 +93,7 @@ fn add(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Result<Operation, CommandOutp
             record_document_start_script(state, target.as_deref(), Some(&script_owner), &script)
         })
         .ok_or_else(|| CommandOutputPlan::error(-31998, "TargetNotLoaded"))?;
-    let identifier = recorded.identifier;
+    let identifier = DevToolsPreloadScriptId::from(recorded.identifier);
     if !recorded.inserted {
         return Err(add_preload_script_result_plan(identifier));
     }

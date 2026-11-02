@@ -6,9 +6,10 @@ use crate::automation::{
     DevToolsErrorKind, DevToolsGetFrameTreeCommand, DevToolsGetFrameTreeResult,
     DevToolsGetFrameTreesResult, DevToolsGetJavaScriptDialogCommand,
     DevToolsHandleJavaScriptDialogCommand, DevToolsJavaScriptDialogResult,
-    DevToolsLayoutMetricsResult, DevToolsPrintToPdfCommand, DevToolsPrintToPdfTransferMode,
-    DevToolsScreenshotClip, DevToolsSetJavaScriptDialogPromptTextCommand, DevToolsTargetInfo,
-    DevToolsTargetKind, FrontendProtocol, UserPromptClosedEvent,
+    DevToolsLayoutMetricsResult, DevToolsPreloadScriptId, DevToolsPrintToPdfCommand,
+    DevToolsPrintToPdfTransferMode, DevToolsScreenshotClip,
+    DevToolsSetJavaScriptDialogPromptTextCommand, DevToolsTargetInfo, DevToolsTargetKind,
+    FrontendProtocol, UserPromptClosedEvent,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
@@ -175,7 +176,7 @@ enum PendingPageCommandKind {
         route: CdpSessionRoute,
     },
     AppendContextPreloadScript {
-        identifier: String,
+        identifier: DevToolsPreloadScriptId,
         pending: PendingPageCommand,
     },
     RemoveDocumentStartScript {
@@ -241,7 +242,7 @@ enum CompletedPageCommandKind {
         route: CdpSessionRoute,
     },
     AppendContextPreloadScript {
-        identifier: String,
+        identifier: DevToolsPreloadScriptId,
         completed: Box<Result<CompletedPageCommand>>,
     },
     RemoveDocumentStartScript {

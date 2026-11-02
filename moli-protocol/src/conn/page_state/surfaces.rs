@@ -1,3 +1,5 @@
+use crate::automation::DevToolsPreloadScriptId;
+
 use super::super::cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
 use super::super::{
     BrowserContext, CdpConnection, DocumentStartScript, EmulatedGeolocationOverrideState,
@@ -273,17 +275,22 @@ impl BrowserContext {
                 self.context_preload_scripts
                     .iter()
                     .map(|(identifier, script)| {
-                        script.with_registry_key(Self::context_preload_script_registry_key(
-                            identifier,
-                        ))
+                        Self::context_preload_script_descriptor(identifier, script)
                     }),
             )
             .collect()
     }
 
-    pub(crate) fn context_preload_script_registry_key(identifier: &str) -> String {
+    fn context_preload_script_registry_key(identifier: &DevToolsPreloadScriptId) -> String {
         // Preserve the namespace used by existing renderer registrations.
         format!("default:{identifier}")
+    }
+
+    pub(crate) fn context_preload_script_descriptor(
+        identifier: &DevToolsPreloadScriptId,
+        script: &DocumentStartScript,
+    ) -> DocumentStartScript {
+        script.with_registry_key(Self::context_preload_script_registry_key(identifier))
     }
 
     pub(crate) fn target_document_start_script_registry_key(
@@ -328,41 +335,44 @@ impl BrowserContext {
             .any(|(_, script)| script.has_bidi_channel_argument)
     }
 
-    pub(crate) fn record_context_preload_script(&mut self, script: &DocumentStartScript) -> String {
+    pub(crate) fn record_context_preload_script(
+        &mut self,
+        script: &DocumentStartScript,
+    ) -> DevToolsPreloadScriptId {
         let identifier = self.reserve_context_preload_script_id();
         self.record_context_preload_script_with_identifier(identifier.clone(), script);
         identifier
     }
 
-    pub(crate) fn reserve_context_preload_script_id(&mut self) -> String {
+    pub(crate) fn reserve_context_preload_script_id(&mut self) -> DevToolsPreloadScriptId {
         self.next_context_preload_script_id = self.next_context_preload_script_id.wrapping_add(1);
-        self.next_context_preload_script_id.to_string()
+        self.next_context_preload_script_id.to_string().into()
     }
 
     pub(crate) fn record_context_preload_script_with_identifier(
         &mut self,
-        identifier: String,
+        identifier: DevToolsPreloadScriptId,
         script: &DocumentStartScript,
     ) {
-        let script =
-            script.with_registry_key(Self::context_preload_script_registry_key(&identifier));
+        let mut script = script.clone();
+        // Renderer keys are derived at publication, never kept as a second identity.
+        script.registry_key = None;
         self.context_preload_scripts.push((identifier, script));
     }
 
-    pub(crate) fn remove_context_preload_script(&mut self, script_id: &str) -> Option<String> {
+    pub(crate) fn remove_context_preload_script(
+        &mut self,
+        script_id: &DevToolsPreloadScriptId,
+    ) -> Option<String> {
         let index = self
             .context_preload_scripts
             .iter()
             .position(|(identifier, _)| identifier == script_id)?;
-        let (_, script) = self.context_preload_scripts.remove(index);
-        Some(
-            script
-                .registry_key
-                .unwrap_or_else(|| Self::context_preload_script_registry_key(script_id)),
-        )
+        let (identifier, _) = self.context_preload_scripts.remove(index);
+        Some(Self::context_preload_script_registry_key(&identifier))
     }
 
-    pub(crate) fn has_context_preload_script(&self, script_id: &str) -> bool {
+    pub(crate) fn has_context_preload_script(&self, script_id: &DevToolsPreloadScriptId) -> bool {
         self.context_preload_scripts
             .iter()
             .any(|(identifier, _)| identifier == script_id)

@@ -21,6 +21,7 @@ use moli_core::storage::{
 use moli_shared_worker::SharedWorkerInstanceId;
 use serde_json::{Value, json};
 
+use crate::automation::DevToolsPreloadScriptId;
 use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 
 use super::{
@@ -82,7 +83,7 @@ pub struct BrowserContext {
     // CLI scripts installed at context creation, outside the protocol preload registry.
     pub(crate) startup_document_start_scripts: Vec<DocumentStartScript>,
     // Mutable protocol registrations scoped to this BrowserContext.
-    pub(crate) context_preload_scripts: Vec<(String, DocumentStartScript)>,
+    pub(crate) context_preload_scripts: Vec<(DevToolsPreloadScriptId, DocumentStartScript)>,
     pub(crate) storage_quota_overrides: HashMap<String, f64>,
     pub(crate) http_cache_root: Option<PathBuf>,
     pub(crate) http_cache_max_bytes: Option<u64>,
