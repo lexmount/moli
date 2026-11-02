@@ -1197,19 +1197,6 @@ struct StandaloneNavigationEngineSlot {
 }
 
 impl StandaloneNavigationEngineSlot {
-    fn materialized(engine: NavigationEngine) -> Self {
-        let runtime_config = engine.runtime_config();
-        let slot = Self {
-            engine: OnceCell::new(),
-            runtime_config,
-            renderer_publication_sender: None,
-        };
-        slot.engine
-            .set(engine)
-            .expect("fresh standalone navigation engine slot must be empty");
-        slot
-    }
-
     fn deferred(runtime_config: NavigationRuntimeConfig) -> Self {
         Self {
             engine: OnceCell::new(),
@@ -1348,6 +1335,9 @@ pub struct CdpConnection {
     base_http_no_proxy: Option<String>,
     base_tls_verify_host: bool,
     initial_storage_partition: CdpInitialStoragePartitionOwner,
+    // Startup policy survives engine materialization and replacement. Protocol
+    // preload registries never own these scripts or assign them identifiers.
+    startup_document_start_scripts: Vec<DocumentStartScript>,
     pub(crate) global_io_streams: HashMap<String, IoStreamState>,
     pub(crate) tracing_state: crate::domains::tracing::TracingState,
     download_registry: SharedDownloadRegistry,
@@ -1598,9 +1588,9 @@ impl CdpConnection {
             CdpInitialStoragePartitionOwner::from_initial_storage_partition(
                 initial_storage_partition,
             );
-        Self::new_with_initial_storage_partition_owner_and_engine(
+        Self::new_with_initial_storage_partition_owner_and_deferred_runtime(
             initial_storage_partition,
-            StandaloneNavigationEngineSlot::deferred(navigation_runtime_config),
+            navigation_runtime_config,
         )
     }
 
@@ -1608,18 +1598,33 @@ impl CdpConnection {
         initial_storage_partition: CdpInitialStoragePartitionOwner,
         navigation_runtime_config: NavigationRuntimeConfig,
     ) -> Self {
-        Self::new_with_initial_storage_partition_owner_and_engine(
+        let conn = Self::new_with_initial_storage_partition_owner_and_deferred_runtime(
             initial_storage_partition,
-            StandaloneNavigationEngineSlot::materialized(
-                NavigationEngine::new_with_runtime_config(navigation_runtime_config),
-            ),
-        )
+            navigation_runtime_config,
+        );
+        conn.standalone_navigation_engine.ensure();
+        conn
     }
 
-    fn new_with_initial_storage_partition_owner_and_engine(
+    fn new_with_initial_storage_partition_owner_and_deferred_runtime(
         initial_storage_partition: CdpInitialStoragePartitionOwner,
-        standalone_navigation_engine: StandaloneNavigationEngineSlot,
+        navigation_runtime_config: NavigationRuntimeConfig,
     ) -> Self {
+        let startup_document_start_scripts = navigation_runtime_config
+            .document_start_scripts()
+            .iter()
+            .map(|source| DocumentStartScript {
+                registry_key: None,
+                devtools_session: None,
+                source: source.clone(),
+                world_name: None,
+                has_bidi_channel_argument: false,
+                bidi_channel_handoffs: Vec::new(),
+            })
+            .collect();
+        let standalone_navigation_engine = StandaloneNavigationEngineSlot::deferred(
+            navigation_runtime_config.with_document_start_scripts(Vec::new()),
+        );
         let fetch_config = standalone_navigation_engine.fetch_config();
         let base_browser_identity = fetch_config.browser_identity().clone();
         let base_http_proxy = fetch_config.http_proxy().map(str::to_owned);
@@ -1669,6 +1674,7 @@ impl CdpConnection {
             base_http_no_proxy,
             base_tls_verify_host,
             initial_storage_partition,
+            startup_document_start_scripts,
             global_io_streams: HashMap::new(),
             tracing_state: crate::domains::tracing::TracingState::default(),
             download_registry: SharedDownloadRegistry::default(),
@@ -3186,7 +3192,7 @@ impl CdpConnection {
                 .runtime_config()
                 .debugger_enabled(),
         );
-        self.apply_global_browser_context_state(&mut browser_context);
+        self.initialize_browser_context_state(&mut browser_context);
         browser_context
     }
 
@@ -3202,7 +3208,9 @@ impl CdpConnection {
         self.insert_browser_context(self.new_browser_context(browser_context_id));
     }
 
-    fn apply_global_browser_context_state(&self, browser_context: &mut BrowserContext) {
+    fn initialize_browser_context_state(&self, browser_context: &mut BrowserContext) {
+        browser_context.startup_document_start_scripts =
+            self.startup_document_start_scripts.clone();
         browser_context.global_cache_disabled = self.global_cache_disabled;
         browser_context.global_extra_headers = self.global_extra_headers.clone();
         browser_context.global_network_conditions = self.global_network_conditions;
@@ -3221,7 +3229,7 @@ impl CdpConnection {
                 .runtime_config()
                 .debugger_enabled(),
         )?;
-        self.apply_global_browser_context_state(&mut browser_context);
+        self.initialize_browser_context_state(&mut browser_context);
         Ok(browser_context)
     }
 

@@ -250,8 +250,7 @@ impl BrowserContext {
     }
 
     pub fn document_start_script_descriptors(&self) -> Vec<DocumentStartScript> {
-        let mut scripts = Vec::new();
-        scripts.extend(self.default_document_start_script_descriptors());
+        let mut scripts = self.default_document_start_script_descriptors();
         let target_id = self.active_target_id();
         scripts.extend(
             self.active_page_target()
@@ -266,12 +265,18 @@ impl BrowserContext {
     }
 
     pub(crate) fn default_document_start_script_descriptors(&self) -> Vec<DocumentStartScript> {
-        self.default_document_start_scripts
+        self.startup_document_start_scripts
             .iter()
-            .map(|(identifier, script)| {
-                script
-                    .with_registry_key(Self::default_document_start_script_registry_key(identifier))
-            })
+            .cloned()
+            .chain(
+                self.default_document_start_scripts
+                    .iter()
+                    .map(|(identifier, script)| {
+                        script.with_registry_key(Self::default_document_start_script_registry_key(
+                            identifier,
+                        ))
+                    }),
+            )
             .collect()
     }
 

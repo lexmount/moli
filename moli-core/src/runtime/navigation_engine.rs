@@ -455,9 +455,9 @@ pub struct NavigationRuntimeConfig {
     subframe_loading_enabled: bool,
     layout_configuration: LayoutConfiguration,
     debugger_enabled: bool,
-    /// CLI `--document-start-script` sources. `moli fetch` reads them straight from
-    /// `BrowserConfig`; `moli serve` only sees this runtime config, so they must travel
-    /// here or every protocol-server page silently skips them.
+    /// Startup sources transported from BrowserConfig to protocol connections.
+    /// The connection owns them before any engine is materialized; they are
+    /// BrowserContext initialization policy, not NavigationEngine state.
     document_start_scripts: Vec<String>,
 }
 
@@ -745,8 +745,7 @@ impl NavigationEngine {
             subframe_loading_enabled,
             layout_configuration,
             debugger_enabled,
-            // Not engine state: the protocol server seeds these into each browser
-            // context's default document-start registry when it binds the config.
+            // Protocol connections capture startup scripts before creating engines.
             document_start_scripts: _,
         } = config;
         let resource_runtime = browser_context_access
@@ -821,8 +820,7 @@ impl NavigationEngine {
             subframe_loading_enabled,
             layout_configuration,
             debugger_enabled,
-            // Not engine state: the protocol server seeds these into each browser
-            // context's default document-start registry when it binds the config.
+            // Protocol connections capture startup scripts before creating engines.
             document_start_scripts: _,
         } = config;
         renderer_owner_source

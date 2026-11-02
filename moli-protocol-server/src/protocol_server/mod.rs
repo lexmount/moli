@@ -14,7 +14,7 @@ use axum::{
 };
 use moli_cookie_jar::StoredCookie;
 use moli_core::{
-    LayoutConfiguration, LayoutPolicy, OptionalResourceFetchMask,
+    LayoutPolicy, OptionalResourceFetchMask,
     runtime::{NavigationRuntimeConfig, storage_partition::StoragePartitionState},
 };
 use moli_fetch::FetchConfig;
@@ -557,8 +557,8 @@ struct AppState {
     addr: SocketAddr,
     control: BrowserInstanceControl,
     remote_allow_origins: Vec<String>,
-    debugger_enabled: bool,
     browser_id: Uuid,
+    navigation_runtime_config: NavigationRuntimeConfig,
     browser_ws_url: String,
     bidi_ws_url: String,
     bidi_session_registry: SharedBidiSessionRegistry,
@@ -566,10 +566,6 @@ struct AppState {
     cdp_agent_host_directory: SharedCdpAgentHostDirectory,
     cdp_owner_registry: SharedCdpOwnerRegistry,
     storage_partition: Arc<StoragePartitionState>,
-    fetch_config: FetchConfig,
-    optional_resource_fetch_mask: OptionalResourceFetchMask,
-    subframe_loading_enabled: bool,
-    layout_configuration: LayoutConfiguration,
 }
 
 impl AppState {
@@ -617,17 +613,13 @@ impl AppState {
             remote_allow_origins: Vec::new(),
             browser_id,
             browser_ws_url: format!("ws://{addr}/devtools/browser/{browser_id}"),
-            debugger_enabled: navigation_runtime_config.debugger_enabled(),
             bidi_ws_url: format!("ws://{addr}/session"),
             bidi_session_registry: SharedBidiSessionRegistry::default(),
             classic_session_registry: SharedClassicSessionRegistry::default(),
             cdp_agent_host_directory,
             cdp_owner_registry,
             storage_partition,
-            fetch_config: navigation_runtime_config.fetch_config().clone(),
-            optional_resource_fetch_mask: navigation_runtime_config.optional_resource_fetch_mask(),
-            subframe_loading_enabled: navigation_runtime_config.subframe_loading_enabled(),
-            layout_configuration: navigation_runtime_config.layout_configuration(),
+            navigation_runtime_config,
         })
     }
 

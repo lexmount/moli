@@ -79,6 +79,8 @@ pub struct BrowserContext {
     pub proxy_socks_version: Option<u8>,
     pub(crate) default_emulated_device_metrics: Option<EmulatedDeviceMetrics>,
     pub(crate) next_default_document_start_script_id: u32,
+    // Installed at context creation, outside the mutable protocol preload registry.
+    pub(crate) startup_document_start_scripts: Vec<DocumentStartScript>,
     pub(crate) default_document_start_scripts: Vec<(String, DocumentStartScript)>,
     pub(crate) storage_quota_overrides: HashMap<String, f64>,
     pub(crate) http_cache_root: Option<PathBuf>,
@@ -546,6 +548,7 @@ impl BrowserContext {
             proxy_socks_version: None,
             default_emulated_device_metrics: None,
             next_default_document_start_script_id: 0,
+            startup_document_start_scripts: Vec::new(),
             default_document_start_scripts: Vec::new(),
             storage_quota_overrides: HashMap::new(),
             http_cache_root,
@@ -588,23 +591,7 @@ impl BrowserContext {
         config: NavigationRuntimeConfig,
         renderer_output_transport_sender: Option<moli_core::RendererOutputTransportSender>,
     ) {
-        let first_bind = self.page_navigation_runtime_config.is_none();
         self.page_navigation_runtime_config = Some(config.clone());
-        if first_bind {
-            // Configured `--document-start-script`s behave like default preloads: every
-            // page of every browser context runs them, matching `moli fetch`. Seed once
-            // per context so a re-bind cannot register duplicates.
-            for source in config.document_start_scripts() {
-                self.record_default_document_start_script(&DocumentStartScript {
-                    registry_key: None,
-                    devtools_session: None,
-                    source: source.clone(),
-                    world_name: None,
-                    has_bidi_channel_argument: false,
-                    bidi_channel_handoffs: Vec::new(),
-                });
-            }
-        }
         self.renderer_output_transport_sender = renderer_output_transport_sender;
         if self.renderer_output_transport_sender.is_some() {
             self.renderer_runtime()
@@ -990,6 +977,7 @@ impl BrowserContext {
             "targetCanAccessOpenerCount": self.target_can_access_opener.len(),
             "targetWindowNameCount": self.named_auxiliary_targets.len(),
             "defaultDocumentStartScriptCount": self.default_document_start_scripts.len(),
+            "startupDocumentStartScriptCount": self.startup_document_start_scripts.len(),
             "domRemoteObjectNodeCacheCount": active_target
                 .map_or(0, |target| target.dom_remote_object_node_cache.len()),
             "sharedWorkerTargetCount": self.shared_worker_targets.len(),
