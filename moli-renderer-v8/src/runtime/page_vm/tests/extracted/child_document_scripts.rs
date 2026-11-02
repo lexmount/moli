@@ -345,6 +345,110 @@ async fn page_vm_child_parser_style_imports_share_media_matching_and_loading() {
     child_parser_stylesheet_media(r#"media="print""#, true, false).await;
 }
 
+#[tokio::test]
+async fn page_vm_child_parser_replays_completed_stylesheets_to_later_owners() {
+    for imports in [false, true] {
+        child_parser_replays_completed_stylesheet(imports).await;
+    }
+}
+
+async fn take_child_stylesheet_test_completion(
+    page_vm: &mut PageVm,
+) -> RendererPageResourceCompletion {
+    let queue = page_vm.page_resource_completion_queue();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some((_, completion)) = queue.pop_front() {
+            return completion;
+        }
+        tokio::time::timeout_at(
+            deadline,
+            page_vm.page_task_queue.wait_for_page_runtime_wake(),
+        )
+        .await
+        .expect("child stylesheet fixture must publish its completion");
+    }
+}
+
+async fn child_parser_replays_completed_stylesheet(imports: bool) {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_concurrent_path_response_http_server(vec![
+            (
+                "/shared.css",
+                "HTTP/1.1 200 OK",
+                ":root { --shared-ready: yes; }".to_owned(),
+                Duration::ZERO,
+            ),
+            (
+                "/hold.js",
+                "HTTP/1.1 200 OK",
+                "parent.__sharedStylesheetEvents.push('hold');".to_owned(),
+                Duration::ZERO,
+            ),
+        ])
+        .await;
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
+            .expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page")).unwrap();
+        let mut page_vm =
+            test_page_vm_with_loader_and_document_url(&loader, Vec::new(), document_url);
+        let local_executor = page_vm.local_executor.clone();
+        local_executor.run(async move {
+            let sheet = |media| if imports {
+                format!("<style media='{media}'>@import '{base_url}/shared.css';</style>")
+            } else {
+                format!("<link rel=stylesheet media='{media}' href='{base_url}/shared.css'>")
+            };
+            let child = format!(
+                "{}<script src='{base_url}/hold.js'></script>{}<script>\
+                 parent.__sharedStylesheetEvents.push(getComputedStyle(document.documentElement)\
+                 .getPropertyValue('--shared-ready').trim());</script>",
+                sheet("print"), sheet("screen"),
+            );
+            page_vm.vm_mut().eval(&format!(r#"
+                globalThis.__sharedStylesheetEvents = [];
+                const root = document.documentElement || document.appendChild(document.createElement('html'));
+                const body = document.body || root.appendChild(document.createElement('body'));
+                const frame = document.createElement('iframe');
+                frame.srcdoc = {};
+                body.appendChild(frame);
+            "#, serde_json::to_string(&child)?))?;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::NavigationCommit, "shared CSS navigation",
+            ).await;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::ClassicScriptSourceLoad, "shared CSS external script source",
+            ).await;
+            run_expected_child_realm_materialization_for_wait(&mut page_vm, "shared CSS realm").await;
+
+            let mut css = None;
+            let mut script = None;
+            for _ in 0..2 {
+                let completion = take_child_stylesheet_test_completion(&mut page_vm).await;
+                match completion.terminal() {
+                    RendererPageResourceTerminal::ChildBlockingStylesheet { .. } => css = Some(completion),
+                    RendererPageResourceTerminal::ChildClassicScript { .. } => script = Some(completion),
+                    other => panic!("unexpected shared stylesheet completion: {other:?}"),
+                }
+            }
+            // Apply the CSS terminal while the parser is still stopped at hold.js.
+            // The matching owner therefore cannot have joined before completion.
+            page_vm.apply_selected_page_resource_completion_turn(css.expect("CSS completion"))?;
+            assert_eq!(page_vm.vm_mut().eval("__sharedStylesheetEvents.join('|')")?, "");
+            page_vm.apply_selected_page_resource_completion_turn(script.expect("script completion"))?;
+            for reason in ["release hold.js", "later stylesheet owner script"] {
+                run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                    &mut page_vm, ChildFrameSemanticTurnKind::DocumentScriptReady, reason,
+                ).await;
+            }
+            assert_eq!(page_vm.vm_mut().eval("__sharedStylesheetEvents.join('|')")?, "hold|yes",
+                "a late owner must install the terminal shared resource without another fetch; imports={imports}");
+            Ok::<_, anyhow::Error>(())
+        }).await.expect("completed stylesheet replay fixture");
+        server.await.expect("shared CSS server");
+    }).await;
+}
+
 async fn child_parser_stylesheet_media(media: &'static str, imports: bool, blocks_scripts: bool) {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_concurrent_path_response_http_server(vec![(
