@@ -209,8 +209,11 @@ impl JsContextHost {
             );
         for network_result in &completion.network_results {
             let terminal = &network_result.terminal;
-            // Match main-document LinkStyle semantics: failure changes the link
-            // event result, but still creates an empty owner CSSStyleSheet.
+            if terminal.failed_integrity() {
+                // Settle the failed load below without creating an owner sheet.
+                continue;
+            }
+            // Ordinary resource failures still create an empty owner sheet.
             let ready_response = terminal.ready_response();
             let stylesheet_text = ready_response
                 .map(|response| response.body_text().to_owned())
