@@ -14,6 +14,7 @@ use webidl::WebIdlDictionarySerialize;
 
 const NAME_SLOT: &str = "__moliValueEventName";
 const ELAPSED_TIME_SLOT: &str = "__moliValueEventElapsedTime";
+const ANIMATION_SLOT: &str = "__moliValueEventAnimation";
 const PSEUDO_ELEMENT_SLOT: &str = "__moliValueEventPseudoElement";
 const BLOB_SLOT: &str = "__moliValueEventBlob";
 const STATUS_MESSAGE_SLOT: &str = "__moliWebGlContextEventStatusMessage";
@@ -73,6 +74,8 @@ impl ValueEventKind {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::AnimationEvent, enumerable, receiver)]
 struct AnimationEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, ANIMATION_SLOT))]
+    animation: (),
     #[webapi(accessor_property = "animationName", getter = payload_getter, data = v8str(scope, NAME_SLOT))]
     animation_name: (),
     #[webapi(accessor_property = "elapsedTime", getter = payload_getter, data = v8str(scope, ELAPSED_TIME_SLOT))]
@@ -84,6 +87,8 @@ struct AnimationEventPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::TransitionEvent, enumerable, receiver)]
 struct TransitionEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, ANIMATION_SLOT))]
+    animation: (),
     #[webapi(accessor_property = "propertyName", getter = payload_getter, data = v8str(scope, NAME_SLOT))]
     property_name: (),
     #[webapi(accessor_property = "elapsedTime", getter = payload_getter, data = v8str(scope, ELAPSED_TIME_SLOT))]
@@ -149,6 +154,9 @@ struct WebGlContextEventInit<'s> {
 struct AnimationEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
+    #[webidl(nullable, interface = web_api_interfaces::CSSAnimation)]
+    #[webidl(snapshot_slot = ANIMATION_SLOT)]
+    animation: Option<v8::Local<'s, v8::Object>>,
     #[webidl(name = "animationName", with = string_member)]
     #[webidl(snapshot_slot = NAME_SLOT)]
     animation_name: v8::Local<'s, v8::String>,
@@ -165,6 +173,9 @@ struct AnimationEventInit<'s> {
 struct TransitionEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
+    #[webidl(nullable, interface = web_api_interfaces::CSSTransition)]
+    #[webidl(snapshot_slot = ANIMATION_SLOT)]
+    animation: Option<v8::Local<'s, v8::Object>>,
     #[webidl(name = "elapsedTime", converter = "double", default = 0.0)]
     #[webidl(snapshot_slot = ELAPSED_TIME_SLOT)]
     elapsed_time: f64,
