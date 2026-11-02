@@ -48,6 +48,7 @@ mod navigation_commit;
 mod navigation_error;
 mod resource_runtime;
 mod site_data;
+mod startup_scripts;
 
 #[test]
 fn protocol_page_access_reports_a_typed_missing_document() {

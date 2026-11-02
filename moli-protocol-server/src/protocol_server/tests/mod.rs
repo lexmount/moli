@@ -1345,4 +1345,5 @@ mod p6_output_handoff;
 mod page_endpoint;
 mod request_guard;
 mod screenshot;
+mod startup_scripts;
 mod websocket;
