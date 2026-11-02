@@ -21,7 +21,6 @@ use super::{
         PendingWindowMessage, PendingWindowMessageEndpoint, PendingWindowMessageSource,
         RuntimeObservableContextToken, WindowExecutionContextOwner, WindowTaskTarget,
         active_child_window_handle, active_lightweight_popup_id,
-        current_or_live_delegate_node_arg_handle,
         element::{
             ComputedStyleTargetContext, STYLE_DECLARATION_FORCED_EMPTY_COMPUTED_SLOT,
             STYLE_DECLARATION_PSEUDO_ELEMENT_SLOT, STYLE_DECLARATION_READ_DOCUMENT_SLOT,
@@ -222,11 +221,13 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    let host = unsafe { &mut *host_ptr };
     let parsed = parse_listener_args::<AddEventListenerArgs>(scope, &args, "addEventListener");
     let Some(call) = parsed else {
         return;
     };
+    let receiver = args.this();
+    let host_ptr = native_event_target_host(scope, receiver).unwrap_or(host_ptr);
+    let host = unsafe { &mut *host_ptr };
     let Some(listener) = call.listener else {
         return;
     };
@@ -344,12 +345,13 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    let host = unsafe { &mut *host_ptr };
     let Some(call) =
         parse_listener_args::<RemoveEventListenerArgs>(scope, &args, "removeEventListener")
     else {
         return;
     };
+    let host_ptr = native_event_target_host(scope, args.this()).unwrap_or(host_ptr);
+    let host = unsafe { &mut *host_ptr };
     let Some(listener) = call.listener else {
         return;
     };
@@ -397,6 +399,7 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         rv.set_bool(false);
         return;
     };
+    let host_ptr = native_event_target_host(scope, args.this()).unwrap_or(host_ptr);
     let host = unsafe { &mut *host_ptr };
     let child_window_target = child_window_handle(scope, args.this());
     let target = if child_window_target.is_none() {
@@ -1194,8 +1197,14 @@ pub(crate) fn window_get_computed_style_callback<'s>(
     let Some(parsed) = webidl::parse_args::<GetComputedStyleArgs>(scope, &args) else {
         return;
     };
-    let Some(handle) =
-        current_or_live_delegate_node_arg_handle(scope, host_ptr, parsed.element.into())
+    // Conversion may have moved the node, and its original Page may already
+    // be closed. Read from the element's current native owner while creating
+    // the fresh declaration in this callback's realm.
+    let Ok((target_host_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(
+            scope,
+            parsed.element,
+        )
     else {
         rv.set_null();
         return;
@@ -1205,9 +1214,9 @@ pub(crate) fn window_get_computed_style_callback<'s>(
         .or_else(|| dom_handle_from_marker_value(scope, args.data()));
     match build_computed_style_object(
         scope,
-        host_ptr,
+        target_host_ptr,
         handle,
-        child_window_handle,
+        child_window_handle.filter(|_| target_host_ptr == host_ptr),
         pseudo_argument,
     ) {
         Some(style) => rv.set(style.into()),
@@ -2080,6 +2089,17 @@ fn dom_handle_from_marker_value(
         .number_value(scope)
         .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
         .map(|value| crate::document_runtime::DomHandle::new(value as usize))
+}
+
+fn native_event_target_host<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<*mut JsContextHost> {
+    // A Node retains its function/prototype realm across adoption. Resolve its
+    // native owner after conversion, since an options getter can move it again.
+    crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
+        .ok()
+        .map(|(host, _)| host)
 }
 
 fn event_target_handle_from_this<'s>(
