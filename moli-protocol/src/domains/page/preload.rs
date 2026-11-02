@@ -124,7 +124,7 @@ impl PendingCreateIsolatedWorldCommand {
     }
 }
 
-fn start_default_document_start_script_append(
+fn start_context_preload_script_append(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     command_session_id: Option<&str>,
@@ -144,7 +144,7 @@ fn start_default_document_start_script_append(
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
             owner_scope: crate::conn::CommandOwnerScope::capture(conn, command_session_id),
-            kind: Box::new(PendingPageCommandKind::AppendDefaultDocumentStartScript {
+            kind: Box::new(PendingPageCommandKind::AppendContextPreloadScript {
                 identifier,
                 pending,
             }),
@@ -488,7 +488,7 @@ fn find_default_preload_script_route(
     script_id: &str,
 ) -> Option<CdpSessionRoute> {
     conn.browser_contexts()
-        .find(|browser_context| browser_context.has_default_document_start_script(script_id))
+        .find(|browser_context| browser_context.has_context_preload_script(script_id))
         .map(|browser_context| CdpSessionRoute::BrowserContext {
             browser_context_id: browser_context.id.clone(),
         })
@@ -526,7 +526,7 @@ fn find_preload_script_route(conn: &mut CdpConnection, script_id: &str) -> Optio
                 .browser_context_id()
                 .and_then(|browser_context_id| conn.browser_context_by_id(browser_context_id))
                 .is_some_and(|browser_context| {
-                    browser_context.has_default_document_start_script(script_id)
+                    browser_context.has_context_preload_script(script_id)
                 });
         if has_script {
             return Some(route);
@@ -587,17 +587,11 @@ fn start_devtools_add_preload_script_command(
             "BrowserContextNotLoaded",
         ));
     };
-    let identifier = browser_context.record_default_document_start_script(&script);
-    let script = script.with_registry_key(
-        BrowserContext::default_document_start_script_registry_key(&identifier),
-    );
-    start_default_document_start_script_append(
-        conn,
-        command_id,
-        command_session_id,
-        identifier,
-        &script,
-    )
+    let identifier = browser_context.record_context_preload_script(&script);
+    let script = script.with_registry_key(BrowserContext::context_preload_script_registry_key(
+        &identifier,
+    ));
+    start_context_preload_script_append(conn, command_id, command_session_id, identifier, &script)
 }
 
 fn start_devtools_remove_preload_script_command(
@@ -653,7 +647,7 @@ fn remove_preload_script_registration(
         && let Some((browser_context_id, _)) = owner_identity.as_ref()
         && let Some(browser_context) = conn.browser_context_by_id_mut(browser_context_id)
         && let Some(default_registry_key) =
-            browser_context.remove_default_document_start_script(&script_id)
+            browser_context.remove_context_preload_script(&script_id)
     {
         removed = true;
         registry_key = Some(default_registry_key);

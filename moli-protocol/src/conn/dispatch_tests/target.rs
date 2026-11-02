@@ -809,7 +809,7 @@ async fn automation_command_executes_default_preload_add_and_remove_without_load
                 .expect("default preload should materialize the default browser context")
         };
         assert!(!browser_context.has_active_target());
-        assert_eq!(browser_context.default_document_start_scripts.len(), 1);
+        assert_eq!(browser_context.context_preload_scripts.len(), 1);
     });
 
     let remove_result = ctx
@@ -829,7 +829,7 @@ async fn automation_command_executes_default_preload_add_and_remove_without_load
             conn.browser_context
                 .as_ref()
                 .expect("browser context")
-                .default_document_start_scripts
+                .context_preload_scripts
                 .is_empty(),
             "default preload removal should clear the browser-context registry"
         )

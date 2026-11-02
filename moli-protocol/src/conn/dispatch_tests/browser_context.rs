@@ -940,7 +940,7 @@ async fn automation_command_executes_user_context_preload_without_default_leakag
             !conn
                 .browser_context_by_id(browser_context_id)
                 .expect("browser context should still exist")
-                .has_default_document_start_script(script_id.as_str()),
+                .has_context_preload_script(script_id.as_str()),
             "removePreloadScript should clear browser-context scoped script from {browser_context_id}"
         ) });
     }

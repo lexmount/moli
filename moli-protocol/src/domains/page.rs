@@ -174,7 +174,7 @@ enum PendingPageCommandKind {
     BringToFront {
         route: CdpSessionRoute,
     },
-    AppendDefaultDocumentStartScript {
+    AppendContextPreloadScript {
         identifier: String,
         pending: PendingPageCommand,
     },
@@ -240,7 +240,7 @@ enum CompletedPageCommandKind {
     BringToFront {
         route: CdpSessionRoute,
     },
-    AppendDefaultDocumentStartScript {
+    AppendContextPreloadScript {
         identifier: String,
         completed: Box<Result<CompletedPageCommand>>,
     },
@@ -308,7 +308,7 @@ impl CompletedPageCommandKind {
         }
 
         match self {
-            Self::AppendDefaultDocumentStartScript { completed, .. }
+            Self::AppendContextPreloadScript { completed, .. }
             | Self::RemoveDocumentStartScript { completed }
             | Self::GetFrameTree { completed, .. }
             | Self::ResetNavigationHistory { completed }
@@ -360,10 +360,10 @@ impl PendingPageCommandDispatch {
             PendingPageCommandKind::BringToFront { route } => {
                 CompletedPageCommandKind::BringToFront { route }
             }
-            PendingPageCommandKind::AppendDefaultDocumentStartScript {
+            PendingPageCommandKind::AppendContextPreloadScript {
                 identifier,
                 pending,
-            } => CompletedPageCommandKind::AppendDefaultDocumentStartScript {
+            } => CompletedPageCommandKind::AppendContextPreloadScript {
                 identifier,
                 completed: Box::new(pending.wait().await),
             },

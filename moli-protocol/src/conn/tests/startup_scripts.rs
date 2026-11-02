@@ -7,11 +7,11 @@ fn startup_config() -> NavigationRuntimeConfig {
 }
 
 fn assert_startup_scripts(context: &BrowserContext) {
-    let scripts = context.default_document_start_script_descriptors();
+    let scripts = context.context_document_start_script_descriptors();
     assert_eq!(scripts.len(), 1, "one startup script per context");
     assert_eq!(scripts[0].source, STARTUP_SOURCE);
     assert!(scripts[0].registry_key.is_none());
-    assert!(context.default_document_start_scripts.is_empty());
+    assert!(context.context_preload_scripts.is_empty());
 }
 
 #[test]
@@ -58,19 +58,15 @@ fn startup_scripts_do_not_share_protocol_preload_identifiers() {
     );
     conn.insert_browser_context(conn.new_browser_context("default".to_owned()));
     let context = conn.browser_context.as_mut().unwrap();
-    assert!(context.remove_default_document_start_script("1").is_none());
+    assert!(context.remove_context_preload_script("1").is_none());
     let script = context
-        .default_document_start_script_descriptors()
+        .context_document_start_script_descriptors()
         .remove(0);
-    let identifier = context.record_default_document_start_script(&script);
+    let identifier = context.record_context_preload_script(&script);
     assert_eq!(
         identifier, "1",
         "startup scripts must not consume protocol IDs"
     );
-    assert!(
-        context
-            .remove_default_document_start_script(&identifier)
-            .is_some()
-    );
+    assert!(context.remove_context_preload_script(&identifier).is_some());
     assert_startup_scripts(context);
 }

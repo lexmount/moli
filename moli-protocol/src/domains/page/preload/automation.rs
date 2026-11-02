@@ -204,15 +204,15 @@ impl PreparedAutomationPreload {
         let identifier = conn
             .browser_context_by_id_mut(first)
             .ok_or_else(preload_no_target_error)?
-            .reserve_default_document_start_script_id();
+            .reserve_context_preload_script_id();
         for id in &contexts {
             conn.browser_context_by_id_mut(id)
                 .ok_or_else(preload_no_target_error)?
-                .record_default_document_start_script_with_identifier(identifier.clone(), &script);
+                .record_context_preload_script_with_identifier(identifier.clone(), &script);
         }
-        let script = script.with_registry_key(
-            BrowserContext::default_document_start_script_registry_key(&identifier),
-        );
+        let script = script.with_registry_key(BrowserContext::context_preload_script_registry_key(
+            &identifier,
+        ));
         let mut operations = Vec::new();
         for id in contexts {
             if let Some(owner) = active_context_owner(conn, &id)
@@ -252,10 +252,10 @@ impl PreparedAutomationPreload {
         let identifier = conn
             .browser_context_by_id_mut(&context_id)
             .ok_or_else(preload_no_target_error)?
-            .record_default_document_start_script(&script);
-        let script = script.with_registry_key(
-            BrowserContext::default_document_start_script_registry_key(&identifier),
-        );
+            .record_context_preload_script(&script);
+        let script = script.with_registry_key(BrowserContext::context_preload_script_registry_key(
+            &identifier,
+        ));
         let operations =
             PreparedPreloadRegistryOperation::capture(conn, owner, PreloadMutation::Append(script))
                 .transpose()
@@ -287,10 +287,10 @@ impl PreparedAutomationPreload {
             && protocol == FrontendProtocol::WebDriverBidi
             && let Some((id, _)) = identity
             && let Some(context) = conn.browser_context_by_id_mut(&id)
-            && let Some(default) = context.remove_default_document_start_script(&script_id)
+            && let Some(context_key) = context.remove_context_preload_script(&script_id)
         {
             removed = true;
-            key = Some(default);
+            key = Some(context_key);
         }
         if !removed && protocol == FrontendProtocol::WebDriverBidi {
             return Err(DevToolsError::new(
@@ -320,7 +320,7 @@ impl PreparedAutomationPreload {
         let script_id = command.script_id.as_str();
         let contexts = conn
             .browser_contexts()
-            .filter(|context| context.has_default_document_start_script(script_id))
+            .filter(|context| context.has_context_preload_script(script_id))
             .map(|context| context.id.clone())
             .collect::<Vec<_>>();
         if contexts.is_empty() {
@@ -334,7 +334,7 @@ impl PreparedAutomationPreload {
             .filter_map(|id| {
                 let key = conn
                     .browser_context_by_id_mut(&id)?
-                    .remove_default_document_start_script(script_id)?;
+                    .remove_context_preload_script(script_id)?;
                 Some((id, key))
             })
             .collect::<Vec<_>>();
