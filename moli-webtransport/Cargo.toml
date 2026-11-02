@@ -7,10 +7,12 @@ edition = "2024"
 [dependencies]
 anyhow = "1"
 bytes = "1"
+der = { version = "0.8.1", features = ["std"] }
 futures-util = "0.3"
 http = "1"
 moli-curl = { path = "../moli-curl" }
 moli-dns-resolver = { path = "../moli-dns-resolver" }
+openssl = { version = "0.10.80", features = ["aws-lc"] }
 parking_lot = "0.12"
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
