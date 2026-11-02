@@ -25,7 +25,7 @@ use super::events::{
 };
 use super::*;
 use crate::runtime::RendererPageContextCancelReason;
-use crossbeam_channel::{after, bounded, never, select};
+use crossbeam_channel::{after, bounded, never};
 use moli_fetch::{BrowserRequestMetadata, FetchCancelHandle, RequestMode};
 use std::{thread, time::Duration};
 
@@ -386,57 +386,68 @@ fn send_synchronous_network_xhr(
         });
 
     let result = match spawn_result {
-        Ok(_) => select! {
-            recv(response_rx) -> result => result.unwrap_or_else(|_| {
-                Err("sync XHR fetch thread dropped response channel".to_owned())
-            }),
-            recv(timeout_rx) -> _ => {
-                let timeout = xhr_timeout.expect("never channel should not fire without xhr timeout");
-                cancel_handle.cancel();
-                host.record_subresource_network(SubresourceNetworkRecord::failure(
-                    prepared.frame_id,
-                    prepared.document_url,
-                    request_url.clone(),
-                    request_method,
-                    request_headers,
-                    request_body,
-                    SubresourceResourceType::Xhr,
-                    format!(
-                        "Synchronous XMLHttpRequest timed out after {} ms",
-                        timeout.as_millis()
-                    ),
-                ));
-                throw_synchronous_xhr_failure(
-                    scope,
-                    xhr,
-                    request_url.as_str(),
-                    "TimeoutError",
-                );
-                return;
-            },
-            recv(page_context_cancel_rx.wake_receiver()) -> _ => {
-                let reason = page_context_cancel_rx
-                    .reason()
-                    .unwrap_or(RendererPageContextCancelReason::ContextDropped);
-                cancel_handle.cancel();
-                let reason_text = match reason {
-                    RendererPageContextCancelReason::PageClosed => "page was closed",
-                    RendererPageContextCancelReason::ContextDropped => "context was dropped",
-                };
-                host.record_subresource_network(SubresourceNetworkRecord::failure(
-                    prepared.frame_id,
-                    prepared.document_url,
-                    request_url,
-                    request_method,
-                    request_headers,
-                    request_body,
-                    SubresourceResourceType::Xhr,
-                    format!("Synchronous XMLHttpRequest aborted because {reason_text}"),
-                ));
-                apply_xhr_abort(scope, xhr);
-                return;
+        Ok(_) => {
+            let mut wait = crossbeam_channel::Select::new();
+            let response = wait.recv(&response_rx);
+            let timeout = wait.recv(&timeout_rx);
+            wait.recv(page_context_cancel_rx.wake_receiver());
+            let selected = {
+                let _native_wait =
+                    crate::v8_execution_watchdog::V8ExecutionWatchdog::pause_for_native_wait();
+                wait.select()
+            };
+            // Resume the JS budgets before response processing, errors or
+            // cancellation can enter any binding or author callback.
+            match selected.index() {
+                index if index == response => selected.recv(&response_rx).unwrap_or_else(|_| {
+                    Err("sync XHR fetch thread dropped response channel".to_owned())
+                }),
+                index if index == timeout => {
+                    let _ = selected.recv(&timeout_rx);
+                    let timeout =
+                        xhr_timeout.expect("never channel should not fire without xhr timeout");
+                    cancel_handle.cancel();
+                    host.record_subresource_network(SubresourceNetworkRecord::failure(
+                        prepared.frame_id,
+                        prepared.document_url,
+                        request_url.clone(),
+                        request_method,
+                        request_headers,
+                        request_body,
+                        SubresourceResourceType::Xhr,
+                        format!(
+                            "Synchronous XMLHttpRequest timed out after {} ms",
+                            timeout.as_millis()
+                        ),
+                    ));
+                    throw_synchronous_xhr_failure(scope, xhr, request_url.as_str(), "TimeoutError");
+                    return;
+                }
+                _ => {
+                    let _ = selected.recv(page_context_cancel_rx.wake_receiver());
+                    let reason = page_context_cancel_rx
+                        .reason()
+                        .unwrap_or(RendererPageContextCancelReason::ContextDropped);
+                    cancel_handle.cancel();
+                    let reason_text = match reason {
+                        RendererPageContextCancelReason::PageClosed => "page was closed",
+                        RendererPageContextCancelReason::ContextDropped => "context was dropped",
+                    };
+                    host.record_subresource_network(SubresourceNetworkRecord::failure(
+                        prepared.frame_id,
+                        prepared.document_url,
+                        request_url,
+                        request_method,
+                        request_headers,
+                        request_body,
+                        SubresourceResourceType::Xhr,
+                        format!("Synchronous XMLHttpRequest aborted because {reason_text}"),
+                    ));
+                    apply_xhr_abort(scope, xhr);
+                    return;
+                }
             }
-        },
+        }
         Err(error) => Err(format!("failed to spawn sync XHR fetch thread: {error}")),
     };
 
