@@ -152,41 +152,51 @@ pub(in crate::network_host) fn headers_entries_json(entries: &[(String, String)]
 
 fn normalized_header_list(entries: &[(String, String)]) -> Vec<(String, String)> {
     let mut normalized = Vec::<(String, String)>::new();
+    let mut first_names = std::collections::HashMap::new();
     for (name, value) in entries {
-        let Some(lower) = normalized_header_name(name) else {
+        let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) else {
             continue;
         };
         let value = normalize_header_value(value);
         if !is_valid_header_value(&value) {
             continue;
         }
-        normalized.push((lower, value));
+        let first_name = *first_names.entry(header_name).or_insert(name.as_str());
+        normalized.push((first_name.to_owned(), value));
     }
     normalized
 }
 
-// JS iteration and XHR's serialized response headers use sort-and-combine;
-// storage and internal Request copies must retain duplicate entries.
-pub(in crate::network_host) fn normalized_headers_entries(
-    entries: &[(String, String)],
-) -> Vec<(String, String)> {
+/// Combine values for network dispatch without losing the first field spelling.
+/// Keep Set-Cookie separate and retain the existing case-insensitive name order.
+pub(crate) fn combined_headers_entries(entries: &[(String, String)]) -> Vec<(String, String)> {
     let mut normalized = Vec::<(String, String)>::new();
-    for (lower, value) in normalized_header_list(entries) {
-        if lower == "set-cookie" {
-            normalized.push((lower, value));
+    for (name, value) in normalized_header_list(entries) {
+        if name.eq_ignore_ascii_case("set-cookie") {
+            normalized.push((name, value));
             continue;
         }
         if let Some((_, existing)) = normalized
             .iter_mut()
-            .find(|(entry_name, _)| *entry_name == lower)
+            .find(|(entry_name, _)| entry_name.eq_ignore_ascii_case(&name))
         {
             existing.push_str(", ");
             existing.push_str(&value);
         } else {
-            normalized.push((lower, value));
+            normalized.push((name, value));
         }
     }
-    normalized.sort_by(|(left, _), (right, _)| left.cmp(right));
+    normalized.sort_by_cached_key(|(name, _)| name.to_ascii_lowercase());
+    normalized
+}
+
+// Public iteration and XHR's serialized response headers use sorted-lowercase
+// names; the internal list and network projection retain their original case.
+pub(crate) fn normalized_headers_entries(entries: &[(String, String)]) -> Vec<(String, String)> {
+    let mut normalized = combined_headers_entries(entries);
+    for (name, _) in &mut normalized {
+        name.make_ascii_lowercase();
+    }
     normalized
 }
 
@@ -198,12 +208,18 @@ pub(in crate::network_host::headers) fn normalized_header_name_or_throw(
     scope: &mut v8::PinScope<'_, '_>,
     name: &str,
 ) -> Option<String> {
-    match normalized_header_name(name) {
-        Some(name) => Some(name),
-        None => {
-            throw_type_error(scope, "Invalid header name");
-            None
-        }
+    validated_header_name_or_throw(scope, name).map(str::to_ascii_lowercase)
+}
+
+pub(in crate::network_host::headers) fn validated_header_name_or_throw<'a>(
+    scope: &mut v8::PinScope<'_, '_>,
+    name: &'a str,
+) -> Option<&'a str> {
+    if HeaderName::from_bytes(name.as_bytes()).is_ok() {
+        Some(name)
+    } else {
+        throw_type_error(scope, "Invalid header name");
+        None
     }
 }
 
@@ -220,20 +236,14 @@ pub(in crate::network_host::headers) fn normalized_header_value_or_throw(
     }
 }
 
-pub(in crate::network_host) fn normalized_header_entry_or_throw(
+pub(super) fn validated_header_entry_or_throw(
     scope: &mut v8::PinScope<'_, '_>,
     name: String,
     value: String,
 ) -> Option<(String, String)> {
-    let name = normalized_header_name_or_throw(scope, &name)?;
+    validated_header_name_or_throw(scope, &name)?;
     let value = normalized_header_value_or_throw(scope, &value)?;
     Some((name, value))
-}
-
-fn normalized_header_name(name: &str) -> Option<String> {
-    HeaderName::from_bytes(name.as_bytes())
-        .ok()
-        .map(|name| name.as_str().to_owned())
 }
 
 fn is_valid_header_value(value: &str) -> bool {
@@ -294,11 +304,11 @@ mod tests {
         assert_eq!(
             stored,
             vec![
-                ("x-test".to_owned(), "one".to_owned()),
-                ("set-cookie".to_owned(), "a=1".to_owned()),
-                ("x-test".to_owned(), String::new()),
-                ("set-cookie".to_owned(), "b=2".to_owned()),
-                ("x-test".to_owned(), "two".to_owned()),
+                ("X-Test".to_owned(), "one".to_owned()),
+                ("Set-Cookie".to_owned(), "a=1".to_owned()),
+                ("X-Test".to_owned(), String::new()),
+                ("Set-Cookie".to_owned(), "b=2".to_owned()),
+                ("X-Test".to_owned(), "two".to_owned()),
             ]
         );
     }
