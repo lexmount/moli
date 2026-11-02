@@ -54,6 +54,16 @@ impl<H: Handler, C> HttpRegistry<H, C> {
         !self.active.is_empty()
     }
 
+    pub(crate) fn resume_read(&mut self, multi: &mut Multi, id: CurlTransferId) {
+        let Some(active) = self.active.get(&id) else {
+            return;
+        };
+        if let Err(error) = active.handle.unpause_read() {
+            let active = self.active.remove(&id).expect("active upload transfer");
+            self.finish_active_transfer(multi, id, active, Err(error.into()));
+        }
+    }
+
     pub(crate) fn poll_handlers(&mut self, poll: fn(&mut H)) {
         for active in self.active.values_mut() {
             poll(active.handle.get_mut());

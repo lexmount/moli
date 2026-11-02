@@ -122,6 +122,22 @@ impl<H: Handler + Send + 'static, C: Send + 'static> Clone for CurlHttpSender<H,
 }
 
 impl<H: Handler + Send + 'static, C: Send + 'static> CurlHttpSender<H, C> {
+    /// Resume a paused upload on this runtime's owner thread. Readiness may
+    /// arrive before admission or after completion; those notifications are
+    /// harmless because the transfer id is never reused.
+    pub fn resume_read(&self, transfer_id: CurlTransferId) -> bool {
+        if self.shutdown_requested.load(Ordering::SeqCst)
+            || self
+                .command_tx
+                .send(CurlRuntimeCommand::ResumeRead(transfer_id))
+                .is_err()
+        {
+            return false;
+        }
+        let _ = self.owner_waker.wakeup();
+        true
+    }
+
     pub fn submit(
         &self,
         job: CurlMultiJob<H, C>,

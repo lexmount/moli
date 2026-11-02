@@ -31,6 +31,7 @@ pub(crate) enum CurlRuntimeCommand<H: Handler, C> {
         transfer_id: CurlTransferId,
         job: CurlMultiJob<H, C>,
     },
+    ResumeRead(CurlTransferId),
     Shutdown,
 }
 
