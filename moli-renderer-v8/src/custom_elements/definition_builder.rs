@@ -35,11 +35,11 @@ pub(super) fn build_custom_element_definition<'s>(
 
     Ok(CustomElementDefinition {
         constructor: v8::Global::new(scope, constructor),
-        observed_attributes,
+        observed_attributes: observed_attributes.into(),
         callbacks,
         disables_shadow,
         disables_internals,
         form_associated,
-        extends_local_name,
+        extends_local_name: extends_local_name.map(Into::into),
     })
 }
