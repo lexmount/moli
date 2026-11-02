@@ -1756,6 +1756,36 @@ impl CdpConnection {
             .devtools_session_state()
     }
 
+    /// Mutates the canonical (target-primary) DevTools session state for the
+    /// Page addressed by `owner`.
+    ///
+    /// A JavaScript dialog blocks the whole renderer frame, so Chromium exposes
+    /// it to every inspector session attached to the page and lets any of them
+    /// resolve it. Moli therefore stores dialog state once per Page residence
+    /// (the primary session key) instead of once per attached session, so a
+    /// dialog opened from one session is visible to — and resolvable from — the
+    /// others. The one-shot renderer completion is consumed exactly once.
+    pub(crate) fn with_target_page_primary_devtools_session_state_for_owner_mut<R>(
+        &mut self,
+        owner: &CommandOwnerScope,
+        f: impl FnOnce(&mut DevToolsSessionState) -> R,
+    ) -> Option<R> {
+        let mut authoritative = self.target_session_owner_mut_for_owner(owner)?;
+        authoritative.session_key = DevToolsSessionKey::Primary;
+        Some(authoritative.mutate_session_state(|mut state| f(state.devtools_session_state_mut())))
+    }
+
+    pub(crate) fn target_page_primary_devtools_session_state_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<&DevToolsSessionState> {
+        let resolved = self.target_session_owner_for_owner(owner)?;
+        self.browser_context_by_id(&resolved.browser_context_id)?
+            .page_target(&resolved.target_id)?
+            .devtools_sessions
+            .session(&DevToolsSessionKey::Primary)
+    }
+
     pub(crate) fn target_runtime_session_state_for_session(
         &self,
         session_id: Option<&str>,

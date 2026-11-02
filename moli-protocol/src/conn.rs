@@ -2230,11 +2230,19 @@ impl CdpConnection {
     }
 
     fn retire_javascript_dialogs_for_owner(&mut self, owner: &CommandOwnerScope) {
-        let event_session_ids = self.page_event_session_ids_for_owner(owner);
+        let _event_session_ids = self.page_event_session_ids_for_owner(owner);
         if let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) {
             slot.retire_javascript_dialog_scope();
         }
-        for event_session_id in event_session_ids {
+        // Dialog state is canonical per Page residence (the primary session
+        // key), so a document replacement clears it there. Clear any residual
+        // attached-session state as well for sessions created before this
+        // canonicalization.
+        let _ = self
+            .with_target_page_primary_devtools_session_state_for_owner_mut(owner, |state| {
+                state.page_session_state.javascript_dialog_state.clear()
+            });
+        for event_session_id in _event_session_ids {
             let event_owner = event_session_id
                 .as_deref()
                 .map(CommandOwnerScope::for_session)
