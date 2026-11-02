@@ -870,6 +870,10 @@ impl RuntimeOwner {
         &self,
         mut job: RuntimeJob,
     ) -> std::result::Result<JobOutcome, (RuntimeResponseTx, anyhow::Error)> {
+        if !job.request.new_connection_fetch {
+            job.request.misdirected_retry_deadline =
+                curl_runtime_deadline(&job.request, &self.config);
+        }
         job.response_progress = job.cancel_handle.begin_response_progress();
         if job.cancel_handle.is_cancelled() {
             return Err((
@@ -966,7 +970,7 @@ impl RuntimeOwner {
         let curl_job = CurlMultiJob {
             easy,
             origin: context.job.origin_key.clone(),
-            deadline: curl_runtime_deadline(&context.job.request, &self.config),
+            deadline: context.job.request.misdirected_retry_deadline,
             dns_resolution,
             priority: request_fetch_priority_rank(&context.job.request),
             label,
@@ -1018,6 +1022,10 @@ impl RuntimeOwner {
             anyhow::Error,
         ),
     > {
+        if !job.request.new_connection_fetch {
+            job.request.misdirected_retry_deadline =
+                curl_runtime_deadline(&job.request, &self.config);
+        }
         job.response_progress = job.cancel_handle.begin_response_progress();
         if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
             return Err((Box::new(job), None, error));
@@ -1165,7 +1173,7 @@ impl RuntimeOwner {
         let curl_job = CurlMultiJob {
             easy,
             origin: context.job.origin_key.clone(),
-            deadline: curl_runtime_deadline(&context.job.request, &self.config),
+            deadline: context.job.request.misdirected_retry_deadline,
             dns_resolution,
             priority: request_fetch_priority_rank(&context.job.request),
             label,
@@ -1223,6 +1231,10 @@ impl RuntimeOwner {
             anyhow::Error,
         ),
     > {
+        if !job.request.new_connection_fetch {
+            job.request.misdirected_retry_deadline =
+                curl_runtime_deadline(&job.request, &self.config);
+        }
         job.response_progress = job.cancel_handle.begin_response_progress();
         if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
             return Err((Box::new(job), None, error));
@@ -1378,7 +1390,7 @@ impl RuntimeOwner {
         let curl_job = CurlMultiJob {
             easy,
             origin: context.job.origin_key.clone(),
-            deadline: curl_runtime_deadline(&context.job.request, &self.config),
+            deadline: context.job.request.misdirected_retry_deadline,
             dns_resolution,
             priority: request_fetch_priority_rank(&context.job.request),
             label,
@@ -1403,6 +1415,43 @@ impl RuntimeOwner {
 
     fn finish_active_transfer(&self, state: &mut OwnerState, completion: RuntimeCurlCompletion) {
         state.active_transfers = state.active_transfers.saturating_sub(1);
+        let cancelled = match &completion.context {
+            ActiveTransferContext::Buffered(context) => context.job.cancel_handle.is_cancelled(),
+            ActiveTransferContext::Streaming(context) => context.job.cancel_handle.is_cancelled(),
+            ActiveTransferContext::StreamingRaw(context) => {
+                context.job.cancel_handle.is_cancelled()
+            }
+        };
+        if !self.shutdown_requested.load(Ordering::SeqCst)
+            && !cancelled
+            && completion.easy.as_ref().is_some_and(|easy| {
+                matches!(
+                    easy.get_ref().misdirected_response,
+                    MisdirectedResponse::Restart
+                )
+            })
+        {
+            // No response channel or cookie write was committed for the first
+            // 421. Resubmit the same logical hop on a new connection once.
+            match completion.context {
+                ActiveTransferContext::Buffered(mut context) => {
+                    context.job.request.new_connection_fetch = true;
+                    self.start_job_or_reply(state, context.job);
+                }
+                ActiveTransferContext::Streaming(mut context) => {
+                    context.job.request.new_connection_fetch = true;
+                    context.job.easy = completion.easy;
+                    self.start_streaming_job_or_reply(state, context.job);
+                }
+                ActiveTransferContext::StreamingRaw(mut context) => {
+                    context.job.request.new_connection_fetch = true;
+                    context.job.easy = completion.easy;
+                    self.start_raw_streaming_job_or_reply(state, context.job);
+                }
+            }
+            return;
+        }
+
         match completion.context {
             ActiveTransferContext::Buffered(context) => {
                 match self.finish_buffered_transfer_inner(
@@ -2725,7 +2774,40 @@ struct ActiveRawStreamingTransferContext {
     effective_request: Request,
 }
 
+#[derive(Default)]
+enum MisdirectedResponse {
+    #[default]
+    Disabled,
+    Eligible,
+    Headers,
+    Restart,
+}
+
+impl MisdirectedResponse {
+    fn header(&mut self, status: Option<u16>, end: bool) -> Option<bool> {
+        if let Some(status) = status
+            && matches!(self, Self::Eligible | Self::Headers)
+        {
+            *self = if status == 421 {
+                Self::Headers
+            } else {
+                Self::Eligible
+            };
+        }
+        if matches!(self, Self::Headers) {
+            if end {
+                *self = Self::Restart;
+            }
+            // Defer headers until the block is complete, then abort the first
+            // transfer without exposing its headers or waiting for its body.
+            return Some(!end);
+        }
+        None
+    }
+}
+
 pub(crate) struct FetchTransferHandler {
+    misdirected_response: MisdirectedResponse,
     response: FetchResponseCollector,
     response_body_observed: bool,
     network_observation_recorder: Option<NetworkObservationRecorder>,
@@ -2770,6 +2852,7 @@ impl FetchTransferHandler {
 
     fn new(response: FetchResponseCollector) -> Self {
         Self {
+            misdirected_response: MisdirectedResponse::Disabled,
             response,
             response_body_observed: false,
             network_observation_recorder: None,
@@ -2875,6 +2958,13 @@ impl Handler for FetchTransferHandler {
         if let Some(recorder) = self.network_observation_recorder.as_ref() {
             recorder.record_response_header_line(data);
         }
+        let status = crate::response::parse_http_response_status_line(data).map(|line| line.status);
+        if let Some(keep_reading) = self
+            .misdirected_response
+            .header(status, data == b"\r\n" || data == b"\n")
+        {
+            return keep_reading;
+        }
         match &mut self.response {
             FetchResponseCollector::Buffered(collector) => collector.header(data),
             FetchResponseCollector::Streaming(collector) => collector.header(data),
@@ -2925,6 +3015,12 @@ fn configure_network_observation(
     request_cookie_report: Option<&StoredCookieQueryReport>,
     capture_proxy_connect_response: bool,
 ) -> Result<()> {
+    easy.get_mut().misdirected_response =
+        if request.can_retry_misdirected_request() && request.method != "CONNECT" {
+            MisdirectedResponse::Eligible
+        } else {
+            MisdirectedResponse::Disabled
+        };
     let recorder = request.network_observation_recorder().cloned();
     let verbose = recorder.is_some() || capture_proxy_connect_response;
     if let Some(recorder) = recorder.as_ref() {

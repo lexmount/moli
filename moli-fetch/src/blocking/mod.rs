@@ -574,6 +574,8 @@ pub(crate) fn configure_easy(
         enforce_request_target_address_policy(config, request_url)?;
     }
     configure_curl_http_protocol_allowlist(easy)?;
+    easy.fresh_connect(request.new_connection_fetch)
+        .context("failed to configure a fresh connection for a 421 retry")?;
 
     // Keep proxy CONNECT handshake headers out of the response callbacks so
     // the collector only processes real HTTP responses.

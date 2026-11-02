@@ -6553,3 +6553,5 @@ fn panicking_fetch_runtime_owner_drop_does_not_replace_an_outer_unwind() {
 mod range_encoding;
 
 mod referrer_redirects;
+
+mod misdirected_request;
