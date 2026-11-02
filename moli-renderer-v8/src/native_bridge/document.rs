@@ -1,3 +1,4 @@
+use super::context_host::DocumentDomainSetOutcome;
 use crate::web_api_interfaces;
 use crate::{
     custom_elements,
@@ -995,18 +996,19 @@ fn document_domain_setter_function<'s>(
     };
     let value = value.to_rust_string_lossy(scope);
     let runtime = unsafe { &mut *runtime_ptr };
-    if runtime.set_document_domain_for_document_handle(handle, &value) {
-        let updated_context_count =
-            runtime.refresh_security_tokens_after_document_domain_mutation(scope, handle);
-        tracing::debug!(
-            ?handle,
-            updated_context_count,
-            "refreshed Window security tokens after document.domain mutation"
-        );
-        rv.set_undefined();
-        return;
+    match runtime.set_document_domain_for_document_handle(handle, &value) {
+        DocumentDomainSetOutcome::Applied => {
+            let updated_context_count =
+                runtime.refresh_security_tokens_after_document_domain_mutation(scope, handle);
+            tracing::debug!(
+                ?handle,
+                updated_context_count,
+                "refreshed Window security tokens after document.domain mutation"
+            );
+        }
+        DocumentDomainSetOutcome::Ignored => {}
+        DocumentDomainSetOutcome::Rejected => throw_document_domain_security_error(scope),
     }
-    throw_document_domain_security_error(scope);
     rv.set_undefined();
 }
 

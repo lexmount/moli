@@ -320,27 +320,42 @@ impl JsContextHost {
     }
 
     pub(crate) fn window_cross_origin_isolated(&self, owner: OwnerDispatchScope) -> bool {
-        use std::borrow::Cow;
+        self.window_policy_container(owner).is_some_and(|policy| {
+            policy.allows_cross_origin_isolation()
+                && self.window_agent_cluster_is_cross_origin_isolated_with_policy(owner, &policy)
+        })
+    }
 
-        let policy = match owner {
-            OwnerDispatchScope::Top => Cow::Borrowed(self.document_policy_container()),
-            OwnerDispatchScope::LightweightPopup(id) => {
-                let Some(policy) = self.lightweight_popup_policy_container(id) else {
-                    return false;
-                };
-                Cow::Borrowed(policy)
-            }
-            OwnerDispatchScope::Child(handle) => {
-                let Some(policy) = self.child_browsing_context_policy_container_snapshot(handle)
-                else {
-                    return false;
-                };
-                Cow::Owned(policy)
-            }
-        };
-        if !policy.allows_cross_origin_isolation() {
-            return false;
+    pub(super) fn window_agent_cluster_is_cross_origin_isolated(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> bool {
+        self.window_policy_container(owner).is_some_and(|policy| {
+            self.window_agent_cluster_is_cross_origin_isolated_with_policy(owner, &policy)
+        })
+    }
+
+    fn window_policy_container(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<std::borrow::Cow<'_, DocumentPolicyContainer>> {
+        use std::borrow::Cow;
+        match owner {
+            OwnerDispatchScope::Top => Some(Cow::Borrowed(self.document_policy_container())),
+            OwnerDispatchScope::Child(handle) => self
+                .child_browsing_context_policy_container_snapshot(handle)
+                .map(Cow::Owned),
+            OwnerDispatchScope::LightweightPopup(id) => self
+                .lightweight_popup_policy_container(id)
+                .map(Cow::Borrowed),
         }
+    }
+
+    fn window_agent_cluster_is_cross_origin_isolated_with_policy(
+        &self,
+        owner: OwnerDispatchScope,
+        policy: &DocumentPolicyContainer,
+    ) -> bool {
         if policy
             .document_isolation_policy
             .enables_cross_origin_isolation()
