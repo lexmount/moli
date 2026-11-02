@@ -8,7 +8,8 @@ use serde_json::Value;
 
 use super::{
     devtools_session::DevToolsSessionRegistry, emulation::EffectiveTargetEmulationState,
-    fetch::TargetFetchOwner, identity::TargetIdentityState, page_slot::TargetPageSlot,
+    fetch::TargetFetchOwner, identity::TargetIdentityState,
+    javascript_dialog::TargetJavaScriptDialogState, page_slot::TargetPageSlot,
     runtime_slot::TargetRuntimeSlot, session::TargetNetworkPolicyState,
     session_storage::TargetSessionStorageNamespace, target_state::TargetOwnerState,
 };
@@ -45,6 +46,7 @@ pub struct PageTargetHost {
     navigation_engine: Option<NavigationEngine>,
     pub(crate) target_identity: TargetIdentityState,
     pub(crate) devtools_sessions: DevToolsSessionRegistry,
+    pub(crate) javascript_dialog_state: TargetJavaScriptDialogState,
     pub(crate) network_policy: TargetNetworkPolicyState,
     pub(crate) http_proxy_override: Option<String>,
     pub(crate) http_no_proxy_override: Option<String>,
@@ -70,6 +72,7 @@ impl PageTargetHost {
             navigation_engine: None,
             target_identity: TargetIdentityState::about_blank(),
             devtools_sessions: DevToolsSessionRegistry::default(),
+            javascript_dialog_state: TargetJavaScriptDialogState::default(),
             network_policy: TargetNetworkPolicyState::default(),
             http_proxy_override: None,
             http_no_proxy_override: None,

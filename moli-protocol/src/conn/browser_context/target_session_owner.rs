@@ -546,11 +546,7 @@ fn clear_page_runtime_remote_object_tracking(state: &mut crate::conn::state::Pag
 
 fn clear_page_loaded_document_session_state(state: &mut crate::conn::state::PageTargetHost) {
     clear_page_runtime_remote_object_tracking(state);
-    for session in state.devtools_sessions.states_mut() {
-        session
-            .page_session_state
-            .clear_loaded_document_context_state();
-    }
+    state.clear_loaded_document_context_state();
 }
 
 fn renderer_runtime_inspector_session_id(session_key: &DevToolsSessionKey) -> Option<String> {
@@ -1761,34 +1757,21 @@ impl CdpConnection {
             .devtools_session_state()
     }
 
-    /// Mutates the canonical (target-primary) DevTools session state for the
-    /// Page addressed by `owner`.
-    ///
-    /// A JavaScript dialog blocks the whole renderer frame, so Chromium exposes
-    /// it to every inspector session attached to the page and lets any of them
-    /// resolve it. Moli therefore stores dialog state once per Page residence
-    /// (the primary session key) instead of once per attached session, so a
-    /// dialog opened from one session is visible to — and resolvable from — the
-    /// others. The one-shot renderer completion is consumed exactly once.
-    pub(crate) fn with_target_page_primary_devtools_session_state_for_owner_mut<R>(
+    pub(crate) fn with_target_javascript_dialog_state_for_owner_mut<R>(
         &mut self,
         owner: &CommandOwnerScope,
-        f: impl FnOnce(&mut DevToolsSessionState) -> R,
+        f: impl FnOnce(&mut crate::conn::TargetJavaScriptDialogState) -> R,
     ) -> Option<R> {
         let mut authoritative = self.target_session_owner_mut_for_owner(owner)?;
-        authoritative.session_key = DevToolsSessionKey::Primary;
-        Some(authoritative.mutate_session_state(|mut state| f(state.devtools_session_state_mut())))
+        Some(f(&mut authoritative.target_mut().javascript_dialog_state))
     }
 
-    pub(crate) fn target_page_primary_devtools_session_state_for_owner(
+    pub(crate) fn target_javascript_dialog_state_for_owner(
         &self,
         owner: &CommandOwnerScope,
-    ) -> Option<&DevToolsSessionState> {
-        let resolved = self.target_session_owner_for_owner(owner)?;
-        self.browser_context_by_id(&resolved.browser_context_id)?
-            .page_target(&resolved.target_id)?
-            .devtools_sessions
-            .session(&DevToolsSessionKey::Primary)
+    ) -> Option<&crate::conn::TargetJavaScriptDialogState> {
+        let authoritative = self.target_session_owner_ref_for_owner(owner)?;
+        Some(&authoritative.target().javascript_dialog_state)
     }
 
     pub(crate) fn target_runtime_session_state_for_session(
@@ -4580,9 +4563,9 @@ mod tests {
             .runtime_session_owner_slot(Some("SID-background-dialog"))
             .expect("background target should own a stable runtime slot")
             .javascript_dialog_scope_observer();
-        conn.with_target_devtools_session_state_for_session_mut(
-            Some("SID-background-dialog"),
-            |state| state.page_session_state.javascript_dialog_state.clear(),
+        conn.with_target_javascript_dialog_state_for_owner_mut(
+            &crate::conn::CommandOwnerScope::capture(&conn, Some("SID-background-dialog")),
+            |state| state.clear(),
         )
         .expect("background session state mutation should be available");
 

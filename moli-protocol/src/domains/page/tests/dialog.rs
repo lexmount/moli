@@ -9,6 +9,17 @@ fn dialog_for_test(
     renderer_dialog_for_test(frame_id, dialog_type, message, "", None)
 }
 
+fn enable_page_events_for_fixture(ctx: &TestContext, session_id: &str) {
+    // These fixtures inspect nonblocking renderer output. Subscribe to Page
+    // events without enabling the renderer's modal wait.
+    ctx.with_fixture(|conn| {
+        conn.with_target_devtools_session_state_for_session_mut(Some(session_id), |state| {
+            state.page_session_state.enable_page_domain(1);
+        })
+        .expect("Page observer fixture");
+    });
+}
+
 fn page_owner_for_test(
     ctx: &mut TestContext,
     session_id: Option<&str>,
@@ -47,19 +58,285 @@ fn push_dialog_for_session(
                     .expect("test target should expose a root frame")
             }),
     };
-    let dialog = crate::conn::TargetJavaScriptDialog::new(page_owner, source_frame_id, dialog);
+    let mut dialog = crate::conn::TargetJavaScriptDialog::new(page_owner, source_frame_id, dialog);
     ctx.with_fixture(|conn| {
-        conn.with_target_page_primary_devtools_session_state_for_owner_mut(
-            &crate::conn::CommandOwnerScope::capture(conn, session_id),
-            |state| {
-                state
-                    .page_session_state
-                    .javascript_dialog_state
-                    .push(dialog);
-            },
-        )
+        let owner = crate::conn::CommandOwnerScope::capture(conn, session_id);
+        dialog.set_page_subscriptions(
+            conn.subscribed_page_event_session_ids_for_owner(&owner)
+                .iter()
+                .filter_map(|session_id| {
+                    conn.page_domain_subscription_generation_for_session_owner(
+                        session_id.as_deref(),
+                    )
+                })
+                .collect(),
+        );
+        conn.with_target_javascript_dialog_state_for_owner_mut(&owner, |state| {
+            state.push(dialog);
+        })
         .expect("target session state should exist")
     });
+}
+
+fn shared_dialog_context() -> TestContext {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-primary", "about:blank");
+    ctx.with_fixture(|conn| {
+        let context = conn.browser_context.as_mut().unwrap();
+        assert!(context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
+        assert!(context.assign_attached_session_to_target("TID-1", "SID-disabled".to_owned()));
+        conn.commit_declared_session_fixtures_for_test();
+        for session_id in ["SID-primary", "SID-attached"] {
+            assert!(conn.set_page_domain_enabled_for_session_owner(Some(session_id), true));
+        }
+    });
+    ctx
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn primary_detach_preserves_shared_javascript_dialog_and_completion() {
+    let mut ctx = shared_dialog_context();
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-attached"),
+        renderer_dialog_for_test(
+            Some("TID-1"),
+            "confirm",
+            "survive detach",
+            "",
+            Some(completion.clone()),
+        ),
+    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .remove_page_session_binding(
+                    "TID-1",
+                    "SID-primary",
+                    &moli_page_types::DevToolsSessionKey::Primary,
+                )
+        );
+        assert!(
+            conn.has_pending_javascript_dialog(),
+            "detaching Primary must retain the Page-owned dialog"
+        );
+    });
+    ctx.process_async(json!({
+        "id": 101, "method": "Page.handleJavaScriptDialog", "sessionId": "SID-attached",
+        "params": {"accept": true}
+    }))
+    .await;
+    assert_eq!(take_response_by_id(&mut ctx, 101)["result"], json!({}));
+    assert!(
+        !completion.finish(false, String::new()),
+        "the surviving session must settle the completion exactly once"
+    );
+    assert!(completion.wait().accepted);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn javascript_dialog_cannot_be_handled_without_page_enable() {
+    let mut ctx = shared_dialog_context();
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-primary"),
+        renderer_dialog_for_test(
+            Some("TID-1"),
+            "confirm",
+            "enabled sessions only",
+            "",
+            Some(completion.clone()),
+        ),
+    );
+    ctx.process_async(json!({
+        "id": 102, "method": "Page.handleJavaScriptDialog", "sessionId": "SID-disabled",
+        "params": {"accept": true}
+    }))
+    .await;
+    let response = take_response_by_id(&mut ctx, 102);
+    assert_eq!(response["error"]["message"], json!("No dialog is showing"));
+    ctx.with_fixture(|conn| assert!(conn.has_pending_javascript_dialog()));
+    ctx.process_async(json!({
+        "id": 103, "method": "Page.handleJavaScriptDialog", "sessionId": "SID-attached",
+        "params": {"accept": true}
+    }))
+    .await;
+    assert_eq!(take_response_by_id(&mut ctx, 103)["result"], json!({}));
+    assert!(!completion.finish(false, String::new()));
+    assert!(completion.wait().accepted);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn late_page_enable_cannot_handle_or_cancel_an_existing_javascript_dialog() {
+    let mut ctx = shared_dialog_context();
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-primary"),
+        renderer_dialog_for_test(
+            Some("TID-1"),
+            "confirm",
+            "original subscribers only",
+            "",
+            Some(completion.clone()),
+        ),
+    );
+    ctx.process_async(json!({
+        "id": 106, "method": "Page.enable", "sessionId": "SID-disabled",
+    }))
+    .await;
+    assert_eq!(take_response_by_id(&mut ctx, 106)["result"], json!({}));
+    ctx.process_async(json!({
+        "id": 107, "method": "Page.handleJavaScriptDialog", "sessionId": "SID-disabled",
+        "params": {"accept": true}
+    }))
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 107)["error"]["message"],
+        json!("No dialog is showing")
+    );
+    ctx.process_async(json!({
+        "id": 108, "method": "Page.disable", "sessionId": "SID-disabled",
+    }))
+    .await;
+    assert_eq!(take_response_by_id(&mut ctx, 108)["result"], json!({}));
+    ctx.with_fixture(|conn| assert!(conn.has_pending_javascript_dialog()));
+    ctx.process_async(json!({
+        "id": 109, "method": "Page.handleJavaScriptDialog", "sessionId": "SID-attached",
+        "params": {"accept": true}
+    }))
+    .await;
+    assert_eq!(take_response_by_id(&mut ctx, 109)["result"], json!({}));
+    assert!(!completion.finish(false, String::new()));
+    assert!(completion.wait().accepted);
+}
+
+async fn assert_page_disable_dismisses_shared_dialog(disabling: &str, observing: &str) {
+    let mut ctx = shared_dialog_context();
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-primary"),
+        renderer_dialog_for_test(
+            Some("TID-1"),
+            "confirm",
+            "cancel on disable",
+            "",
+            Some(completion.clone()),
+        ),
+    );
+    ctx.process_async(json!({
+        "id": 104, "method": "Page.disable", "sessionId": disabling,
+    }))
+    .await;
+    assert_eq!(take_response_by_id(&mut ctx, 104)["result"], json!({}));
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_pending_javascript_dialog(),
+            "Page.disable must dismiss the shared dialog from either session"
+        )
+    });
+    assert!(
+        !completion.finish(true, String::new()),
+        "Page.disable must settle the renderer completion"
+    );
+    assert!(!completion.wait().accepted);
+    let closed = ctx
+        .take_all()
+        .into_iter()
+        .filter(|message| message["method"] == "Page.javascriptDialogClosed")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        closed.len(),
+        1,
+        "only the remaining Page subscriber should receive the close event: {closed:?}"
+    );
+    assert_eq!(closed[0]["sessionId"], json!(observing));
+    assert_eq!(closed[0]["params"]["result"], json!(false));
+    ctx.process_async(json!({
+        "id": 105, "method": "Page.handleJavaScriptDialog", "sessionId": observing,
+        "params": {"accept": true}
+    }))
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 105)["error"]["message"],
+        json!("No dialog is showing")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn primary_page_disable_dismisses_shared_javascript_dialog() {
+    assert_page_disable_dismisses_shared_dialog("SID-primary", "SID-attached").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attached_page_disable_dismisses_shared_javascript_dialog() {
+    assert_page_disable_dismisses_shared_dialog("SID-attached", "SID-primary").await;
+}
+
+#[test]
+fn dropping_page_target_dismisses_installed_javascript_dialog() {
+    let mut ctx = shared_dialog_context();
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-attached"),
+        renderer_dialog_for_test(
+            Some("TID-1"),
+            "prompt",
+            "target closes",
+            "",
+            Some(completion.clone()),
+        ),
+    );
+    ctx.with_fixture(|conn| {
+        let target = conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .take_page_target_for_close("TID-1")
+            .expect("live Page target");
+        drop(target);
+    });
+    assert!(
+        !completion.finish(true, String::new()),
+        "dropping a Page target must settle its installed completion"
+    );
+    assert!(!completion.wait().accepted);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disabling_last_page_subscriber_dismisses_without_cdp_close_event() {
+    let mut ctx = shared_dialog_context();
+    ctx.with_fixture(|conn| {
+        assert!(conn.disable_page_domain_for_session_owner(Some("SID-attached")))
+    });
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-primary"),
+        renderer_dialog_for_test(
+            Some("TID-1"),
+            "confirm",
+            "last observer",
+            "",
+            Some(completion.clone()),
+        ),
+    );
+    ctx.process_async(json!({"id": 110, "method": "Page.disable", "sessionId": "SID-primary"}))
+        .await;
+    assert_eq!(take_response_by_id(&mut ctx, 110)["result"], json!({}));
+    assert!(!completion.finish(true, String::new()));
+    assert!(!completion.wait().accepted);
+    assert!(
+        ctx.take_all()
+            .iter()
+            .all(|message| message["method"] != "Page.javascriptDialogClosed")
+    );
 }
 
 #[test]
@@ -97,21 +374,20 @@ fn retiring_page_scope_and_clearing_dialog_state_dismisses_installed_dialog() {
     });
 
     ctx.with_fixture(|conn| {
-        conn.with_target_page_primary_devtools_session_state_for_owner_mut(
+        conn.with_target_javascript_dialog_state_for_owner_mut(
             &crate::conn::CommandOwnerScope::capture(conn, Some("SID-dialog-clear")),
-            |state| state.page_session_state.javascript_dialog_state.clear(),
+            |state| state.clear(),
         )
         .expect("target page session state should clear")
     });
 
     ctx.with_fixture(|conn| {
         let state = &conn
-            .target_page_primary_devtools_session_state_for_owner(
-                &crate::conn::CommandOwnerScope::capture(conn, Some("SID-dialog-clear")),
-            )
-            .expect("target page session state")
-            .page_session_state
-            .javascript_dialog_state;
+            .target_javascript_dialog_state_for_owner(&crate::conn::CommandOwnerScope::capture(
+                conn,
+                Some("SID-dialog-clear"),
+            ))
+            .expect("target page session state");
         assert!(state.is_empty());
     });
     ctx.with_fixture(|conn| {
@@ -160,9 +436,8 @@ async fn pending_javascript_dialogs_are_preserved_per_background_target() {
     {
         ctx.with_fixture(|conn| {
             let browser_context = conn.browser_context.as_mut().unwrap();
-            browser_context.active_page_target_mut().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
+            browser_context
+                .active_page_target_mut()
                 .javascript_dialog_state
                 .push(dialog("TID-A", "a"));
             browser_context.insert_page_target_host(PageTargetHost::new(
@@ -182,9 +457,8 @@ async fn pending_javascript_dialogs_are_preserved_per_background_target() {
                     .is_empty()
             );
             assert!(
-                browser_context.active_page_target().devtools_sessions
-                    [moli_page_types::DevToolsSessionKey::Primary]
-                    .page_session_state
+                browser_context
+                    .active_page_target()
                     .javascript_dialog_state
                     .is_empty()
             );
@@ -205,9 +479,8 @@ async fn pending_javascript_dialogs_are_preserved_per_background_target() {
     {
         ctx.with_fixture(|conn| {
             let browser_context = conn.browser_context.as_mut().unwrap();
-            browser_context.active_page_target_mut().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
+            browser_context
+                .active_page_target_mut()
                 .javascript_dialog_state
                 .push(dialog("TID-B", "b"));
         });
@@ -223,9 +496,8 @@ async fn pending_javascript_dialogs_are_preserved_per_background_target() {
                     .is_empty()
             );
             assert_eq!(
-                browser_context.active_page_target().devtools_sessions
-                    [moli_page_types::DevToolsSessionKey::Primary]
-                    .page_session_state
+                browser_context
+                    .active_page_target()
                     .javascript_dialog_state
                     .pending_dialogs(),
                 &[dialog("TID-A", "a")]
@@ -243,9 +515,8 @@ async fn pending_javascript_dialogs_are_preserved_per_background_target() {
                     .is_empty()
             );
             assert_eq!(
-                browser_context.active_page_target().devtools_sessions
-                    [moli_page_types::DevToolsSessionKey::Primary]
-                    .page_session_state
+                browser_context
+                    .active_page_target()
                     .javascript_dialog_state
                     .pending_dialogs(),
                 &[dialog("TID-B", "b")]
@@ -257,6 +528,7 @@ async fn pending_javascript_dialogs_are_preserved_per_background_target() {
 async fn javascript_dialog_events_round_trip_through_page_domain() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    enable_page_events_for_fixture(&ctx, "SID-1");
     let page = ctx
         .build_fixture_page("data:text/html,<button id='b'>alert</button>")
         .await
@@ -325,6 +597,7 @@ async fn document_open_preserves_dialog_order_and_retires_replaced_document_stat
         "SID-dialog-open",
         "about:blank",
     );
+    enable_page_events_for_fixture(&ctx, "SID-dialog-open");
     ctx.install_buffered_navigation_fixture_for_session_owner(
         url::Url::parse("https://dialog-replacement.example/").unwrap(),
         "<!doctype html><body>dialog replacement</body>".into(),
@@ -361,12 +634,10 @@ async fn document_open_preserves_dialog_order_and_retires_replaced_document_stat
     );
     ctx.with_fixture(|conn| {
         assert!(
-            conn.target_page_primary_devtools_session_state_for_owner(
+            conn.target_javascript_dialog_state_for_owner(
                 &crate::conn::CommandOwnerScope::capture(conn, Some("SID-dialog-open")),
             )
             .expect("replacement target page session state")
-            .page_session_state
-            .javascript_dialog_state
             .is_empty(),
             "the replacement Document must retire the already-emitted dialog state"
         )
@@ -379,20 +650,17 @@ async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let page_owner = page_owner_for_test(&mut ctx, Some("SID-1"));
     ctx.with_fixture(|conn| {
-        conn.with_target_page_primary_devtools_session_state_for_owner_mut(
+        conn.with_target_javascript_dialog_state_for_owner_mut(
             &crate::conn::CommandOwnerScope::capture(conn, Some("SID-1")),
             |state| {
-                state
-                    .page_session_state
-                    .javascript_dialog_state
-                    .push(target_dialog_for_test(
-                        page_owner,
-                        "TID-1",
-                        "alert",
-                        "classic alert",
-                        "",
-                        None,
-                    ));
+                state.push(target_dialog_for_test(
+                    page_owner,
+                    "TID-1",
+                    "alert",
+                    "classic alert",
+                    "",
+                    None,
+                ));
             },
         )
         .expect("target session state should exist")
@@ -440,20 +708,25 @@ async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
     let closed_event = events
         .into_iter()
         .find(|event| {
-            event.clone().into_parts().0["method"] == json!("Page.javascriptDialogClosed")
+            matches!(
+                event.clone().into_parts().1,
+                Some(AutomationEvent::UserPromptClosed(_))
+            )
         })
-        .expect("peeked dialog should emit Page.javascriptDialogClosed");
+        .expect("native automation must observe the dialog closing without Page.enable");
     assert!(
         closed_event.protocol_message().is_none(),
         "closed dialog event should stay typed until wire projection"
     );
-    let (closed_message, closed_sidecar) = closed_event.into_parts();
-    assert_eq!(closed_message["params"]["result"], json!(true));
-    assert_eq!(closed_message["params"]["frameId"], json!("TID-1"));
-    assert!(matches!(
-        closed_sidecar,
-        Some(crate::automation::AutomationEvent::UserPromptClosed(_))
-    ));
+    assert!(
+        closed_event.clone().into_wire_message().is_none(),
+        "a disabled Page session must not receive CDP dialog events"
+    );
+    let (_, Some(AutomationEvent::UserPromptClosed(closed))) = closed_event.into_parts() else {
+        panic!("typed native close event");
+    };
+    assert!(closed.accepted);
+    assert_eq!(closed.frame_id.as_str(), "TID-1");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -471,15 +744,12 @@ async fn set_javascript_dialog_prompt_text_is_shared_across_attached_sessions() 
     });
     let page_owner = page_owner_for_test(&mut ctx, Some("SID-2"));
     ctx.with_fixture(|conn| {
-        conn.with_target_page_primary_devtools_session_state_for_owner_mut(
+        conn.with_target_javascript_dialog_state_for_owner_mut(
             &crate::conn::CommandOwnerScope::capture(conn, Some("SID-1")),
             |state| {
-                state
-                    .page_session_state
-                    .javascript_dialog_state
-                    .push(target_dialog_for_test(
-                        page_owner, "TID-1", "prompt", "prompt?", "", None,
-                    ));
+                state.push(target_dialog_for_test(
+                    page_owner, "TID-1", "prompt", "prompt?", "", None,
+                ));
             },
         )
         .expect("target session state should exist")
@@ -545,17 +815,16 @@ async fn set_javascript_dialog_prompt_text_is_shared_across_attached_sessions() 
         result.expect("accept prompt should resolve"),
         crate::automation::AutomationResult::Empty
     ));
-    let messages = events
+    let events = events
         .into_iter()
-        .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
+        .filter_map(|event| event.into_parts().1)
         .collect::<Vec<_>>();
     assert!(
-        messages.iter().any(|message| {
-            message["method"] == json!("Page.javascriptDialogClosed")
-                && message["params"]["result"] == json!(true)
-                && message["params"]["userInput"] == json!("cheese")
-        }),
-        "stored prompt text should be consumed by accept: {messages:?}"
+        events.iter().any(
+            |event| matches!(event, AutomationEvent::UserPromptClosed(closed)
+            if closed.accepted && closed.user_text == "cheese")
+        ),
+        "stored prompt text should be consumed by native accept: {events:?}"
     );
 }
 
@@ -563,6 +832,9 @@ async fn set_javascript_dialog_prompt_text_is_shared_across_attached_sessions() 
 async fn handle_javascript_dialog_finishes_renderer_completion() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.with_fixture(|conn| {
+        assert!(conn.set_page_domain_enabled_for_session_owner(Some("SID-1"), true))
+    });
     let completion = RendererJavaScriptDialogCompletion::pending();
     push_dialog_for_session(
         &mut ctx,
@@ -647,6 +919,11 @@ async fn javascript_dialog_pending_state_is_shared_across_active_attached_sessio
         );
     });
     ctx.with_fixture(|conn| conn.commit_declared_session_fixtures_for_test());
+    ctx.with_fixture(|conn| {
+        for session_id in ["SID-primary", "SID-attached"] {
+            assert!(conn.set_page_domain_enabled_for_session_owner(Some(session_id), true));
+        }
+    });
     push_dialog_for_session(
         &mut ctx,
         Some("SID-attached"),
@@ -658,12 +935,11 @@ async fn javascript_dialog_pending_state_is_shared_across_active_attached_sessio
     ctx.with_fixture(|conn| {
         assert!(
             !conn
-                .target_page_primary_devtools_session_state_for_owner(
-                    &crate::conn::CommandOwnerScope::capture(conn, Some("SID-primary")),
-                )
+                .target_javascript_dialog_state_for_owner(&crate::conn::CommandOwnerScope::capture(
+                    conn,
+                    Some("SID-primary")
+                ),)
                 .expect("primary page session state")
-                .page_session_state
-                .javascript_dialog_state
                 .is_empty(),
             "every attached session observes the Page's canonical pending dialog"
         )
@@ -717,12 +993,10 @@ async fn javascript_dialog_pending_state_is_shared_across_active_attached_sessio
     assert_eq!(attached["error"]["message"], json!("No dialog is showing"));
     ctx.with_fixture(|conn| {
         assert!(
-            conn.target_page_primary_devtools_session_state_for_owner(
+            conn.target_javascript_dialog_state_for_owner(
                 &crate::conn::CommandOwnerScope::capture(conn, Some("SID-attached")),
             )
             .expect("canonical page session state")
-            .page_session_state
-            .javascript_dialog_state
             .is_empty(),
             "resolving the shared dialog clears it exactly once"
         )
@@ -745,23 +1019,29 @@ async fn handle_javascript_dialog_rejects_dialog_without_current_page_residence(
         });
     }
     ctx.with_fixture(|conn| {
-        conn.with_target_devtools_session_state_for_session_mut(None, |state| {
-            state
-                .page_session_state
-                .javascript_dialog_state
-                .push(target_dialog_for_test(
-                    crate::conn::TargetPageResidenceIdentity::new_for_test(
-                        "BID-dialog-missing-frame".to_owned(),
-                        Some("retired-target".to_owned()),
-                        1,
-                    ),
-                    "retired-target",
-                    "alert",
-                    "stale dialog",
-                    "",
-                    None,
-                ));
-        })
+        assert!(conn.set_page_domain_enabled_for_session_owner(None, true));
+        let generation = conn
+            .page_domain_subscription_generation_for_session_owner(None)
+            .unwrap();
+        let mut dialog = target_dialog_for_test(
+            crate::conn::TargetPageResidenceIdentity::new_for_test(
+                "BID-dialog-missing-frame".to_owned(),
+                Some("retired-target".to_owned()),
+                1,
+            ),
+            "retired-target",
+            "alert",
+            "stale dialog",
+            "",
+            None,
+        );
+        dialog.set_page_subscriptions(vec![generation]);
+        conn.with_target_javascript_dialog_state_for_owner_mut(
+            &crate::conn::CommandOwnerScope::capture(conn, None),
+            |state| {
+                state.push(dialog);
+            },
+        )
         .expect("target session state should exist")
     });
 
@@ -792,6 +1072,7 @@ async fn handle_javascript_dialog_rejects_dialog_without_current_page_residence(
 async fn javascript_dialog_events_are_emitted_after_runtime_call_function_on() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    enable_page_events_for_fixture(&ctx, "SID-1");
     let page = ctx
         .build_fixture_page("data:text/html,<body>callFunctionOn</body>")
         .await
@@ -855,6 +1136,7 @@ async fn javascript_dialog_events_are_emitted_after_runtime_call_function_on() {
 async fn javascript_dialog_events_are_emitted_from_playwright_utility_world_call_function_on() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    enable_page_events_for_fixture(&ctx, "SID-1");
     let page = ctx
         .build_fixture_page("data:text/html,<body>utility dialog</body>")
         .await
@@ -942,6 +1224,7 @@ async fn javascript_dialog_events_are_emitted_from_playwright_serialized_utility
 {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    enable_page_events_for_fixture(&ctx, "SID-1");
     let page = ctx
         .build_fixture_page("data:text/html,<body>serialized utility dialog</body>")
         .await

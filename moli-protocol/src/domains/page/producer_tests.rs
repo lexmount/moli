@@ -359,6 +359,9 @@ async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback
     bc.set_active_target_id("TID-active");
     bc.attach_active_session("SID-1");
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    ctx.with_fixture(|conn| {
+        assert!(conn.set_page_domain_enabled_for_session_owner(Some("SID-1"), true))
+    });
     let page_owner = ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-1"));
     let source_document = renderer_document_identity_for_test(1, 1);
     let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
@@ -401,10 +404,12 @@ async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback
     assert!(!event.has_browser_handler);
     ctx.with_fixture(|conn| {
         let installed = {
-            conn.target_page_session_state_for_session(Some("SID-1"))
-                .expect("target page session state should exist")
-                .javascript_dialog_state
-                .pending_dialogs()
+            conn.target_javascript_dialog_state_for_owner(&crate::conn::CommandOwnerScope::capture(
+                conn,
+                Some("SID-1"),
+            ))
+            .expect("target page session state should exist")
+            .pending_dialogs()
         };
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].page_owner(), &page_owner);
@@ -426,6 +431,9 @@ async fn child_dialog_output_stays_with_its_exact_protocol_attachment() {
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let page_owner =
         ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-attached"));
+    ctx.with_fixture(|conn| {
+        assert!(conn.set_page_domain_enabled_for_session_owner(Some("SID-attached"), true))
+    });
     let mut prepared =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
             super::PagePreparedOutputs::from_javascript_dialogs_for_test(
@@ -453,25 +461,29 @@ async fn child_dialog_output_stays_with_its_exact_protocol_attachment() {
     assert_eq!(message["params"]["frameId"], json!("FRAME-child"));
     ctx.with_fixture(|conn| {
         assert!(
-            conn.target_page_primary_devtools_session_state_for_owner(
-                &CommandOwnerScope::for_session("SID-attached"),
-            )
-            .expect("primary session state")
-            .page_session_state
-            .javascript_dialog_state
-            .pending_dialogs()
-            .len()
+            conn.target_javascript_dialog_state_for_owner(&CommandOwnerScope::for_session(
+                "SID-attached"
+            ),)
+                .expect("primary session state")
+                .pending_dialogs()
+                .len()
                 == 1,
             "the canonical Page residence owns exactly one installed dialog"
         )
     });
     ctx.with_fixture(|conn| {
         assert!(
-            conn.target_page_session_state_for_session(Some("SID-attached"))
-                .expect("attached session state")
-                .javascript_dialog_state
-                .is_empty(),
-            "the dialog lives in the canonical residence state, not a per-session slot"
+            std::ptr::eq(
+                conn.target_javascript_dialog_state_for_owner(&CommandOwnerScope::for_session(
+                    "SID-primary"
+                ))
+                .unwrap(),
+                conn.target_javascript_dialog_state_for_owner(&CommandOwnerScope::for_session(
+                    "SID-attached"
+                ))
+                .unwrap(),
+            ),
+            "both sessions must address the same Page-owned dialog state"
         )
     });
 }
@@ -721,41 +733,51 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
             .to_owned();
         (popup_target_id, popup_session_id)
     });
-    let observed_messages = protocol_messages_from_background_events(out);
-    let dialog_event = observed_messages
+    let dialog_event = out
         .iter()
-        .find(|message| message["method"] == json!("Page.javascriptDialogOpening"))
-        .unwrap_or_else(|| {
-            panic!(
-                "popup dialog opening event; popup_session_id={popup_session_id}; \
-                     observed={observed_messages:?}"
-            )
-        });
-    assert_eq!(dialog_event["sessionId"], json!(popup_session_id));
+        .filter_map(|event| event.clone().into_parts().1)
+        .find_map(|event| match event {
+            AutomationEvent::PageJavaScriptDialogOpening(event) => Some(event),
+            _ => None,
+        })
+        .expect("native automation must observe the popup-owned dialog");
     assert_eq!(
-        dialog_event["params"]["frameId"],
-        json!(popup_target_id.clone())
+        dialog_event.frame_id.as_ref().map(|frame| frame.as_str()),
+        Some(popup_target_id.as_str())
+    );
+    assert_eq!(dialog_event.message, "popup-owned dialog");
+    let observed_messages = protocol_messages_from_background_events(out);
+    assert!(
+        observed_messages
+            .iter()
+            .all(|message| message["method"] != "Page.javascriptDialogOpening"),
+        "an auto-attached session without Page.enable must not receive CDP dialog events: {observed_messages:?}"
     );
     ctx.with_fixture(|conn| {
         assert!(
-            conn.target_page_session_state_for_session(Some("SID-opener"))
-                .expect("opener session state")
-                .javascript_dialog_state
-                .is_empty(),
+            conn.target_javascript_dialog_state_for_owner(
+                &crate::conn::CommandOwnerScope::capture(conn, Some("SID-opener"))
+            )
+            .expect("opener session state")
+            .is_empty(),
             "opener session must not own the popup's modal dialog"
         )
     });
     ctx.with_fixture(|conn| {
         assert_eq!(
-            conn.target_page_session_state_for_session(Some(&popup_session_id))
-                .expect("popup session state")
-                .javascript_dialog_state
-                .pending_dialogs()
-                .len(),
+            conn.target_javascript_dialog_state_for_owner(
+                &crate::conn::CommandOwnerScope::capture(conn, Some(&popup_session_id))
+            )
+            .expect("popup session state")
+            .pending_dialogs()
+            .len(),
             1
         )
     });
 
+    ctx.with_fixture(|conn| {
+        assert!(conn.set_page_domain_enabled_for_session_owner(Some(&popup_session_id), true))
+    });
     let mut later_dialog =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
             super::PagePreparedOutputs::from_javascript_dialogs_for_test(
@@ -788,19 +810,21 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
     }));
     ctx.with_fixture(|conn| {
         assert_eq!(
-            conn.target_page_session_state_for_session(Some(&popup_session_id))
-                .expect("popup session state")
-                .javascript_dialog_state
-                .pending_dialogs()
-                .len(),
+            conn.target_javascript_dialog_state_for_owner(
+                &crate::conn::CommandOwnerScope::capture(conn, Some(&popup_session_id))
+            )
+            .expect("popup session state")
+            .pending_dialogs()
+            .len(),
             2,
             "a later output batch should resolve through the existing popup attachment"
         )
     });
     ctx.with_fixture(|conn| {
-        conn.with_target_devtools_session_state_for_session_mut(Some(&popup_session_id), |state| {
-            state.page_session_state.javascript_dialog_state.clear()
-        })
+        conn.with_target_javascript_dialog_state_for_owner_mut(
+            &crate::conn::CommandOwnerScope::capture(conn, Some(&popup_session_id)),
+            |state| state.clear(),
+        )
         .expect("popup session state should clear")
     });
     assert!(!completion.wait().accepted);
@@ -876,10 +900,11 @@ async fn unattached_popup_dialog_is_dismissed_without_opener_fallback() {
     );
     ctx.with_fixture(|conn| {
         assert!(
-            conn.target_page_session_state_for_session(Some("SID-opener-no-session"))
-                .expect("opener session state")
-                .javascript_dialog_state
-                .is_empty()
+            conn.target_javascript_dialog_state_for_owner(
+                &crate::conn::CommandOwnerScope::capture(conn, Some("SID-opener-no-session"))
+            )
+            .expect("opener session state")
+            .is_empty()
         )
     });
     assert!(!completion.finish(true, String::new()));
@@ -975,10 +1000,11 @@ async fn javascript_dialog_prepared_action_dismisses_replacement_page_output() {
     assert!(out.is_empty());
     ctx.with_fixture(|conn| {
         assert!(
-            conn.target_page_session_state_for_session(Some("SID-dialog-stale-page"))
-                .expect("target page session state")
-                .javascript_dialog_state
-                .is_empty()
+            conn.target_javascript_dialog_state_for_owner(
+                &crate::conn::CommandOwnerScope::capture(conn, Some("SID-dialog-stale-page"))
+            )
+            .expect("target page session state")
+            .is_empty()
         )
     });
     assert!(
@@ -1024,9 +1050,9 @@ async fn javascript_dialog_prepared_action_dismisses_retired_dialog_scope() {
             .retire_javascript_dialog_scope()
     });
     ctx.with_fixture(|conn| {
-        conn.with_target_devtools_session_state_for_session_mut(
-            Some("SID-dialog-generation"),
-            |state| state.page_session_state.javascript_dialog_state.clear(),
+        conn.with_target_javascript_dialog_state_for_owner_mut(
+            &crate::conn::CommandOwnerScope::capture(conn, Some("SID-dialog-generation")),
+            |state| state.clear(),
         )
         .expect("target session state should retire its dialog scope")
     });
@@ -1049,6 +1075,9 @@ async fn javascript_dialog_projection_uses_captured_url_and_frame() {
     bc.set_target_url("https://example.test/current-before-capture".to_owned());
     bc.attach_active_session("SID-dialog-source");
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    ctx.with_fixture(|conn| {
+        assert!(conn.set_page_domain_enabled_for_session_owner(Some("SID-dialog-source"), true))
+    });
     let page_owner =
         ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-dialog-source"));
     let dialog = RendererPendingJavaScriptDialog::new(
@@ -1212,6 +1241,9 @@ async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
         .filter_map(|(message, automation_event)| match automation_event {
             Some(AutomationEvent::BrowserDownloadWillBegin(_)) => Some("Browser.downloadWillBegin"),
             Some(AutomationEvent::BrowserDownloadProgress(_)) => Some("Browser.downloadProgress"),
+            Some(AutomationEvent::PageJavaScriptDialogOpening(_)) => {
+                Some("Page.javascriptDialogOpening")
+            }
             _ => message["method"].as_str(),
         })
         .filter(|method| {

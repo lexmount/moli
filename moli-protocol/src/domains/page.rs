@@ -640,9 +640,16 @@ fn enable_page_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutput
 }
 
 fn disable_page_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
+    // Chromium cancels a pending dialog when an observing Page handler is
+    // disabled and there is no native dialog manager to take over.
+    let dismiss_dialog = javascript_dialog::prepare_cdp_dialog_dismissal(conn, cmd);
     if !conn.disable_page_domain_for_session_owner(cmd.session_id) {
         return CommandOutputPlan::error(-31998, "BrowserContextNotLoaded");
     }
+    let plan = match dismiss_dialog {
+        Some(command) => complete_devtools_handle_javascript_dialog_command(conn, command),
+        None => CommandOutputPlan::success(),
+    };
     let dialog_handler_enabled = conn
         .navigation_load_inputs_for_session_owner(cmd.session_id)
         .renderer_runtime
@@ -656,7 +663,7 @@ fn disable_page_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutpu
             format!("failed to update JavaScript dialog handling: {error}"),
         );
     }
-    CommandOutputPlan::success()
+    plan
 }
 
 fn set_lifecycle_events_enabled_command(
