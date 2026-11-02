@@ -1763,3 +1763,230 @@ document.querySelector('main').textContent = globalThis.__realmMarker;
     let _ = socket.close(None).await;
     abort_test_cdp_server(protocol_server).await;
 }
+
+// Issue #2063: when two CDP sessions are attached to the same page, Chromium
+// reports a JavaScript dialog to every session attached to the page that has
+// the Page domain enabled, and lets any of them resolve it. Moli previously
+// bound the dialog to the session whose command opened it.
+#[tokio::test]
+async fn websocket_cdp_javascript_dialog_is_reported_to_and_resolvable_by_every_attached_session() {
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect to cdp websocket");
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+    // Session B opens the create/attach flow; session A attaches to the same
+    // target afterwards.
+    let session_b = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
+    let target_id = session_b.target_id.clone();
+    let session_b_id = session_b.session_id.clone();
+    // Attach the second Page session through an explicit browser session, as
+    // CDP clients do when they create independent sessions for one target.
+    let browser_attach = send_cdp_command(
+        &mut socket,
+        4,
+        "Target.attachToBrowserTarget",
+        None,
+        json!({}),
+    )
+    .await;
+    let browser_session_id = browser_attach
+        .iter()
+        .find(|message| message["id"] == json!(4_u64))
+        .and_then(|message| message["result"]["sessionId"].as_str())
+        .expect("browser sessionId")
+        .to_owned();
+    let attach_a = send_cdp_command(
+        &mut socket,
+        5,
+        "Target.attachToTarget",
+        Some(&browser_session_id),
+        json!({ "targetId": target_id, "flatten": true }),
+    )
+    .await;
+    let session_a_id = attach_a
+        .iter()
+        .find(|message| message["id"] == json!(5_u64))
+        .and_then(|message| message["result"]["sessionId"].as_str())
+        .expect("second page sessionId")
+        .to_owned();
+    assert_ne!(session_a_id, session_b_id);
+    let attach_c = send_cdp_command(
+        &mut socket,
+        7,
+        "Target.attachToTarget",
+        Some(&browser_session_id),
+        json!({ "targetId": target_id, "flatten": true }),
+    )
+    .await;
+    let session_c_id = attach_c
+        .iter()
+        .find(|message| message["id"] == json!(7_u64))
+        .and_then(|message| message["result"]["sessionId"].as_str())
+        .expect("third page sessionId")
+        .to_owned();
+    assert_ne!(session_c_id, session_a_id);
+    assert_ne!(session_c_id, session_b_id);
+
+    let _ = send_cdp_command(
+        &mut socket,
+        6,
+        "Runtime.enable",
+        Some(&session_a_id),
+        json!({}),
+    )
+    .await;
+    let _ = send_cdp_command(
+        &mut socket,
+        8,
+        "Runtime.enable",
+        Some(&session_b_id),
+        json!({}),
+    )
+    .await;
+    let _ = send_cdp_command(
+        &mut socket,
+        10,
+        "Page.enable",
+        Some(&session_a_id),
+        json!({}),
+    )
+    .await;
+    // Load a real document on the target before opening a dialog; the initial
+    // about:blank target has no loaded page to block.
+    let _ = cdp_navigate_and_wait_for_load(
+        &mut socket,
+        14,
+        &session_b_id,
+        "data:text/html,<title>cross-session dialog</title>",
+    )
+    .await;
+    let _ = send_cdp_command(
+        &mut socket,
+        12,
+        "Page.enable",
+        Some(&session_b_id),
+        json!({}),
+    )
+    .await;
+
+    // Session B opens a confirm; its Runtime.evaluate stays pending.
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 20_u64,
+                "method": "Runtime.evaluate",
+                "sessionId": session_b_id,
+                "params": { "expression": "confirm('cross session confirm')", "returnByValue": true }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send cross-session confirm");
+
+    let observed = recv_cdp_messages_for(&mut socket, Duration::from_secs(3)).await;
+    assert!(
+        observed.iter().any(|message| {
+            message["sessionId"].as_str() == Some(session_b_id.as_str())
+                && message["method"] == json!("Page.javascriptDialogOpening")
+                && message["params"]["message"] == json!("cross session confirm")
+        }),
+        "opening session B should receive the dialog event: {observed:#?}"
+    );
+    assert!(
+        !observed
+            .iter()
+            .any(|message| message["id"] == json!(20_u64)),
+        "the opening Runtime.evaluate must remain pending: {observed:#?}"
+    );
+    assert!(
+        observed.iter().any(|message| {
+            message["sessionId"].as_str() == Some(session_a_id.as_str())
+                && message["method"] == json!("Page.javascriptDialogOpening")
+                && message["params"]["message"] == json!("cross session confirm")
+        }),
+        "second attached session A should receive the dialog event: {observed:#?}"
+    );
+    assert!(
+        !observed.iter().any(|message| {
+            message["sessionId"].as_str() == Some(session_c_id.as_str())
+                && message["method"] == json!("Page.javascriptDialogOpening")
+        }),
+        "a session without Page.enable must not receive Page dialog events: {observed:#?}"
+    );
+
+    // Session A — the session that did NOT open the dialog — resolves it.
+    send_cdp_command_without_wait(
+        &mut socket,
+        22,
+        "Page.handleJavaScriptDialog",
+        Some(&session_a_id),
+        json!({ "accept": true }),
+    )
+    .await;
+    let handled = recv_cdp_messages_for(&mut socket, Duration::from_secs(3)).await;
+    assert!(
+        handled
+            .iter()
+            .any(|message| message["id"] == json!(22_u64) && message["result"] == json!({})),
+        "a session that did not open the dialog must still resolve it: {handled:#?}"
+    );
+
+    let evaluate = handled
+        .iter()
+        .find(|message| message["id"] == json!(20_u64))
+        .expect("cross-session confirm should resolve after handle");
+    assert_eq!(
+        evaluate["result"]["result"]["value"],
+        json!(true),
+        "accepted cross-session confirm should return true: {handled:#?}"
+    );
+
+    let closing = handled
+        .iter()
+        .filter(|message| {
+            message["method"] == json!("Page.javascriptDialogClosed")
+                && message["params"]["result"] == json!(true)
+        })
+        .collect::<Vec<_>>();
+    for session_id in [&session_a_id, &session_b_id] {
+        assert!(
+            closing.iter().any(|message| {
+                message["sessionId"].as_str() == Some(session_id.as_str())
+                    && message["method"] == json!("Page.javascriptDialogClosed")
+                    && message["params"]["result"] == json!(true)
+            }),
+            "javascriptDialogClosed should reach attached session {session_id}: {closing:#?}"
+        );
+    }
+    assert!(
+        !closing
+            .iter()
+            .any(|message| { message["sessionId"].as_str() == Some(session_c_id.as_str()) }),
+        "a session without Page.enable must not receive javascriptDialogClosed"
+    );
+
+    // The renderer completion is one-shot: a second handle from session B finds
+    // no dialog.
+    let second = send_cdp_command(
+        &mut socket,
+        24,
+        "Page.handleJavaScriptDialog",
+        Some(&session_b_id),
+        json!({ "accept": true }),
+    )
+    .await;
+    assert!(
+        second.iter().any(|message| {
+            message["id"] == json!(24_u64)
+                && message["error"]["message"] == json!("No dialog is showing")
+        }),
+        "resolving the shared dialog must consume it exactly once: {second:#?}"
+    );
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(protocol_server).await;
+}

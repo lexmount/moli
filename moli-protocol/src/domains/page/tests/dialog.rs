@@ -49,12 +49,15 @@ fn push_dialog_for_session(
     };
     let dialog = crate::conn::TargetJavaScriptDialog::new(page_owner, source_frame_id, dialog);
     ctx.with_fixture(|conn| {
-        conn.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-            state
-                .page_session_state
-                .javascript_dialog_state
-                .push(dialog);
-        })
+        conn.with_target_page_primary_devtools_session_state_for_owner_mut(
+            &crate::conn::CommandOwnerScope::capture(conn, session_id),
+            |state| {
+                state
+                    .page_session_state
+                    .javascript_dialog_state
+                    .push(dialog);
+            },
+        )
         .expect("target session state should exist")
     });
 }
@@ -94,19 +97,21 @@ fn retiring_page_scope_and_clearing_dialog_state_dismisses_installed_dialog() {
     });
 
     ctx.with_fixture(|conn| {
-        conn.with_target_devtools_session_state_for_session_mut(Some("SID-dialog-clear"), |state| {
-            state.page_session_state.javascript_dialog_state.clear()
-        })
+        conn.with_target_page_primary_devtools_session_state_for_owner_mut(
+            &crate::conn::CommandOwnerScope::capture(conn, Some("SID-dialog-clear")),
+            |state| state.page_session_state.javascript_dialog_state.clear(),
+        )
         .expect("target page session state should clear")
     });
 
     ctx.with_fixture(|conn| {
-        let state = {
-            &conn
-                .target_page_session_state_for_session(Some("SID-dialog-clear"))
-                .expect("target page session state")
-                .javascript_dialog_state
-        };
+        let state = &conn
+            .target_page_primary_devtools_session_state_for_owner(
+                &crate::conn::CommandOwnerScope::capture(conn, Some("SID-dialog-clear")),
+            )
+            .expect("target page session state")
+            .page_session_state
+            .javascript_dialog_state;
         assert!(state.is_empty());
     });
     ctx.with_fixture(|conn| {
@@ -356,10 +361,13 @@ async fn document_open_preserves_dialog_order_and_retires_replaced_document_stat
     );
     ctx.with_fixture(|conn| {
         assert!(
-            conn.target_page_session_state_for_session(Some("SID-dialog-open"))
-                .expect("replacement target page session state")
-                .javascript_dialog_state
-                .is_empty(),
+            conn.target_page_primary_devtools_session_state_for_owner(
+                &crate::conn::CommandOwnerScope::capture(conn, Some("SID-dialog-open")),
+            )
+            .expect("replacement target page session state")
+            .page_session_state
+            .javascript_dialog_state
+            .is_empty(),
             "the replacement Document must retire the already-emitted dialog state"
         )
     });
@@ -371,19 +379,22 @@ async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let page_owner = page_owner_for_test(&mut ctx, Some("SID-1"));
     ctx.with_fixture(|conn| {
-        conn.with_target_devtools_session_state_for_session_mut(Some("SID-1"), |state| {
-            state
-                .page_session_state
-                .javascript_dialog_state
-                .push(target_dialog_for_test(
-                    page_owner,
-                    "TID-1",
-                    "alert",
-                    "classic alert",
-                    "",
-                    None,
-                ));
-        })
+        conn.with_target_page_primary_devtools_session_state_for_owner_mut(
+            &crate::conn::CommandOwnerScope::capture(conn, Some("SID-1")),
+            |state| {
+                state
+                    .page_session_state
+                    .javascript_dialog_state
+                    .push(target_dialog_for_test(
+                        page_owner,
+                        "TID-1",
+                        "alert",
+                        "classic alert",
+                        "",
+                        None,
+                    ));
+            },
+        )
         .expect("target session state should exist")
     });
 
@@ -446,19 +457,31 @@ async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_javascript_dialog_prompt_text_is_used_when_accepting_prompt() {
+async fn set_javascript_dialog_prompt_text_is_shared_across_attached_sessions() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page_owner = page_owner_for_test(&mut ctx, Some("SID-1"));
     ctx.with_fixture(|conn| {
-        conn.with_target_devtools_session_state_for_session_mut(Some("SID-1"), |state| {
-            state
-                .page_session_state
-                .javascript_dialog_state
-                .push(target_dialog_for_test(
-                    page_owner, "TID-1", "prompt", "prompt?", "", None,
-                ));
-        })
+        assert!(
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .assign_attached_session_to_target("TID-1", "SID-2".to_owned())
+        );
+        conn.commit_declared_session_fixtures_for_test();
+    });
+    let page_owner = page_owner_for_test(&mut ctx, Some("SID-2"));
+    ctx.with_fixture(|conn| {
+        conn.with_target_page_primary_devtools_session_state_for_owner_mut(
+            &crate::conn::CommandOwnerScope::capture(conn, Some("SID-1")),
+            |state| {
+                state
+                    .page_session_state
+                    .javascript_dialog_state
+                    .push(target_dialog_for_test(
+                        page_owner, "TID-1", "prompt", "prompt?", "", None,
+                    ));
+            },
+        )
         .expect("target session state should exist")
     });
 
@@ -468,6 +491,23 @@ async fn set_javascript_dialog_prompt_text_is_used_when_accepting_prompt() {
         target_id: Some(crate::automation::DevToolsTargetId::from("TID-1")),
         browser_context_id: None,
     };
+    let get_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            crate::automation::AutomationCommand::GetJavaScriptDialog(
+                crate::automation::DevToolsGetJavaScriptDialogCommand {
+                    context: context.clone(),
+                },
+            ),
+        )
+        .await;
+    let crate::automation::AutomationResult::JavaScriptDialog(dialog) =
+        get_result.expect("other attached session should read shared prompt")
+    else {
+        panic!("get dialog should return shared prompt details");
+    };
+    assert_eq!(dialog.dialog_type, "prompt");
+    assert_eq!(dialog.message, "prompt?");
+
     let result = ctx
         .execute_automation_command_through_renderer_fence_for_test(
             crate::automation::AutomationCommand::SetJavaScriptDialogPromptText(
@@ -483,11 +523,17 @@ async fn set_javascript_dialog_prompt_text_is_used_when_accepting_prompt() {
         crate::automation::AutomationResult::Empty
     ));
 
+    let attached_context = crate::automation::AutomationContext {
+        protocol: crate::automation::FrontendProtocol::WebDriverClassic,
+        session_id: Some(crate::automation::DevToolsSessionId::from("SID-2")),
+        target_id: Some(crate::automation::DevToolsTargetId::from("TID-1")),
+        browser_context_id: None,
+    };
     let (result, _, events) = ctx
         .execute_owned_automation_command_for_test(
             crate::automation::AutomationCommand::HandleJavaScriptDialog(
                 crate::automation::DevToolsHandleJavaScriptDialogCommand {
-                    context,
+                    context: attached_context,
                     accept: true,
                     prompt_text: String::new(),
                 },
@@ -582,7 +628,7 @@ async fn handle_javascript_dialog_rejects_when_no_dialog_is_showing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn javascript_dialog_pending_state_is_session_local_for_active_attached_session() {
+async fn javascript_dialog_pending_state_is_shared_across_active_attached_sessions() {
     let mut ctx = TestContext::new();
     load_bc_with_session(
         &mut ctx,
@@ -606,13 +652,20 @@ async fn javascript_dialog_pending_state_is_session_local_for_active_attached_se
         Some("SID-attached"),
         dialog_for_test(Some("TID-dialog-attached"), "alert", "aux dialog"),
     );
+    // A dialog opened from one attachment is stored once for the Page
+    // residence, so an unrelated attachment with the Page domain enabled sees
+    // and can resolve the same dialog (Chromium behavior; see #2063).
     ctx.with_fixture(|conn| {
         assert!(
-            conn.target_page_session_state_for_session(Some("SID-primary"))
+            !conn
+                .target_page_primary_devtools_session_state_for_owner(
+                    &crate::conn::CommandOwnerScope::capture(conn, Some("SID-primary")),
+                )
                 .expect("primary page session state")
+                .page_session_state
                 .javascript_dialog_state
                 .is_empty(),
-            "primary session must not see attached pending dialog"
+            "every attached session observes the Page's canonical pending dialog"
         )
     });
     let context = AutomationContext {
@@ -628,6 +681,8 @@ async fn javascript_dialog_pending_state_is_session_local_for_active_attached_se
         )
     });
 
+    // Any attached session may resolve the dialog. Handling it from the session
+    // that did *not* open it must succeed.
     ctx.process_async(json!({
         "id": 36,
         "method": "Page.handleJavaScriptDialog",
@@ -637,9 +692,18 @@ async fn javascript_dialog_pending_state_is_session_local_for_active_attached_se
     .await;
     let primary = take_response_by_id(&mut ctx, 36);
     assert_eq!(primary["sessionId"], json!("SID-primary"));
-    assert_eq!(primary["error"]["code"], json!(-32602));
-    assert_eq!(primary["error"]["message"], json!("No dialog is showing"));
+    assert_eq!(primary["result"], json!({}));
+    let closed = ctx
+        .sent
+        .iter()
+        .find(|message| message["method"] == json!("Page.javascriptDialogClosed"))
+        .expect("a cross-session handle should emit a closed event");
+    assert_eq!(closed["sessionId"], json!("SID-primary"));
+    assert_eq!(closed["params"]["frameId"], json!("TID-dialog-attached"));
+    assert_eq!(closed["params"]["result"], json!(true));
 
+    // The one-shot renderer completion is consumed exactly once: a second
+    // handle from the other session finds no dialog.
     ctx.process_async(json!({
         "id": 37,
         "method": "Page.handleJavaScriptDialog",
@@ -647,24 +711,20 @@ async fn javascript_dialog_pending_state_is_session_local_for_active_attached_se
         "params": { "accept": true }
     }))
     .await;
-    let closed = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Page.javascriptDialogClosed"))
-        .expect("attached handle should emit closed event");
-    assert_eq!(closed["sessionId"], json!("SID-attached"));
-    assert_eq!(closed["params"]["frameId"], json!("TID-dialog-attached"));
-    assert_eq!(closed["params"]["result"], json!(true));
     let attached = take_response_by_id(&mut ctx, 37);
     assert_eq!(attached["sessionId"], json!("SID-attached"));
-    assert_eq!(attached["result"], json!({}));
+    assert_eq!(attached["error"]["code"], json!(-32602));
+    assert_eq!(attached["error"]["message"], json!("No dialog is showing"));
     ctx.with_fixture(|conn| {
         assert!(
-            conn.target_page_session_state_for_session(Some("SID-attached"))
-                .expect("attached page session state")
-                .javascript_dialog_state
-                .is_empty(),
-            "attached handle should consume only its own dialog"
+            conn.target_page_primary_devtools_session_state_for_owner(
+                &crate::conn::CommandOwnerScope::capture(conn, Some("SID-attached")),
+            )
+            .expect("canonical page session state")
+            .page_session_state
+            .javascript_dialog_state
+            .is_empty(),
+            "resolving the shared dialog clears it exactly once"
         )
     });
     ctx.with_fixture(|conn| {
