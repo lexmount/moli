@@ -40,10 +40,10 @@ fn registry_constructor_prototype<'s>(
     constructor_name: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
     match registry_key {
-        CustomElementRegistryKey::Global | CustomElementRegistryKey::Scoped(_) => {
+        CustomElementRegistryKey::Global(_) | CustomElementRegistryKey::Scoped(_, _) => {
             global_constructor_prototype(scope, constructor_name)
         }
-        CustomElementRegistryKey::Child(handle) => {
+        CustomElementRegistryKey::Child(_, handle) => {
             let window = unsafe { &*host_ptr }
                 .existing_child_browsing_context_window_wrapper(scope, handle)?;
             constructor_prototype(scope, window, constructor_name)

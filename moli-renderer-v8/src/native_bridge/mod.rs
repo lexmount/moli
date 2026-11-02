@@ -36,6 +36,7 @@ pub(crate) use history_queue::{
     NavigationAttemptId, PendingHistoryTraversal, PendingHistoryTraversalAction,
     PendingNavigationApiTaskAction, PendingNavigationFinishedResult, PendingNavigationResult,
 };
+pub(crate) use identity::NativeDomHostId;
 use identity::{BridgeHandle, BridgeIdentityStore, DomTokenListKind, ReflectorId};
 use identity::{CollectionKind, LiveCollectionDescriptor, LiveCollectionQueryKind};
 pub(crate) use identity::{
