@@ -28,6 +28,7 @@ struct FixtureRuntimeState {
     dynamic_stylesheet_dcl: Arc<FixtureEvent>,
     dynamic_stylesheet_script_executed: Arc<FixtureEvent>,
     runtime_inline_module_executed: Arc<FixtureEvent>,
+    runtime_stylesheet_snapshot_applied: Arc<FixtureEvent>,
     alternate_stylesheet_probe_executed: Arc<FixtureEvent>,
     runtime_owned_async_script_executed: Arc<FixtureEvent>,
     dynamic_preparation_context_replaced: Arc<FixtureEvent>,
