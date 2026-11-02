@@ -39,3 +39,7 @@ pub use moli_renderer_v8::{
     RendererRuntimeRemoteObjectResolution,
 };
 pub use moli_renderer_v8::{RendererPageAccessError, RendererPageCommand, RendererPageReply};
+
+/// ACE page tasks executed on the renderer owner thread.
+#[cfg(feature = "ace-protocol")]
+pub use moli_renderer_v8::ace_page_task;

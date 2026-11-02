@@ -4828,6 +4828,8 @@ pub enum RendererPageCommand {
     PageDiagnosticsSnapshot,
     HasPendingLocationNavigation,
     DispatchPreparedElementClick(RendererPreparedPointerClick),
+    #[cfg(feature = "ace-protocol")]
+    AcePageTask(Box<dyn crate::ace_page_task::AcePageTask>),
     DispatchMouseEventAtPoint {
         x: f64,
         y: f64,
@@ -6153,6 +6155,8 @@ pub enum RendererPageReply {
     DocumentLifecycleEvents(Vec<RendererDocumentLifecycleEvent>),
     PendingSubresourceContinueOutcome(crate::PendingSubresourceContinueOutcome),
     PageDiagnosticsSnapshot(RendererPageDiagnosticsSnapshot),
+    #[cfg(feature = "ace-protocol")]
+    AcePageTask(Box<crate::ace_page_task::AcePageTaskOutput>),
     InputDispatchOutcome(RendererInputDispatchOutcome),
     SetDocumentContentResult(RendererSetDocumentContentResult),
     ScrollIntoViewResult(RendererScrollIntoViewResult),
@@ -6348,6 +6352,8 @@ impl RendererPageReply {
             Self::InputDispatchOutcome(outcome) | Self::ElementClickDispatch(Ok(outcome)) => {
                 Some(outcome)
             }
+            #[cfg(feature = "ace-protocol")]
+            Self::AcePageTask(result) => result.input_outcome.as_ref(),
             Self::NativeCommandReady(ready) => ready.input_dispatch_outcome(),
             _ => None,
         }
@@ -6360,6 +6366,8 @@ impl RendererPageReply {
             Self::InputDispatchOutcome(outcome) | Self::ElementClickDispatch(Ok(outcome)) => {
                 Some(outcome)
             }
+            #[cfg(feature = "ace-protocol")]
+            Self::AcePageTask(result) => result.input_outcome.as_mut(),
             Self::NativeCommandReady(ready) => ready.input_dispatch_outcome_mut(),
             _ => None,
         }

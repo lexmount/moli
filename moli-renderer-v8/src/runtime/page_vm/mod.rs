@@ -61,6 +61,8 @@ mod document_lifecycle_turn;
 pub(crate) mod dom_agent_state;
 mod dom_mutations;
 mod dom_search;
+#[cfg(feature = "ace-protocol")]
+mod extension_host;
 mod followed_navigation;
 mod frontend_node_bindings;
 mod javascript_navigation_lifecycle;

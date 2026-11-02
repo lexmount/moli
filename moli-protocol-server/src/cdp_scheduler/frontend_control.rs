@@ -129,6 +129,10 @@ impl CdpFrontendControlState {
                 let _ = completion_tx.send(result);
                 self.target_control.checkpoint();
             }
+            #[cfg(feature = "ace-protocol")]
+            CdpFrontendControlRequest::AcePageTask(_) => {
+                unreachable!("finite control requests run in the actor")
+            }
             CdpFrontendControlRequest::TargetDestroyed { .. }
             | CdpFrontendControlRequest::EnsureDefaultTargetPublished { .. }
             | CdpFrontendControlRequest::ExecuteInternalCommand { .. }

@@ -698,6 +698,8 @@ mod child_classic_document_script;
 mod child_classic_source_load;
 mod child_document_event;
 mod child_document_lifecycle;
+#[cfg(feature = "ace-protocol")]
+mod page_inspection;
 pub(crate) use child_document_lifecycle::ChildDocumentLifecycleRunOutcome;
 mod child_document_modulator;
 mod child_document_script_owner_hooks;

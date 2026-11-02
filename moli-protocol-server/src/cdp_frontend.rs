@@ -1,3 +1,6 @@
+#[cfg(feature = "ace-protocol")]
+mod ace_page_tasks;
+
 use anyhow::{Context, Result, bail};
 use moli_protocol_cdp::{CdpCommandParseError, ParsedCdpCommand};
 use tokio::sync::{mpsc, oneshot};
@@ -20,6 +23,8 @@ pub(crate) struct CdpFrontendEndpoint {
 }
 
 pub(crate) enum CdpFrontendControlRequest {
+    #[cfg(feature = "ace-protocol")]
+    AcePageTask(ace_page_tasks::AcePageTaskRequest),
     DisposeOrphanedResource(CdpControlResource),
     ExecuteInternalCommand {
         command: Box<ParsedCdpCommand>,

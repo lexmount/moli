@@ -13,6 +13,8 @@ mod body_output;
 mod browser_context_disposal;
 mod command_dispatch;
 pub(crate) use command_dispatch::PreparedProtocolCommand;
+#[cfg(feature = "ace-protocol")]
+pub mod ace_page_task;
 mod direct;
 mod dom;
 mod scheduler;

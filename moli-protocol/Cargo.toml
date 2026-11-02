@@ -6,6 +6,7 @@ edition = "2024"
 build = "build.rs"
 
 [features]
+ace-protocol = ["moli-core/ace-protocol"]
 test-support = []
 
 [dependencies]
