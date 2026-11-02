@@ -84,16 +84,20 @@ fn new_custom_elements_registry_for_owner<'s>(
 ) -> Result<v8::Local<'s, v8::Object>> {
     let registry = new_custom_elements_registry(scope)?;
     super::registry_runtime::mark_custom_elements_registry_owner(scope, registry);
-    let Some(child_handle) = child_handle else {
-        return Ok(registry);
-    };
-    let handle_value = v8::BigInt::new_from_u64(scope, child_handle.index() as u64);
-    set_private_value(
-        scope,
-        registry,
-        CUSTOM_ELEMENTS_REGISTRY_CHILD_HANDLE_SLOT,
-        handle_value.into(),
-    );
+    if let Some(child_handle) = child_handle {
+        let handle_value = v8::BigInt::new_from_u64(scope, child_handle.index() as u64);
+        set_private_value(
+            scope,
+            registry,
+            CUSTOM_ELEMENTS_REGISTRY_CHILD_HANDLE_SLOT,
+            handle_value.into(),
+        );
+    }
+    if let Some(host_ptr) = super::registry_runtime::registry_owner_host(scope, registry)
+        && let Some(key) = super::registry_runtime::registry_store_key(scope, registry)
+    {
+        super::registry_runtime::bind_custom_elements_registry_data(scope, registry, host_ptr, key);
+    }
     Ok(registry)
 }
 

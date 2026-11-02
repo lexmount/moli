@@ -39,6 +39,42 @@ pub(crate) fn registry_owner_host<'s>(
     context_host_ptr_from_context_slot(owner.get_creation_context(scope)?)
 }
 
+pub(crate) fn bind_custom_elements_registry_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    registry: v8::Local<'s, v8::Object>,
+    host_ptr: *mut JsContextHost,
+    key: CustomElementRegistryKey,
+) {
+    // Constructors already know the native owner and key. Their receiver is
+    // not branded until the generated constructor binding returns.
+    let owner = get_private_object(scope, registry, CUSTOM_ELEMENTS_REGISTRY_OWNER_SLOT)
+        .and_then(|owner| owner.get_creation_context(scope))
+        .expect("native registry has a constructing realm");
+    let data = unsafe { &mut *host_ptr }
+        .custom_elements_mut_for_registry_key(key)
+        .registry_data();
+    let host = unsafe { &*host_ptr };
+    let inactive_identity = host
+        .window_execution_context_identity_for_access_check(owner)
+        .is_some_and(|identity| {
+            !host.window_execution_context_identity_is_current(identity)
+                || matches!(
+                    identity.dispatch_scope(),
+                    crate::native_bridge::OwnerDispatchScope::Child(handle)
+                        if !host.dom_host().is_connected(handle)
+                )
+        });
+    if crate::util::page_context_is_detached_document(owner)
+        || crate::util::page_context_is_disconnected(owner)
+        || host.browsing_context_is_closed()
+        || inactive_identity
+    {
+        data.retire();
+    }
+    let scope = &mut v8::ContextScope::new(scope, owner);
+    data.bind_wrapper(scope, registry);
+}
+
 pub(crate) fn mark_scoped_custom_elements_registry(
     scope: &mut v8::PinScope<'_, '_>,
     registry: v8::Local<'_, v8::Object>,
