@@ -102,12 +102,9 @@ mod tests {
         FrameDocumentTaskOwner::new(FrameSchedulerLaneId(1), LocalWindowId(2), DocumentId(3))
     }
 
-    fn parse_document_with_blocking_stylesheet_inputs(
+    fn parse_document_with_stylesheet_inputs(
         html: &str,
-    ) -> (
-        NativeDom,
-        Vec<crate::DocumentOwnedBlockingStylesheetDiscoveryInput>,
-    ) {
+    ) -> (NativeDom, Vec<crate::DocumentOwnedStylesheetDiscoveryInput>) {
         let (document, _, inputs) = crate::parse_html_test_fixture_with_parser_outputs(
             Url::parse("https://example.com/").unwrap(),
             html.to_owned(),
@@ -306,18 +303,16 @@ mod tests {
     }
     #[tokio::test]
     async fn blocking_stylesheets_gate_defer_like_post_parse_work_by_snapshot() {
-        let (document, blocking_stylesheet_inputs) = parse_document_with_blocking_stylesheet_inputs(
+        let (document, stylesheet_inputs) = parse_document_with_stylesheet_inputs(
             "<!doctype html><html><head><link rel=stylesheet href='/app.css'><script defer src='/app.js'></script></head><body></body></html>",
         );
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut runtime = DocumentRuntime::new_networked(&document, &loader);
         let script = document.script_handles()[0];
-        let blocker = blocking_stylesheet_inputs
+        let blocker = stylesheet_inputs
             .first()
             .expect("stylesheet before defer script should be discovered");
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            blocking_stylesheet_inputs.iter(),
-        );
+        runtime.note_discovered_document_owned_stylesheet_inputs(stylesheet_inputs.iter());
 
         let mut blocking_signatures_before = HashSet::new();
         blocking_signatures_before.insert(blocker.signature().clone());
@@ -340,18 +335,16 @@ mod tests {
 
     #[tokio::test]
     async fn parser_deferred_owner_source_keeps_snapshot_gate_without_queue_markers() {
-        let (document, blocking_stylesheet_inputs) = parse_document_with_blocking_stylesheet_inputs(
+        let (document, stylesheet_inputs) = parse_document_with_stylesheet_inputs(
             "<!doctype html><html><head><link rel=stylesheet href='/app.css'><script defer src='/app.js'></script></head><body></body></html>",
         );
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut runtime = DocumentRuntime::new_networked(&document, &loader);
         let script_node = document.script_handles()[0];
-        let blocker = blocking_stylesheet_inputs
+        let blocker = stylesheet_inputs
             .first()
             .expect("stylesheet before defer script");
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            blocking_stylesheet_inputs.iter(),
-        );
+        runtime.note_discovered_document_owned_stylesheet_inputs(stylesheet_inputs.iter());
 
         let task_owner =
             FrameDocumentTaskOwner::new(FrameSchedulerLaneId(1), LocalWindowId(2), DocumentId(3));
@@ -479,15 +472,13 @@ mod tests {
 
     #[tokio::test]
     async fn domcontentloaded_task_is_not_directly_blocked_by_stylesheets() {
-        let (document, blocking_stylesheet_inputs) = parse_document_with_blocking_stylesheet_inputs(
+        let (document, stylesheet_inputs) = parse_document_with_stylesheet_inputs(
             "<!doctype html><html><head><link rel=stylesheet href='/app.css'><script defer src='/app.js'></script></head><body></body></html>",
         );
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut runtime = DocumentRuntime::new_networked(&document, &loader);
-        assert!(!blocking_stylesheet_inputs.is_empty());
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            blocking_stylesheet_inputs.iter(),
-        );
+        assert!(!stylesheet_inputs.is_empty());
+        runtime.note_discovered_document_owned_stylesheet_inputs(stylesheet_inputs.iter());
 
         assert!(
             !runtime

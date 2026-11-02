@@ -2836,6 +2836,7 @@ name = "moli-css-parse"
 version = "0.1.0"
 dependencies = [
  "cssparser",
+ "euclid",
  "stylo",
  "stylo_traits",
  "unicode-case-mapping",
@@ -3586,6 +3587,7 @@ name = "moli-stylesheet-blocking"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "moli-css-parse",
  "moli-dom",
  "moli-fetch",
  "moli-owner-queue",

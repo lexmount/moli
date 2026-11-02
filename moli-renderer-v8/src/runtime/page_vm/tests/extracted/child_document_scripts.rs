@@ -86,9 +86,10 @@ globalThis.__childClassicWaitValue = 91;
                     .eval("__childClassicWaitEvents.join('|')")?;
 
                 let page_resource_queue = page_vm.page_resource_completion_queue();
-                if !page_resource_queue.has_ready_completion() {
-                    tokio::time::timeout(
-                        Duration::from_secs(2),
+                let completion_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+                while !page_resource_queue.has_ready_completion() {
+                    tokio::time::timeout_at(
+                        completion_deadline,
                         page_vm.page_task_queue.wait_for_page_runtime_wake(),
                     )
                     .await
@@ -311,6 +312,40 @@ globalThis.__childClassicWaitValue = 91;
 }
 #[tokio::test]
 async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() {
+    child_parser_stylesheet_media("", false, true).await;
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_blocking_classic_waits_for_screen_print_stylesheet() {
+    child_parser_stylesheet_media(r#"media="screen,print""#, false, true).await;
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_stylesheets_use_the_child_media_environment() {
+    for media in [
+        r#"media="only screen""#,
+        r#"media="not print""#,
+        r#"media="screen and (color) and (width: 320px)""#,
+    ] {
+        child_parser_stylesheet_media(media, false, true).await;
+    }
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_loads_nonmatching_stylesheets_without_blocking_scripts() {
+    for media in [r#"media="print""#, r#"media="(min-width: 768px)""#] {
+        child_parser_stylesheet_media(media, false, false).await;
+    }
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_style_imports_share_media_matching_and_loading() {
+    child_parser_stylesheet_media(r#"media="only screen and (max-width: 500px)""#, true, true)
+        .await;
+    child_parser_stylesheet_media(r#"media="print""#, true, false).await;
+}
+
+async fn child_parser_stylesheet_media(media: &'static str, imports: bool, blocks_scripts: bool) {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_concurrent_path_response_http_server(vec![(
             "/parser-blocking.css",
@@ -333,6 +368,11 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
         ) = local_executor
             .run(async move {
                 let mut page_vm = page_vm;
+                let stylesheet = if imports {
+                    format!(r#"<style id="child-style" {media}>@import url('{base_url}/parser-blocking.css');</style>"#)
+                } else {
+                    format!(r#"<link id="child-style" rel="stylesheet" href="{base_url}/parser-blocking.css" {media}>"#)
+                };
                 page_vm.vm_mut().eval(&format!(
                     r#"
 (() => {{
@@ -340,10 +380,13 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
   const root = document.documentElement || document.appendChild(document.createElement("html"));
   const body = document.body || root.appendChild(document.createElement("body"));
   const frame = document.createElement("iframe");
+  frame.width = "320";
+  frame.height = "200";
   frame.onload = () => globalThis.__childParserStylesheetEvents.push("load");
   frame.srcdoc = `
-    <link rel="stylesheet" href="{base_url}/parser-blocking.css">
+    {stylesheet}
     <script>
+      parent.__childParserStylesheetMediaMatches = matchMedia(document.getElementById('child-style').media).matches;
       parent.__childParserStylesheetEvents.push(
         "script:" + getComputedStyle(document.documentElement)
           .getPropertyValue("--child-parser-style-gate").trim() + ":" + document.readyState
@@ -370,12 +413,19 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                     crate::page_task_queue::PageChildRealmMaterializationTargetEffect::MaterializedCurrentOwnerWithoutDocumentStartScript
                 );
 
+                if !blocks_scripts {
+                    for kind in [ChildFrameSemanticTurnKind::DocumentScriptReady,
+                                 ChildFrameSemanticTurnKind::DocumentLifecycle,
+                                 ChildFrameSemanticTurnKind::DocumentLifecycle] {
+                        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                            &mut page_vm, kind, "nonmatching stylesheet must allow script and DCL",
+                        ).await;
+                    }
+                }
                 assert_eq!(
-                    page_vm
-                        .vm_mut()
-                        .eval("__childParserStylesheetEvents.join('|')")?,
-                    "",
-                    "parser-blocking classic must remain pending while its preparation-time stylesheet snapshot is unresolved"
+                    page_vm.vm_mut().eval("__childParserStylesheetEvents.join('|')")?,
+                    if blocks_scripts { "" } else { "script::complete" },
+                    "only matching stylesheets may block the parser-created classic script: {media}"
                 );
                 assert!(
                     !page_vm
@@ -388,9 +438,10 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                 );
 
                 let page_resource_queue = page_vm.page_resource_completion_queue();
-                if !page_resource_queue.has_ready_completion() {
-                    tokio::time::timeout(
-                        Duration::from_secs(2),
+                let completion_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+                while !page_resource_queue.has_ready_completion() {
+                    tokio::time::timeout_at(
+                        completion_deadline,
                         page_vm.page_task_queue.wait_for_page_runtime_wake(),
                     )
                     .await
@@ -420,6 +471,7 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                     .eval("__childParserStylesheetEvents.join('|')")?;
 
                 let mut followup_sources = Vec::new();
+                if blocks_scripts {
                 followup_sources.push(
                     run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
                         &mut page_vm,
@@ -451,6 +503,9 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                     )
                     .await,
                 );
+                }
+                assert_eq!(page_vm.vm_mut().eval("String(__childParserStylesheetMediaMatches)")?,
+                           if blocks_scripts { "true" } else { "false" });
                 followup_sources.push(
                     run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
                         &mut page_vm,
@@ -467,9 +522,12 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                     )
                     .await,
                 );
-                let final_events = page_vm
-                    .vm_mut()
-                    .eval("__childParserStylesheetEvents.join('|')")?;
+                let final_events = page_vm.vm_mut().eval("__childParserStylesheetEvents.join('|')")?;
+                assert_eq!(page_vm.vm_mut().eval(r#"(() => {
+                    const d = document.querySelector('iframe').contentDocument;
+                    d.getElementById('child-style').media = 'all';
+                    return getComputedStyle(d.documentElement).getPropertyValue('--child-parser-style-gate').trim();
+                })()"#)?, "stylesheet-ready", "loaded CSS must remain available when media changes");
                 assert_eq!(page_vm.run_next_child_frame_task_source_for_semantic_test().await, None);
 
                 Ok::<_, anyhow::Error>((
@@ -497,20 +555,20 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
             PageResourceCompletionOutputEffect::CaptureRequired
         );
         assert_eq!(
-            events_after_completion, "",
+            events_after_completion, if blocks_scripts { "" } else { "script::complete" },
             "stylesheet resource completion must not inline-run child script"
         );
         assert_eq!(
             followup_sources,
-            vec![
+            if blocks_scripts { vec![
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::HostLoad,
-            ]
+            ] } else { vec![ChildFrameSemanticTurnKind::DocumentLifecycle, ChildFrameSemanticTurnKind::HostLoad] }
         );
-        assert_eq!(final_events, "script:stylesheet-ready:complete|load");
+        assert_eq!(final_events, if blocks_scripts { "script:stylesheet-ready:complete|load" } else { "script::complete|load" });
         server.await.expect("child parser stylesheet server should finish");
     })
     .await;

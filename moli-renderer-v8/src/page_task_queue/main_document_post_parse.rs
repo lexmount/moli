@@ -13,7 +13,7 @@ use crate::{
         MainDocumentScriptLoadDelayLease, MainDocumentScriptLoadDelayRelease,
     },
     host::ScriptEventTask,
-    stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput,
+    stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput,
     types::ScriptRun,
 };
 
@@ -48,7 +48,7 @@ impl MainDocumentPostParseOwner {
 /// it is not another task queue or scheduler classification.
 #[derive(Debug)]
 pub(crate) enum MainDocumentPostParseWork {
-    SeedDocumentOwnedBlockingStylesheets(Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>),
+    SeedDocumentOwnedBlockingStylesheets(Vec<DocumentOwnedStylesheetDiscoveryInput>),
     RecordDocumentScriptRun(ScriptRun),
     DispatchContentSecurityPolicyViolation(ContentSecurityPolicyViolationEventTask),
     DispatchScriptEvent(ScriptEventTask),

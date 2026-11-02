@@ -1,9 +1,9 @@
 use crate::{
-    context_bootstrap::evaluate_match_media_query_list_with_viewport,
     document_runtime::DomHandle,
     dom::native::{DomHost, Element, Node},
     protocol_types::EmulatedMediaOverrides,
     style_engine::StyleViewport,
+    style_engine::media_list::evaluate_media_query_list,
 };
 
 pub(crate) fn link_rel_qualifies_as_stylesheet(rel: Option<&str>, title: Option<&str>) -> bool {
@@ -93,8 +93,7 @@ pub(super) fn stylesheet_source_media_matches(
     viewport: StyleViewport,
 ) -> bool {
     let media = media_text.trim();
-    media.is_empty()
-        || evaluate_match_media_query_list_with_viewport(media, Some(emulated_media), viewport)
+    media.is_empty() || evaluate_media_query_list(media, Some(emulated_media), viewport)
 }
 
 #[cfg(test)]

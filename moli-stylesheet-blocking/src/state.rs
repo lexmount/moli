@@ -9,7 +9,7 @@ use url::Url;
 
 use crate::discovery::{
     DocumentBlockingStylesheetSignature, DocumentOwnedBlockingStylesheet,
-    DocumentOwnedBlockingStylesheetDiscoveryInput, StylesheetBlockingReadView,
+    DocumentOwnedStylesheetDiscoveryInput, StylesheetBlockingReadView,
     collect_document_owned_blocking_stylesheets,
     collect_document_owned_blocking_stylesheets_before, document_node_precedes,
 };
@@ -59,15 +59,17 @@ impl StylesheetBlockingState {
         self.discover_from_blockers(fetcher, &document_url, blockers.iter());
     }
 
+    /// Admit script gates. The embedding runtime separately loads inputs that
+    /// do not block scripts, retaining their ordinary Document-load lifetime.
     pub fn discover_from_inputs<'a, F>(
         &mut self,
         fetcher: &F,
         document_url: &Url,
-        inputs: impl IntoIterator<Item = &'a DocumentOwnedBlockingStylesheetDiscoveryInput>,
+        inputs: impl IntoIterator<Item = &'a DocumentOwnedStylesheetDiscoveryInput>,
     ) where
         F: StylesheetFetcher,
     {
-        for input in inputs {
+        for input in inputs.into_iter().filter(|input| input.blocks_scripts()) {
             self.discover_input(
                 fetcher,
                 document_url,
@@ -741,6 +743,13 @@ mod tests {
     }
 
     impl StylesheetBlockingReadView for TestStylesheetDocument {
+        fn media_query_matches(&self, media: &str) -> bool {
+            crate::discovery::default_screen_media_query_matches(
+                media,
+                self.document_is_quirks_mode(),
+            )
+        }
+
         fn stylesheet_element(&self, node_id: NativeNodeId) -> Option<StylesheetElementRead> {
             match node_id.index() {
                 1 => Some(StylesheetElementRead::parser_created_html_link_for_test(
@@ -1160,15 +1169,15 @@ mod tests {
     async fn stale_style_import_completion_cannot_resolve_same_signature_aba() {
         use crate::discovery::{
             DocumentOwnedBlockingStylesheet, DocumentOwnedBlockingStylesheetCandidate,
-            DocumentOwnedBlockingStylesheetDiscoveryInput,
+            DocumentOwnedStylesheetDiscoveryInput,
         };
 
-        fn input(node_id: NodeId, url: Url) -> DocumentOwnedBlockingStylesheetDiscoveryInput {
+        fn input(node_id: NodeId, url: Url) -> DocumentOwnedStylesheetDiscoveryInput {
             let candidate = DocumentOwnedBlockingStylesheetCandidate::ParserCreatedStyleImport {
                 node_id,
                 urls: vec![url],
             };
-            DocumentOwnedBlockingStylesheetDiscoveryInput::from(
+            DocumentOwnedStylesheetDiscoveryInput::from(
                 &DocumentOwnedBlockingStylesheet::from_candidate(&candidate),
             )
         }

@@ -440,8 +440,7 @@ impl XmlParserSession {
         let discovered_modulepreload_link_candidates = target
             .common
             .drain_discovered_modulepreload_link_candidates();
-        let discovered_blocking_stylesheet_inputs =
-            target.common.drain_discovered_blocking_stylesheet_inputs();
+        let discovered_stylesheet_inputs = target.common.drain_discovered_stylesheet_inputs();
 
         let result = match raw_step {
             RawXmlParserStep::Script(node_id) => {
@@ -467,7 +466,7 @@ impl XmlParserSession {
             result,
             discovered_async_prefetch_scripts,
             discovered_modulepreload_link_candidates,
-            discovered_blocking_stylesheet_inputs,
+            discovered_stylesheet_inputs,
         }
     }
 
@@ -503,9 +502,7 @@ impl XmlParserSession {
             discovered_parser_meta_csp_candidates: target
                 .common
                 .drain_discovered_parser_meta_csp_candidates(),
-            discovered_blocking_stylesheet_inputs: target
-                .common
-                .drain_discovered_blocking_stylesheet_inputs(),
+            discovered_stylesheet_inputs: target.common.drain_discovered_stylesheet_inputs(),
         }
     }
 }

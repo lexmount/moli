@@ -11,7 +11,7 @@ use crate::service_worker_runtime::{ServiceWorkerClientId, ServiceWorkerRequestD
 use crate::types::{AsyncSubresourceFetchResponseFilter, SubresourceResourceType};
 
 pub(crate) use moli_stylesheet_blocking::{
-    DocumentBlockingStylesheetSignature, DocumentOwnedBlockingStylesheetDiscoveryInput,
+    DocumentBlockingStylesheetSignature, DocumentOwnedStylesheetDiscoveryInput,
     StylesheetBlockingOperation, StylesheetBlockingReadView, StylesheetBlockingState,
     StylesheetBlockingStatus, StylesheetCompletion, StylesheetElementRead, StylesheetFetch,
     StylesheetFetchIdentity, StylesheetFetchOptions, StylesheetFetchTerminal, StylesheetFetcher,

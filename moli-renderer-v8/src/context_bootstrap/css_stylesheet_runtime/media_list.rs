@@ -282,7 +282,7 @@ pub(crate) fn css_media_rule_matches_getter_callback<'s>(
         } else {
             (None, crate::style_engine::StyleViewport::default())
         };
-    let matches = super::media_queries::evaluate_match_media_query_list_with_viewport(
+    let matches = crate::style_engine::media_list::evaluate_media_query_list(
         &media_text,
         emulated_media.as_ref(),
         viewport,

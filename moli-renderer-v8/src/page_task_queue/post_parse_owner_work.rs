@@ -10,7 +10,7 @@ use crate::{
     host::{ScriptEventKind, ScriptEventTask},
     planning::PreparedScript,
     stylesheet_blocking::DocumentBlockingStylesheetSignature,
-    stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput,
+    stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput,
     types::ScriptRun,
 };
 
@@ -28,7 +28,7 @@ pub(crate) enum PostParsePageOwnedWork {
 
 #[derive(Debug)]
 pub(crate) enum PostParseLifecycleWork {
-    SeedDocumentOwnedBlockingStylesheets(Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>),
+    SeedDocumentOwnedBlockingStylesheets(Vec<DocumentOwnedStylesheetDiscoveryInput>),
     AdvanceMainParserDeferredScripts {
         owner: FrameDocumentTaskOwner,
         initial_count: usize,

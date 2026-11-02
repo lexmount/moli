@@ -15,7 +15,7 @@ use crate::{
         },
         document_runtime::{DocumentRuntime, DomHandle, EventTargetHandle},
         document_script_scheduler::{
-            FrameDocumentBlockingStylesheetStore, FrameDocumentScriptSchedulerStore,
+            FrameDocumentScriptSchedulerStore, FrameDocumentStylesheetStore,
             FrameParserClassicScriptRunnerStore, FrameParserDeferredScriptOrderStore,
         },
         frame_owner_model::{
@@ -860,7 +860,7 @@ pub(crate) struct JsContextHost {
     frame_owner_store: FrameOwnerStore,
     frame_parser_classic_scripts: FrameParserClassicScriptRunnerStore,
     frame_parser_deferred_script_order: FrameParserDeferredScriptOrderStore,
-    frame_document_blocking_stylesheets: FrameDocumentBlockingStylesheetStore,
+    frame_document_stylesheets: FrameDocumentStylesheetStore,
     child_document_script_schedulers: FrameDocumentScriptSchedulerStore,
     child_document_parsers: ChildDocumentParserStore,
     child_window_proxy_records: ChildWindowProxyRecords,
@@ -887,8 +887,6 @@ pub(crate) struct JsContextHost {
     protocol_user_gesture_activation_depth: usize,
     current_input_event: Option<crate::native_bridge::CurrentInputEvent>,
     webdriver_bidi_file_prompt_handler_stack: Vec<String>,
-    emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-    viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     document_activity: moli_page_types::DocumentActivity,
     initial_empty_main_document: bool,
     subframe_loading_disabled_documents: Rc<RefCell<HashMap<DomHandle, usize>>>,

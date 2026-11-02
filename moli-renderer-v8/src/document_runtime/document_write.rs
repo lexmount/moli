@@ -81,6 +81,10 @@ impl ParserMutationEffectConsumer for DocumentWriteParserMutationOwner<'_, '_, '
 }
 
 impl ParserDomReadConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
+    fn stylesheet_media_matches(&mut self, media: &str) -> bool {
+        self.runtime.stylesheet_media_matches(media)
+    }
+
     fn node_exists(&mut self, node_id: DomHandle) -> bool {
         self.runtime.parser_runtime_dom_node_exists(node_id)
     }
@@ -459,13 +463,9 @@ impl DocumentRuntime {
                 .discovery_signals
                 .modulepreload_link_candidates,
         );
-        let completed_stylesheet_clients = self
-            .note_discovered_document_owned_blocking_stylesheet_inputs(
-                finish_signals
-                    .discovery_signals
-                    .blocking_stylesheet_inputs
-                    .iter(),
-            );
+        let completed_stylesheet_clients = self.note_discovered_document_owned_stylesheet_inputs(
+            finish_signals.discovery_signals.stylesheet_inputs.iter(),
+        );
         self.settle_stylesheet_link_clients_in_current_scope(
             scope,
             host_ptr,
@@ -2319,7 +2319,7 @@ impl DocumentRuntime {
                         result,
                         discovered_async_prefetch_scripts: _,
                         discovered_modulepreload_link_candidates,
-                        discovered_blocking_stylesheet_inputs,
+                        discovered_stylesheet_inputs,
                     },
             } = parser_step;
             let discovered_parser_meta_csp_candidates = insertion_controller
@@ -2339,8 +2339,8 @@ impl DocumentRuntime {
             begin_insertion = false;
 
             let completed_stylesheet_clients = self
-                .note_discovered_document_owned_blocking_stylesheet_inputs(
-                    discovered_blocking_stylesheet_inputs.iter(),
+                .note_discovered_document_owned_stylesheet_inputs(
+                    discovered_stylesheet_inputs.iter(),
                 );
             self.settle_stylesheet_link_clients_in_current_scope(
                 scope,
@@ -2363,7 +2363,7 @@ impl DocumentRuntime {
                     if self.current_document_resource_loader().is_none() {
                         continue;
                     }
-                    let blocking_signatures = discovered_blocking_stylesheet_inputs
+                    let blocking_signatures = discovered_stylesheet_inputs
                         .iter()
                         .map(|input| input.signature().clone())
                         .collect::<HashSet<_>>();

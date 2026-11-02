@@ -18,6 +18,13 @@ use moli_stylesheet_blocking::{
 };
 
 impl StylesheetBlockingReadView for ParserStreamDocumentSnapshot {
+    fn media_query_matches(&self, media: &str) -> bool {
+        moli_stylesheet_blocking::default_screen_media_query_matches(
+            media,
+            self.document_is_quirks_mode(),
+        )
+    }
+
     fn stylesheet_element(&self, node_id: NativeNodeId) -> Option<StylesheetElementRead> {
         self.node(node_id)
             .and_then(StylesheetElementRead::from_node)
@@ -72,6 +79,34 @@ mod tests {
     use moli_dom::native::Node;
 
     #[test]
+    fn nonmatching_style_imports_are_loads_only_when_the_style_type_is_css() {
+        for (type_attribute, loads) in [
+            ("", true),
+            ("text/css", true),
+            (" text/css ", false),
+            ("application/json", false),
+        ] {
+            let stream = HtmlParser::SCRIPTING_ENABLED
+                .start_document(url::Url::parse("https://example.test/").unwrap());
+            let html = format!(
+                "<!doctype html><style type='{type_attribute}' media='print'>@import url('/print.css');</style><script>0</script>"
+            );
+            let outcome = stream.pump_parser_step(&html);
+            assert_eq!(
+                outcome.discovered_stylesheet_inputs.len(),
+                usize::from(loads),
+                "type={type_attribute:?}"
+            );
+            assert!(
+                outcome
+                    .discovered_stylesheet_inputs
+                    .iter()
+                    .all(|input| !input.blocks_scripts())
+            );
+        }
+    }
+
+    #[test]
     fn document_owned_blocking_candidates_include_parser_created_style_imports() {
         let parser = HtmlParser::SCRIPTING_ENABLED;
         let document = parser.parse(
@@ -108,7 +143,7 @@ mod tests {
         let mut captured_blockers = Vec::new();
         while stream.has_pending_input() {
             let outcome = stream.pump_next_parser_step(0);
-            captured_blockers.extend(outcome.discovered_blocking_stylesheet_inputs);
+            captured_blockers.extend(outcome.discovered_stylesheet_inputs);
             if matches!(outcome.result, ParserPumpStep::InputDrained) && !stream.has_pending_input()
             {
                 break;
