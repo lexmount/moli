@@ -100,6 +100,29 @@ impl StylesheetCandidateTransition {
 }
 
 impl NativeDom {
+    pub(super) fn transfer_stylesheet_candidate_scopes_from(
+        &mut self,
+        source: &mut Self,
+        handles: &HashMap<NativeNodeId, NativeNodeId>,
+    ) {
+        let source_scopes = Arc::make_mut(
+            &mut source
+                .stylesheet_candidate_registries
+                .candidates_by_tree_scope,
+        );
+        let target_scopes = Arc::make_mut(
+            &mut self
+                .stylesheet_candidate_registries
+                .candidates_by_tree_scope,
+        );
+        for (old, new) in handles {
+            if let Some(candidates) = source_scopes.remove(old) {
+                let moved = candidates.iter().map(|handle| handles[handle]).collect();
+                target_scopes.insert(*new, Arc::new(moved));
+            }
+        }
+    }
+
     pub fn stylesheet_candidate_handles_for_tree_scope(
         &self,
         tree_scope: NativeNodeId,
