@@ -250,7 +250,7 @@ impl BrowserContext {
     }
 
     pub fn document_start_script_descriptors(&self) -> Vec<DocumentStartScript> {
-        let mut scripts = self.default_document_start_script_descriptors();
+        let mut scripts = self.context_document_start_script_descriptors();
         let target_id = self.active_target_id();
         scripts.extend(
             self.active_page_target()
@@ -264,15 +264,16 @@ impl BrowserContext {
         scripts
     }
 
-    pub(crate) fn default_document_start_script_descriptors(&self) -> Vec<DocumentStartScript> {
+    /// Startup scripts followed by protocol preloads for new Documents in this Context.
+    pub(crate) fn context_document_start_script_descriptors(&self) -> Vec<DocumentStartScript> {
         self.startup_document_start_scripts
             .iter()
             .cloned()
             .chain(
-                self.default_document_start_scripts
+                self.context_preload_scripts
                     .iter()
                     .map(|(identifier, script)| {
-                        script.with_registry_key(Self::default_document_start_script_registry_key(
+                        script.with_registry_key(Self::context_preload_script_registry_key(
                             identifier,
                         ))
                     }),
@@ -280,7 +281,8 @@ impl BrowserContext {
             .collect()
     }
 
-    pub(crate) fn default_document_start_script_registry_key(identifier: &str) -> String {
+    pub(crate) fn context_preload_script_registry_key(identifier: &str) -> String {
+        // Preserve the namespace used by existing renderer registrations.
         format!("default:{identifier}")
     }
 
@@ -320,57 +322,48 @@ impl BrowserContext {
         ))
     }
 
-    pub(crate) fn has_default_bidi_channel_preload_script(&self) -> bool {
-        self.default_document_start_scripts
+    pub(crate) fn has_context_bidi_channel_preload_script(&self) -> bool {
+        self.context_preload_scripts
             .iter()
             .any(|(_, script)| script.has_bidi_channel_argument)
     }
 
-    pub(crate) fn record_default_document_start_script(
-        &mut self,
-        script: &DocumentStartScript,
-    ) -> String {
-        let identifier = self.reserve_default_document_start_script_id();
-        self.record_default_document_start_script_with_identifier(identifier.clone(), script);
+    pub(crate) fn record_context_preload_script(&mut self, script: &DocumentStartScript) -> String {
+        let identifier = self.reserve_context_preload_script_id();
+        self.record_context_preload_script_with_identifier(identifier.clone(), script);
         identifier
     }
 
-    pub(crate) fn reserve_default_document_start_script_id(&mut self) -> String {
-        self.next_default_document_start_script_id =
-            self.next_default_document_start_script_id.wrapping_add(1);
-        self.next_default_document_start_script_id.to_string()
+    pub(crate) fn reserve_context_preload_script_id(&mut self) -> String {
+        self.next_context_preload_script_id = self.next_context_preload_script_id.wrapping_add(1);
+        self.next_context_preload_script_id.to_string()
     }
 
-    pub(crate) fn record_default_document_start_script_with_identifier(
+    pub(crate) fn record_context_preload_script_with_identifier(
         &mut self,
         identifier: String,
         script: &DocumentStartScript,
     ) {
-        let script = script.with_registry_key(Self::default_document_start_script_registry_key(
-            &identifier,
-        ));
-        self.default_document_start_scripts
-            .push((identifier, script));
+        let script =
+            script.with_registry_key(Self::context_preload_script_registry_key(&identifier));
+        self.context_preload_scripts.push((identifier, script));
     }
 
-    pub(crate) fn remove_default_document_start_script(
-        &mut self,
-        script_id: &str,
-    ) -> Option<String> {
+    pub(crate) fn remove_context_preload_script(&mut self, script_id: &str) -> Option<String> {
         let index = self
-            .default_document_start_scripts
+            .context_preload_scripts
             .iter()
             .position(|(identifier, _)| identifier == script_id)?;
-        let (_, script) = self.default_document_start_scripts.remove(index);
+        let (_, script) = self.context_preload_scripts.remove(index);
         Some(
             script
                 .registry_key
-                .unwrap_or_else(|| Self::default_document_start_script_registry_key(script_id)),
+                .unwrap_or_else(|| Self::context_preload_script_registry_key(script_id)),
         )
     }
 
-    pub(crate) fn has_default_document_start_script(&self, script_id: &str) -> bool {
-        self.default_document_start_scripts
+    pub(crate) fn has_context_preload_script(&self, script_id: &str) -> bool {
+        self.context_preload_scripts
             .iter()
             .any(|(identifier, _)| identifier == script_id)
     }

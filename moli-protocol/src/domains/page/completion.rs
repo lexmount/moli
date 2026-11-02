@@ -19,7 +19,7 @@ pub(crate) fn complete_finite(
         command_context.set_renderer_output_predecessor(predecessor);
     }
     let plan = match *completed.kind {
-        CompletedPageCommandKind::AppendDefaultDocumentStartScript {
+        CompletedPageCommandKind::AppendContextPreloadScript {
             identifier,
             completed,
         } => {

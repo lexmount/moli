@@ -78,10 +78,11 @@ pub struct BrowserContext {
     pub proxy_autoconfig_url: Option<String>,
     pub proxy_socks_version: Option<u8>,
     pub(crate) default_emulated_device_metrics: Option<EmulatedDeviceMetrics>,
-    pub(crate) next_default_document_start_script_id: u32,
-    // Installed at context creation, outside the mutable protocol preload registry.
+    pub(crate) next_context_preload_script_id: u32,
+    // CLI scripts installed at context creation, outside the protocol preload registry.
     pub(crate) startup_document_start_scripts: Vec<DocumentStartScript>,
-    pub(crate) default_document_start_scripts: Vec<(String, DocumentStartScript)>,
+    // Mutable protocol registrations scoped to this BrowserContext.
+    pub(crate) context_preload_scripts: Vec<(String, DocumentStartScript)>,
     pub(crate) storage_quota_overrides: HashMap<String, f64>,
     pub(crate) http_cache_root: Option<PathBuf>,
     pub(crate) http_cache_max_bytes: Option<u64>,
@@ -547,9 +548,9 @@ impl BrowserContext {
             proxy_autoconfig_url: None,
             proxy_socks_version: None,
             default_emulated_device_metrics: None,
-            next_default_document_start_script_id: 0,
+            next_context_preload_script_id: 0,
             startup_document_start_scripts: Vec::new(),
-            default_document_start_scripts: Vec::new(),
+            context_preload_scripts: Vec::new(),
             storage_quota_overrides: HashMap::new(),
             http_cache_root,
             http_cache_max_bytes,
@@ -976,7 +977,7 @@ impl BrowserContext {
             "targetOpenerFrameCount": self.target_opener_frame_ids.len(),
             "targetCanAccessOpenerCount": self.target_can_access_opener.len(),
             "targetWindowNameCount": self.named_auxiliary_targets.len(),
-            "defaultDocumentStartScriptCount": self.default_document_start_scripts.len(),
+            "defaultDocumentStartScriptCount": self.context_preload_scripts.len(),
             "startupDocumentStartScriptCount": self.startup_document_start_scripts.len(),
             "domRemoteObjectNodeCacheCount": active_target
                 .map_or(0, |target| target.dom_remote_object_node_cache.len()),

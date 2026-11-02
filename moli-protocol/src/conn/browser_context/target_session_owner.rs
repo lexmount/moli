@@ -307,7 +307,7 @@ impl TargetNavigationLoadInputs {
             .expect("resolved Page target owner must remain live");
         let page_state = target;
         let mut document_start_scripts = Vec::new();
-        document_start_scripts.extend(browser_context.default_document_start_script_descriptors());
+        document_start_scripts.extend(browser_context.context_document_start_script_descriptors());
         document_start_scripts.extend(
             target
                 .owner_state
@@ -439,7 +439,7 @@ impl TargetNavigationLoadInputs {
             browser_context.effective_active_http_no_proxy_override_owned();
         inputs.tls_verify_host_override =
             browser_context.effective_active_tls_verify_host_override();
-        inputs.document_start_scripts = browser_context.default_document_start_script_descriptors();
+        inputs.document_start_scripts = browser_context.context_document_start_script_descriptors();
         inputs.extra_http_headers = browser_context.effective_extra_headers();
         inputs.viewport_surface = browser_context
             .default_emulated_device_metrics
@@ -1848,7 +1848,7 @@ impl CdpConnection {
         self.target_owner_identity_for_owner(owner)
             .and_then(|(browser_context_id, _)| self.browser_context_by_id(&browser_context_id))
             .is_some_and(|browser_context| {
-                browser_context.has_default_bidi_channel_preload_script()
+                browser_context.has_context_bidi_channel_preload_script()
             })
     }
 
@@ -1871,7 +1871,7 @@ impl CdpConnection {
         {
             handoffs.extend(
                 browser_context
-                    .default_document_start_scripts
+                    .context_preload_scripts
                     .iter()
                     .flat_map(|(_, script)| script.bidi_channel_handoffs.clone()),
             );
