@@ -1,6 +1,8 @@
 use super::*;
 use tokio_tungstenite::tungstenite::{Error, client::IntoClientRequest};
 
+mod fetch;
+
 #[tokio::test]
 async fn request_guard_bidi_session_websocket_rejects_cross_origin() {
     let (addr, server) = spawn_test_protocol_server().await;
