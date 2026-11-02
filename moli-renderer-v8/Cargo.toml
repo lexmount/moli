@@ -15,6 +15,7 @@ test-support = []
 wpt-extensions = []
 
 [dependencies]
+urlpattern = "0.6.0"
 anyhow = "1.0.100"
 app_units = "0.7.8"
 base64 = "0.22"

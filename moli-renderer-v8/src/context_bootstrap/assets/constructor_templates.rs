@@ -1037,6 +1037,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             )
         }
         ConstructorKind::Url => build_url_constructor_template(scope),
+        ConstructorKind::UrlPattern => super::super::url_pattern::build_template(scope),
         ConstructorKind::UrlSearchParams => build_url_search_params_constructor_template(scope),
         ConstructorKind::FormData => build_form_data_constructor_template(scope),
         ConstructorKind::IndexedDb => v8::FunctionTemplate::builder(illegal_constructor_callback)

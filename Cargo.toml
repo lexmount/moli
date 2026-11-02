@@ -98,6 +98,7 @@ members = [
 license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
+urlpattern = { git = "https://github.com/lexmount/rust-urlpattern", rev = "0cb2793ad3e6bc809fb3a2ff16075d6393dca056" }
 # Share AWS-LC 0.46 with aws-lc-rs until upstream openssl-sys updates its backend.
 openssl-sys = { git = "https://github.com/lexmount/rust-openssl", rev = "4497b245b09660f838dd00750616929b4cfe52ba" }
 parley = { git = "https://github.com/lexmount/parley", rev = "a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf" }

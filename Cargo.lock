@@ -3431,6 +3431,7 @@ dependencies = [
  "tracing",
  "typed-num",
  "url",
+ "urlpattern",
  "uuid",
  "v8",
  "wasm_dep_analyzer",
@@ -6294,6 +6295,17 @@ name = "urlencoding"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
+
+[[package]]
+name = "urlpattern"
+version = "0.6.0"
+source = "git+https://github.com/lexmount/rust-urlpattern?rev=0cb2793ad3e6bc809fb3a2ff16075d6393dca056#0cb2793ad3e6bc809fb3a2ff16075d6393dca056"
+dependencies = [
+ "icu_properties",
+ "regex",
+ "serde",
+ "url",
+]
 
 [[package]]
 name = "usvg"
