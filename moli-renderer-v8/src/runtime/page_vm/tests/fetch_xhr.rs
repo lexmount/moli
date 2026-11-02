@@ -697,5 +697,6 @@ fn check_blob_fetch_and_xhr_methods_in_window_and_worker(
 
 mod event_source;
 mod fetch;
+mod header_names;
 mod workers;
 mod xhr;

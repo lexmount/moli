@@ -25,7 +25,7 @@ pub(in crate::network_host) fn get_header_prop<'s>(
     let lower = normalized_header_name_or_throw(scope, name)?;
     let values = headers_list(scope, obj)
         .into_iter()
-        .filter_map(|(entry_name, value)| (entry_name == lower).then_some(value))
+        .filter_map(|(entry_name, value)| entry_name.eq_ignore_ascii_case(&lower).then_some(value))
         .collect::<Vec<_>>();
     if values.is_empty() {
         None
