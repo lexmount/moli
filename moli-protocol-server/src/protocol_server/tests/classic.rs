@@ -2,7 +2,7 @@ use super::*;
 use axum::http::{HeaderMap, header};
 use serde_json::{Map, Value};
 
-type ProtocolApp = super::super::trailing_slash::TrailingSlash<axum::Router>;
+type ProtocolApp = ProtocolRouter;
 
 async fn classic_capture_layout(app: ProtocolApp, session_id: &str) {
     let captured = classic_request_json(
@@ -1080,6 +1080,7 @@ async fn classic_request_status_and_json(
     let response = app
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .method(method)
                 .uri(path)
                 .body(Body::empty())
@@ -1105,6 +1106,7 @@ async fn classic_request_status_headers_and_json(
     let response = app
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .method(method)
                 .uri(path)
                 .body(Body::empty())
@@ -1132,6 +1134,7 @@ async fn classic_request_status_headers_and_text(
     let response = app
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .method(method)
                 .uri(path)
                 .body(Body::empty())
@@ -1160,6 +1163,7 @@ async fn classic_request_status_and_json_with_body(
     let response = app
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .method(method)
                 .uri(path)
                 .header(header::CONTENT_TYPE, "application/json")
@@ -1187,6 +1191,7 @@ async fn classic_request_status_headers_and_json_with_body(
     let response = app
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .method(method)
                 .uri(path)
                 .header(header::CONTENT_TYPE, "application/json")

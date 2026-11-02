@@ -294,6 +294,7 @@ async fn request_json_with_router(
     let response = router
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .method(method)
                 .uri(path)
                 .body(Body::empty())
@@ -328,6 +329,7 @@ async fn request_status_and_text_with_router(
     let response = router
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .method(method)
                 .uri(path)
                 .body(Body::empty())
@@ -1340,5 +1342,6 @@ mod download;
 mod misc;
 mod p6_output_handoff;
 mod page_endpoint;
+mod request_guard;
 mod screenshot;
 mod websocket;
