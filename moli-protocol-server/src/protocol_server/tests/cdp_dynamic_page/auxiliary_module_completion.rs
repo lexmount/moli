@@ -17,6 +17,7 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
                         "export { default } from './module.js';",
                     ),
                     "/module.json" => (StatusCode::OK, "application/json", "{\"answer\":42}"),
+                    "/module.css" => (StatusCode::OK, "text/css", "body { color: green; }"),
                     "/missing.js" => (StatusCode::NOT_FOUND, "text/javascript", "not found"),
                     "/parser.js" => (StatusCode::OK, "text/javascript", "globalThis.parserModuleAnswer = 42;"),
                     "/runtime.js" => (StatusCode::OK, "text/javascript", "globalThis.runtimeModuleAnswer = 42;"),
@@ -83,6 +84,7 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
                             "javascript",
                             "graph",
                             "json",
+                            "css",
                             "fetch-error"
                         ]),
                         "{mode}: {result}"
@@ -100,6 +102,7 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
         "/module.js",
         "/graph.js",
         "/module.json",
+        "/module.css",
         "/missing.js",
         "/runtime.js",
     ] {
