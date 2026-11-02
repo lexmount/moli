@@ -847,6 +847,10 @@ pub(crate) struct JsContextHost {
     child_custom_elements: HashMap<DomHandle, CustomElementStore>,
     scoped_custom_elements: HashMap<u32, CustomElementStore>,
     foreign_custom_elements: HashMap<CustomElementRegistryKey, CustomElementStore>,
+    pub(crate) custom_element_registry_bindings:
+        Option<Rc<crate::custom_elements::CustomElementRegistryBindings>>,
+    pub(in crate::native_bridge) custom_element_registry_references_enabled: Cell<bool>,
+    pub(in crate::native_bridge) custom_element_registry_references_version: Cell<Option<u64>>,
     parser_defined_autonomous_custom_elements: VecDeque<String>,
     // Parser-created direct construction leaves html5ever's open-stack
     // placeholder alive but detached. The runtime-visible element is the
@@ -854,6 +858,7 @@ pub(crate) struct JsContextHost {
     // that result before the next script observes the DOM.
     parser_custom_element_handoff_replacements: HashMap<DomHandle, DomHandle>,
     scoped_custom_element_registry_wrappers: HashMap<u32, v8::Weak<v8::Object>>,
+    scoped_custom_element_registry_documents: HashSet<DomHandle>,
     custom_element_registry_associations:
         LinkedHashMap<DomHandle, CustomElementRegistryAssociation>,
     next_scoped_custom_elements_registry_id: u32,

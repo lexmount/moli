@@ -1474,7 +1474,7 @@ fn attach_shadow_default_registry_uses_owner_document_default() {
               const nullRoot = document
                 .createElement("wpt-null-host")
                 .attachShadow({ mode: "open", customElementRegistry: null });
-              const nestedHost = document.createElement("wpt-nested-host");
+              const nestedHost = document.createElement("wpt-nested-host", { customElementRegistry: null });
               nullRoot.appendChild(nestedHost);
               const nestedDefaultRoot = nestedHost.attachShadow({ mode: "open" });
 
@@ -1513,16 +1513,16 @@ fn removing_from_shadow_tree_preserves_non_default_registry_association() {
               const scopedRoot = document
                 .createElement("wpt-scoped-root")
                 .attachShadow({ mode: "open", customElementRegistry: registry });
-              const scopedWrapper = document.createElement("div");
-              const scopedChild = document.createElement("wpt-scoped-child");
+              const scopedWrapper = document.createElement("div", { customElementRegistry: registry });
+              const scopedChild = document.createElement("wpt-scoped-child", { customElementRegistry: registry });
               scopedWrapper.appendChild(scopedChild);
               scopedRoot.appendChild(scopedWrapper);
 
               const nullRoot = document
                 .createElement("wpt-null-root")
                 .attachShadow({ mode: "open", customElementRegistry: null });
-              const nullWrapper = document.createElement("section");
-              const nullChild = document.createElement("wpt-null-child");
+              const nullWrapper = document.createElement("section", { customElementRegistry: null });
+              const nullChild = document.createElement("wpt-null-child", { customElementRegistry: null });
               nullWrapper.appendChild(nullChild);
               nullRoot.appendChild(nullWrapper);
 

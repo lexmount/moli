@@ -22,6 +22,15 @@ impl NativeDomBridge {
         self.wrap_bridge_handle(scope, host_ptr, BridgeHandle::Node(handle))
     }
 
+    pub(crate) fn synchronize_custom_element_registry_references(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+    ) {
+        self.identity
+            .synchronize_registry_references(scope, host_ptr);
+    }
+
     pub(crate) fn cached_handle_wrapper<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -55,7 +64,14 @@ impl NativeDomBridge {
         host_ptr: *mut JsContextHost,
         handle: BridgeHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        self.materialize_bridge_wrapper(scope, host_ptr, handle, BridgeWrapperIdentity::Canonical)
+        let result = self.materialize_bridge_wrapper(
+            scope,
+            host_ptr,
+            handle,
+            BridgeWrapperIdentity::Canonical,
+        );
+        self.synchronize_custom_element_registry_references(scope, host_ptr);
+        result
     }
 
     fn materialize_bridge_wrapper<'s, 'i>(

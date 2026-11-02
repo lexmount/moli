@@ -80,7 +80,14 @@ fn should_preserve_same_document_registry_association(
     host_ptr: *mut JsContextHost,
     root: DomHandle,
 ) -> bool {
-    let host = unsafe { &*host_ptr }.dom_host();
+    let runtime = unsafe { &*host_ptr };
+    let host = runtime.dom_host();
+    if host
+        .owner_document_handle(root)
+        .is_some_and(|document| runtime.document_uses_scoped_custom_element_registries(document))
+    {
+        return true;
+    }
     host.node(root)
         .and_then(Node::parent_node)
         .is_some_and(|parent| {
