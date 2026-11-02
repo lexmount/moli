@@ -36,7 +36,14 @@ async def browser_endpoint_discovery(endpoint: str, results: list[dict[str, Any]
     assert_equal(await discover_websocket_url(endpoint), websocket_url, "stable discovery")
     await _reject(endpoint, "/devtools/browser/moli-browser")
     await _reject(endpoint, f"/devtools/browser/{uuid4()}")
+    record(results, "browser_endpoint_uuid_discovery", {
+        "stableWithinInstance": True,
+        "unknownEndpointStatus": 404,
+    })
 
+
+async def browser_endpoint_lifecycle(endpoint: str, results: list[dict[str, Any]]) -> None:
+    path = _browser_path(await discover_websocket_url(endpoint))
     server = await start_browser()
     try:
         other_endpoint = await wait_for_browser_endpoint(server)
@@ -67,9 +74,7 @@ async def browser_endpoint_discovery(endpoint: str, results: list[dict[str, Any]
             await client.websocket.close()
     finally:
         await stop_browser(server)
-    record(results, "browser_endpoint_uuid_discovery_and_restart", {
-        "stableWithinInstance": True,
+    record(results, "browser_endpoint_uuid_restart", {
         "distinctBetweenInstances": True,
         "staleEndpointRejectedAfterRestart": True,
-        "unknownEndpointStatus": 404,
     })

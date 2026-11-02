@@ -482,7 +482,7 @@ OPTIONAL_EXTERNAL_GROUPS: tuple[SmokeGroup, ...] = (
 
 
 PROCESS_GROUPS: tuple[SmokeGroup, ...] = (
-    SmokeGroup("target-lifecycle", "Managed-process target churn, FD bounds, and post-close navigation.",
+    SmokeGroup("target-lifecycle", "Managed-process endpoint rotation, target churn, FD bounds, and post-close navigation.",
                "process", run_target_lifecycle_group),
 )
 
