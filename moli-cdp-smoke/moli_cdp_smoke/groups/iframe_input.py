@@ -3,7 +3,7 @@ from __future__ import annotations
 from . import SmokeState
 from ..helpers import capture_layout
 from ..assertions import SmokeError, assert_equal, wait_until
-from ..raw_cdp import discover_websocket_url
+from ..raw_cdp import discover_browser_version
 
 
 def _assert_close(actual: object, expected: float, label: str, tolerance: float = 0.15) -> None:
@@ -305,8 +305,8 @@ async def run_iframe_input_group(state: SmokeState) -> None:
 async def _run_nested_iframe_input_workflow(state: SmokeState) -> None:
     page = state.page
     cdp = state.cdp
-    websocket_url = await discover_websocket_url(state.endpoint)
-    is_moli = websocket_url.endswith("/devtools/browser/moli-browser")
+    version = await discover_browser_version(state.endpoint)
+    is_moli = isinstance(version.get("Moli-Version"), str)
     await page.set_viewport_size({"width": 800, "height": 600})
     await page.set_content(
         """

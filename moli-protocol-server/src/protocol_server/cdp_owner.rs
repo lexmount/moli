@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Weak, atomic::AtomicU64},
+    sync::{Arc, Weak},
 };
 
 use anyhow::{Context, Result, bail};
@@ -47,8 +47,6 @@ struct CdpOwnerRecord {
 #[derive(Clone)]
 struct CdpOwnerRuntimeConfig {
     directory: SharedCdpAgentHostDirectory,
-    target_id_allocator: Arc<AtomicU64>,
-    tab_target_id_allocator: Arc<AtomicU64>,
     storage_partition: Arc<StoragePartitionState>,
     navigation_runtime_config: NavigationRuntimeConfig,
     screencast_interval_ms: u32,
@@ -59,8 +57,6 @@ impl SharedCdpOwnerRegistry {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         directory: SharedCdpAgentHostDirectory,
-        target_id_allocator: Arc<AtomicU64>,
-        tab_target_id_allocator: Arc<AtomicU64>,
         storage_partition: Arc<StoragePartitionState>,
         navigation_runtime_config: NavigationRuntimeConfig,
         screencast_interval_ms: u32,
@@ -70,8 +66,6 @@ impl SharedCdpOwnerRegistry {
             inner: Arc::new(CdpOwnerRegistryInner {
                 config: CdpOwnerRuntimeConfig {
                     directory,
-                    target_id_allocator,
-                    tab_target_id_allocator,
                     storage_partition,
                     navigation_runtime_config,
                     screencast_interval_ms,
@@ -125,11 +119,7 @@ impl SharedCdpOwnerRegistry {
             initial_storage_partition,
             self.inner.config.navigation_runtime_config.clone(),
             self.inner.config.screencast_interval_ms,
-            Some(CdpTargetHostIntegration::new(
-                self.inner.config.target_id_allocator.clone(),
-                self.inner.config.tab_target_id_allocator.clone(),
-                lifecycle_observer,
-            )),
+            Some(CdpTargetHostIntegration::new(lifecycle_observer)),
             Some(CdpOwnerActorLifecycle {
                 instance_control: self.inner.config.instance_control.clone(),
             }),

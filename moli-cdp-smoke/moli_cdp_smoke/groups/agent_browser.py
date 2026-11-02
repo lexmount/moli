@@ -156,9 +156,7 @@ async def run_agent_browser_group(
     browser_websocket = discovery.get("webSocketDebuggerUrl")
     if not isinstance(browser_websocket, str) or not browser_websocket:
         raise SmokeError(f"/json/version has no browser websocket: {discovery!r}")
-    is_moli_endpoint = browser_websocket.endswith(
-        "/devtools/browser/moli-browser"
-    )
+    is_moli_endpoint = isinstance(discovery.get("Moli-Version"), str)
 
     parsed_endpoint = urlparse(endpoint)
     if parsed_endpoint.port is None:

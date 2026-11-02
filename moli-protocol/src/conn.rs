@@ -1310,6 +1310,9 @@ pub struct CdpConnection {
     auto_attach_owner_sessions: IndexMap<Option<String>, Rc<AutoAttachOwnerPolicy>>,
     target_control: TargetControlPlane,
     default_target_lifecycle: DefaultTargetLifecycle,
+    default_page_target_id: String,
+    default_tab_target_id: String,
+    target_id_generator: Option<fn() -> String>,
     service_worker_auto_attach_related_owners: Vec<ServiceWorkerAutoAttachRelatedOwner>,
     service_worker_pause_on_start_owner_sessions: HashSet<Option<String>>,
     dedicated_worker_pause_on_start_owner_sessions: HashSet<Option<String>>,
@@ -1631,6 +1634,9 @@ impl CdpConnection {
             auto_attach_owner_sessions: IndexMap::new(),
             target_control: TargetControlPlane::default(),
             default_target_lifecycle: DefaultTargetLifecycle::default(),
+            default_page_target_id: DEFAULT_CDP_PAGE_TARGET_ID.to_owned(),
+            default_tab_target_id: DEFAULT_CDP_TAB_TARGET_ID.to_owned(),
+            target_id_generator: None,
             service_worker_auto_attach_related_owners: Vec::new(),
             service_worker_pause_on_start_owner_sessions: HashSet::new(),
             dedicated_worker_pause_on_start_owner_sessions: HashSet::new(),
@@ -3256,12 +3262,38 @@ impl CdpConnection {
         DEFAULT_BROWSER_CONTEXT_ID
     }
 
-    pub fn default_target_id(&self) -> &'static str {
-        DEFAULT_CDP_PAGE_TARGET_ID
+    /// Configure opaque target identities before publishing any target or
+    /// creating a browser context. Remote debugging servers use a random
+    /// generator; embedded callers can retain their existing identity scheme.
+    pub fn set_target_id_generator(&mut self, generator: fn() -> String) {
+        assert_eq!(
+            self.default_target_lifecycle,
+            DefaultTargetLifecycle::Unpublished
+        );
+        assert!(self.browser_context.is_none() && self.inactive_browser_contexts.is_empty());
+        let page_id = generator();
+        let tab_id = generator();
+        assert!(!page_id.is_empty() && !tab_id.is_empty());
+        assert_ne!(page_id, tab_id);
+        self.default_page_target_id = page_id;
+        self.default_tab_target_id = tab_id;
+        self.target_id_generator = Some(generator);
     }
 
-    pub fn default_tab_target_id(&self) -> &'static str {
-        DEFAULT_CDP_TAB_TARGET_ID
+    pub fn default_target_id(&self) -> &str {
+        &self.default_page_target_id
+    }
+
+    pub fn default_tab_target_id(&self) -> &str {
+        &self.default_tab_target_id
+    }
+
+    pub(crate) fn is_default_target_id(&self, target_id: &str) -> bool {
+        target_id == self.default_target_id() || target_id == self.default_tab_target_id()
+    }
+
+    pub(crate) fn default_target_is_placeholder(&self, target_id: &str) -> bool {
+        self.default_target_lifecycle.is_placeholder() && self.is_default_target_id(target_id)
     }
 
     pub(crate) fn devtools_target_info(&self, target_id: &str) -> Option<DevToolsTargetInfo> {
@@ -3278,15 +3310,21 @@ impl CdpConnection {
         self.browser_contexts()
             .find_map(|browser_context| browser_context.devtools_target_info(target_id))
             .or_else(|| {
-                (target_id == DEFAULT_CDP_PAGE_TARGET_ID)
-                    .then(|| self.default_target_lifecycle.placeholder_page_info())
+                (target_id == self.default_target_id())
+                    .then(|| {
+                        self.default_target_lifecycle
+                            .placeholder_page_info(self.default_target_id())
+                    })
                     .flatten()
             })
     }
 
     pub(crate) fn devtools_target_infos(&self) -> Vec<DevToolsTargetInfo> {
         let mut target_infos = Vec::new();
-        if let Some(page_target_info) = self.default_target_lifecycle.placeholder_page_info() {
+        if let Some(page_target_info) = self
+            .default_target_lifecycle
+            .placeholder_page_info(self.default_target_id())
+        {
             if let Some(tab_target_info) = self
                 .target_control
                 .tab_target_info_for_page_target_info(page_target_info.clone())
@@ -3325,17 +3363,13 @@ impl CdpConnection {
     /// Crosses the default target's placeholder-to-live boundary when the
     /// requested operation genuinely needs a page owner.
     pub(crate) fn ensure_default_target_live(&mut self, target_id: &str) {
-        if self
-            .default_target_lifecycle
-            .is_placeholder_target(target_id)
-        {
+        if self.default_target_is_placeholder(target_id) {
             self.install_default_browser_target();
         }
     }
 
     pub(crate) fn default_placeholder_is_logically_active(&self, target_id: &str) -> bool {
-        self.default_target_lifecycle
-            .is_placeholder_target(target_id)
+        self.default_target_is_placeholder(target_id)
             && self.browser_contexts().all(|browser_context| {
                 !browser_context.has_active_target()
                     && browser_context.background_targets().next().is_none()
@@ -3896,6 +3930,13 @@ impl CdpConnection {
 
     pub fn gen_target_id(&mut self) -> String {
         loop {
+            if let Some(generate) = self.target_id_generator {
+                let target_id = generate();
+                if !self.has_registered_target_id(&target_id) {
+                    return target_id;
+                }
+                continue;
+            }
             let id = if let Some(allocator) = self.shared_target_id_allocator.as_ref() {
                 allocator
                     .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
@@ -3924,6 +3965,13 @@ impl CdpConnection {
 
     fn gen_tab_target_id(&mut self) -> String {
         loop {
+            if let Some(generate) = self.target_id_generator {
+                let target_id = generate();
+                if !self.has_registered_target_id(&target_id) {
+                    return target_id;
+                }
+                continue;
+            }
             let id = if let Some(allocator) = self.shared_tab_target_id_allocator.as_ref() {
                 allocator
                     .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {

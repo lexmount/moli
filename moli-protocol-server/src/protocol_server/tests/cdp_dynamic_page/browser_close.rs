@@ -30,10 +30,14 @@ async fn instance(
 }
 
 async fn browser(addr: SocketAddr) -> TestCdpSocket {
-    connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
-        .await
-        .expect("connect owned browser")
-        .0
+    connect_async(
+        discover_browser_websocket_url(addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect owned browser")
+    .0
 }
 
 async fn joined(task: tokio::task::JoinHandle<anyhow::Result<()>>) {

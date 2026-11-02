@@ -45,10 +45,13 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;

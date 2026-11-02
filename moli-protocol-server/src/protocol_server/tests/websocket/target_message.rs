@@ -47,10 +47,13 @@ async fn send_nested_command(
 #[tokio::test]
 async fn nonflat_target_wraps_initial_runtime_context_and_later_renderer_events() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
     let target = cdp_create_target_with_transport(&mut socket, 2, &context, false).await;
     let mut output = send_nested_command(
@@ -142,7 +145,9 @@ async fn nonflat_target_wraps_initial_runtime_context_and_later_renderer_events(
 #[tokio::test]
 async fn legacy_target_transport_acks_while_runtime_is_held_and_keeps_normal_call_routing() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let url = format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}");
+    let url = discover_browser_websocket_url(addr)
+        .await
+        .expect("discover browser endpoint");
     let (mut socket, _) = connect_async(&url).await.unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
     let target = cdp_create_target_with_transport(&mut socket, 2, &context, false).await;
@@ -229,10 +234,13 @@ async fn legacy_target_transport_acks_while_runtime_is_held_and_keeps_normal_cal
 async fn legacy_target_navigation_routes_deferred_reply_and_fetch_continuation_through_normal_tasks()
  {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
     let target = cdp_create_target_with_transport(&mut socket, 2, &context, false).await;
     send_nested_command(
@@ -352,10 +360,13 @@ async fn legacy_target_navigation_routes_deferred_reply_and_fetch_continuation_t
 #[tokio::test]
 async fn legacy_target_held_runtime_does_not_block_detach_or_sibling_session() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
     let target = cdp_create_target_with_transport(&mut socket, 2, &context, false).await;
     let sibling = cdp_create_attached_target(&mut socket, 4, &context).await;
@@ -407,10 +418,13 @@ async fn legacy_target_held_runtime_does_not_block_detach_or_sibling_session() {
 #[tokio::test]
 async fn nonflat_auto_attached_worker_keeps_its_parent_envelopes() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
     let target = cdp_create_target_with_transport(&mut socket, 2, &context, false).await;
     send_nested_command(&mut socket, 70, &target.session_id, 10, "Target.setAutoAttach",
@@ -467,7 +481,9 @@ async fn nonflat_auto_attached_worker_keeps_its_parent_envelopes() {
 #[tokio::test]
 async fn legacy_target_transport_preserves_browser_access_and_validates_explicit_sessions() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let endpoint = format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}");
+    let endpoint = discover_browser_websocket_url(addr)
+        .await
+        .expect("discover browser endpoint");
     let (mut socket, _) = connect_async(&endpoint).await.unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
     let target = cdp_create_target_with_transport(&mut socket, 2, &context, false).await;

@@ -1093,14 +1093,8 @@ async def _close_startup_target(browser: Any) -> None:
         startup = [
             info
             for info in targets.get("targetInfos", [])
-            if info.get("type") == "page" and info.get("targetId") == "moli-default"
+            if info.get("type") == "page" and info.get("url") == "about:blank"
         ]
-        if not startup:
-            startup = [
-                info
-                for info in targets.get("targetInfos", [])
-                if info.get("type") == "page" and info.get("url") == "about:blank"
-            ]
         if len(startup) != 1:
             raise SmokeError(f"expected one startup Page target, got: {startup!r}")
         startup_target_id = startup[0].get("targetId")

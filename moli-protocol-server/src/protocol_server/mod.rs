@@ -1,9 +1,4 @@
-use std::{
-    future::IntoFuture,
-    net::SocketAddr,
-    sync::{Arc, atomic::AtomicU64},
-    time::Duration,
-};
+use std::{future::IntoFuture, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use anyhow::{Context, anyhow};
@@ -23,12 +18,11 @@ use moli_core::{
     runtime::{NavigationRuntimeConfig, storage_partition::StoragePartitionState},
 };
 use moli_fetch::FetchConfig;
-#[cfg(test)]
-use moli_protocol::DEFAULT_CDP_TAB_TARGET_ID;
-use moli_protocol::{CdpInitialStoragePartition, DEFAULT_CDP_PAGE_TARGET_ID};
+use moli_protocol::CdpInitialStoragePartition;
 use tokio::net::TcpListener;
 use tower::Layer;
 use tracing::info;
+use uuid::Uuid;
 
 pub use crate::config::ServerConfig;
 pub use instance_control::{BrowserInstanceControl, InstanceCommand};
@@ -51,10 +45,6 @@ use cdp_owner::SharedCdpOwnerRegistry;
 use webdriver_bidi::SharedBidiSessionRegistry;
 use webdriver_classic::SharedClassicSessionRegistry;
 
-const DEFAULT_BROWSER_ID: &str = "moli-browser";
-const DEFAULT_TARGET_ID: &str = DEFAULT_CDP_PAGE_TARGET_ID;
-#[cfg(test)]
-const DEFAULT_TAB_TARGET_ID: &str = DEFAULT_CDP_TAB_TARGET_ID;
 const DEFAULT_TARGET_URL: &str = "about:blank";
 const JSON_DISCOVERY_PATH: &str = "/json";
 
@@ -231,8 +221,11 @@ impl ProtocolRoutes for Router<AppState> {
     }
 }
 
-fn build_router(app_state: AppState) -> trailing_slash::TrailingSlash<Router> {
+type ProtocolRouter = trailing_slash::TrailingSlash<Router>;
+
+fn build_router(app_state: AppState) -> ProtocolRouter {
     let control = app_state.control.clone();
+    let browser_ws_path = format!("/devtools/browser/{}", app_state.browser_id);
     let router = Router::new()
         .protocol_route("/status", get(webdriver_classic::webdriver_classic_status))
         .protocol_route(JSON_DISCOVERY_PATH, any(cdp::json_list))
@@ -242,10 +235,7 @@ fn build_router(app_state: AppState) -> trailing_slash::TrailingSlash<Router> {
         .protocol_route("/json/new", put(cdp::json_new_target))
         .protocol_route("/json/activate/{target_id}", get(cdp::json_activate_target))
         .protocol_route("/json/close/{target_id}", get(cdp::json_close_target))
-        .protocol_route(
-            "/devtools/browser/{browser_id}",
-            get(cdp::ws_browser_upgrade_handler),
-        )
+        .protocol_route(&browser_ws_path, get(cdp::ws_browser_upgrade_handler))
         .protocol_route(
             "/devtools/page/{target_id}",
             get(cdp::ws_target_upgrade_handler),
@@ -558,16 +548,16 @@ fn is_websocket_upgrade_request(request: &Request<Body>) -> bool {
 
 #[derive(Clone)]
 struct AppState {
+    addr: SocketAddr,
     control: BrowserInstanceControl,
     debugger_enabled: bool,
+    browser_id: Uuid,
     browser_ws_url: String,
-    page_ws_url: String,
     bidi_ws_url: String,
     bidi_session_registry: SharedBidiSessionRegistry,
     classic_session_registry: SharedClassicSessionRegistry,
     cdp_agent_host_directory: SharedCdpAgentHostDirectory,
     cdp_owner_registry: SharedCdpOwnerRegistry,
-    devtools_frontend_url: String,
     storage_partition: Arc<StoragePartitionState>,
     fetch_config: FetchConfig,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
@@ -605,31 +595,26 @@ impl AppState {
         screencast_interval_ms: u32,
         control: BrowserInstanceControl,
     ) -> anyhow::Result<Self> {
+        let browser_id = Uuid::new_v4();
         let cdp_agent_host_directory = SharedCdpAgentHostDirectory::default();
-        let cdp_target_id_allocator = Arc::new(AtomicU64::new(0));
-        let cdp_tab_target_id_allocator = Arc::new(AtomicU64::new(0));
         let cdp_owner_registry = SharedCdpOwnerRegistry::new(
             cdp_agent_host_directory.clone(),
-            cdp_target_id_allocator,
-            cdp_tab_target_id_allocator,
             storage_partition.clone(),
             navigation_runtime_config.clone(),
             screencast_interval_ms,
             control.clone(),
         );
         Ok(Self {
+            addr,
             control,
-            browser_ws_url: format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"),
+            browser_id,
+            browser_ws_url: format!("ws://{addr}/devtools/browser/{browser_id}"),
             debugger_enabled: navigation_runtime_config.debugger_enabled(),
-            page_ws_url: format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"),
             bidi_ws_url: format!("ws://{addr}/session"),
             bidi_session_registry: SharedBidiSessionRegistry::default(),
             classic_session_registry: SharedClassicSessionRegistry::default(),
             cdp_agent_host_directory,
             cdp_owner_registry,
-            devtools_frontend_url: format!(
-                "/devtools/inspector.html?ws={addr}/devtools/page/{DEFAULT_TARGET_ID}"
-            ),
             storage_partition,
             fetch_config: navigation_runtime_config.fetch_config().clone(),
             optional_resource_fetch_mask: navigation_runtime_config.optional_resource_fetch_mask(),

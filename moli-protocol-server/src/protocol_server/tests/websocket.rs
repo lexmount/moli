@@ -102,9 +102,11 @@ async fn assert_profile_cookie_delete_command_persists_across_restart(
     let (cdp_addr, cdp_server) =
         spawn_profiled_test_protocol_server_with_initial_cookies(profile.path.clone(), Vec::new())
             .await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .unwrap_or_else(|error| panic!("connect to profiled cookie cdp websocket: {error}"));
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
@@ -160,9 +162,11 @@ async fn assert_profile_cookie_delete_command_persists_across_restart(
     let (cdp_addr, cdp_server) =
         spawn_profiled_test_protocol_server_with_initial_cookies(profile.path.clone(), Vec::new())
             .await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .unwrap_or_else(|error| panic!("reconnect to profiled cookie cdp websocket: {error}"));
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
@@ -203,9 +207,11 @@ async fn assert_profile_cookie_delete_command_persists_across_restart(
     let (cdp_addr, cdp_server) =
         spawn_profiled_test_protocol_server_with_initial_cookies(profile.path.clone(), Vec::new())
             .await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .unwrap_or_else(|error| panic!("reconnect after cookie clear: {error}"));
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;

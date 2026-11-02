@@ -22,6 +22,7 @@ moli-protocol-webdriver-classic = { path = "../moli-protocol-webdriver-classic" 
 moli-trace = { path = "../moli-trace" }
 parking_lot = "0.12"
 percent-encoding = "2.3"
+rand = "0.10.3"
 serde_json = "1.0.145"
 socket2 = { version = "0.6.3", features = ["all"] }
 thiserror = "2.0.17"
@@ -29,10 +30,12 @@ tokio = { version = "1.51.0", features = ["io-std", "io-util", "macros", "net", 
 tracing = "0.1.41"
 tower = { version = "0.5.2", default-features = false, features = ["util"] }
 url = "2.5.7"
+uuid = { version = "1.23.1", default-features = false, features = ["v4"] }
 
 [dev-dependencies]
 moli-browser-profile = { path = "../moli-browser-profile" }
 moli-protocol = { path = "../moli-protocol", features = ["test-support"] }
+moli-test-support = { path = "../moli-test-support" }
 png = "0.18"
 time = "0.3"
 tokio-tungstenite = "0.28.0"
