@@ -453,21 +453,25 @@ async fn child_dialog_output_stays_with_its_exact_protocol_attachment() {
     assert_eq!(message["params"]["frameId"], json!("FRAME-child"));
     ctx.with_fixture(|conn| {
         assert!(
-            conn.target_page_session_state_for_session(Some("SID-primary"))
-                .expect("primary session state")
-                .javascript_dialog_state
-                .is_empty(),
-            "drain-time session must not acquire another attachment's dialog"
+            conn.target_page_primary_devtools_session_state_for_owner(
+                &CommandOwnerScope::for_session("SID-attached"),
+            )
+            .expect("primary session state")
+            .page_session_state
+            .javascript_dialog_state
+            .pending_dialogs()
+            .len()
+                == 1,
+            "the canonical Page residence owns exactly one installed dialog"
         )
     });
     ctx.with_fixture(|conn| {
-        assert_eq!(
+        assert!(
             conn.target_page_session_state_for_session(Some("SID-attached"))
                 .expect("attached session state")
                 .javascript_dialog_state
-                .pending_dialogs()
-                .len(),
-            1
+                .is_empty(),
+            "the dialog lives in the canonical residence state, not a per-session slot"
         )
     });
 }

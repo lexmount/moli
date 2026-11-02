@@ -85,6 +85,9 @@ impl TargetSessionStateMut<'_> {
         state.page_file_chooser_opened_event_enabled = false;
         state.page_intercept_file_chooser_dialog_enabled = false;
         state.page_screencast.stop();
+        // Clear any legacy/session-local dialog state. Current dialogs live in
+        // the canonical Page-primary state and are intentionally unaffected by
+        // disabling just this attachment's Page domain.
         state.javascript_dialog_state.clear();
     }
 
