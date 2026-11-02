@@ -62,11 +62,8 @@ impl BrowserContext {
 
     #[cfg(test)]
     fn clear_active_target_loaded_document_session_state(&mut self) {
-        for session in self.active_page_target_mut().devtools_sessions.states_mut() {
-            session
-                .page_session_state
-                .clear_loaded_document_context_state();
-        }
+        self.active_page_target_mut()
+            .clear_loaded_document_context_state();
     }
 
     #[cfg(test)]
@@ -272,10 +269,8 @@ impl PageTargetHost {
             .commit_document_title(committed_document_title);
         for session in self.devtools_sessions.states_mut() {
             session.clear_runtime_remote_object_tracking();
-            session
-                .page_session_state
-                .clear_loaded_document_context_state();
         }
+        self.clear_loaded_document_context_state();
     }
 
     pub(crate) fn commit_existing_page_navigation(
@@ -388,6 +383,7 @@ impl PageTargetHost {
     }
 
     pub(crate) async fn close_page_async(&mut self) {
+        self.javascript_dialog_state.clear();
         if let Some(page) = self
             .runtime_slot
             .clear_loaded_page_with_reason(TargetPageAbsenceReason::TargetClosed)

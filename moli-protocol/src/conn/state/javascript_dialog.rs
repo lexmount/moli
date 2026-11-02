@@ -239,6 +239,9 @@ pub(crate) struct TargetJavaScriptDialog {
     source_frame_id: String,
     renderer_dialog: RendererPendingJavaScriptDialog,
     pending_prompt_text: Option<String>,
+    /// Connection-wide Page subscription generations that observed the opening.
+    /// Enabling Page after the dialog opens does not grant its pending callback.
+    page_subscriptions: Vec<u64>,
 }
 
 impl TargetJavaScriptDialog {
@@ -252,6 +255,7 @@ impl TargetJavaScriptDialog {
             source_frame_id,
             renderer_dialog,
             pending_prompt_text: None,
+            page_subscriptions: Vec::new(),
         }
     }
 
@@ -279,6 +283,14 @@ impl TargetJavaScriptDialog {
         self.renderer_dialog.finish(accepted, user_input)
     }
 
+    pub(crate) fn set_page_subscriptions(&mut self, generations: Vec<u64>) {
+        self.page_subscriptions = generations;
+    }
+
+    pub(crate) fn has_page_subscription(&self, generation: u64) -> bool {
+        self.page_subscriptions.contains(&generation)
+    }
+
     fn set_prompt_text(&mut self, prompt_text: String) {
         self.pending_prompt_text = Some(prompt_text);
     }
@@ -289,15 +301,21 @@ impl TargetJavaScriptDialog {
     }
 }
 
-/// Installed modal-dialog state for one protocol attachment and Page lifetime.
+/// Installed modal-dialog state owned by one Page target, independently of its
+/// DevTools sessions.
 ///
 /// Clearing dismisses every installed renderer completion. In-flight prepared
 /// output is authorized separately by the stable Page scope in
-/// `TargetRuntimeSlot`; keeping that authority out of this state lets an
-/// otherwise-default session state disappear without losing Page identity.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// `TargetRuntimeSlot`. Dropping the target also settles its installed dialogs.
+#[derive(Debug, Default, PartialEq)]
 pub(crate) struct TargetJavaScriptDialogState {
     pending_dialogs: Vec<TargetJavaScriptDialog>,
+}
+
+impl Drop for TargetJavaScriptDialogState {
+    fn drop(&mut self) {
+        self.clear();
+    }
 }
 
 impl TargetJavaScriptDialogState {

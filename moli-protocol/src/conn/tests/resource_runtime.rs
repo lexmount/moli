@@ -1912,6 +1912,12 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
+    inactive
+        .background_target_mut("TID-dialog-background")
+        .unwrap()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .page_session_state
+        .enable_page_domain(1);
     ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-dialog-background"))
         .await;
@@ -1997,8 +2003,6 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
                 .background_target("TID-dialog-background")
                 .filter(|target| target.has_non_default_session_state())
                 .expect("background page session state should remain background")
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
                 .javascript_dialog_state
                 .is_empty(),
             "handling the dialog should pop the background session dialog queue"

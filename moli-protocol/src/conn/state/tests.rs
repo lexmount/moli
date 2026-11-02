@@ -114,13 +114,17 @@ fn page_domain_subscription_generation_tracks_distinct_enable_lifetimes() {
 
 #[test]
 fn input_event_ignore_state_survives_document_context_replacement() {
-    let mut state = TargetPageSessionState {
-        input_events_ignored: true,
-        input_intercept_drags_enabled: true,
-        ..Default::default()
-    };
+    let mut target = PageTargetHost::empty("TID-input".to_owned());
+    target.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].page_session_state =
+        TargetPageSessionState {
+            input_events_ignored: true,
+            input_intercept_drags_enabled: true,
+            ..Default::default()
+        };
 
-    state.clear_loaded_document_context_state();
+    target.clear_loaded_document_context_state();
+    let state =
+        &target.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].page_session_state;
 
     assert!(
         state.input_events_ignored,
