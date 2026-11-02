@@ -182,6 +182,7 @@ async fn stale_child_unusable_stylesheet_preserves_physical_output_without_docum
             root_document,
             ChildBlockingStylesheetLoadCompletion {
                 import_graph: None,
+                load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId(1),
                 child_handle,
                 owner: stale_owner,
                 signature: crate::DocumentBlockingStylesheetSignature::ParserCreatedStyleImport {

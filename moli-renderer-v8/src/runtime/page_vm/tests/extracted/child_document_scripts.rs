@@ -346,9 +346,23 @@ async fn page_vm_child_parser_style_imports_share_media_matching_and_loading() {
 }
 
 #[tokio::test]
-async fn page_vm_child_parser_replays_completed_stylesheets_to_later_owners() {
+async fn page_vm_child_parser_late_stylesheet_owners_refetch_no_store_responses() {
     for imports in [false, true] {
-        child_parser_replays_completed_stylesheet(imports).await;
+        child_parser_late_stylesheet_owner(imports, "no-store", false).await;
+    }
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_late_stylesheet_owners_retry_failed_responses() {
+    for imports in [false, true] {
+        child_parser_late_stylesheet_owner(imports, "no-store", true).await;
+    }
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_late_stylesheet_owners_reuse_fresh_responses_through_fetch() {
+    for imports in [false, true] {
+        child_parser_late_stylesheet_owner(imports, "max-age=3600", false).await;
     }
 }
 
@@ -370,23 +384,70 @@ async fn take_child_stylesheet_test_completion(
     }
 }
 
-async fn child_parser_replays_completed_stylesheet(imports: bool) {
+async fn child_stylesheet_cache_test_server(
+    cache_control: &'static str,
+    fail_first: bool,
+) -> (String, JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let request_count = if cache_control == "max-age=3600" {
+        2
+    } else {
+        3
+    };
+    let server = tokio::spawn(async move {
+        let mut paths = Vec::new();
+        let mut css_count = 0;
+        for _ in 0..request_count {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_http_request_head(&mut stream).await.unwrap();
+            let path = request
+                .lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap();
+            paths.push(path.to_owned());
+            let (content_type, body) = match path {
+                "/shared.css" => {
+                    css_count += 1;
+                    if fail_first && css_count == 1 {
+                        // Close without an HTTP response to produce a network failure.
+                        continue;
+                    }
+                    (
+                        "text/css",
+                        format!(
+                            ":root {{ --shared-ready: {}; }}",
+                            if css_count == 1 { "first" } else { "second" }
+                        ),
+                    )
+                }
+                "/hold.js" => (
+                    "text/javascript",
+                    "parent.__sharedStylesheetEvents.push('hold');".to_owned(),
+                ),
+                _ => panic!("unexpected stylesheet cache test request: {path}"),
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nCache-Control: {cache_control}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+        paths
+    });
+    (format!("http://{address}"), server)
+}
+
+async fn child_parser_late_stylesheet_owner(
+    imports: bool,
+    cache_control: &'static str,
+    fail_first: bool,
+) {
     run_page_vm_async_test(async move {
-        let (base_url, server) = spawn_concurrent_path_response_http_server(vec![
-            (
-                "/shared.css",
-                "HTTP/1.1 200 OK",
-                ":root { --shared-ready: yes; }".to_owned(),
-                Duration::ZERO,
-            ),
-            (
-                "/hold.js",
-                "HTTP/1.1 200 OK",
-                "parent.__sharedStylesheetEvents.push('hold');".to_owned(),
-                Duration::ZERO,
-            ),
-        ])
-        .await;
+        let (base_url, server) = child_stylesheet_cache_test_server(cache_control, fail_first).await;
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
             .expect("loader");
         let document_url = Url::parse(&format!("{base_url}/page")).unwrap();
@@ -436,16 +497,26 @@ async fn child_parser_replays_completed_stylesheet(imports: bool) {
             page_vm.apply_selected_page_resource_completion_turn(css.expect("CSS completion"))?;
             assert_eq!(page_vm.vm_mut().eval("__sharedStylesheetEvents.join('|')")?, "");
             page_vm.apply_selected_page_resource_completion_turn(script.expect("script completion"))?;
-            for reason in ["release hold.js", "later stylesheet owner script"] {
-                run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
-                    &mut page_vm, ChildFrameSemanticTurnKind::DocumentScriptReady, reason,
-                ).await;
-            }
-            assert_eq!(page_vm.vm_mut().eval("__sharedStylesheetEvents.join('|')")?, "hold|yes",
-                "a late owner must install the terminal shared resource without another fetch; imports={imports}");
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::DocumentScriptReady, "release hold.js",
+            ).await;
+            assert_eq!(page_vm.vm_mut().eval("__sharedStylesheetEvents.join('|')")?, "hold");
+            // Even a cache hit must enter Fetch and deliver its own completion
+            // before the new matching owner can release the following script.
+            let later_css = take_child_stylesheet_test_completion(&mut page_vm).await;
+            assert!(matches!(later_css.terminal(), RendererPageResourceTerminal::ChildBlockingStylesheet { .. }));
+            page_vm.apply_selected_page_resource_completion_turn(later_css)?;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::DocumentScriptReady, "later stylesheet owner script",
+            ).await;
+            let expected = if cache_control == "max-age=3600" { "hold|first" } else { "hold|second" };
+            assert_eq!(page_vm.vm_mut().eval("__sharedStylesheetEvents.join('|')")?, expected,
+                "a late owner must use Fetch cache policy; imports={imports}, cache_control={cache_control}, fail_first={fail_first}");
             Ok::<_, anyhow::Error>(())
-        }).await.expect("completed stylesheet replay fixture");
-        server.await.expect("shared CSS server");
+        }).await.expect("late stylesheet owner fixture");
+        let paths = server.await.expect("shared CSS server");
+        let expected_css_count = if cache_control == "max-age=3600" { 1 } else { 2 };
+        assert_eq!(paths.iter().filter(|path| path.as_str() == "/shared.css").count(), expected_css_count);
     }).await;
 }
 

@@ -1225,6 +1225,7 @@ pub(super) struct ChildBlockingStylesheetLoadCompletion {
     pub(super) child_handle: NativeNodeId,
     pub(super) owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     pub(super) signature: crate::DocumentBlockingStylesheetSignature,
+    pub(super) load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
     pub(super) network_results: Vec<ChildBlockingStylesheetNetworkResult>,
     pub(super) import_graph:
         Option<std::sync::Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>>,

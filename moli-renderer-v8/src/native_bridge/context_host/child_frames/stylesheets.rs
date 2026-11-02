@@ -2,7 +2,7 @@ use super::JsContextHost;
 use crate::{
     document_runtime::DomHandle,
     document_script_scheduler::FrameDocumentStylesheetAdmission,
-    frame_owner_model::FrameDocumentTaskOwner,
+    frame_owner_model::{DocumentLoadDelayTokenId, FrameDocumentTaskOwner},
     stylesheet_blocking::{
         DocumentBlockingStylesheetSignature, DocumentOwnedStylesheetDiscoveryInput,
         RendererStylesheetFetcher, ServiceWorkerStylesheetFetchContext, StylesheetFetcher,
@@ -66,31 +66,18 @@ impl JsContextHost {
             };
             let stylesheet_store = &mut self.frame_document_stylesheets;
             let frame_owner_store = &mut self.frame_owner_store;
-            match stylesheet_store.discover(
-                owner.document_owner(),
-                &input,
-                import_root.clone(),
-                || {
+            let load_delay_token =
+                match stylesheet_store.discover(owner.document_owner(), &input, import_root, || {
                     frame_owner_store
                         .acquire_current_child_blocking_stylesheet_load_delay(child_handle, owner)
-                },
-            ) {
-                FrameDocumentStylesheetAdmission::Start => {}
-                FrameDocumentStylesheetAdmission::Joined => continue,
-                FrameDocumentStylesheetAdmission::Completed(completion) => {
-                    self.install_child_parser_stylesheet_result(
-                        &completion,
-                        &[input.node_id()],
-                        import_root.as_slice(),
-                    );
-                    continue;
-                }
-            }
+                }) {
+                    FrameDocumentStylesheetAdmission::Start(token) => token,
+                    FrameDocumentStylesheetAdmission::Joined => continue,
+                };
             accepted += 1;
             let Some(fetcher) = fetcher.clone() else {
-                let load_delay_token = self
-                    .frame_document_stylesheets
-                    .apply_completion(owner.document_owner(), &signature, None)
+                self.frame_document_stylesheets
+                    .take_completion(owner.document_owner(), &signature, load_delay_token)
                     .expect("accepted child stylesheet must own a load-delay token");
                 let released = self
                     .frame_owner_store
@@ -113,6 +100,7 @@ impl JsContextHost {
                 owner,
                 document_url.clone(),
                 signature,
+                load_delay_token,
                 fetcher,
             );
         }
@@ -125,6 +113,7 @@ impl JsContextHost {
         owner: FrameDocumentTaskOwner,
         document_url: url::Url,
         signature: DocumentBlockingStylesheetSignature,
+        load_delay_token: DocumentLoadDelayTokenId,
         fetcher: RendererStylesheetFetcher,
     ) {
         let completion_tx = self.resource_completion_tx.clone();
@@ -190,6 +179,7 @@ impl JsContextHost {
                     child_handle,
                     owner,
                     signature,
+                    load_delay_token,
                     network_results,
                     import_graph,
                 },
@@ -225,12 +215,11 @@ impl JsContextHost {
             );
             return;
         }
-        let completion = std::sync::Arc::new(completion);
         let successful = completion.successful();
-        let Some(load_delay_token) = self.frame_document_stylesheets.apply_completion(
+        let Some(subscribers) = self.frame_document_stylesheets.take_completion(
             completion.owner.document_owner(),
             &completion.signature,
-            Some(std::sync::Arc::clone(&completion)),
+            completion.load_delay_token,
         ) else {
             tracing::debug!(
                 child_handle = ?completion.child_handle,
@@ -240,14 +229,12 @@ impl JsContextHost {
             );
             return;
         };
-        let node_ids = self
-            .frame_document_stylesheets
-            .node_ids_for_signature(completion.owner.document_owner(), &completion.signature);
-        let roots = self
-            .frame_document_stylesheets
-            .import_roots_for_signature(completion.owner.document_owner(), &completion.signature);
-        let installed_stylesheet_count =
-            self.install_child_parser_stylesheet_result(&completion, &node_ids, &roots);
+        let load_delay_token = subscribers.load_delay_token;
+        let installed_stylesheet_count = self.install_child_parser_stylesheet_result(
+            &completion,
+            &subscribers.node_ids,
+            &subscribers.import_roots,
+        );
         let mut stylesheet_subresources = Vec::new();
         let optional_resource_fetch_mask = self
             .document_resource_loader_for_owner(completion.owner)
@@ -373,9 +360,7 @@ impl JsContextHost {
         );
     }
 
-    // Both a fresh completion and a late subscriber use the same installation
-    // path. Replaying a terminal does not publish network records or acquire
-    // another document load-delay token.
+    // Install only for this in-flight request's remaining subscribers.
     fn install_child_parser_stylesheet_result(
         &mut self,
         completion: &ChildBlockingStylesheetLoadCompletion,
