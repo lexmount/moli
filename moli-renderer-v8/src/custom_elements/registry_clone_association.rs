@@ -7,12 +7,15 @@ pub(super) fn registry_association_for_clone_source(
     target_document: DomHandle,
 ) -> CustomElementRegistryAssociation {
     match host.effective_custom_element_registry_association(source) {
-        CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(scoped_id)) => {
-            CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(scoped_id))
-        }
+        CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(
+            owner,
+            scoped_id,
+        )) => CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(
+            owner, scoped_id,
+        )),
         CustomElementRegistryAssociation::Null => CustomElementRegistryAssociation::Null,
         CustomElementRegistryAssociation::Registry(
-            CustomElementRegistryKey::Global | CustomElementRegistryKey::Child(_),
+            CustomElementRegistryKey::Global(_) | CustomElementRegistryKey::Child(_, _),
         ) => host.default_custom_element_registry_association_for_document(target_document),
     }
 }
@@ -31,14 +34,15 @@ pub(super) fn registry_association_for_import_clone_source(
     let target_default =
         host.default_custom_element_registry_association_for_document(target_document);
     match host.effective_custom_element_registry_association(source) {
-        CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(scoped_id)) => {
-            Some(CustomElementRegistryAssociation::Registry(
-                CustomElementRegistryKey::Scoped(scoped_id),
-            ))
-        }
+        CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(
+            owner,
+            scoped_id,
+        )) => Some(CustomElementRegistryAssociation::Registry(
+            CustomElementRegistryKey::Scoped(owner, scoped_id),
+        )),
         CustomElementRegistryAssociation::Null => Some(fallback_registry.unwrap_or(target_default)),
         CustomElementRegistryAssociation::Registry(
-            CustomElementRegistryKey::Global | CustomElementRegistryKey::Child(_),
+            CustomElementRegistryKey::Global(_) | CustomElementRegistryKey::Child(_, _),
         ) => Some(target_default),
     }
 }

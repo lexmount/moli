@@ -804,6 +804,7 @@ impl JsContextHost {
                 self.set_custom_element_registry_association(
                     document_handle,
                     CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
+                        self.custom_element_registry_owner_id(),
                         handle,
                     )),
                 );
@@ -904,8 +905,10 @@ impl JsContextHost {
             .collect::<HashSet<_>>();
         for association in self.custom_element_registry_associations.values() {
             if let CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
+                owner,
                 handle,
             )) = association
+                && *owner == self.custom_element_registry_owner_id()
                 && !live_handles.contains(handle)
             {
                 stale_registry_context_handles.insert(*handle);
@@ -918,6 +921,7 @@ impl JsContextHost {
                 self.set_custom_element_registry_association(
                     document_handle,
                     CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
+                        self.custom_element_registry_owner_id(),
                         handle,
                     )),
                 );
