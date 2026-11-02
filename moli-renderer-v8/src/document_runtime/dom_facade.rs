@@ -13,6 +13,15 @@ use html5ever::tree_builder::QuirksMode;
 // they are the "basic DOM access" layer that other modules depend on, but they do not define
 // selector semantics or orchestrate mutation side effects on their own.
 impl DocumentRuntime {
+    pub(crate) fn transfer_native_event_targets_from(
+        &mut self,
+        source: &mut Self,
+        handles: &HashMap<DomHandle, DomHandle>,
+    ) -> HashSet<crate::native_bridge::EventCallbackId> {
+        self.events
+            .transfer_node_targets_from(&mut source.events, handles)
+    }
+
     pub(crate) fn document_design_mode_enabled(&self, document: DomHandle) -> bool {
         self.dom_host
             .document_design_mode_enabled_for_handle(document)

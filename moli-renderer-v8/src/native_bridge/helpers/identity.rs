@@ -2,6 +2,8 @@ use super::super::{BridgeHandle, JsContextHost, ReflectorId};
 use crate::util::context_host_ptr_from_context_slot;
 use anyhow::{Context, bail, ensure};
 
+pub(in crate::native_bridge) const NATIVE_BRIDGE_OWNER_SLOT: &str = "__moliNativeBridgeOwner";
+
 fn object_reflector_id(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
@@ -32,9 +34,13 @@ pub(in crate::native_bridge) fn bridge_handle_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
 ) -> anyhow::Result<(*mut JsContextHost, BridgeHandle)> {
-    // Related Pages share an isolate, but reflector IDs belong to the
-    // wrapper's original DOM bridge rather than the calling Window's bridge.
-    let context = object
+    // Reflector IDs belong to the producer bridge. Fresh platform objects can
+    // live in a different receiver realm, so retain their native owner through
+    // a traced private object rather than an unowned host pointer.
+    let object = v8::Local::new(scope, object);
+    let owner =
+        crate::util::get_private_object(scope, object, NATIVE_BRIDGE_OWNER_SLOT).unwrap_or(object);
+    let context = owner
         .get_creation_context(scope)
         .context("native wrapper has no creation context")?;
     let runtime_ptr = context_host_ptr_from_context_slot(context)
@@ -44,5 +50,13 @@ pub(in crate::native_bridge) fn bridge_handle_from_object(
         .native_bridge()
         .bridge_handle(reflector_id)
         .with_context(|| format!("no bridge identity for reflector id {}", reflector_id.raw()))?;
+    if let Some(node) = handle.node_handle() {
+        let (owner, node) = unsafe { &*runtime_ptr }
+            .native_bridge()
+            .identity
+            .resolve_node_ownership(scope, runtime_ptr, node)
+            .context("native node's owning realm has retired")?;
+        return Ok((owner, handle.with_node_handle(node)));
+    }
     Ok((runtime_ptr, handle))
 }
