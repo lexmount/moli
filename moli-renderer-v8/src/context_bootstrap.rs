@@ -485,8 +485,8 @@ pub(crate) use self::shared::{
     structured_serialize_value_for_post_message, wasm_module_message_allowed_for_target,
 };
 pub(crate) use self::shared::{
-    console_arg_remote_object_json, current_console_stack, initialize_console_namespace,
-    install_console_message_buffers_for_context,
+    console_arg_remote_object_json, console_label_arguments, current_console_stack,
+    initialize_console_namespace, install_console_message_buffers_for_context,
     snapshot_console_message_details_for_current_context,
     snapshot_console_messages_for_current_context,
 };
