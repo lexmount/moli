@@ -3373,6 +3373,7 @@ document.body.appendChild(replacementFrame);
                             old_root_document,
                             ChildBlockingStylesheetLoadCompletion {
                                 import_graph: None,
+                                load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId(1),
             child_handle: old_child_handle,
                                 owner: old_child_owner,
                                 signature: crate::DocumentBlockingStylesheetSignature::
