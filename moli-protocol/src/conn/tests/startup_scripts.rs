@@ -1,4 +1,5 @@
 use super::*;
+use crate::automation::DevToolsPreloadScriptId;
 
 const STARTUP_SOURCE: &str = "globalThis.__startupCount = (globalThis.__startupCount || 0) + 1";
 
@@ -58,15 +59,30 @@ fn startup_scripts_do_not_share_protocol_preload_identifiers() {
     );
     conn.insert_browser_context(conn.new_browser_context("default".to_owned()));
     let context = conn.browser_context.as_mut().unwrap();
-    assert!(context.remove_context_preload_script("1").is_none());
+    assert!(
+        context
+            .remove_context_preload_script(&DevToolsPreloadScriptId::from("1"))
+            .is_none()
+    );
     let script = context
         .context_document_start_script_descriptors()
         .remove(0);
-    let identifier = context.record_context_preload_script(&script);
+    let identifier = context
+        .record_context_preload_script(&script.with_registry_key("target:previous-registration"));
     assert_eq!(
-        identifier, "1",
+        identifier.as_str(),
+        "1",
         "startup scripts must not consume protocol IDs"
     );
-    assert!(context.remove_context_preload_script(&identifier).is_some());
+    assert!(context.context_preload_scripts[0].1.registry_key.is_none());
+    let descriptor = context
+        .context_document_start_script_descriptors()
+        .remove(1);
+    assert_eq!(descriptor.registry_key.as_deref(), Some("default:1"));
+    assert_eq!(
+        context.remove_context_preload_script(&identifier),
+        descriptor.registry_key,
+        "removal must use the same derived key that was published to the renderer"
+    );
     assert_startup_scripts(context);
 }

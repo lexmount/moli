@@ -128,7 +128,7 @@ fn start_context_preload_script_append(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     command_session_id: Option<&str>,
-    identifier: String,
+    identifier: DevToolsPreloadScriptId,
     script: &DocumentStartScript,
 ) -> PageCommandTaskStep {
     let renderer_runtime_inspector_session_id =
@@ -179,14 +179,16 @@ fn start_document_start_script_remove(
     }
 }
 
-pub(super) fn add_preload_script_result_plan(identifier: String) -> CommandOutputPlan {
+pub(super) fn add_preload_script_result_plan(
+    identifier: DevToolsPreloadScriptId,
+) -> CommandOutputPlan {
     CommandOutputPlan::result(add_preload_script_result(identifier))
 }
 
-pub(super) fn add_preload_script_result(identifier: String) -> serde_json::Value {
+pub(super) fn add_preload_script_result(identifier: DevToolsPreloadScriptId) -> serde_json::Value {
     CommandOutputPlan::devtools_result_payload(AutomationResult::AddPreloadScript(
         DevToolsAddPreloadScriptResult {
-            script_id: DevToolsPreloadScriptId::from(identifier),
+            script_id: identifier,
         },
     ))
 }
@@ -455,13 +457,13 @@ fn remove_preload_command_target_route(
         command.script_id = local_script_id;
         return Ok((route, command));
     }
-    let script_id = command.script_id.as_str().to_owned();
+    let script_id = &command.script_id;
     if command.context.protocol == FrontendProtocol::WebDriverBidi
-        && let Some(route) = find_default_preload_script_route(conn, &script_id)
+        && let Some(route) = find_context_preload_script_route(conn, script_id)
     {
         return Ok((route, command));
     }
-    let Some(route) = find_preload_script_route(conn, &script_id) else {
+    let Some(route) = find_preload_script_route(conn, script_id) else {
         return Err(DevToolsError::new(
             DevToolsErrorKind::NoSuchScript,
             "NoSuchScript",
@@ -483,9 +485,9 @@ fn split_bidi_preload_script_id(
     ))
 }
 
-fn find_default_preload_script_route(
+fn find_context_preload_script_route(
     conn: &mut CdpConnection,
-    script_id: &str,
+    script_id: &DevToolsPreloadScriptId,
 ) -> Option<CdpSessionRoute> {
     conn.browser_contexts()
         .find(|browser_context| browser_context.has_context_preload_script(script_id))
@@ -494,7 +496,10 @@ fn find_default_preload_script_route(
         })
 }
 
-fn find_preload_script_route(conn: &mut CdpConnection, script_id: &str) -> Option<CdpSessionRoute> {
+fn find_preload_script_route(
+    conn: &mut CdpConnection,
+    script_id: &DevToolsPreloadScriptId,
+) -> Option<CdpSessionRoute> {
     let target_ids = conn
         .browser_contexts()
         .flat_map(|browser_context| browser_context.devtools_target_infos())
@@ -520,7 +525,7 @@ fn find_preload_script_route(conn: &mut CdpConnection, script_id: &str) -> Optio
                 owner_state
                     .document_start_scripts
                     .iter()
-                    .any(|(identifier, _)| identifier == script_id)
+                    .any(|(identifier, _)| identifier == script_id.as_str())
             })
             || route
                 .browser_context_id()
@@ -588,9 +593,7 @@ fn start_devtools_add_preload_script_command(
         ));
     };
     let identifier = browser_context.record_context_preload_script(&script);
-    let script = script.with_registry_key(BrowserContext::context_preload_script_registry_key(
-        &identifier,
-    ));
+    let script = BrowserContext::context_preload_script_descriptor(&identifier, &script);
     start_context_preload_script_append(conn, command_id, command_session_id, identifier, &script)
 }
 
@@ -614,7 +617,7 @@ fn remove_preload_script_registration(
     command: DevToolsRemovePreloadScriptCommand,
 ) -> Result<Option<String>, CommandOutputPlan> {
     let protocol = command.context.protocol;
-    let script_id = command.script_id.into_string();
+    let script_id = command.script_id;
     let renderer_inspector_session_id =
         conn.target_renderer_runtime_inspector_session_id_for_session(command_session_id);
     let script_owner_session = (protocol == FrontendProtocol::Cdp).then(|| {
@@ -625,7 +628,7 @@ fn remove_preload_script_registration(
         target_document_start_script_registry_key_for_owner(
             target_id.as_deref(),
             script_owner_session.as_ref(),
-            &script_id,
+            script_id.as_str(),
         )
     });
     let remove_result =
@@ -633,7 +636,7 @@ fn remove_preload_script_registration(
             remove_stored_document_start_script_registry_key(
                 owner_state,
                 script_owner_session.as_ref(),
-                &script_id,
+                script_id.as_str(),
                 target_registry_key.clone(),
             )
         });
@@ -1307,7 +1310,7 @@ impl PreparedPageAddPreload {
                 context.context_mut().protocol_events_mut().extend(events);
             }
         }
-        Ok(add_preload_script_result_plan(self.identifier))
+        Ok(add_preload_script_result_plan(self.identifier.into()))
     }
 }
 
