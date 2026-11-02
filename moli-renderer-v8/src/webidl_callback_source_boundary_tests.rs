@@ -36,8 +36,6 @@ const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
     // Page-supplied execute functions use WindowWebIdlCallbackFunction instead.
     ("context_bootstrap/web_mcp/state.rs", 1),
     ("custom_elements/construction.rs", 1),
-    ("custom_elements/definition.rs", 10),
-    ("custom_elements/definition_callbacks.rs", 1),
     ("host/timers.rs", 1),
     // AbortSignal listeners and onabort now use the shared typed EventTarget
     // registry. These remaining roots own browser-created abort algorithms.

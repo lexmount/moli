@@ -132,10 +132,11 @@ pub(crate) use registry_install::{
     build_custom_elements_registry_for_window, rebind_materialized_child_custom_elements_registry,
 };
 mod registry_runtime;
+mod registry_tracing;
 pub(crate) use registry_runtime::{
-    mark_custom_elements_registry_owner, mark_scoped_custom_elements_registry,
-    registry_association_from_value, registry_association_matches_document, registry_owner_host,
-    registry_store_key,
+    bind_custom_elements_registry_data, mark_custom_elements_registry_owner,
+    mark_scoped_custom_elements_registry, registry_association_from_value,
+    registry_association_matches_document, registry_owner_host, registry_store_key,
 };
 mod registry_initializer;
 pub(crate) use registry_initializer::initialize_registry_for_subtree;
