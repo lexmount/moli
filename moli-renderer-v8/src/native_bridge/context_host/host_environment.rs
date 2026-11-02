@@ -964,6 +964,24 @@ impl JsContextHost {
     }
 
     pub(crate) fn apply_stylesheet_owner_changes(&mut self, changes: &[DomStylesheetOwnerChange]) {
+        for change in changes {
+            let reprocesses = match change.kind() {
+                DomStylesheetOwnerChangeKind::Attribute {
+                    namespace,
+                    local_name,
+                } => {
+                    namespace.is_none()
+                        && crate::document_runtime::attribute_reprocesses_connected_stylesheet(
+                            local_name,
+                        )
+                }
+                _ => true,
+            };
+            if reprocesses {
+                self.frame_document_stylesheets
+                    .invalidate_owner(crate::dom::NodeId::new(change.owner().index()));
+            }
+        }
         let dom_host = self.dom_host() as *const _;
         self.style_engine
             .apply_stylesheet_owner_changes_with_host(unsafe { &*dom_host }, changes);
