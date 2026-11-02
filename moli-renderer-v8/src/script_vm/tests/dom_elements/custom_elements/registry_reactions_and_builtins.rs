@@ -1,5 +1,111 @@
 use super::*;
 
+fn assert_registry_adoption_classification(
+    host: &mut crate::native_bridge::JsContextHost,
+    roots: &[crate::document_runtime::DomHandle],
+    needs_preservation: bool,
+    expected_retargets: &[crate::document_runtime::DomHandle],
+) {
+    let document = host.dom_host().owner_document_handle(roots[0]).unwrap();
+    assert_eq!(
+        crate::custom_elements::roots_need_registry_retargets(host, roots),
+        needs_preservation
+    );
+    // Compare the cheap classification with the existing full traversal, not
+    // with a second implementation of the root predicate.
+    let targets = host
+        .dom_host_mut()
+        .adoption_targets_for_roots(roots, document);
+    let host_ptr = host as *mut crate::native_bridge::JsContextHost;
+    let full_plan = crate::custom_elements::adoption_plan_before_adoption(host_ptr, &targets);
+    let retargets = full_plan
+        .registry_retargets
+        .iter()
+        .map(|retarget| retarget.handle)
+        .collect::<Vec<_>>();
+    assert_eq!(retargets, expected_retargets);
+    assert!(needs_preservation || retargets.is_empty());
+}
+
+#[test]
+fn registry_adoption_skips_empty_plans_for_fresh_and_fragment_subtrees() {
+    let vm = new_storage_test_vm("https://registry-removal.test/");
+    let mut host = vm._context_host.borrow_mut();
+    assert!(!host.has_explicit_custom_element_registry_associations());
+    let root = host.dom_host_mut().create_element("section");
+    let element = host.dom_host_mut().create_element("p");
+    let text = host.dom_host_mut().create_text_node("fresh text");
+    assert!(host.dom_host_mut().append_child(root, element));
+    assert!(host.dom_host_mut().append_child(element, text));
+    assert_registry_adoption_classification(&mut host, &[root], false, &[]);
+
+    let document = host.document_handle();
+    let fragment = host
+        .dom_host_mut()
+        .create_document_fragment_for_document(document);
+    assert!(host.dom_host_mut().append_child(fragment, root));
+    assert_registry_adoption_classification(&mut host, &[root], false, &[]);
+
+    let template = host.dom_host_mut().create_element("template");
+    let contents = host
+        .dom_host()
+        .parser_template_contents_handle(template)
+        .unwrap();
+    let leaf = host.dom_host_mut().create_element("span");
+    assert!(host.dom_host_mut().append_child(contents, leaf));
+    assert_registry_adoption_classification(&mut host, &[template], false, &[]);
+
+    let unrelated = host.dom_host_mut().create_element("canvas");
+    let registry =
+        host.default_custom_element_registry_association_for_document(host.document_handle());
+    host.set_custom_element_registry_association(unrelated, registry);
+    assert_registry_adoption_classification(&mut host, &[root], false, &[]);
+    host.set_custom_element_registry_association(
+        leaf,
+        crate::custom_elements::CustomElementRegistryAssociation::Null,
+    );
+    assert_registry_adoption_classification(&mut host, &[template], false, &[]);
+}
+
+#[test]
+fn registry_adoption_preserves_parented_and_explicit_subtrees() {
+    let vm = new_storage_test_vm("https://registry-removal.test/");
+    let mut host = vm._context_host.borrow_mut();
+    let parent = host.dom_host_mut().create_element("div");
+    let root = host.dom_host_mut().create_element("p");
+    assert!(host.dom_host_mut().append_child(parent, root));
+    assert_registry_adoption_classification(&mut host, &[root], true, &[root]);
+
+    let shadow = host
+        .dom_host_mut()
+        .attach_shadow_root(parent, "open")
+        .unwrap();
+    assert!(host.dom_host_mut().append_child(shadow, root));
+    assert_registry_adoption_classification(&mut host, &[root], true, &[root]);
+
+    let detached = host.dom_host_mut().create_element("section");
+    assert!(host.dom_host_mut().append_child(detached, parent));
+    host.set_custom_element_registry_association(
+        root,
+        crate::custom_elements::CustomElementRegistryAssociation::Null,
+    );
+    assert_registry_adoption_classification(&mut host, &[detached], true, &[root]);
+}
+
+#[test]
+fn registry_adoption_preserves_fresh_roots_in_scoped_documents() {
+    let mut vm = new_storage_test_vm("https://registry-removal.test/");
+    vm.eval("globalThis.registryForRemoval = new CustomElementRegistry()")
+        .unwrap();
+    let mut host = vm._context_host.borrow_mut();
+    assert!(!host.has_explicit_custom_element_registry_associations());
+    assert!(host.document_uses_scoped_custom_element_registries(host.document_handle()));
+    let root = host.dom_host_mut().create_element("section");
+    let child = host.dom_host_mut().create_element("p");
+    assert!(host.dom_host_mut().append_child(root, child));
+    assert_registry_adoption_classification(&mut host, &[root], true, &[root, child]);
+}
+
 #[test]
 fn custom_element_registry_promise_resolution_allows_constructor_then_getter_reentry() {
     let mut vm = new_storage_test_vm("https://registry-promise-reentry.test/");
