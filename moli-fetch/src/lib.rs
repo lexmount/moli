@@ -33,6 +33,7 @@ mod streaming_response;
 #[cfg(test)]
 mod tests;
 mod upload;
+mod upload_body;
 mod url_pattern;
 
 pub use auth_retry::AuthRetryBudget;
@@ -109,4 +110,5 @@ pub use runtime::{
 };
 pub use streaming_response::{StreamingHtmlResponse, StreamingRawResponse};
 pub use upload::{UploadEvent, UploadObserver, UploadReport};
+pub use upload_body::{UploadBody, UploadBodyError, UploadBodySender};
 pub use url_pattern::url_pattern_matches;

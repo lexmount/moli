@@ -808,7 +808,7 @@ async fn send_http11_fallback_response(
     }
 }
 
-fn h2_tls_acceptor() -> tokio_rustls::TlsAcceptor {
+pub(super) fn h2_tls_acceptor() -> tokio_rustls::TlsAcceptor {
     use tokio_rustls::rustls::{
         ServerConfig,
         pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},

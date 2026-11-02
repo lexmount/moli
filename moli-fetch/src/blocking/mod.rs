@@ -52,6 +52,8 @@ const CURL_OPTION_PROTOCOLS_STR: curl_sys::CURLoption = curl_sys::CURLOPTTYPE_OB
 const CURL_OPTION_REDIR_PROTOCOLS_STR: curl_sys::CURLoption =
     curl_sys::CURLOPTTYPE_OBJECTPOINT + 319;
 const CURL_HTTP_PROTOCOL_ALLOWLIST: &[u8; 11] = b"http,https\0";
+// Stable curl.h long option, absent from the pinned curl-sys Rust exports.
+const CURL_OPTION_KEEP_SENDING_ON_ERROR: curl_sys::CURLoption = curl_sys::CURLOPTTYPE_LONG + 245;
 // Leave enough of the default page deadline to settle a failed DCL-critical
 // child request and continue parsing. Main navigations retain caller policy.
 const DEFAULT_BROWSER_SUBRESOURCE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -667,11 +669,35 @@ pub(crate) fn configure_easy(
             .context("failed to set curl connect timeout")?;
     }
 
-    let curl_http_version = match http_version {
-        RequestHttpVersion::PreferHttp2 => HttpVersion::V2TLS,
-        RequestHttpVersion::Http1Only => HttpVersion::V11,
+    let streaming_upload = request.upload_body.is_some();
+    // Chromium's half-duplex fetch finishes the upload before settling even
+    // when the server has already replied with a redirect or error status.
+    let result = unsafe {
+        curl_sys::curl_easy_setopt(
+            easy.raw(),
+            CURL_OPTION_KEEP_SENDING_ON_ERROR,
+            c_long::from(streaming_upload),
+        )
+    };
+    if result != curl_sys::CURLE_OK {
+        return Err(curl::Error::new(result))
+            .context("failed to configure early-response upload handling");
+    }
+    let curl_http_version = match (streaming_upload, http_version) {
+        (true, _) => {
+            anyhow::ensure!(
+                request_url.scheme() == "https",
+                "streaming request bodies require HTTP/2 over HTTPS"
+            );
+            HttpVersion::V2PriorKnowledge
+        }
+        (false, RequestHttpVersion::PreferHttp2) => HttpVersion::V2TLS,
+        (false, RequestHttpVersion::Http1Only) => HttpVersion::V11,
     };
     if let Err(error) = easy.http_version(curl_http_version) {
+        if streaming_upload {
+            return Err(error).context("failed to require HTTP/2 for a streaming upload");
+        }
         debug!(url = %request_url, ?http_version, "failed to configure HTTP version for request: {error}");
     }
     // Do not enable CURLOPT_PIPEWAIT here. Moli often discovers a burst
@@ -700,6 +726,7 @@ pub(crate) fn configure_easy(
         .context("failed to configure response content decoding")?;
     easy.get_mut()
         .begin_dictionary_response(request, request_url);
+    easy.get_mut().begin_upload_body(request)?;
 
     // TLS client identities are Fetch credentials. Check each redirect target;
     // curl also uses the client certificate configuration to match reusable
@@ -719,25 +746,36 @@ pub(crate) fn configure_easy(
     easy.url(transport_url.as_str())
         .with_context(|| anyhow!("failed to set curl request url to {}", request_url))?;
 
-    match request.method.as_str() {
-        "GET" => easy.get(true).context("failed to configure GET request")?,
-        "HEAD" => easy
-            .nobody(true)
-            .context("failed to configure HEAD request")?,
-        "POST" => {
-            easy.post(true)
-                .context("failed to configure POST request")?;
-            let body_bytes = request.body.as_deref().unwrap_or(&[]);
-            easy.post_fields_copy(body_bytes)
-                .context("failed to set POST body")?;
-        }
-        method => {
-            easy.custom_request(method)
-                .with_context(|| anyhow!("failed to configure {method} request"))?;
-            // Fetch requires Content-Length: 0 for a bodyless PUT, just as for POST.
-            if request.body.is_some() || method == "PUT" {
-                easy.post_fields_copy(request.body.as_deref().unwrap_or(&[]))
-                    .context("failed to set custom request body")?;
+    if streaming_upload {
+        anyhow::ensure!(
+            !matches!(request.method.as_str(), "GET" | "HEAD"),
+            "GET and HEAD requests cannot have streaming bodies"
+        );
+        easy.upload(true)
+            .context("failed to configure streaming request upload")?;
+        easy.custom_request(&request.method)
+            .context("failed to configure streaming request method")?;
+    } else {
+        match request.method.as_str() {
+            "GET" => easy.get(true).context("failed to configure GET request")?,
+            "HEAD" => easy
+                .nobody(true)
+                .context("failed to configure HEAD request")?,
+            "POST" => {
+                easy.post(true)
+                    .context("failed to configure POST request")?;
+                let body_bytes = request.body.as_deref().unwrap_or(&[]);
+                easy.post_fields_copy(body_bytes)
+                    .context("failed to set POST body")?;
+            }
+            method => {
+                easy.custom_request(method)
+                    .with_context(|| anyhow!("failed to configure {method} request"))?;
+                // Fetch requires Content-Length: 0 for a bodyless PUT, just as for POST.
+                if request.body.is_some() || method == "PUT" {
+                    easy.post_fields_copy(request.body.as_deref().unwrap_or(&[]))
+                        .context("failed to set custom request body")?;
+                }
             }
         }
     }
@@ -792,6 +830,10 @@ pub(crate) fn configure_easy(
     }
 
     let mut has_content_type_header = false;
+    if streaming_upload {
+        suppress_curl_generated_header(&mut headers, "Expect")
+            .context("failed to suppress curl streaming upload expectation")?;
+    }
     for (name, value) in outgoing_headers.iter() {
         has_content_type_header |= name.eq_ignore_ascii_case("content-type");
         append_curl_request_header(&mut headers, name, value)

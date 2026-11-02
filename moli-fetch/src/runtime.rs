@@ -19,14 +19,14 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::{Receiver, Sender};
-use curl::easy::{Easy2, Handler, InfoType, WriteError};
+use curl::easy::{Easy2, Handler, InfoType, ReadError, WriteError};
 use moli_cookie_jar::{
     NetworkCookieRequestContext, SharedBrowserCookieStore, StoredCookieQueryReport,
     advance_cookie_request_context,
 };
 use moli_curl::{
     CurlHttpSender, CurlMultiCompletion, CurlMultiJob, CurlMultiRuntime, CurlMultiRuntimeConfig,
-    CurlOriginKey,
+    CurlOriginKey, CurlTransferId,
 };
 use moli_url_policy::ensure_http_network_transport_url;
 use parking_lot::Mutex;
@@ -761,6 +761,15 @@ struct RuntimeOwner {
 }
 
 impl RuntimeOwner {
+    fn bind_upload_read_wake(&self, body: Option<crate::UploadBody>, id: CurlTransferId) {
+        if let Some(body) = body {
+            let sender = self.curl_http.clone();
+            body.bind_read_wake(move || {
+                sender.resume_read(id);
+            });
+        }
+    }
+
     fn prepare_request(
         &self,
         restarts: &SharedNavigationClientHintRestarts,
@@ -1045,6 +1054,7 @@ impl RuntimeOwner {
             request_extra_info,
             response_policy: prepared_request.response_policy,
         };
+        let upload_body = context.job.request.upload_body.clone();
         let curl_job = CurlMultiJob {
             easy,
             origin: context.job.origin_key.clone(),
@@ -1059,7 +1069,10 @@ impl RuntimeOwner {
             context: ActiveTransferContext::Buffered(Box::new(context)),
         };
         match self.curl_http.submit(curl_job) {
-            Ok(_) => Ok(JobOutcome::Submitted),
+            Ok(id) => {
+                self.bind_upload_read_wake(upload_body, id);
+                Ok(JobOutcome::Submitted)
+            }
             Err(error) => Err((
                 error
                     .job
@@ -1270,6 +1283,7 @@ impl RuntimeOwner {
             request_cookie_header: cookie_header,
             effective_request: prepared_request.request,
         };
+        let upload_body = context.job.request.upload_body.clone();
         let curl_job = CurlMultiJob {
             easy,
             origin: context.job.origin_key.clone(),
@@ -1284,7 +1298,10 @@ impl RuntimeOwner {
             context: ActiveTransferContext::Streaming(Box::new(context)),
         };
         match self.curl_http.submit(curl_job) {
-            Ok(_) => Ok(StreamingJobOutcome::Submitted),
+            Ok(id) => {
+                self.bind_upload_read_wake(upload_body, id);
+                Ok(StreamingJobOutcome::Submitted)
+            }
             Err(error) => {
                 let context = error
                     .job
@@ -1509,6 +1526,7 @@ impl RuntimeOwner {
             stale_cached_lookup,
             effective_request: prepared_request.request,
         };
+        let upload_body = context.job.request.upload_body.clone();
         let curl_job = CurlMultiJob {
             easy,
             origin: context.job.origin_key.clone(),
@@ -1523,7 +1541,10 @@ impl RuntimeOwner {
             context: ActiveTransferContext::StreamingRaw(Box::new(context)),
         };
         match self.curl_http.submit(curl_job) {
-            Ok(_) => Ok(StreamingJobOutcome::Submitted),
+            Ok(id) => {
+                self.bind_upload_read_wake(upload_body, id);
+                Ok(StreamingJobOutcome::Submitted)
+            }
             Err(error) => {
                 let context = error
                     .job
@@ -1544,6 +1565,13 @@ impl RuntimeOwner {
         state: &mut OwnerState,
         mut completion: RuntimeCurlCompletion,
     ) {
+        if let Some(upload) = completion
+            .easy
+            .as_ref()
+            .and_then(|easy| easy.get_ref().upload_body.as_ref())
+        {
+            upload.complete_transport(completion.result.is_ok());
+        }
         if let Some(observer) = completion
             .easy
             .as_ref()
@@ -3113,6 +3141,7 @@ pub(crate) struct FetchTransferHandler {
     response_body_observed: bool,
     network_observation_recorder: Option<NetworkObservationRecorder>,
     upload_observer: Option<crate::UploadObserver>,
+    upload_body: Option<Box<crate::upload_body::UploadBodyReader>>,
     upload_response_status: Option<u16>,
     upload_request_is_connect: bool,
     proxy_connect_response_recorder: ProxyConnectResponseRecorder,
@@ -3130,6 +3159,16 @@ enum FetchResponseCollector {
 }
 
 impl FetchTransferHandler {
+    pub(crate) fn begin_upload_body(&mut self, request: &Request) -> Result<()> {
+        self.upload_body = request
+            .upload_body
+            .as_ref()
+            .map(crate::UploadBody::claim_reader)
+            .transpose()?
+            .map(Box::new);
+        Ok(())
+    }
+
     fn curl_timing(&self) -> Option<crate::FetchCurlTiming> {
         self.response_progress()
             .and_then(ResponseProgress::curl_timing)
@@ -3171,6 +3210,7 @@ impl FetchTransferHandler {
             response_body_observed: false,
             network_observation_recorder: None,
             upload_observer: None,
+            upload_body: None,
             upload_response_status: None,
             upload_request_is_connect: false,
             proxy_connect_response_recorder: ProxyConnectResponseRecorder::default(),
@@ -3330,6 +3370,12 @@ impl FetchTransferHandler {
 }
 
 impl Handler for FetchTransferHandler {
+    fn read(&mut self, output: &mut [u8]) -> std::result::Result<usize, ReadError> {
+        self.upload_body
+            .as_mut()
+            .map_or(Ok(0), |body| body.read(output))
+    }
+
     fn ssl_ctx(&mut self, context: *mut std::ffi::c_void) -> Result<(), curl::Error> {
         if let Some(timing) = self.response_progress() {
             timing.mark_tls_context_started();
@@ -3492,6 +3538,9 @@ impl Handler for FetchTransferHandler {
         };
         if keep_going && let Some(observer) = &self.upload_observer {
             observer.bytes_sent(ulnow as u64);
+        }
+        if keep_going && let Some(upload) = &mut self.upload_body {
+            upload.observe_progress(ulnow as u64);
         }
         keep_going
     }

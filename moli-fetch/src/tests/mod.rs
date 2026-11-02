@@ -23,6 +23,7 @@ mod response_timing;
 mod support;
 mod tls_credentials;
 mod upload;
+mod upload_body;
 mod websocket_transport;
 mod webtransport_transport;
 

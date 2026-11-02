@@ -148,6 +148,7 @@ impl<H: Handler, C> CurlRuntimeOwner<H, C> {
     fn handle_command(&mut self, command: CurlRuntimeCommand<H, C>) {
         match command {
             CurlRuntimeCommand::Request { transfer_id, job } => self.http.admit(transfer_id, job),
+            CurlRuntimeCommand::ResumeRead(id) => self.http.resume_read(&mut self.multi, id),
             CurlRuntimeCommand::Shutdown => self.close(),
         }
     }

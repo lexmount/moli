@@ -1115,6 +1115,7 @@ static CURLcode on_stream_frame(struct Curl_cfilter *cf,
     if(stream->ws)
       stream->ws->recv_eos = TRUE;
     if(!stream->closed && !stream->body_eos &&
+       !data->set.http_keep_sending_on_error &&
        ((stream->status_code >= 400) || (stream->status_code < 200))) {
       /* The server did not give us a positive response and we are not
        * done uploading the request body. We need to stop doing that and
