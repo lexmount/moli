@@ -400,6 +400,8 @@ impl JsContextHost {
                         .unwrap_or_default(),
                     cross_origin_isolated: refresh_policy_source
                         .is_some_and(|policy| policy.cross_origin_isolated),
+                    coop_coep_isolation: refresh_policy_source
+                        .is_some_and(|policy| policy.coop_coep_isolation),
                     document_content_security_policies: refresh_policy_source
                         .map(|policy| policy.document_content_security_policies.clone())
                         .unwrap_or_default(),
