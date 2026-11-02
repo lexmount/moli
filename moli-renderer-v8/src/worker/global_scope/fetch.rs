@@ -1,5 +1,5 @@
 use super::*;
-use crate::network_host::{FetchArgumentError, convert_fetch_arguments};
+use crate::network_host::{FetchArgumentError, combined_headers_entries, convert_fetch_arguments};
 use crate::service_worker_runtime::{
     ServiceWorkerClientId, ServiceWorkerDirectFetchResult, ServiceWorkerFetchDispatch,
     ServiceWorkerFetchRequest, ServiceWorkerFetchRequestMetadata, ServiceWorkerRequestDestination,
@@ -2048,6 +2048,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             return;
         }
     };
+    let request_headers = combined_headers_entries(&request_headers);
     let headers = merge_worker_request_headers(
         &extra_http_headers,
         &moli_fetch::RequestHeaders::from_byte_strings(&request_headers)

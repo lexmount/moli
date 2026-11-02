@@ -18,6 +18,7 @@ fn assert_initial_worker_auth_network_headers(headers: Option<&[(String, String)
 
 mod fetch_network;
 mod file_and_xhr;
+mod header_names;
 mod opfs_storage;
 mod websockets;
 mod worker_globals;
