@@ -3,9 +3,8 @@ mod request;
 mod service_worker;
 
 use self::paths::{
-    local_fetch_error_text, record_intercepted_fetch, reject_bad_port_fetch, reject_blocked_fetch,
-    reject_csp_fetch, reject_offline_fetch, reject_url_policy_fetch, resolve_local_fetch,
-    spawn_network_fetch,
+    record_intercepted_fetch, reject_bad_port_fetch, reject_blocked_fetch, reject_csp_fetch,
+    reject_offline_fetch, reject_url_policy_fetch, resolve_local_fetch, spawn_network_fetch,
 };
 use self::request::prepare_window_fetch_request;
 use self::service_worker::dispatch_service_worker_fetch;
@@ -298,8 +297,7 @@ fn window_fetch_callback_in_relevant_realm<'s>(
             return;
         }
         Ok(None) => {}
-        Err(error) => {
-            let message = local_fetch_error_text(&error);
+        Err(message) => {
             let exception = v8_string(scope, &message)
                 .map(|message| v8::Exception::type_error(scope, message))
                 .unwrap_or_else(|| v8::undefined(scope).into());

@@ -23,6 +23,7 @@ pub(super) fn record_intercepted_fetch(
         prepared.fetch_context,
         v8::Global::new(scope, resolver),
         prepared.keepalive,
+        prepared.integrity.clone(),
         prepared.connect_policy,
         prepared.csp_report_context,
         prepared.credentials_mode,
@@ -150,22 +151,40 @@ pub(super) fn local_fetch_error_text(error: &LocalUrlError) -> String {
 pub(super) fn resolve_local_fetch(
     host: &mut JsContextHost,
     prepared: &PreparedWindowFetchRequest,
-) -> Result<Option<Response>, LocalUrlError> {
+) -> Result<Option<Response>, String> {
     let Some(result) = local_url_response_result(&prepared.resolved_url, &prepared.method) else {
         return Ok(None);
     };
-    let response = result.inspect_err(|error| {
-        host.record_subresource_network(SubresourceNetworkRecord::failure(
-            prepared.frame_id.clone(),
-            prepared.document_url.clone(),
-            prepared.resolved_url.clone(),
-            prepared.method.clone(),
-            prepared.request_headers.clone(),
-            request_body_text(&prepared.body),
-            SubresourceResourceType::Fetch,
-            local_fetch_error_text(error),
-        ));
-    })?;
+    let response = result
+        .map_err(|error| local_fetch_error_text(&error))
+        .and_then(|response| {
+            let readable = network_response_filter(
+                &prepared.request_origin,
+                &response.head(),
+                prepared.request_mode,
+            )
+            .is_none_or(|filter| filter.is_readable());
+            validate_fetch_response_integrity(
+                &prepared.integrity,
+                &prepared.method,
+                response.status,
+                readable,
+                response.body_bytes(),
+            )?;
+            Ok(response)
+        })
+        .inspect_err(|error| {
+            host.record_subresource_network(SubresourceNetworkRecord::failure(
+                prepared.frame_id.clone(),
+                prepared.document_url.clone(),
+                prepared.resolved_url.clone(),
+                prepared.method.clone(),
+                prepared.request_headers.clone(),
+                request_body_text(&prepared.body),
+                SubresourceResourceType::Fetch,
+                error.clone(),
+            ));
+        })?;
     host.record_subresource_network(
         SubresourceNetworkRecord::success_with_body(
             prepared.frame_id.clone(),
@@ -255,6 +274,7 @@ pub(super) fn spawn_network_fetch(
         prepared.fetch_context,
         v8::Global::new(scope, resolver),
         prepared.keepalive,
+        prepared.integrity.clone(),
         prepared.connect_policy,
         prepared.csp_report_context,
         Some(cancel_handle.clone()),

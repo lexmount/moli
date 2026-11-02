@@ -37,5 +37,5 @@ pub(crate) use self::materialize::{
     materialize_response_object_body, materialize_response_object_body_with_chunk_callback,
     materialize_response_object_head,
     materialize_response_object_head_for_service_worker_respond_with,
-    materialized_body_bytes_from_value, network_response_filter,
+    materialized_body_bytes_from_value, network_response_filter, response_has_null_body,
 };
