@@ -209,7 +209,7 @@ fn fragment_html_uses_context_custom_element_registry_association() {
                 mode: "open",
                 customElementRegistry: null
               });
-              const nullContainer = document.createElement("div");
+              const nullContainer = document.createElement("div", { customElementRegistry: null });
               nullShadow.appendChild(nullContainer);
               nullContainer.innerHTML =
                 "<wpt-fragment-null id='null-root'>" +
@@ -1615,4 +1615,60 @@ fn range_clone_and_contextual_fragment_deliver_initial_attribute_reactions() {
         result,
         "constructed|id:null:source||true||source||constructed|id:null:fragment||true||fragment"
     );
+}
+
+#[test]
+fn custom_element_registry_native_lookups_ignore_public_window_getters() {
+    let mut vm = new_storage_html_test_vm("https://registry-native-lookup.test/");
+    vm.eval(
+        r#"
+        (() => {
+            const run = function () {
+                const expected = customElements;
+                const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'customElements');
+                let reads = 0;
+                Object.defineProperty(globalThis, 'customElements', {
+                    configurable: true,
+                    get() {
+                        reads++;
+                        throw new Error('native registry lookup invoked the public getter');
+                    }
+                });
+                try {
+                    const element = document.createElement('article');
+                    if (element.customElementRegistry !== expected) {
+                        throw new Error('element lost its intrinsic default registry');
+                    }
+                    const host = document.createElement('section');
+                    const root = host.attachShadow({mode: 'open'});
+                    const child = document.createElement('em');
+                    root.appendChild(child);
+                    if (child.customElementRegistry !== expected || reads !== 0) {
+                        throw new Error('shadow subtree consulted the public registry getter');
+                    }
+                } finally {
+                    if (descriptor) {
+                        Object.defineProperty(globalThis, 'customElements', descriptor);
+                    } else {
+                        delete globalThis.customElements;
+                    }
+                }
+                return reads;
+            };
+            const topReads = run();
+            const frame = document.createElement('iframe');
+            document.body.appendChild(frame);
+            let childReads;
+            try {
+                childReads = frame.contentWindow.eval('(' + run.toString() + ')()');
+            } finally {
+                frame.remove();
+            }
+            if (topReads !== 0 || childReads !== 0) {
+                throw new Error('native registry lookup must bypass author getters in every realm');
+            }
+        })()
+    "#,
+    )
+    .expect("native default registry lookup must use intrinsic realm data");
 }
