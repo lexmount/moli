@@ -1189,6 +1189,8 @@ impl PageVm {
             RendererPageCommand::HasPendingLocationNavigation => {
                 Ok(RendererPageReply::Bool(self.vm().has_pending_location_navigation()))
             }
+            #[cfg(feature = "ace-protocol")]
+            RendererPageCommand::AcePageTask(task) => self.execute_ace_page_task(task),
             #[cfg(debug_assertions)]
             RendererPageCommand::PanicForTesting => {
                 panic!("renderer page command panicked for testing")

@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 license.workspace = true
 
+[features]
+ace-protocol = ["moli-protocol/ace-protocol"]
+
 [dependencies]
 anyhow = "1.0.100"
 axum = { version = "0.8.6", features = ["ws"] }

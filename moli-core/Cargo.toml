@@ -6,6 +6,7 @@ edition = "2024"
 
 [features]
 default = []
+ace-protocol = ["moli-renderer-v8/ace-protocol"]
 # Compile renderer-only testing and diagnostic projections. This is not part of
 # normal browser behavior and must stay disabled in production builds.
 test-support = ["moli-renderer-v8/test-support"]

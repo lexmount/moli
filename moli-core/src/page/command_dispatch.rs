@@ -361,6 +361,8 @@ impl Page {
             RendererPageReply::ElementClickDispatch(_) => "an element click dispatch reply",
             RendererPageReply::Bool(_) => "a bool reply",
             RendererPageReply::OptionalBool(_) => "an optional bool reply",
+            #[cfg(feature = "ace-protocol")]
+            RendererPageReply::AcePageTask(_) => "AcePageTask",
             RendererPageReply::InputDispatchOutcome(_) => "an input dispatch outcome reply",
             RendererPageReply::RuntimeInspectorProtocolMessages(_) => {
                 "runtime inspector protocol messages"
@@ -492,6 +494,12 @@ impl Page {
             RendererPageReply::Unit => "a unit reply",
             RendererPageReply::NativeCommandReady(_) => "an unsettled native frontend reply",
             RendererPageReply::NativeCommandPublished => "a published native frontend reply",
+            // Another dependency may enable the renderer's ACE feature without
+            // enabling this crate's feature. Keep normal replies exhaustive when
+            // ACE is enabled here, and tolerate that mixed configuration otherwise.
+            #[cfg(not(feature = "ace-protocol"))]
+            #[allow(unreachable_patterns)]
+            _ => "an unknown renderer reply",
         }
     }
 

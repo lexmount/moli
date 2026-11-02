@@ -27,6 +27,8 @@ use uuid::Uuid;
 pub use crate::config::ServerConfig;
 pub use instance_control::{BrowserInstanceControl, InstanceCommand};
 
+#[cfg(feature = "ace-protocol")]
+pub mod browser_runtime;
 mod cdp;
 mod cdp_agent_host;
 mod cdp_owner;
@@ -52,6 +54,8 @@ const JSON_DISCOVERY_PATH: &str = "/json";
 
 #[derive(Debug, Clone)]
 pub struct ProtocolServer {
+    #[cfg(feature = "ace-protocol")]
+    runtime_ready: Option<browser_runtime::RuntimeReadyCallback>,
     config: ServerConfig,
     storage_partition: Arc<StoragePartitionState>,
     navigation_runtime_config: NavigationRuntimeConfig,
@@ -123,6 +127,8 @@ impl ProtocolServer {
                 .set_http_cache_dir(Some(http_cache_root.display().to_string()));
         }
         Self {
+            #[cfg(feature = "ace-protocol")]
+            runtime_ready: None,
             config,
             storage_partition,
             navigation_runtime_config,
@@ -160,6 +166,8 @@ impl ProtocolServer {
         )?;
         app_state.remote_allow_origins = self.config.remote_allow_origins.clone();
 
+        #[cfg(feature = "ace-protocol")]
+        self.notify_runtime_ready(&app_state);
         serve_listener(listener, app_state).await
     }
 }
