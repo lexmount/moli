@@ -241,7 +241,9 @@ async fn local_scrapling_dynamic_fetcher_over_cdp_smoke() -> Result<()> {
     let mut protocol_server = spawn_moli_protocol_server(cdp_port)?;
     wait_for_protocol_server_cdp_discovery_ready(&mut protocol_server, cdp_port).await?;
 
-    let cdp_url = format!("ws://127.0.0.1:{cdp_port}/devtools/browser/moli-browser");
+    let cdp_url =
+        support::discover_browser_websocket_url((std::net::Ipv4Addr::LOCALHOST, cdp_port).into())
+            .await?;
     let fixture_url = fixture_server.url("/static");
     let output = run_local_scrapling_dynamic_fetcher_smoke_async(
         &python,

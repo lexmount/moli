@@ -85,10 +85,13 @@ async fn popup_navigation_uses_source_referrer_policy_and_window_features() {
         spawn_dedicated_fixture_server(referrer_fixture(), "popup-referrer");
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let parent_id = create_dynamic_target(&mut browser, 1).await;
     let mut parent = connect_dynamic_page(addr, &parent_id).await;
     send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;
@@ -155,10 +158,13 @@ async fn named_popup_navigation_uses_the_callers_referrer_policy() {
         spawn_dedicated_fixture_server(referrer_fixture(), "named-popup-cross-referrer");
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let parent_id = create_dynamic_target(&mut browser, 1).await;
     let mut parent = connect_dynamic_page(addr, &parent_id).await;
     send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;
@@ -207,10 +213,13 @@ async fn paused_popup_navigation_retains_accepted_referrer_context() {
         spawn_dedicated_fixture_server(referrer_fixture(), "paused-popup-referrer");
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let parent_id = create_dynamic_target(&mut browser, 1).await;
     let mut parent = connect_dynamic_page(addr, &parent_id).await;
     send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;

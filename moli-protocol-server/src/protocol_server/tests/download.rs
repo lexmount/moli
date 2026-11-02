@@ -69,9 +69,11 @@ async fn websocket_cdp_download_events_are_emitted_after_input_response() {
             .as_nanos()
     ));
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -323,9 +325,11 @@ async fn websocket_cdp_download_events_work_with_playwright_context_scoped_behav
             .as_nanos()
     ));
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -531,9 +535,11 @@ async fn websocket_cdp_page_download_events_do_not_require_browser_events_enable
             .as_nanos()
     ));
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -715,9 +721,11 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
             .as_nanos()
     ));
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -926,9 +934,11 @@ async fn websocket_cdp_page_navigate_direct_attachment_returns_is_download_and_k
             .as_nanos()
     ));
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -1192,9 +1202,11 @@ async fn websocket_cdp_page_navigate_post_parse_location_download_keeps_document
             .as_nanos()
     ));
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -1446,9 +1458,11 @@ async fn websocket_cdp_cancel_download_does_not_resume_stale_page_observer() {
             .as_nanos()
     ));
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -1723,9 +1737,11 @@ async fn websocket_cdp_completed_download_can_be_opened_as_io_stream() {
             .as_nanos()
     ));
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 

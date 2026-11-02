@@ -27,10 +27,13 @@ async fn popup_document_access_keeps_retained_functions_and_checks_borrowed_rece
     let base = format!("http://{fixture_addr}");
     let cross = format!("http://localhost:{}", fixture_addr.port());
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -98,10 +101,13 @@ async fn initial_popup_retirement_rejects_frames_created_by_navigation_cancellat
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -192,10 +198,13 @@ async fn initial_popup_commit_keeps_window_timers_and_service_worker_completion(
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -269,10 +278,13 @@ async fn isolated_popup_navigation_releases_indexed_db_connections() {
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -331,10 +343,13 @@ async fn iframe_popup_location_navigation_uses_incumbent_document_referrer() {
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -383,10 +398,13 @@ async fn cross_window_blank_reload_keeps_target_base_and_referrer() {
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -411,10 +429,13 @@ async fn cross_origin_location_functions_accept_other_location_receivers() {
     let base = format!("http://{fixture_addr}");
     let cross = format!("http://localhost:{}", fixture_addr.port());
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -457,10 +478,13 @@ async fn saved_popup_locations_cannot_navigate_a_replacement_document() {
     let base = format!("http://{fixture_addr}");
     let cross = format!("http://localhost:{}", fixture_addr.port());
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;

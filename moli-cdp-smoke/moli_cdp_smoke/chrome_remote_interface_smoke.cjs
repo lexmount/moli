@@ -72,7 +72,7 @@ async function main() {
   const discovery = await readJson(`${endpoint.replace(/\/$/, "")}/json/version`);
   const browserWebSocket = discovery.webSocketDebuggerUrl;
   assert(typeof browserWebSocket === "string" && browserWebSocket, "missing browser websocket");
-  const isMoli = browserWebSocket.endsWith("/devtools/browser/moli-browser");
+  const isMoli = typeof discovery["Moli-Version"] === "string";
   const results = [];
   const record = (name, data = {}) => results.push({name, ok: true, ...data});
 

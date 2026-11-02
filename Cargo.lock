@@ -3320,10 +3320,12 @@ dependencies = [
  "moli-protocol-cdp",
  "moli-protocol-webdriver-bidi",
  "moli-protocol-webdriver-classic",
+ "moli-test-support",
  "moli-trace",
  "parking_lot",
  "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "png",
+ "rand 0.10.3",
  "serde_json",
  "socket2",
  "thiserror",
@@ -3333,6 +3335,7 @@ dependencies = [
  "tower",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]

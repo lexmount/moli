@@ -24,11 +24,16 @@ def _read_json_url(url: str) -> Any:
         return json.loads(response.read().decode("utf-8"))
 
 
-async def discover_websocket_url(endpoint: str) -> str:
+async def discover_browser_version(endpoint: str) -> dict[str, Any]:
     version_url = endpoint.rstrip("/") + "/json/version"
     payload = await asyncio.to_thread(_read_json_url, version_url)
     if not isinstance(payload, dict):
         raise RawCdpError(f"CDP discovery response was not an object: {payload!r}")
+    return payload
+
+
+async def discover_websocket_url(endpoint: str) -> str:
+    payload = await discover_browser_version(endpoint)
     websocket_url = payload.get("webSocketDebuggerUrl")
     if not isinstance(websocket_url, str) or not websocket_url:
         raise RawCdpError(f"CDP discovery response did not include webSocketDebuggerUrl: {payload}")

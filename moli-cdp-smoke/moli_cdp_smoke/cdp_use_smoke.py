@@ -62,7 +62,7 @@ async def run(endpoint: str, fixture: str) -> dict[str, Any]:
         isinstance(browser_websocket, str) and bool(browser_websocket),
         "discovery payload has no browser websocket",
     )
-    is_moli = browser_websocket.endswith("/devtools/browser/moli-browser")
+    is_moli = isinstance(discovery.get("Moli-Version"), str)
     client = CDPClient(browser_websocket)
     results: list[dict[str, Any]] = []
     browser_context_id: str | None = None

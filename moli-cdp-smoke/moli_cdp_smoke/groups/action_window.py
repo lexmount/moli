@@ -9,7 +9,7 @@ from typing import Any
 from ..assertions import SmokeError, assert_equal, record, record_contract, wait_until
 from ..navigation import navigate as navigate_document
 from ..png_image import DecodedPng, decode_png
-from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_websocket_url
+from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_browser_version
 
 
 async def _response_for_id(
@@ -495,8 +495,8 @@ async def run_action_window_group(
     fixture: str,
     results: list[dict[str, Any]],
 ) -> None:
-    websocket_url = await discover_websocket_url(endpoint)
-    is_moli = websocket_url.endswith("/devtools/browser/moli-browser")
+    version = await discover_browser_version(endpoint)
+    is_moli = isinstance(version.get("Moli-Version"), str)
 
     client = await connect_raw_cdp(endpoint)
     context_id: str | None = None

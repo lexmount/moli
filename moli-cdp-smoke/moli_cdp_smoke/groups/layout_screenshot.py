@@ -12,7 +12,7 @@ from ..navigation import (
 )
 from ..jpeg_image import jpeg_dimensions
 from ..png_image import decode_png
-from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_websocket_url
+from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_browser_version
 from ..serve import start_moli_serve, stop_browser, wait_for_browser_endpoint
 
 
@@ -505,8 +505,8 @@ async def run_layout_screenshot_group(
     fixture: str,
     results: list[dict[str, Any]],
 ) -> None:
-    websocket_url = await discover_websocket_url(endpoint)
-    is_moli = websocket_url.endswith("/devtools/browser/moli-browser")
+    version = await discover_browser_version(endpoint)
+    is_moli = isinstance(version.get("Moli-Version"), str)
     client = await connect_raw_cdp(endpoint)
     target_id: str | None = None
     try:

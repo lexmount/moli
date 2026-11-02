@@ -23,6 +23,9 @@ use tokio::{
     time::{Duration, sleep},
 };
 
+mod cdp;
+pub use cdp::discover_browser_websocket_url;
+
 #[derive(Clone, Default)]
 struct FixtureRuntimeState {
     dynamic_stylesheet_dcl: Arc<FixtureEvent>,

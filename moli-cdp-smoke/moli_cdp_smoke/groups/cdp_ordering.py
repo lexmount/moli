@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from ..assertions import SmokeError, assert_equal, record_contract
-from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_websocket_url
+from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_browser_version
 
 
 CHROMIUM_SOURCE = "Chromium 145.0.7632.116 raw CDP calibration, 2026-10-01"
@@ -464,7 +464,7 @@ async def _paused_mutation(wire: _Wire, page: _Page, is_moli: bool) -> dict[str,
 
 
 async def run_cdp_ordering_group(endpoint: str, fixture_url: str, results: list[dict[str, Any]]) -> None:
-    is_moli = (await discover_websocket_url(endpoint)).endswith("/devtools/browser/moli-browser")
+    is_moli = isinstance((await discover_browser_version(endpoint)).get("Moli-Version"), str)
     scenarios = [
         ("native_terminal_notification_prefix", _native_prefix),
         ("isolated_world_notification_prefix", _world_prefix),
