@@ -687,6 +687,7 @@ fn raw_subresource_memory_cacheable_resource_type(request: &Request) -> bool {
             Some(
                 BrowserRequestMetadata::Fetch
                     | BrowserRequestMetadata::JsonModule
+                    | BrowserRequestMetadata::TextModule
                     | BrowserRequestMetadata::Manifest
                     | BrowserRequestMetadata::StyleModule
                     | BrowserRequestMetadata::Xhr
@@ -702,6 +703,7 @@ fn raw_subresource_memory_cacheable_headers(request: &Request) -> bool {
                 metadata,
                 BrowserRequestMetadata::Fetch
                     | BrowserRequestMetadata::JsonModule
+                    | BrowserRequestMetadata::TextModule
                     | BrowserRequestMetadata::Manifest
                     | BrowserRequestMetadata::StyleModule
                     | BrowserRequestMetadata::Xhr
