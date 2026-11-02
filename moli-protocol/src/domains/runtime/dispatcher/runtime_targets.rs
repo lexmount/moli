@@ -312,7 +312,7 @@ pub(super) async fn remap_bidi_node_shared_references_for_target_using(
     target: &DevToolsRuntimeTarget,
     command: &mut DevToolsCallFunctionCommand,
     realm_id: Option<&DevToolsRealmId>,
-) -> Result<(), DevToolsError> {
+) -> Result<Option<crate::conn::BidiChannelObjectGroupLease>, DevToolsError> {
     let owner = CommandOwnerScope::for_route(target.route.clone());
     let mut references = Vec::new();
     if let Some(this_parameter) = command.this_parameter.as_ref() {
@@ -335,8 +335,13 @@ pub(super) async fn remap_bidi_node_shared_references_for_target_using(
     });
     references.dedup();
     if references.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
+
+    // Node argument objects are temporary inspector roots, not client-owned
+    // handles. The existing scoped group also cleans up a partial remap or a
+    // cancelled command before execution reaches the explicit release.
+    let lease = workflow.state(|state| state.allocate_runtime_object_group_for_owner(&owner))??;
 
     let execution_context_id = if let Some(execution_context_id) = target.execution_context_id {
         Some(execution_context_id)
@@ -359,6 +364,7 @@ pub(super) async fn remap_bidi_node_shared_references_for_target_using(
             execution_context_id,
             &reference.shared_id,
             realm_id,
+            lease.name(),
         )
         .await?
         else {
@@ -374,7 +380,7 @@ pub(super) async fn remap_bidi_node_shared_references_for_target_using(
         }
     }
 
-    Ok(())
+    Ok(Some(lease))
 }
 
 pub(super) fn collect_bidi_node_shared_reference_paths(
@@ -429,6 +435,7 @@ pub(super) async fn remap_bidi_node_shared_id_for_target_using(
     execution_context_id: Option<i64>,
     shared_id: &str,
     realm_id: Option<&DevToolsRealmId>,
+    object_group: &str,
 ) -> Result<Option<DevToolsRemoteHandleId>, DevToolsError> {
     let is_internal_bidi_node_id = is_webdriver_bidi_node_shared_id(shared_id);
     let snapshot =
@@ -451,13 +458,14 @@ pub(super) async fn remap_bidi_node_shared_id_for_target_using(
         ));
     };
     let lookup_owner = owner.clone();
+    let group = object_group.to_owned();
     let Some(remote_object) = workflow
         .query(move |state| {
             state.prepare_runtime_resolve_node_query(
                 &lookup_owner,
                 backend_node_id,
                 execution_context_id,
-                None,
+                Some(group),
             )
         })
         .await?
@@ -487,6 +495,7 @@ pub(super) async fn remap_bidi_node_shared_id_for_target_using(
             remote_object,
             registration_id,
             realm,
+            object_group,
         )
     })?;
     Ok(Some(DevToolsRemoteHandleId::from(object_id)))

@@ -328,15 +328,20 @@ impl ClassicSessionManager {
         node_id: u32,
         reference: ClassicPageBoundDomReference,
     ) {
+        let owner = ClassicElementOwner {
+            node_id,
+            reference,
+            target_id: binding.target_id.clone(),
+            browsing_context_target_id: binding.browsing_context_target_id().to_owned(),
+        };
         self.element_owners.insert(
             (binding.session_id.clone(), element_id.to_owned()),
-            ClassicElementOwner {
-                node_id,
-                reference,
-                target_id: binding.target_id.clone(),
-                browsing_context_target_id: binding.browsing_context_target_id().to_owned(),
-            },
+            owner.clone(),
         );
+        // An imported alias must not replace an ID already returned to the client.
+        self.element_ids_by_owner
+            .entry((binding.session_id.clone(), owner))
+            .or_insert_with(|| element_id.to_owned());
     }
 
     fn resolve_element_owner(
@@ -551,6 +556,28 @@ impl ClassicSessionRuntimeHandle {
         command: AutomationCommand,
     ) -> Result<AutomationResult, DevToolsError> {
         self.execute_inner(command, None).await
+    }
+
+    pub(super) async fn webdriver_node_reference(
+        &self,
+        context: AutomationContext,
+        shared_id: String,
+    ) -> Result<Option<moli_protocol::WebDriverNodeReference>, DevToolsError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        let closed = || {
+            DevToolsError::new(
+                DevToolsErrorKind::NoSuchSession,
+                "Classic session runtime is closed",
+            )
+        };
+        self.tx
+            .send(ClassicSessionRuntimeRequest::WebDriverNodeReference {
+                context,
+                shared_id,
+                response_tx,
+            })
+            .map_err(|_| closed())?;
+        response_rx.await.map_err(|_| closed())?
     }
 
     pub(super) async fn execute_inner(
@@ -917,6 +944,12 @@ impl ClassicSessionRuntimeCommandExecution {
 }
 
 enum ClassicSessionRuntimeRequest {
+    WebDriverNodeReference {
+        context: AutomationContext,
+        shared_id: String,
+        response_tx:
+            oneshot::Sender<Result<Option<moli_protocol::WebDriverNodeReference>, DevToolsError>>,
+    },
     Execute {
         command: Box<AutomationCommand>,
         timeout: Option<Duration>,
@@ -1006,6 +1039,14 @@ async fn handle_classic_session_runtime_request(
     mut attached_bidi: Option<&mut ClassicAttachedBidiSocket>,
 ) -> ClassicSessionRuntimeRequestOutcome {
     match request {
+        ClassicSessionRuntimeRequest::WebDriverNodeReference {
+            context,
+            shared_id,
+            response_tx,
+        } => {
+            let _ = response_tx.send(scheduler.webdriver_node_reference(&context, &shared_id));
+            ClassicSessionRuntimeRequestOutcome::Continue
+        }
         ClassicSessionRuntimeRequest::Execute {
             command,
             timeout,

@@ -35,7 +35,7 @@ pub use conn::{
     OwnedProtocolWaitTask, ParsedCdpCommand, PendingCdpCommandDispatch,
     PendingDeferredMainDocumentLoadCompletion, PendingProtocolSchedulerWork,
     PendingRuntimeProtocolMessageDispatch, ProtocolOwnerClosed, ProtocolStateHandle,
-    ProtocolStateOwner, ProtocolWorkflowState, spawn_owned_protocol_wait,
+    ProtocolStateOwner, ProtocolWorkflowState, WebDriverNodeReference, spawn_owned_protocol_wait,
 };
 pub use conn::{
     AutomationCommandTaskStep, CompletedAutomationCommandDispatch, PendingAutomationCommandDispatch,

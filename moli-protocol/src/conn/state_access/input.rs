@@ -94,10 +94,21 @@ impl ProtocolWorkflowState<'_> {
     }
     pub(crate) fn finish_input_file_chooser_activation(
         self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         activation: PreparedFileChooserActivation,
         shared_id: DevToolsRemoteHandleId,
     ) -> Option<BackgroundProtocolEvent> {
-        activation.finish_event(self.connection, session_id, shared_id)
+        let (backend_node_id, frame_id) = activation.node_reference();
+        let frame_id = frame_id.to_owned();
+        let event =
+            activation.finish_event(self.connection, owner.session_id(), shared_id.clone())?;
+        self.register_webdriver_node_reference(
+            owner,
+            shared_id.into_string(),
+            backend_node_id,
+            Some(&frame_id),
+            true,
+        );
+        Some(event)
     }
 }

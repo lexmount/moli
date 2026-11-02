@@ -66,6 +66,9 @@ pub(crate) struct DevToolsSessionState {
     pub(crate) runtime_remote_object_groups: HashMap<String, String>,
     pub(crate) runtime_remote_object_realms: HashMap<String, String>,
     pub(crate) runtime_remote_object_aliases: HashMap<String, String>,
+    // Exported node identities outlive their Document so a first Classic use
+    // after navigation still reports stale. Entries contain no JS roots.
+    pub(crate) webdriver_node_references: HashMap<String, super::WebDriverNodeReference>,
     pub(crate) emitted_child_default_execution_context_ids: HashSet<i64>,
     pub(crate) inspector_session_state: InspectorSessionState,
     pub(crate) pending_inspector_awaits: TargetPendingInspectorAwaitRegistry,

@@ -199,7 +199,10 @@ lifecycle, error, and teardown coverage is still pending.
 
 WebdriverIO v9 has a separate pinned client smoke, also run by CI. It checks
 capability opt-in and the same navigation, form input, click, and link workflow
-in Classic opt-out, default BiDi, and explicit BiDi sessions:
+in Classic opt-out, default BiDi, and explicit BiDi sessions. BiDi sessions also
+check shared node identity through a Classic script round trip, preserve an
+existing Classic ID after importing the same node from BiDi, and check stale-node
+errors after navigation for a reference never previously used by Classic:
 
 ```bash
 npm ci --prefix moli-webdriver-smoke

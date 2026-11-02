@@ -706,6 +706,7 @@ pub use state::{
     IsolatedWorldDefinition, LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome,
     NavigationRequestLoadPolicy, NoContentNavigation, PageNavigationHistoryEntry, PageTargetHost,
     PendingNavigationHistoryUpdate, RuntimeBindingDefinition, TargetInfo, URL_BASE,
+    WebDriverNodeReference,
 };
 #[cfg(test)]
 pub(crate) use state::{

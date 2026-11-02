@@ -10,7 +10,7 @@ async fn websocket_bidi_node_references_work_in_classic_element_commands() {
         .as_str()
         .unwrap()
         .to_owned();
-    let url = classic_data_url_for_bidi_test("<!doctype html><h1>Ready</h1>");
+    let url = classic_data_url_for_bidi_test("<!doctype html><h1>Ready</h1><h2>Untouched</h2>");
     let navigation = send_bidi_command(
         &mut socket,
         2,
@@ -27,6 +27,16 @@ async fn websocket_bidi_node_references_work_in_classic_element_commands() {
     )
     .await;
     let shared_id = located["result"]["nodes"][0]["sharedId"].as_str().unwrap();
+    let untouched = send_bidi_command(
+        &mut socket,
+        30,
+        "browsingContext.locateNodes",
+        json!({"context": &context, "locator": {"type": "css", "value": "h2"}}),
+    )
+    .await;
+    let untouched_id = untouched["result"]["nodes"][0]["sharedId"]
+        .as_str()
+        .unwrap();
     let (status, text) = classic_request_status_on_server_with_body(
         addr,
         "GET",
@@ -65,17 +75,27 @@ async fn websocket_bidi_node_references_work_in_classic_element_commands() {
     )
     .await;
     assert_eq!(replaced["type"], "success");
-    let (_, stale) = classic_request_status_on_server_with_body(
+    for id in [shared_id, untouched_id] {
+        let (_, stale) = classic_request_status_on_server_with_body(
+            addr,
+            "GET",
+            &format!("/session/{session_id}/element/{id}/text"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(
+            stale["value"]["error"], "stale element reference",
+            "{stale}"
+        );
+    }
+    let (_, unknown) = classic_request_status_on_server_with_body(
         addr,
         "GET",
-        &format!("/session/{session_id}/element/{shared_id}/text"),
+        &format!("/session/{session_id}/element/moli:bidi-renderer-node:4294967295/text"),
         json!({}),
     )
     .await;
-    assert_eq!(
-        stale["value"]["error"], "stale element reference",
-        "{stale}"
-    );
+    assert_eq!(unknown["value"]["error"], "no such element", "{unknown}");
     let located_again = send_bidi_command(
         &mut socket,
         5,

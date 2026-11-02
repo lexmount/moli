@@ -298,6 +298,7 @@ pub(super) async fn materialize_devtools_script_node_remote_value_using(
         workflow,
         &owner,
         &object_snapshot.snapshot,
+        object_snapshot.frame_id.as_deref(),
     )
     .await;
     workflow.register_node_reference(
@@ -614,6 +615,7 @@ pub(super) async fn materialize_bidi_dom_collection_entries_using(
             workflow,
             &owner,
             &object_snapshot.snapshot,
+            object_snapshot.frame_id.as_deref(),
         )
         .await;
         workflow.register_node_reference(&owner, &object_id, realm_id, Some(shared_id.as_str()));
@@ -694,6 +696,7 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
             workflow,
             &owner,
             &object_snapshot.snapshot,
+            object_snapshot.frame_id.as_deref(),
         )
         .await;
         workflow.register_node_reference(&owner, &object_id, realm_id, Some(shared_id.as_str()));
@@ -861,6 +864,7 @@ pub(super) async fn register_bidi_node_bindings_for_snapshot_tree_using(
     workflow: &mut RuntimeWorkflow,
     owner: &CommandOwnerScope,
     snapshot: &DocumentNodeSnapshot,
+    frame_id: Option<&str>,
 ) {
     let mut entries = Vec::new();
     let mut stack = vec![snapshot];
@@ -869,15 +873,22 @@ pub(super) async fn register_bidi_node_bindings_for_snapshot_tree_using(
             entries.push((
                 webdriver_bidi_node_shared_id_for_backend_node_id(backend_node_id),
                 backend_node_id,
+                snapshot.is_element,
             ));
         }
         stack.extend(snapshot.shadow_roots.iter().rev());
         stack.extend(snapshot.children.iter().rev());
     }
 
-    for (shared_id, backend_node_id) in entries {
+    for (shared_id, backend_node_id, is_element) in entries {
         if let Err(error) = workflow
-            .register_node_binding(owner, shared_id.as_str(), backend_node_id)
+            .register_node_binding(
+                owner,
+                shared_id.as_str(),
+                backend_node_id,
+                frame_id,
+                is_element,
+            )
             .await
         {
             tracing::debug!(
