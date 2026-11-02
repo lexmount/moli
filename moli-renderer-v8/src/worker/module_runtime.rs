@@ -1791,6 +1791,7 @@ fn worker_module_browser_request_metadata(
 ) -> BrowserRequestMetadata {
     match module_type {
         WorkerModuleType::Json => BrowserRequestMetadata::JsonModule,
+        WorkerModuleType::Text => BrowserRequestMetadata::TextModule,
         WorkerModuleType::JavaScriptOrWebAssembly => graph_metadata,
     }
 }
@@ -1846,6 +1847,7 @@ pub(super) enum WorkerModuleType {
     // share this entry; the fetched MIME type selects the compiled record.
     JavaScriptOrWebAssembly,
     Json,
+    Text,
 }
 
 impl WorkerModuleType {
@@ -1860,6 +1862,7 @@ impl WorkerModuleType {
                 super::module_mime::ensure_worker_json_module_mime_from_headers(headers)?;
                 Ok(WorkerScriptResourceKind::JsonModule)
             }
+            Self::Text => Ok(WorkerScriptResourceKind::TextModule),
             Self::JavaScriptOrWebAssembly => {
                 if super::worker_response_has_webassembly_mime(headers) {
                     return Ok(WorkerScriptResourceKind::WebAssemblyModule);
@@ -1893,6 +1896,7 @@ struct WorkerModuleDependency {
 
 enum WorkerSyntheticModuleRecord {
     Json(String),
+    Text(String),
     WebAssembly(WasmModuleRecord),
 }
 
@@ -2084,6 +2088,10 @@ impl WorkerModuleGraph {
                 .source
                 .text_source()
                 .map(|source| WorkerSyntheticModuleRecord::Json(source.to_owned())),
+            WorkerModuleType::Text => record
+                .source
+                .text_source()
+                .map(|source| WorkerSyntheticModuleRecord::Text(source.to_owned())),
             WorkerModuleType::JavaScriptOrWebAssembly => None,
         }
     }
@@ -2444,7 +2452,10 @@ fn compile_worker_module_record(
     Vec<WorkerModuleRequest>,
     Option<WasmModuleRecord>,
 )> {
-    if key.module_type == WorkerModuleType::Json {
+    if matches!(
+        key.module_type,
+        WorkerModuleType::Json | WorkerModuleType::Text
+    ) {
         return compile_worker_synthetic_module_record(scope, source_url);
     }
     if let Some(bytes) = source.binary_source() {
@@ -2708,6 +2719,11 @@ fn worker_module_key_for_attributes(
     };
     match module_type {
         "json" => Ok(WorkerModuleKey::json(url.clone(), attributes.clone())),
+        "text" => Ok(WorkerModuleKey {
+            url: url.clone(),
+            module_type: WorkerModuleType::Text,
+            attributes: attributes.clone(),
+        }),
         other => Err(format!("module type `{other}` is not a valid module type")),
     }
 }
@@ -2966,6 +2982,10 @@ fn worker_synthetic_module_evaluation_steps<'s>(
         .get_slot::<RefCell<WorkerModuleGraph>>()
         .and_then(|graph| graph.borrow().synthetic_module_record_for(module))?;
     match synthetic {
+        WorkerSyntheticModuleRecord::Text(source) => {
+            let value = v8_string(scope, &source)?;
+            set_worker_synthetic_default_export(scope, module, value.into())
+        }
         WorkerSyntheticModuleRecord::Json(source) => {
             evaluate_worker_json_synthetic_module(scope, module, &source)
         }

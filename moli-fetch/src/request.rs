@@ -127,6 +127,7 @@ pub enum BrowserRequestMetadata {
     Font,
     Image,
     JsonModule,
+    TextModule,
     Manifest,
     Ping,
     Script,

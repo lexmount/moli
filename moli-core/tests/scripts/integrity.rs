@@ -143,6 +143,16 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
+        "/text-module.txt" => (
+            "200 OK",
+            "Content-Type: application/octet-stream\r\nCache-Control: no-store\r\n".to_owned(),
+            SCRIPT.to_owned(),
+        ),
+        "/text-module-preload.html" => (
+            "200 OK",
+            "Content-Type: text/html\r\n".to_owned(),
+            text_modules::preload_markup(),
+        ),
         "/document-referrer.html" | "/meta-policy.html" | "/meta-policy-fetch" => {
             document_referrer_dispatch::fixture_response(path, query, request.referer.as_deref())
         }
@@ -1167,3 +1177,6 @@ async fn service_worker_redirect_preserves_worker_response_filter() -> Result<()
     assert_integrity_results(result, &cases);
     Ok(())
 }
+
+#[path = "text_network.rs"]
+mod text_modules;
