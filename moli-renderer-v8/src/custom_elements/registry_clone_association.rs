@@ -1,4 +1,4 @@
-use super::registry::{CustomElementRegistryAssociation, CustomElementRegistryKey};
+use super::registry::CustomElementRegistryAssociation;
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
 pub(super) fn registry_association_for_clone_source(
@@ -7,16 +7,13 @@ pub(super) fn registry_association_for_clone_source(
     target_document: DomHandle,
 ) -> CustomElementRegistryAssociation {
     match host.effective_custom_element_registry_association(source) {
-        CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(
-            owner,
-            scoped_id,
-        )) => CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(
-            owner, scoped_id,
-        )),
+        CustomElementRegistryAssociation::Registry(key) if key.is_scoped() => {
+            CustomElementRegistryAssociation::Registry(key)
+        }
         CustomElementRegistryAssociation::Null => CustomElementRegistryAssociation::Null,
-        CustomElementRegistryAssociation::Registry(
-            CustomElementRegistryKey::Global(_) | CustomElementRegistryKey::Child(_, _),
-        ) => host.default_custom_element_registry_association_for_document(target_document),
+        CustomElementRegistryAssociation::Registry(_) => {
+            host.default_custom_element_registry_association_for_document(target_document)
+        }
     }
 }
 
@@ -34,15 +31,10 @@ pub(super) fn registry_association_for_import_clone_source(
     let target_default =
         host.default_custom_element_registry_association_for_document(target_document);
     match host.effective_custom_element_registry_association(source) {
-        CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(
-            owner,
-            scoped_id,
-        )) => Some(CustomElementRegistryAssociation::Registry(
-            CustomElementRegistryKey::Scoped(owner, scoped_id),
-        )),
+        CustomElementRegistryAssociation::Registry(key) if key.is_scoped() => {
+            Some(CustomElementRegistryAssociation::Registry(key))
+        }
         CustomElementRegistryAssociation::Null => Some(fallback_registry.unwrap_or(target_default)),
-        CustomElementRegistryAssociation::Registry(
-            CustomElementRegistryKey::Global(_) | CustomElementRegistryKey::Child(_, _),
-        ) => Some(target_default),
+        CustomElementRegistryAssociation::Registry(_) => Some(target_default),
     }
 }
