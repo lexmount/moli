@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     sync::Arc,
 };
 
@@ -28,11 +28,17 @@ pub(crate) enum FrameDocumentStylesheetAdmission {
 
 #[derive(Debug)]
 struct FrameDocumentStylesheetEntry {
-    node_ids: HashSet<NodeId>,
-    blocks_scripts: bool,
+    node_ids: HashMap<NodeId, bool>,
     import_roots: Vec<crate::document_runtime::ConnectedStyleImportRoot>,
     status: FrameDocumentStylesheetStatus,
     load_delay_token: Option<DocumentLoadDelayTokenId>,
+}
+
+impl FrameDocumentStylesheetEntry {
+    fn blocks_scripts(&self) -> bool {
+        matches!(self.status, FrameDocumentStylesheetStatus::Pending)
+            && self.node_ids.values().any(|blocking| *blocking)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -54,11 +60,13 @@ impl FrameDocumentStylesheetStore {
         let signature = input.signature().clone();
         let entries = self.documents.entry(owner).or_default();
         if let Some(entry) = entries.get_mut(&signature) {
-            let added = entry.node_ids.insert(input.node_id());
+            let added = entry
+                .node_ids
+                .insert(input.node_id(), input.blocks_scripts())
+                .is_none();
             if added {
                 entry.import_roots.extend(import_root);
             }
-            entry.blocks_scripts |= input.blocks_scripts();
             tracing::debug!(
                 owner = ?owner,
                 node_id = ?input.node_id(),
@@ -85,8 +93,7 @@ impl FrameDocumentStylesheetStore {
         entries.insert(
             signature.clone(),
             FrameDocumentStylesheetEntry {
-                node_ids: HashSet::from([input.node_id()]),
-                blocks_scripts: input.blocks_scripts(),
+                node_ids: HashMap::from([(input.node_id(), input.blocks_scripts())]),
                 import_roots: import_root.into_iter().collect(),
                 status: FrameDocumentStylesheetStatus::Pending,
                 load_delay_token: Some(load_delay_token),
@@ -99,7 +106,7 @@ impl FrameDocumentStylesheetStore {
             ?load_delay_token,
             pending_count = entries
                 .values()
-                .filter(|entry| entry.blocks_scripts && matches!(entry.status, FrameDocumentStylesheetStatus::Pending))
+                .filter(|entry| entry.blocks_scripts())
                 .count(),
             "accepted child parser stylesheet for document owner"
         );
@@ -142,20 +149,16 @@ impl FrameDocumentStylesheetStore {
             return false;
         };
         signatures.into_iter().any(|signature| {
-            entries.get(signature).is_some_and(|entry| {
-                entry.blocks_scripts
-                    && matches!(entry.status, FrameDocumentStylesheetStatus::Pending)
-            })
+            entries
+                .get(signature)
+                .is_some_and(|entry| entry.blocks_scripts())
         })
     }
 
     pub(crate) fn has_pending(&self, owner: FrameDocumentOwner) -> bool {
-        self.documents.get(&owner).is_some_and(|entries| {
-            entries.values().any(|entry| {
-                entry.blocks_scripts
-                    && matches!(entry.status, FrameDocumentStylesheetStatus::Pending)
-            })
-        })
+        self.documents
+            .get(&owner)
+            .is_some_and(|entries| entries.values().any(|entry| entry.blocks_scripts()))
     }
 
     pub(crate) fn import_roots_for_signature(
@@ -178,8 +181,21 @@ impl FrameDocumentStylesheetStore {
         self.documents
             .get(&owner)
             .and_then(|entries| entries.get(signature))
-            .map(|entry| entry.node_ids.iter().copied().collect())
+            .map(|entry| entry.node_ids.keys().copied().collect())
             .unwrap_or_default()
+    }
+
+    /// Revoke this processing's install and script-blocking authority without
+    /// discarding the shared resource or the token its completion must settle.
+    pub(crate) fn invalidate_owner(&mut self, node_id: NodeId) {
+        for entries in self.documents.values_mut() {
+            for entry in entries.values_mut() {
+                entry.node_ids.remove(&node_id);
+                entry
+                    .import_roots
+                    .retain(|root| root.owner.index() != node_id.index());
+            }
+        }
     }
 
     pub(crate) fn remove_document(&mut self, owner: FrameDocumentOwner) -> usize {
@@ -298,5 +314,47 @@ mod tests {
             "retired owner completion must not update replacement readiness"
         );
         assert!(store.blocks_signatures(replacement_owner, [input.signature()]));
+    }
+
+    #[test]
+    fn invalidated_child_owner_does_not_own_the_shared_terminal_or_block_scripts() {
+        let owner = owner();
+        let mut store = FrameDocumentStylesheetStore::default();
+        let stream = crate::parser::HtmlParser::SCRIPTING_ENABLED
+            .start_document(Url::parse("https://styles.test/").unwrap());
+        let outcome = stream.pump_parser_step(
+            "<!doctype html><link rel=stylesheet href='/shared.css' media=print><script>0</script>",
+        );
+        let nonblocking = outcome
+            .discovered_stylesheet_inputs
+            .into_iter()
+            .next()
+            .unwrap()
+            .with_node_id(NodeId::new(30));
+        let blocking = input(31, "https://styles.test/shared.css");
+        let token = DocumentLoadDelayTokenId(7);
+        assert!(matches!(
+            store.discover(owner, &nonblocking, None, || Some(token)),
+            FrameDocumentStylesheetAdmission::Start
+        ));
+        assert!(matches!(
+            store.discover(owner, &blocking, None, || panic!("shared fetch")),
+            FrameDocumentStylesheetAdmission::Joined
+        ));
+        assert!(store.has_pending(owner));
+        store.invalidate_owner(blocking.node_id());
+        assert!(
+            !store.has_pending(owner),
+            "only current subscribers can block scripts"
+        );
+        assert_eq!(
+            store.node_ids_for_signature(owner, blocking.signature()),
+            vec![nonblocking.node_id()]
+        );
+        assert_eq!(
+            store.apply_completion(owner, blocking.signature(), None),
+            Some(token),
+            "revoking an owner must not lose the shared request's load-delay token"
+        );
     }
 }

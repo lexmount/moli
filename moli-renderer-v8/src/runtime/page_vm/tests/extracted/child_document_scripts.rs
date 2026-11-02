@@ -449,6 +449,100 @@ async fn child_parser_replays_completed_stylesheet(imports: bool) {
     }).await;
 }
 
+#[tokio::test]
+async fn page_vm_child_parser_link_completion_requires_a_current_owner() {
+    for mutation in ["href", "same-url", "remove", "media"] {
+        child_parser_link_completion_after_mutation(mutation).await;
+    }
+}
+
+async fn child_parser_link_completion_after_mutation(mutation: &'static str) {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![(
+            "/old.css",
+            "HTTP/1.1 200 OK",
+            ":root { --old-sheet: stale; }".to_owned(),
+            Duration::ZERO,
+        )]).await;
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page")).unwrap();
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let local_executor = page_vm.local_executor.clone();
+        local_executor.run(async move {
+            // The browser has completed this scan before a child script can
+            // replace a parser-created, nonmatching link. The standalone VM
+            // fixture must establish the same admission boundary explicitly.
+            page_vm.vm_mut().document_runtime.queue_initial_connected_style_loads();
+            let child = format!("<link id=theme rel=stylesheet media=print href='{base_url}/old.css'><script>parent.__staleLinkScriptRan=true;</script>");
+            page_vm.vm_mut().eval(&format!(r#"
+                const root = document.documentElement || document.appendChild(document.createElement('html'));
+                const body = document.body || root.appendChild(document.createElement('body'));
+                globalThis.__staleFrame = document.createElement('iframe');
+                __staleFrame.srcdoc = {};
+                body.appendChild(__staleFrame);
+            "#, serde_json::to_string(&child)?))?;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::NavigationCommit, "stale CSS navigation",
+            ).await;
+            run_expected_child_realm_materialization_for_wait(&mut page_vm, "stale CSS realm").await;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::DocumentScriptReady, "nonblocking link permits script",
+            ).await;
+            assert_eq!(page_vm.vm_mut().eval("String(__staleLinkScriptRan)")?, "true");
+
+            // Keep the old terminal out of the selected dispatcher until after
+            // the element has changed. No wall-clock delay establishes order.
+            let queue = page_vm.page_resource_completion_queue();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            let old = loop {
+                if let Some((_, completion)) = queue.pop_front() {
+                    break completion;
+                }
+                tokio::time::timeout_at(deadline, wake_rx.recv()).await
+                    .expect("old stylesheet terminal must arrive")
+                    .expect("stylesheet owner wake route must stay open");
+            };
+            assert!(matches!(old.terminal(), RendererPageResourceTerminal::ChildBlockingStylesheet { .. }));
+            let action = match mutation {
+                "href" => "theme.href = 'data:text/css,:root%7B--new-sheet:current;%7D';",
+                "same-url" => "const original = theme.href; theme.href = 'data:text/css,:root%7B--new-sheet:current;%7D'; theme.href = original;",
+                "remove" => "theme.remove();",
+                "media" => "",
+                _ => unreachable!(),
+            };
+            page_vm.vm_mut().eval(&format!(r#"
+                globalThis.__staleTheme = __staleFrame.contentDocument.getElementById('theme');
+                {{ const theme = __staleTheme; {action} theme.media = 'screen'; }}
+            "#))?;
+            if mutation == "href" {
+                page_vm.vm_mut().prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+                while page_vm.vm_mut().eval("getComputedStyle(__staleFrame.contentDocument.documentElement).getPropertyValue('--new-sheet').trim()")? != "current" {
+                    if !page_vm.run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::StylesheetCompletion, &loader,
+                    ).await? {
+                        tokio::time::timeout_at(deadline, wake_rx.recv()).await
+                            .expect("replacement stylesheet terminal must arrive")
+                            .expect("stylesheet owner wake route must stay open");
+                    }
+                }
+                assert_eq!(page_vm.vm_mut().eval("getComputedStyle(__staleFrame.contentDocument.documentElement).getPropertyValue('--new-sheet').trim()")?, "current");
+            }
+            page_vm.apply_selected_page_resource_completion_turn(old)?;
+            assert_eq!(page_vm.vm_mut().eval("getComputedStyle(__staleFrame.contentDocument.documentElement).getPropertyValue('--old-sheet').trim()")?,
+                if mutation == "media" { "stale" } else { "" },
+                "only the element's current stylesheet processing can install a terminal: {mutation}");
+            if mutation == "href" {
+                assert_eq!(page_vm.vm_mut().eval("getComputedStyle(__staleFrame.contentDocument.documentElement).getPropertyValue('--new-sheet').trim()")?, "current",
+                    "the old response must not replace an already installed newer stylesheet");
+            }
+            Ok::<_, anyhow::Error>(())
+        }).await.expect("stale child stylesheet fixture");
+        server.await.expect("old stylesheet server");
+    }).await;
+}
+
 async fn child_parser_stylesheet_media(media: &'static str, imports: bool, blocks_scripts: bool) {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_concurrent_path_response_http_server(vec![(
