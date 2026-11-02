@@ -37,6 +37,7 @@ pub(crate) use browser_identity::BaseBrowserIdentityOverrideState;
 pub use identity::DevToolsDocumentResidenceIdentity;
 pub use identity::TargetPageResidenceIdentity as DevToolsPageResidenceIdentity;
 pub use identity::URL_BASE;
+pub use identity::WebDriverNodeReference;
 pub(crate) use identity::{
     RendererPageResidenceIdentity, TargetIdentityState, TargetPageProtocolAttachmentIdentity,
     TargetPageResidenceIdentity, TargetRootDocumentProtocolAttachmentIdentity,

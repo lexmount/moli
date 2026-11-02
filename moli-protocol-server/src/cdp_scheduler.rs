@@ -122,6 +122,19 @@ enum DefaultTargetRuntimeInitialization {
 }
 
 impl CdpScheduler {
+    pub(crate) fn webdriver_node_reference(
+        &mut self,
+        context: &moli_protocol::automation::AutomationContext,
+        shared_id: &str,
+    ) -> Result<
+        Option<moli_protocol::WebDriverNodeReference>,
+        moli_protocol::automation::DevToolsError,
+    > {
+        self.state
+            .with_state(|state| state.webdriver_node_reference(context, shared_id))
+            .expect("live protocol actor state")
+    }
+
     pub(crate) fn document_residence_identity_for_devtools_context(
         &mut self,
         context: &moli_protocol::automation::AutomationContext,

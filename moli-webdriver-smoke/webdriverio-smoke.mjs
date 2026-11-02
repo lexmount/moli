@@ -25,7 +25,7 @@ const fixture = createServer((req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.end(req.url === '/next'
     ? '<!doctype html><title>Second page</title><h1>Link navigation succeeded</h1>'
-    : `<!doctype html><title>First page</title><h1>Ready</h1>
+    : `<!doctype html><title>First page</title><h1>Ready</h1><h2>Untouched</h2><h3>Classic first</h3>
        <input id="name"><button id="submit" onclick="document.querySelector('#result').textContent='Hello '+document.querySelector('#name').value">Submit</button>
        <p id="result"></p><a id="next" href="/next">Next</a>`);
 });
@@ -76,9 +76,60 @@ async function workflow(name, capabilities, expectedBidi) {
     await browser.$('#name').setValue('Moli');
     await browser.$('#submit').click();
     assert.equal(await browser.$('#result').getText(), 'Hello Moli');
+    let untouchedId;
+    if (expectedBidi) {
+      const { contexts } = await browser.browsingContextGetTree({});
+      const context = contexts[0].context;
+      const { nodes } = await browser.browsingContextLocateNodes({
+        context, locator: { type: 'css', value: 'h1' },
+      });
+      const key = 'element-6066-11e4-a52e-4f735466cecf';
+      const response = await fetch(`${endpoint}/session/${browser.sessionId}/execute/sync`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ script: 'return arguments[0];', args: [{ [key]: nodes[0].sharedId }] }),
+      });
+      assert.equal(response.status, 200);
+      const { value } = await response.json();
+      assert.equal(value[key], nodes[0].sharedId, `${name}: cross-protocol node identity`);
+      const echoed = await browser.scriptCallFunction({
+        target: { context }, functionDeclaration: 'function(node) { return node.textContent; }',
+        arguments: [{ sharedId: value[key] }], awaitPromise: false,
+      });
+      assert.equal(echoed.result.value, 'Ready');
+      const findClassicFirst = async () => {
+        const response = await fetch(`${endpoint}/session/${browser.sessionId}/element`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ using: 'css selector', value: 'h3' }),
+        });
+        assert.equal(response.status, 200);
+        return (await response.json()).value[key];
+      };
+      const classicId = await findClassicFirst();
+      const classicFirst = await browser.browsingContextLocateNodes({
+        context, locator: { type: 'css', value: 'h3' },
+      });
+      const imported = await fetch(`${endpoint}/session/${browser.sessionId}/execute/sync`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          script: 'return arguments[0];', args: [{ [key]: classicFirst.nodes[0].sharedId }],
+        }),
+      });
+      assert.equal(imported.status, 200);
+      assert.equal((await imported.json()).value[key], classicId, `${name}: preserve existing Classic ID`);
+      assert.equal(await findClassicFirst(), classicId, `${name}: repeated Classic lookup identity`);
+      const untouched = await browser.browsingContextLocateNodes({
+        context, locator: { type: 'css', value: 'h2' },
+      });
+      untouchedId = untouched.nodes[0].sharedId;
+    }
     await browser.$('#next').click();
     await browser.waitUntil(async () => await browser.getTitle() === 'Second page', { timeout: 5000 });
     assert.equal(await browser.$('h1').getText(), 'Link navigation succeeded');
+    if (untouchedId) {
+      const response = await fetch(`${endpoint}/session/${browser.sessionId}/element/${untouchedId}/text`);
+      assert.equal(response.status, 404);
+      assert.equal((await response.json()).value.error, 'stale element reference');
+    }
     console.log(JSON.stringify({ test: name, protocol: expectedBidi ? 'bidi' : 'classic', status: 'passed', milliseconds: Math.round(performance.now() - started) }));
   } finally {
     await browser.deleteSession();

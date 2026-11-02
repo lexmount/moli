@@ -126,16 +126,28 @@ impl RuntimeWorkflow {
             None
         };
         let owner = CommandOwnerScope::for_route(target.route.clone());
-        if let AutomationCommand::CallFunction(call) = &mut command
+        let remapped_nodes = if let AutomationCommand::CallFunction(call) = &mut command
             && call.context.protocol == FrontendProtocol::WebDriverBidi
         {
             remap_bidi_node_shared_references_for_target_using(self, &target, call, realm.as_ref())
-                .await?;
-        }
+                .await?
+        } else {
+            None
+        };
         self.state(|state| {
             state.validate_runtime_automation_handles(&owner, &command, realm.as_ref())
         })??;
-        let response = self.native(target.clone(), command).await?;
+        let response = self.native(target.clone(), command).await;
+        if let Some(lease) = remapped_nodes {
+            // Cleanup follows the original Page even if the script navigated;
+            // checking the current scope would reject its accepted result.
+            self.context
+                .with_state(&mut self.driver, move |state, _| {
+                    state.release_runtime_object_group(lease)
+                })
+                .map_err(workflow_error)?;
+        }
+        let response = response?;
         if result_kind == DevToolsRuntimeCommandResultKind::Empty {
             return devtools_empty_result_from_response(response);
         }
@@ -325,17 +337,29 @@ impl RuntimeWorkflow {
         self.query(move |state| state.prepare_runtime_backend_node_query(owner, id, depth, pierce))
     }
 
-    pub(in crate::domains::runtime) fn register_node_binding(
+    pub(in crate::domains::runtime) async fn register_node_binding(
         &mut self,
         owner: &CommandOwnerScope,
         shared_id: &str,
         backend_node_id: u32,
-    ) -> impl Future<Output = Result<(), DevToolsError>> {
+        frame_id: Option<&str>,
+        is_element: bool,
+    ) -> Result<(), DevToolsError> {
         self.query(move |state| {
             state.prepare_runtime_bidi_binding_registration(
                 owner,
                 shared_id.to_owned(),
                 backend_node_id,
+            )
+        })
+        .await?;
+        self.state(|state| {
+            state.register_webdriver_node_reference(
+                owner,
+                shared_id.to_owned(),
+                backend_node_id,
+                frame_id,
+                is_element,
             )
         })
     }

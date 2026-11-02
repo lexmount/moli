@@ -13,6 +13,98 @@ use crate::conn::{CommandOwnerScope, PreparedRuntimePageQuery};
 struct RuntimeNodeContextUnavailable;
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn register_webdriver_node_reference(
+        self,
+        owner: &CommandOwnerScope,
+        shared_id: String,
+        backend_node_id: u32,
+        frame_id: Option<&str>,
+        is_element: bool,
+    ) {
+        let Some((_, Some(target_id))) = self.connection.target_owner_identity_for_owner(owner)
+        else {
+            return;
+        };
+        let context = crate::automation::AutomationContext {
+            protocol: crate::automation::FrontendProtocol::WebDriverBidi,
+            session_id: owner.session_id().map(Into::into),
+            target_id: Some(target_id.as_str().into()),
+            browser_context_id: None,
+        };
+        let Some(page_residence) = self
+            .connection
+            .document_residence_identity_for_devtools_context(&context)
+        else {
+            return;
+        };
+        let browsing_context_id = frame_id.unwrap_or(&target_id).to_owned();
+        let frame_document = self
+            .connection
+            .browsing_context_owner(&browsing_context_id)
+            .and_then(|frame| frame.document);
+        let reference = crate::conn::WebDriverNodeReference {
+            page_residence,
+            target_id,
+            browsing_context_id,
+            backend_node_id,
+            is_element,
+            frame_document,
+        };
+        self.connection
+            .with_target_devtools_session_state_for_owner_mut(owner, |state| {
+                state
+                    .webdriver_node_references
+                    .entry(shared_id)
+                    .or_insert(reference);
+            });
+    }
+
+    /// Look up an exported node without creating an inspector object. Unknown
+    /// and foreign-frame references remain unknown; a known retired Document
+    /// is stale even when Classic has never imported the reference before.
+    pub fn webdriver_node_reference(
+        self,
+        context: &crate::automation::AutomationContext,
+        shared_id: &str,
+    ) -> Result<Option<crate::conn::WebDriverNodeReference>, crate::automation::DevToolsError> {
+        let Some(owner) = self
+            .connection
+            .command_owner_scope_for_devtools_context(context)
+        else {
+            return Ok(None);
+        };
+        let Some(reference) = self
+            .connection
+            .target_devtools_session_state_for_owner(&owner)
+            .and_then(|state| state.webdriver_node_references.get(shared_id))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if !reference.is_element
+            || context.target_id.as_ref().map(|target| target.as_str())
+                != Some(reference.browsing_context_id.as_str())
+        {
+            return Ok(None);
+        }
+        let current = self
+            .connection
+            .document_residence_identity_for_devtools_context(context);
+        let frame_document = self
+            .connection
+            .browsing_context_owner(&reference.browsing_context_id)
+            .and_then(|frame| frame.document);
+        if current.as_ref() != Some(&reference.page_residence)
+            || frame_document != reference.frame_document
+        {
+            return Err(crate::automation::DevToolsError::new(
+                crate::automation::DevToolsErrorKind::NoSuchNode,
+                "DOM reference belongs to a replaced Document",
+            ));
+        }
+        Ok(Some(reference))
+    }
+
     pub(crate) fn with_runtime_scope<T>(
         self,
         scope: Option<&crate::conn::RuntimePageScope>,
@@ -99,15 +191,27 @@ impl ProtocolWorkflowState<'_> {
         let owner = self
             .connection
             .command_owner_scope_for_devtools_context(context)
-            .and_then(|owner| {
-                crate::conn::BidiChannelPageOwner::capture_for_owner(self.connection, owner)
-            })
             .ok_or_else(|| {
                 crate::automation::DevToolsError::new(
                     crate::automation::DevToolsErrorKind::NoSuchTarget,
                     crate::conn::NoDocumentLoaded,
                 )
             })?;
+        self.allocate_runtime_object_group_for_owner(&owner)
+    }
+
+    pub(crate) fn allocate_runtime_object_group_for_owner(
+        self,
+        owner: &CommandOwnerScope,
+    ) -> Result<crate::conn::BidiChannelObjectGroupLease, crate::automation::DevToolsError> {
+        let owner =
+            crate::conn::BidiChannelPageOwner::capture_for_owner(self.connection, owner.clone())
+                .ok_or_else(|| {
+                    crate::automation::DevToolsError::new(
+                        crate::automation::DevToolsErrorKind::NoSuchTarget,
+                        crate::conn::NoDocumentLoaded,
+                    )
+                })?;
         crate::conn::BidiChannelObjectGroupLease::allocate(self.connection, owner).ok_or_else(
             || {
                 crate::automation::DevToolsError::new(
@@ -201,7 +305,14 @@ impl ProtocolWorkflowState<'_> {
         remote: Value,
         object_id: String,
         realm: Option<crate::automation::DevToolsRealmId>,
+        object_group: &str,
     ) {
+        self.connection
+            .register_runtime_remote_object_ids_from_value_for_owner_with_group(
+                owner,
+                &remote,
+                object_group,
+            );
         if let Some(realm) = realm {
             self.connection
                 .register_runtime_remote_object_ids_for_owner_with_realm(

@@ -1,6 +1,177 @@
 use super::*;
 
 #[tokio::test]
+async fn bidi_node_arguments_release_temporary_handles_on_success_and_error() {
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    let (context, shared_id, _) =
+        materialize_bidi_target_node_for_test(&mut ctx, "<div id='target'>Hello</div>", "#target")
+            .await;
+    let owner = ctx.with_fixture(|conn| {
+        conn.command_owner_scope_for_devtools_context(&context)
+            .unwrap()
+    });
+    let roots = |ctx: &mut crate::testing::TestContext| {
+        ctx.with_fixture(|conn| {
+            conn.target_devtools_session_state_for_owner(&owner)
+                .unwrap()
+                .runtime_remote_object_ids
+                .clone()
+        })
+    };
+    let before = roots(&mut ctx);
+    for (function, arguments, expected_error) in [
+        (
+            "function(node) { return node.textContent; }",
+            vec![json!({"sharedId": shared_id.as_str()})],
+            None,
+        ),
+        (
+            "function(node) { throw null; }",
+            vec![json!({"sharedId": shared_id.as_str()})],
+            None,
+        ),
+        (
+            "function(node, other) { return node; }",
+            vec![
+                json!({"sharedId": shared_id.as_str()}),
+                json!({"sharedId": "moli:bidi-renderer-node:4294967295"}),
+            ],
+            Some(DevToolsErrorKind::NoSuchNode),
+        ),
+        (
+            "function(node, other) { return node; }",
+            vec![
+                json!({"sharedId": shared_id.as_str()}),
+                json!({"handle": "not-exported"}),
+            ],
+            Some(DevToolsErrorKind::NoSuchHandle),
+        ),
+    ] {
+        let result = ctx
+            .execute_automation_command_through_renderer_fence_for_test(
+                AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+                    context: context.clone(),
+                    realm_id: None,
+                    world_name: None,
+                    object_id: None,
+                    this_parameter: None,
+                    function_declaration: function.to_owned(),
+                    arguments,
+                    await_promise: false,
+                    user_gesture: false,
+                    webdriver_bidi_file_prompt_handler: None,
+                    result_ownership: DevToolsResultOwnership::None,
+                    object_group: None,
+                    preserve_remote_metadata: false,
+                    serialization_options: None,
+                    materialize_bidi_script_result: true,
+                }),
+            )
+            .await;
+        if let Some(kind) = expected_error {
+            assert_eq!(result.unwrap_err().kind, kind, "{function}");
+        } else if function == "function(node) { throw null; }" {
+            let AutomationResult::Script(result) = result.unwrap() else {
+                panic!("expected the script exception result");
+            };
+            assert!(matches!(*result, DevToolsScriptResult::Exception(_)));
+        } else {
+            assert_eq!(
+                expect_script_value_result(result.unwrap(), function).value,
+                "Hello"
+            );
+        }
+        ctx.wait_for_direct_command_work_completion_for_test("temporary node argument cleanup")
+            .await;
+        assert_eq!(
+            roots(&mut ctx),
+            before,
+            "temporary argument handles escaped {function}"
+        );
+    }
+    // Native interoperability lookup must also be independent of inspector
+    // roots, including repeated first-use checks by Classic commands.
+    for _ in 0..3 {
+        let reference = ctx
+            .state
+            .with_state(|state| state.webdriver_node_reference(&context, shared_id.as_str()))
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(reference.is_element);
+    }
+    assert_eq!(roots(&mut ctx), before);
+    // Releasing the argument group must not disown the separately returned
+    // client-owned root, even when both handles point at the same DOM node.
+    let returned = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+                context: context.clone(),
+                realm_id: None,
+                world_name: None,
+                object_id: None,
+                this_parameter: None,
+                function_declaration: "function(node) { return node; }".to_owned(),
+                arguments: vec![json!({"sharedId": shared_id.as_str()})],
+                await_promise: false,
+                user_gesture: false,
+                webdriver_bidi_file_prompt_handler: None,
+                result_ownership: DevToolsResultOwnership::Root,
+                object_group: None,
+                preserve_remote_metadata: false,
+                serialization_options: None,
+                materialize_bidi_script_result: true,
+            }),
+        )
+        .await
+        .unwrap();
+    let remote = expect_script_value_result(returned, "returning the node should succeed");
+    let handle = remote.handle.unwrap();
+    let mut realm_context = context.clone();
+    realm_context.target_id = None;
+    let reused = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+                context: realm_context,
+                realm_id: Some(remote.realm.unwrap()),
+                world_name: None,
+                object_id: None,
+                this_parameter: Some(json!({"handle": handle.as_str()})),
+                function_declaration:
+                    "function(node) { return this === node && node.textContent; }".to_owned(),
+                arguments: vec![json!({"sharedId": shared_id.as_str()})],
+                await_promise: false,
+                user_gesture: false,
+                webdriver_bidi_file_prompt_handler: None,
+                result_ownership: DevToolsResultOwnership::None,
+                object_group: None,
+                preserve_remote_metadata: false,
+                serialization_options: None,
+                materialize_bidi_script_result: true,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        expect_script_value_result(reused, "client root must remain live").value,
+        "Hello"
+    );
+    ctx.execute_automation_command_through_renderer_fence_for_test(
+        AutomationCommand::ReleaseObjects(DevToolsReleaseObjectsCommand {
+            context,
+            realm_id: None,
+            world_name: None,
+            handles: vec![handle],
+        }),
+    )
+    .await
+    .unwrap();
+    ctx.wait_for_direct_command_work_completion_for_test("temporary node argument cleanup")
+        .await;
+    assert_eq!(roots(&mut ctx), before);
+}
+
+#[tokio::test]
 async fn bidi_fetch_control_resolves_background_request_owner() {
     let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-fetch-background".to_owned());

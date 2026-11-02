@@ -33,6 +33,10 @@ pub(crate) struct PreparedFileChooserActivation {
 }
 
 impl PreparedFileChooserActivation {
+    pub(crate) fn node_reference(&self) -> (u32, &str) {
+        (self.backend_node_id, &self.source_frame_id)
+    }
+
     pub(crate) fn capture(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
@@ -192,13 +196,8 @@ pub(super) async fn emit_prepared_activation(
             shared_id
         }
     };
-    let session_id = owner.session_id().map(str::to_owned);
     if let Ok(Some(event)) = driver.with_state(move |state| {
-        state.finish_input_file_chooser_activation(
-            session_id.as_deref(),
-            activation,
-            element_shared_id,
-        )
+        state.finish_input_file_chooser_activation(owner, activation, element_shared_id)
     }) {
         out.push(event);
     }
