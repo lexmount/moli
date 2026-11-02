@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::Arc,
+};
 
 use crate::{
     dom::NodeId,
@@ -6,13 +9,21 @@ use crate::{
     stylesheet_blocking::{
         DocumentBlockingStylesheetSignature, DocumentOwnedStylesheetDiscoveryInput,
     },
+    types::ChildBlockingStylesheetLoadCompletion,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 enum FrameDocumentStylesheetStatus {
     Pending,
-    Ready,
-    Failed,
+    // Retain the physical terminal separately from per-owner installation.
+    // None represents admission without an available resource loader.
+    Completed(Option<Arc<ChildBlockingStylesheetLoadCompletion>>),
+}
+
+pub(crate) enum FrameDocumentStylesheetAdmission {
+    Start,
+    Joined,
+    Completed(Arc<ChildBlockingStylesheetLoadCompletion>),
 }
 
 #[derive(Debug)]
@@ -39,11 +50,12 @@ impl FrameDocumentStylesheetStore {
         input: &DocumentOwnedStylesheetDiscoveryInput,
         import_root: Option<crate::document_runtime::ConnectedStyleImportRoot>,
         acquire_load_delay: impl FnOnce() -> Option<DocumentLoadDelayTokenId>,
-    ) -> bool {
+    ) -> FrameDocumentStylesheetAdmission {
         let signature = input.signature().clone();
         let entries = self.documents.entry(owner).or_default();
         if let Some(entry) = entries.get_mut(&signature) {
-            if entry.node_ids.insert(input.node_id()) {
+            let added = entry.node_ids.insert(input.node_id());
+            if added {
                 entry.import_roots.extend(import_root);
             }
             entry.blocks_scripts |= input.blocks_scripts();
@@ -51,10 +63,15 @@ impl FrameDocumentStylesheetStore {
                 owner = ?owner,
                 node_id = ?input.node_id(),
                 signature = ?signature,
-                status = ?entry.status,
+                pending = matches!(entry.status, FrameDocumentStylesheetStatus::Pending),
                 "child parser stylesheet discovery joined existing document-owned readiness"
             );
-            return false;
+            return match &entry.status {
+                FrameDocumentStylesheetStatus::Completed(Some(completion)) if added => {
+                    FrameDocumentStylesheetAdmission::Completed(Arc::clone(completion))
+                }
+                _ => FrameDocumentStylesheetAdmission::Joined,
+            };
         }
         let Some(load_delay_token) = acquire_load_delay() else {
             tracing::warn!(
@@ -63,7 +80,7 @@ impl FrameDocumentStylesheetStore {
                 signature = ?signature,
                 "rejecting child parser stylesheet without a document load-delay token"
             );
-            return false;
+            return FrameDocumentStylesheetAdmission::Joined;
         };
         entries.insert(
             signature.clone(),
@@ -82,29 +99,28 @@ impl FrameDocumentStylesheetStore {
             ?load_delay_token,
             pending_count = entries
                 .values()
-                .filter(|entry| entry.blocks_scripts && entry.status == FrameDocumentStylesheetStatus::Pending)
+                .filter(|entry| entry.blocks_scripts && matches!(entry.status, FrameDocumentStylesheetStatus::Pending))
                 .count(),
             "accepted child parser stylesheet for document owner"
         );
-        true
+        FrameDocumentStylesheetAdmission::Start
     }
 
     pub(crate) fn apply_completion(
         &mut self,
         owner: FrameDocumentOwner,
         signature: &DocumentBlockingStylesheetSignature,
-        successful: bool,
+        completion: Option<Arc<ChildBlockingStylesheetLoadCompletion>>,
     ) -> Option<DocumentLoadDelayTokenId> {
         let entries = self.documents.get_mut(&owner)?;
         let entry = entries.get_mut(signature)?;
-        if entry.status != FrameDocumentStylesheetStatus::Pending {
+        if !matches!(entry.status, FrameDocumentStylesheetStatus::Pending) {
             return None;
         }
-        entry.status = if successful {
-            FrameDocumentStylesheetStatus::Ready
-        } else {
-            FrameDocumentStylesheetStatus::Failed
-        };
+        let successful = completion
+            .as_ref()
+            .is_some_and(|result| result.successful());
+        entry.status = FrameDocumentStylesheetStatus::Completed(completion);
         let load_delay_token = entry.load_delay_token.take()?;
         tracing::debug!(
             owner = ?owner,
@@ -127,7 +143,8 @@ impl FrameDocumentStylesheetStore {
         };
         signatures.into_iter().any(|signature| {
             entries.get(signature).is_some_and(|entry| {
-                entry.blocks_scripts && entry.status == FrameDocumentStylesheetStatus::Pending
+                entry.blocks_scripts
+                    && matches!(entry.status, FrameDocumentStylesheetStatus::Pending)
             })
         })
     }
@@ -135,7 +152,8 @@ impl FrameDocumentStylesheetStore {
     pub(crate) fn has_pending(&self, owner: FrameDocumentOwner) -> bool {
         self.documents.get(&owner).is_some_and(|entries| {
             entries.values().any(|entry| {
-                entry.blocks_scripts && entry.status == FrameDocumentStylesheetStatus::Pending
+                entry.blocks_scripts
+                    && matches!(entry.status, FrameDocumentStylesheetStatus::Pending)
             })
         })
     }
@@ -221,14 +239,17 @@ mod tests {
         let owner = owner();
         let mut store = FrameDocumentStylesheetStore::default();
         let token = DocumentLoadDelayTokenId(7);
-        assert!(store.discover(owner, &input, None, || Some(token)));
+        assert!(matches!(
+            store.discover(owner, &input, None, || Some(token)),
+            FrameDocumentStylesheetAdmission::Start
+        ));
         assert!(!store.blocks_signatures(owner, [input.signature()]));
         assert!(!store.has_pending(owner));
         assert_eq!(
-            store.apply_completion(owner, input.signature(), false),
+            store.apply_completion(owner, input.signature(), None),
             Some(token)
         );
-        assert_eq!(store.apply_completion(owner, input.signature(), true), None);
+        assert_eq!(store.apply_completion(owner, input.signature(), None), None);
         assert_eq!(store.remove_document(owner), 1);
     }
 
@@ -239,31 +260,40 @@ mod tests {
         let input = input(3, "https://styles.test/blocked.css");
 
         let load_delay_token = DocumentLoadDelayTokenId(7);
-        assert!(store.discover(owner, &input, None, || Some(load_delay_token)));
+        assert!(matches!(
+            store.discover(owner, &input, None, || Some(load_delay_token)),
+            FrameDocumentStylesheetAdmission::Start
+        ));
         assert!(
-            !store.discover(owner, &input, None, || {
-                panic!("joined stylesheet discovery must not acquire another load-delay token")
-            }),
+            matches!(
+                store.discover(owner, &input, None, || {
+                    panic!("joined stylesheet discovery must not acquire another load-delay token")
+                }),
+                FrameDocumentStylesheetAdmission::Joined
+            ),
             "duplicate stylesheet discovery should join the original owner entry"
         );
         assert!(store.blocks_signatures(owner, [input.signature()]));
         assert_eq!(
-            store.apply_completion(owner, input.signature(), false),
+            store.apply_completion(owner, input.signature(), None),
             Some(load_delay_token)
         );
         assert!(!store.blocks_signatures(owner, [input.signature()]));
-        assert_eq!(store.apply_completion(owner, input.signature(), true), None);
+        assert_eq!(store.apply_completion(owner, input.signature(), None), None);
         assert_eq!(store.remove_document(owner), 1);
         assert!(!store.has_pending(owner));
 
         let replacement_owner =
             FrameDocumentOwner::new(owner.local_window_id, DocumentId(owner.document_id.0 + 1));
-        assert!(store.discover(replacement_owner, &input, None, || {
-            Some(DocumentLoadDelayTokenId(8))
-        }));
+        assert!(matches!(
+            store.discover(replacement_owner, &input, None, || {
+                Some(DocumentLoadDelayTokenId(8))
+            }),
+            FrameDocumentStylesheetAdmission::Start
+        ));
         assert!(
             store
-                .apply_completion(owner, input.signature(), true)
+                .apply_completion(owner, input.signature(), None)
                 .is_none(),
             "retired owner completion must not update replacement readiness"
         );
