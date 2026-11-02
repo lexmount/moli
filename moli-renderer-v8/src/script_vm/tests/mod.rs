@@ -5,6 +5,7 @@ mod child_document_web_fonts;
 mod credential_container;
 mod credential_json_options;
 mod cross_document_drag_events;
+mod cross_origin_isolation_permissions;
 mod cross_origin_navigation;
 mod current_pass_css_fonts;
 mod document_encodings;
