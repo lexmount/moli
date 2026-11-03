@@ -1,6 +1,16 @@
 use super::*;
 
 #[test]
+fn custom_element_reactions_preserve_dom_exceptions_through_nested_callbacks() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://reaction-exception.test/");
+    let source = format!(
+        "(() => {{const checks = {}; return JSON.stringify([checks.length, checks.filter(row => !row.passed)]);}})()",
+        include_str!("reaction_exceptions.js")
+    );
+    assert_eq!(vm.eval(&source).unwrap(), "[368,[]]");
+}
+
+#[test]
 fn template_adoption_reactions_use_each_associated_tree_document() {
     let mut vm = new_parsed_test_vm(
         "https://template-adoption-reactions.test/",

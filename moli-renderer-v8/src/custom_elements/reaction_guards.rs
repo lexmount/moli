@@ -76,5 +76,23 @@ pub(crate) fn with_custom_element_reaction_scope<'scope, 'pin, R>(
     op: impl FnOnce(&mut v8::PinScope<'scope, 'pin>) -> R,
 ) -> R {
     let mut reaction_scope = CustomElementReactionScope::enter(scope, host_ptr);
-    op(reaction_scope.scope())
+    let (result, exception) = {
+        let try_catch = std::pin::pin!(v8::TryCatch::new(reaction_scope.scope()));
+        let mut scope = try_catch.init();
+        let result = op(&mut scope);
+        if scope.has_terminated() {
+            let _ = scope.rethrow();
+            return result;
+        }
+        let exception = scope.exception();
+        // Reactions run even when the DOM operation threw. Suspend its
+        // exception so callback catch boundaries cannot consume or replace it.
+        scope.reset();
+        (result, exception)
+    };
+    drop(reaction_scope);
+    if let Some(exception) = exception {
+        scope.throw_exception(exception);
+    }
+    result
 }
