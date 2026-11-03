@@ -1146,6 +1146,82 @@ frame.removeAttribute("srcdoc");
     );
 }
 #[test]
+fn child_frame_src_same_cross_origin_fragment_keeps_browser_navigation_authority() {
+    let mut vm = new_storage_test_vm("https://cross-origin-fragment-owner.test/");
+    vm.exec(
+        r#"
+globalThis.fragmentOwnerFrame = document.createElement('iframe');
+fragmentOwnerFrame.src = 'data:text/html,<!doctype html><body>cross-origin#foo';
+(document.body || document.documentElement || document).appendChild(fragmentOwnerFrame);
+"#,
+        None,
+    )
+    .unwrap();
+    vm.drain_pending_child_frame_work_for_test();
+    let before = vm.eval("history.length").unwrap().parse::<u64>().unwrap();
+    vm.exec("fragmentOwnerFrame.src = fragmentOwnerFrame.src", None)
+        .expect(
+            "the embedding element can navigate a cross-origin child to its current fragment URL",
+        );
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval("history.length").unwrap().parse::<u64>().unwrap(),
+        before + 1
+    );
+    assert_eq!(
+        vm.eval("(() => {try {fragmentOwnerFrame.contentWindow.document; return false;} catch (error) {return error.name === 'SecurityError';}})()").unwrap(),
+        "true",
+    );
+}
+
+#[test]
+fn child_internal_window_sync_reads_native_location_without_access_checks() {
+    let mut vm = new_storage_test_vm("https://child-window-internal-sync.test/");
+    vm.exec(
+        r#"
+globalThis.internalSyncFrame = document.createElement('iframe');
+internalSyncFrame.id = 'internal-sync-frame';
+internalSyncFrame.srcdoc = '<body>initial';
+(document.body || document.documentElement || document).appendChild(internalSyncFrame);
+globalThis.retainedInternalSyncWindow = internalSyncFrame.contentWindow;
+"#,
+        None,
+    )
+    .unwrap();
+    vm.drain_pending_child_frame_work_for_test();
+    vm.exec(
+        "internalSyncFrame.src = 'data:text/html,<body>cross-origin'; internalSyncFrame.removeAttribute('srcdoc');",
+        None,
+    )
+    .unwrap();
+    vm.drain_pending_child_frame_work_for_test();
+    let frame = vm
+        .document_runtime
+        .dom_host()
+        .element_handle_by_id("internal-sync-frame")
+        .unwrap();
+    vm.with_default_context_scope(|scope, host_ptr| {
+        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+        let mut scope = try_catch.init();
+        unsafe { &mut *host_ptr }
+            .sync_existing_child_browsing_context_window_state(&mut scope, frame);
+        assert!(
+            !scope.has_caught(),
+            "browser-owned synchronization must not leave a cross-origin exception pending"
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        vm.eval(
+            "(() => {try {retainedInternalSyncWindow.document; return false;} catch(error) {return error.name === 'SecurityError';}})()",
+        )
+        .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn child_window_proxy_identity_survives_cross_origin_round_trip() {
     let mut vm = new_storage_test_vm("https://child-window-proxy-round-trip.test/");
 

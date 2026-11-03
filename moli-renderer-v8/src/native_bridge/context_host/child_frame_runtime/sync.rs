@@ -4,14 +4,13 @@ use crate::{
     context_bootstrap::{
         bind_window_performance_seed, install_navigation_entry_view_for_holder,
         reset_window_location_runtime_state, set_window_origin_runtime_state,
-        sync_window_location_history_navigation_runtime_surface,
+        sync_window_location_history_navigation_runtime_surface, window_location_href,
     },
     document_runtime::DomHandle,
     native_bridge::{
         child_window_surface::bind_materialized_child_window_indexed_db_factory,
         helpers::set_object_slot,
     },
-    util::v8str,
 };
 
 impl JsContextHost {
@@ -47,6 +46,13 @@ impl JsContextHost {
         let Some(wrapper) = self.child_window_proxy_records.live_window(scope, handle) else {
             return;
         };
+        // Materializing the current wrapper also updates its parent/top slots.
+        // Those browser-owned updates must run in the Window's Realm, before
+        // the wrapper lookup can encounter cross-origin access checks.
+        let context = wrapper
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context());
+        let scope = &mut v8::ContextScope::new(scope, context);
         if self
             .child_window_proxy_records
             .live_window_exposed_to_top(handle)
@@ -82,16 +88,10 @@ impl JsContextHost {
         else {
             return;
         };
-        let should_reset_runtime_state = wrapper
-            .get(scope, v8str(scope, "location").into())
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            .and_then(|location| {
-                location
-                    .get(scope, v8str(scope, "href").into())
-                    .and_then(|value| value.to_string(scope))
-                    .map(|value| value.to_rust_string_lossy(scope))
-            })
-            .is_none_or(|href| href != visible_state.href);
+        // Native synchronization reads Location state without invoking the
+        // public href getter's checks against the initiating author script.
+        let should_reset_runtime_state =
+            window_location_href(scope, wrapper).is_none_or(|href| href != visible_state.href);
         if should_reset_runtime_state {
             let _ = reset_window_location_runtime_state(scope, wrapper, &visible_state.href);
         } else {
