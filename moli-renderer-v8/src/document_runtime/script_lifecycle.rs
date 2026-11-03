@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::page_task_queue::PageTask;
 use std::{
     cell::{Ref, RefCell, RefMut},
     collections::{HashSet, VecDeque},
@@ -18,7 +20,7 @@ use crate::{
         MainDocumentScriptSchedulerStore, MainParserDocumentOwner, ModuleScriptContinuationStore,
     },
     page_task_queue::{
-        PageTask, PostParseLifecycleWork, PostParsePageOwnedWork, WindowScriptFailureReportTask,
+        PostParseLifecycleWork, PostParsePageOwnedWork, WindowScriptFailureReportTask,
     },
     parser::ParserScriptPreparationFailure,
     planning::PreparedScript,
@@ -36,6 +38,7 @@ pub(crate) struct DocumentScriptLifecycle {
     runtime_script_events: DynamicScriptOwnerEventSource,
     deferred_page_tasks: DeferredPageTaskState,
     parser_owned_pre_domcontentloaded_work: OwnerTaskSource<PostParsePageOwnedWork>,
+    #[cfg(test)]
     parser_boundary_lifecycle_tx: tokio::sync::mpsc::UnboundedSender<PageTask>,
     /// Standalone `DocumentRuntime` unit tests retain the same owner-source
     /// residence used by the parse-time queue instead of constructing a
@@ -50,7 +53,7 @@ pub(crate) type SharedRuntimeScriptWorkState = Rc<RefCell<RuntimeScriptWorkState
 impl DocumentScriptLifecycle {
     pub(crate) fn with_scheduler(
         scripts: HostScriptScheduler,
-        parser_boundary_lifecycle_tx: tokio::sync::mpsc::UnboundedSender<PageTask>,
+        #[cfg(test)] parser_boundary_lifecycle_tx: tokio::sync::mpsc::UnboundedSender<PageTask>,
     ) -> Self {
         let runtime_script_events = DynamicScriptOwnerEventSource::default();
         let dynamic_scripts = DynamicScriptOwner::with_event_sender(runtime_script_events.sender());
@@ -65,6 +68,7 @@ impl DocumentScriptLifecycle {
             runtime_script_events,
             deferred_page_tasks: DeferredPageTaskState::default(),
             parser_owned_pre_domcontentloaded_work: OwnerTaskSource::default(),
+            #[cfg(test)]
             parser_boundary_lifecycle_tx,
             #[cfg(test)]
             standalone_parser_boundary_lifecycle_source: None,
@@ -72,6 +76,7 @@ impl DocumentScriptLifecycle {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn enqueue_parser_boundary_lifecycle_work(&self, work: PostParseLifecycleWork) {
         assert!(
             self.parser_boundary_lifecycle_tx

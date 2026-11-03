@@ -2452,12 +2452,11 @@ impl DocumentRuntime {
                 })?;
             // Parser admission cannot run author code. Reuse the queued exact
             // Window target so a retired child cannot receive this event later.
-            self.enqueue_content_security_policy_violation_event_task(
-                crate::page_task_queue::ContentSecurityPolicyViolationEventTask::for_window(
-                    document_owner,
-                    window_target,
-                    violation.clone(),
-                ),
+            host.queue_content_security_policy_violation_event_task(
+                window_target,
+                target,
+                violation,
+                true,
             );
             return Ok(());
         }
@@ -2484,40 +2483,22 @@ impl DocumentRuntime {
             );
         }
 
-        let event_task = match target {
-            Some(target) => {
-                crate::page_task_queue::ContentSecurityPolicyViolationEventTask::for_element(
-                    document_owner,
-                    target,
-                    violation.clone(),
-                )
-            }
-            None => crate::page_task_queue::ContentSecurityPolicyViolationEventTask::new(
-                document_owner,
-                violation.clone(),
-            ),
-        }
-        .with_event_document_owner(event_owner);
-        self.enqueue_content_security_policy_violation_event_task(event_task);
-        Ok(())
-    }
-
-    pub(crate) fn enqueue_content_security_policy_violation_event_task(
-        &mut self,
-        event_task: crate::page_task_queue::ContentSecurityPolicyViolationEventTask,
-    ) {
-        let work = PostParseLifecycleWork::DispatchContentSecurityPolicyViolation(event_task);
-        if self.has_active_parser_write_insertion_point() {
-            self.enqueue_parser_boundary_lifecycle_work(work);
-        } else if !self.dom_content_loaded_dispatched() {
-            self.enqueue_parser_owned_pre_domcontentloaded_page_owned_work(
-                PostParsePageOwnedWork::lifecycle_work(work),
+        // A later URL/Trusted Types violation must not overtake an earlier
+        // inline violation because parser lifecycle work uses another queue.
+        // Retain the source Document, and let dispatch-time CSP retargeting
+        // decide whether the original element still belongs to it.
+        let owner = crate::window_document_identity::WindowDocumentOwner::Frame(
+            event_owner.unwrap_or(document_owner),
+        );
+        if let Some(task_target) = host.window_document_task_target_for_owner(owner) {
+            host.queue_content_security_policy_violation_event_task(
+                task_target,
+                target,
+                violation,
+                false,
             );
-        } else {
-            self.script_lifecycle
-                .scripts_mut()
-                .enqueue_post_parse_lifecycle_work(work);
         }
+        Ok(())
     }
 
     pub(crate) fn dispatch_content_security_policy_violation_event_page_task<'s>(

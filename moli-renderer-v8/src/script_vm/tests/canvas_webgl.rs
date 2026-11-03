@@ -3093,7 +3093,7 @@ async fn html_image_load_honors_img_src_with_unknown_csp_directives() {
         "image CSP event should drain"
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         2
     );
     assert_eq!(
@@ -3132,7 +3132,7 @@ async fn html_image_report_only_csp_reports_without_blocking_load() {
         "image report-only CSP event should drain"
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(
@@ -3218,7 +3218,7 @@ document.body.appendChild(__imageCspFrame);
             vm.drain_ready_page_task_executor_turns_for_setup(&loader, 32)
                 .await
                 .expect("image CSP reports should drain");
-            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+            drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await;
             assert_eq!(
                 vm.eval("__imageCspEvents.slice().sort().join('|')")
                     .expect("cross-realm image results should evaluate"),
@@ -3294,7 +3294,7 @@ document.head.appendChild(meta);
     vm.drain_ready_page_task_executor_turns_for_setup(&loader, 32)
         .await
         .expect("cached image policy reports should drain");
-    drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+    drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await;
     assert_eq!(
         vm.eval("__imageCspEvents.slice().sort().join('|')")
             .expect("cached image policy results should evaluate"),
@@ -3359,7 +3359,7 @@ __imageCspFrame.contentDocument.body.appendChild(image);
     vm.drain_ready_page_task_executor_turns_for_setup(&loader, 32)
         .await
         .expect("child report-only image reports should drain");
-    drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+    drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await;
     assert_eq!(
         vm.eval("__imageCspEvents.slice().sort().join('|')")
             .expect("child report-only image results should evaluate"),
@@ -3427,7 +3427,7 @@ document.body.appendChild(__imageCspFrame);
     vm.drain_ready_page_task_executor_turns_for_setup(&loader, 32)
         .await
         .expect("parent image CSP reports should drain");
-    drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+    drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await;
     assert_eq!(
         vm.eval("__imageCspEvents.slice().sort().join('|')")
             .expect("navigated child image results should evaluate"),
@@ -3469,7 +3469,7 @@ async fn html_image_invalid_base_url_fails_before_csp_check() {
         "image fallback event should drain"
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         0,
         "an invalid base URL must fail before CSP queues a violation task"
     );
@@ -3547,7 +3547,7 @@ async fn parser_image_load_honors_meta_img_src_csp() {
         .expect("parser task-end checkpoint should select the image request");
     run_one_canvas_image_load_event_task(&mut vm, &loader).await;
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(

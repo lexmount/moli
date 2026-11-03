@@ -1,12 +1,12 @@
-use crate::host::ScriptEventKind;
 use crate::{
-    content_security_policy::ContentSecurityPolicyUrlViolation,
-    document_runtime::{DomHandle, ReadyConnectedStyleLoad},
-    frame_owner_model::FrameDocumentTaskOwner,
-    host::ScriptEventTask,
-    planning::PreparedScript,
+    content_security_policy::ContentSecurityPolicyUrlViolation, document_runtime::DomHandle,
+    frame_owner_model::FrameDocumentTaskOwner, planning::PreparedScript, types::ScriptErrorValue,
+};
+#[cfg(test)]
+use crate::{
+    document_runtime::ReadyConnectedStyleLoad,
+    host::{ScriptEventKind, ScriptEventTask},
     stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput,
-    types::ScriptErrorValue,
     types::ScriptRun,
 };
 
@@ -149,30 +149,31 @@ impl ContentSecurityPolicyViolationEventTask {
     ) -> Option<crate::frame_owner_model::FrameDocumentTaskOwner> {
         self.event_document_owner
     }
+}
 
-    pub(crate) fn for_window(
-        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
-        window_target: crate::native_bridge::WindowDocumentTaskTarget,
-        violation: ContentSecurityPolicyUrlViolation,
-    ) -> Self {
-        Self {
-            owner,
-            window_target: Some(window_target),
-            event_document_owner: None,
-            target: None,
-            violation,
-        }
+/// Production parser work uses typed sources with exact Document owners.
+/// Only scheduler unit fixtures can construct the legacy unowned projection.
+#[cfg(not(test))]
+#[derive(Debug)]
+pub(crate) enum PageTask {}
+
+#[cfg(not(test))]
+impl PageTask {
+    pub(crate) fn phase_label(&self) -> &'static str {
+        match *self {}
+    }
+    pub(crate) fn as_script(&self) -> Option<&PreparedScript> {
+        match *self {}
+    }
+    pub(crate) fn is_window_load_task(&self) -> bool {
+        match *self {}
+    }
+    pub(crate) fn is_waiting_for_source_load(&self) -> bool {
+        match *self {}
     }
 }
 
-/// Page/document-level JS tasks that must execute on the page owner chain.
-///
-/// The queue models browser-observable turn boundaries explicitly: background
-/// work can notify readiness, document-level scheduling can enqueue page-owned
-/// tasks, and JS still runs only when the page owner drains this queue.
-// The frame-owner rollout is shrinking post-parse production use of raw
-// `PageTask`. Some lifecycle variants remain as parse-time/test compatibility
-// surface and can be unconstructed in focused test binaries.
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) enum PageTask {
     SeedDocumentOwnedBlockingStylesheets(Vec<DocumentOwnedStylesheetDiscoveryInput>),
@@ -208,6 +209,7 @@ pub(crate) enum PageTask {
     DispatchWindowLoad,
 }
 
+#[cfg(test)]
 impl PageTask {
     pub(crate) fn phase_label(&self) -> &'static str {
         match self {
