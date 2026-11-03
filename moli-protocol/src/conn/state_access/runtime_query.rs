@@ -19,7 +19,7 @@ impl ProtocolWorkflowState<'_> {
         shared_id: String,
         backend_node_id: u32,
         frame_id: Option<&str>,
-        is_element: bool,
+        kind: crate::automation::WebDriverNodeKind,
     ) {
         let Some((_, Some(target_id))) = self.connection.target_owner_identity_for_owner(owner)
         else {
@@ -47,7 +47,7 @@ impl ProtocolWorkflowState<'_> {
             target_id,
             browsing_context_id,
             backend_node_id,
-            is_element,
+            kind,
             frame_document,
         };
         self.connection
@@ -66,6 +66,7 @@ impl ProtocolWorkflowState<'_> {
         self,
         context: &crate::automation::AutomationContext,
         shared_id: &str,
+        kind: crate::automation::WebDriverNodeKind,
     ) -> Result<Option<crate::conn::WebDriverNodeReference>, crate::automation::DevToolsError> {
         let Some(owner) = self
             .connection
@@ -81,7 +82,7 @@ impl ProtocolWorkflowState<'_> {
         else {
             return Ok(None);
         };
-        if !reference.is_element
+        if reference.kind != kind
             || context.target_id.as_ref().map(|target| target.as_str())
                 != Some(reference.browsing_context_id.as_str())
         {
@@ -492,6 +493,29 @@ impl ProtocolWorkflowState<'_> {
                     backend_node_id,
                     depth,
                     pierce,
+                )
+            },
+            Page::finish_document_node_snapshot_for_backend_node_id,
+        )
+    }
+
+    pub(crate) fn prepare_webdriver_node_reference_query(
+        self,
+        owner: &CommandOwnerScope,
+        reference: crate::automation::DevToolsDomNodeReference,
+        protocol: crate::automation::FrontendProtocol,
+    ) -> Result<PreparedRuntimePageQuery<Option<DocumentNodeObjectSnapshot>>> {
+        let session = self
+            .connection
+            .target_renderer_runtime_inspector_session_id_for_owner(owner);
+        let reference = reference.into_renderer_reference_for_protocol(session.clone(), protocol);
+        PreparedRuntimePageQuery::prepare(
+            self.connection,
+            owner,
+            "export WebDriver node reference failed",
+            move |page| {
+                page.start_document_node_snapshot_for_node_in_inspector_session(
+                    session, false, reference, 0, false,
                 )
             },
             Page::finish_document_node_snapshot_for_backend_node_id,

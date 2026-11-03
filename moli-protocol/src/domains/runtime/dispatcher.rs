@@ -7,13 +7,14 @@ use serde_json::{Map, Value, json};
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsBidiChannelProperties,
     DevToolsCallFunctionCommand, DevToolsDomNodeReference, DevToolsError, DevToolsErrorKind,
-    DevToolsEvaluateScriptCommand, DevToolsGetFrameOwnerCommand, DevToolsGetRealmsCommand,
-    DevToolsGetRealmsResult, DevToolsLocateNodesCommand, DevToolsLocateNodesLocator,
-    DevToolsLocateNodesResult, DevToolsLocateNodesTextMatch, DevToolsRealmId,
-    DevToolsReleaseObjectsCommand, DevToolsRemoteHandleId, DevToolsRemoteValue,
-    DevToolsResolveNodeCommand, DevToolsResultOwnership, DevToolsScriptException,
-    DevToolsScriptResult, DevToolsSerializationOptions, DevToolsTargetId, FrontendProtocol,
-    RuntimeExecutionContextEvent, is_webdriver_bidi_node_shared_id,
+    DevToolsEvaluateScriptCommand, DevToolsGetFrameOwnerCommand,
+    DevToolsGetOrCreateNodeReferenceCommand, DevToolsGetRealmsCommand, DevToolsGetRealmsResult,
+    DevToolsLocateNodesCommand, DevToolsLocateNodesLocator, DevToolsLocateNodesResult,
+    DevToolsLocateNodesTextMatch, DevToolsRealmId, DevToolsReleaseObjectsCommand,
+    DevToolsRemoteHandleId, DevToolsRemoteValue, DevToolsResolveNodeCommand,
+    DevToolsResultOwnership, DevToolsScriptException, DevToolsScriptResult,
+    DevToolsSerializationOptions, DevToolsTargetId, FrontendProtocol, RuntimeExecutionContextEvent,
+    WebDriverNodeKind, is_webdriver_bidi_node_shared_id,
     webdriver_bidi_node_shared_id_for_backend_node_id,
 };
 use moli_core::page::{

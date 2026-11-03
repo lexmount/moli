@@ -1782,6 +1782,7 @@ fn cdp_result_payload_from_devtools_result(result: AutomationResult) -> Value {
         AutomationResult::DescribeNode(result) => json!({
             "node": result.node,
         }),
+        AutomationResult::NodeReference(shared_id) => json!({"sharedId": shared_id.as_str()}),
         AutomationResult::GetFrameOwner(result) => {
             let mut value = json!({"backendNodeId": result.backend_node_id});
             if result.node_id != 0 {

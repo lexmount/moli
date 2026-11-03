@@ -87,6 +87,8 @@ pub fn webdriver_bidi_navigation_id_from_loader_id(loader_id: &str) -> DevToolsN
 
 const WEBDRIVER_BIDI_RENDERER_NODE_SHARED_ID_PREFIX: &str = "moli:bidi-renderer-node:";
 
+/// Classic and BiDi use the same reference. Its authority is retained by the
+/// exporting session's native node registry and renderer binding.
 pub fn webdriver_bidi_node_shared_id_for_backend_node_id(
     backend_node_id: u32,
 ) -> DevToolsRemoteHandleId {
@@ -248,6 +250,7 @@ pub enum AutomationCommand {
     SetGeolocationOverride(DevToolsSetGeolocationOverrideCommand),
     SetNetworkConditions(DevToolsSetNetworkConditionsCommand),
     GetFrameOwner(DevToolsGetFrameOwnerCommand),
+    GetOrCreateNodeReference(DevToolsGetOrCreateNodeReferenceCommand),
     LocateNodes(DevToolsLocateNodesCommand),
     GetDocument(DevToolsGetDocumentCommand),
     RequestChildNodes(DevToolsRequestChildNodesCommand),
@@ -335,6 +338,7 @@ impl AutomationCommand {
             AutomationCommand::SetGeolocationOverride(command) => &command.context,
             AutomationCommand::SetNetworkConditions(command) => &command.context,
             AutomationCommand::GetFrameOwner(command) => &command.context,
+            AutomationCommand::GetOrCreateNodeReference(command) => &command.context,
             AutomationCommand::LocateNodes(command) => &command.context,
             AutomationCommand::GetDocument(command) => &command.context,
             AutomationCommand::RequestChildNodes(command) => &command.context,
@@ -886,6 +890,32 @@ pub struct DevToolsCookieFilter {
 pub struct DevToolsGetFrameOwnerCommand {
     pub context: AutomationContext,
     pub frame_id: DevToolsFrameId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebDriverNodeKind {
+    Element,
+    ShadowRoot,
+    Other,
+}
+
+impl WebDriverNodeKind {
+    pub(crate) fn from_snapshot(snapshot: &moli_core::page::DocumentNodeSnapshot) -> Self {
+        if snapshot.is_element {
+            Self::Element
+        } else if snapshot.shadow_root_type.is_some() {
+            Self::ShadowRoot
+        } else {
+            Self::Other
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevToolsGetOrCreateNodeReferenceCommand {
+    pub context: AutomationContext,
+    pub reference: DevToolsDomNodeReference,
+    pub kind: WebDriverNodeKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1474,6 +1504,7 @@ pub enum AutomationResult {
     Realms(DevToolsGetRealmsResult),
     Script(Box<DevToolsScriptResult>),
     LocateNodes(DevToolsLocateNodesResult),
+    NodeReference(DevToolsRemoteHandleId),
     DescribeNode(DevToolsDescribeNodeResult),
     GetFrameOwner(DevToolsGetFrameOwnerResult),
     QuerySelector(DevToolsQuerySelectorResult),

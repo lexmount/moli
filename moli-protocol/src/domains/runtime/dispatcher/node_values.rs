@@ -873,22 +873,16 @@ pub(super) async fn register_bidi_node_bindings_for_snapshot_tree_using(
             entries.push((
                 webdriver_bidi_node_shared_id_for_backend_node_id(backend_node_id),
                 backend_node_id,
-                snapshot.is_element,
+                WebDriverNodeKind::from_snapshot(snapshot),
             ));
         }
         stack.extend(snapshot.shadow_roots.iter().rev());
         stack.extend(snapshot.children.iter().rev());
     }
 
-    for (shared_id, backend_node_id, is_element) in entries {
+    for (shared_id, backend_node_id, kind) in entries {
         if let Err(error) = workflow
-            .register_node_binding(
-                owner,
-                shared_id.as_str(),
-                backend_node_id,
-                frame_id,
-                is_element,
-            )
+            .register_node_binding(owner, shared_id.as_str(), backend_node_id, frame_id, kind)
             .await
         {
             tracing::debug!(

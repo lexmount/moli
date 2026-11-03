@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
-use moli_protocol::automation::DevToolsDomNodeReference;
+use moli_protocol::automation::{DevToolsDomNodeReference, WebDriverNodeKind};
 use serde_json::{Map, Value};
 
 use super::{
@@ -46,7 +46,7 @@ impl ClassicScriptFrameOwnerReferenceKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum ClassicScriptResultReference {
     Element {
         node_id: u32,
@@ -63,58 +63,50 @@ pub(super) enum ClassicScriptResultReference {
     PopupWindow(u64),
 }
 
-pub(super) fn collect_classic_script_dom_reference_node_ids(value: &Value, out: &mut Vec<u32>) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                collect_classic_script_dom_reference_node_ids(value, out);
-            }
-        }
-        Value::Object(map) => {
-            match classic_script_result_reference(map) {
-                Some(ClassicScriptResultReference::Element {
-                    node_id,
-                    backend_node_id,
-                })
-                | Some(ClassicScriptResultReference::ShadowRoot {
-                    node_id,
-                    backend_node_id,
-                }) => {
-                    if backend_node_id.is_none() {
-                        out.push(node_id);
-                    }
-                    return;
-                }
-                Some(ClassicScriptResultReference::Frame { .. })
-                | Some(ClassicScriptResultReference::Window)
-                | Some(ClassicScriptResultReference::PopupWindow(_)) => return,
-                None => {}
-            }
-            for value in map.values() {
-                collect_classic_script_dom_reference_node_ids(value, out);
-            }
-        }
-        _ => {}
+impl ClassicScriptResultReference {
+    pub(super) fn node_reference(self) -> Option<(DevToolsDomNodeReference, WebDriverNodeKind)> {
+        let (node_id, backend_node_id, kind) = match self {
+            Self::Element {
+                node_id,
+                backend_node_id,
+            } => (node_id, backend_node_id, WebDriverNodeKind::Element),
+            Self::ShadowRoot {
+                node_id,
+                backend_node_id,
+            } => (node_id, backend_node_id, WebDriverNodeKind::ShadowRoot),
+            _ => return None,
+        };
+        Some((
+            backend_node_id
+                .map(DevToolsDomNodeReference::BackendNodeId)
+                .unwrap_or(DevToolsDomNodeReference::FrontendNodeId(node_id)),
+            kind,
+        ))
     }
 }
 
-pub(super) fn classic_script_canonical_dom_reference(
-    node_id: u32,
-    backend_node_id: Option<u32>,
-    dom_references_by_node_id: &BTreeMap<u32, ClassicScriptCanonicalNodeReference>,
-) -> ClassicScriptCanonicalNodeReference {
-    if let Some(reference) = dom_references_by_node_id.get(&node_id) {
-        return reference.clone();
-    }
-    if let Some(backend_node_id) = backend_node_id {
-        return ClassicScriptCanonicalNodeReference {
-            node_id: backend_node_id,
-            reference: DevToolsDomNodeReference::BackendNodeId(backend_node_id),
-        };
-    }
-    ClassicScriptCanonicalNodeReference {
-        node_id,
-        reference: DevToolsDomNodeReference::FrontendNodeId(node_id),
+pub(super) fn collect_classic_script_node_references(
+    value: &Value,
+    out: &mut BTreeSet<ClassicScriptResultReference>,
+) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_classic_script_node_references(value, out);
+            }
+        }
+        Value::Object(map) => {
+            if let Some(reference) = classic_script_result_reference(map) {
+                if reference.node_reference().is_some() {
+                    out.insert(reference);
+                }
+                return;
+            }
+            for value in map.values() {
+                collect_classic_script_node_references(value, out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -242,7 +234,7 @@ fn backend_node_id_from_described_node(node: &Value) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use moli_protocol::automation::DevToolsDomNodeReference;
+    use moli_protocol::automation::{DevToolsDomNodeReference, WebDriverNodeKind};
     use serde_json::json;
 
     use super::*;
@@ -327,14 +319,17 @@ mod tests {
     #[test]
     fn canonical_dom_reference_does_not_guess_backend_identity_from_frontend_id_range() {
         let high_frontend_node_id = 2_000_000_007;
-        let references = BTreeMap::new();
 
         assert_eq!(
-            classic_script_canonical_dom_reference(high_frontend_node_id, None, &references),
-            ClassicScriptCanonicalNodeReference {
+            ClassicScriptResultReference::Element {
                 node_id: high_frontend_node_id,
-                reference: DevToolsDomNodeReference::FrontendNodeId(high_frontend_node_id),
+                backend_node_id: None
             }
+            .node_reference(),
+            Some((
+                DevToolsDomNodeReference::FrontendNodeId(high_frontend_node_id),
+                WebDriverNodeKind::Element
+            ))
         );
         assert_eq!(
             classic_script_canonical_dom_reference_from_described_node(

@@ -261,6 +261,7 @@ fn prepare_automation_workflow(
         | AutomationCommand::CallFunction(_)
         | AutomationCommand::TerminateExecution(_)
         | AutomationCommand::LocateNodes(_)
+        | AutomationCommand::GetOrCreateNodeReference(_)
         | AutomationCommand::ReleaseObjects(_)) => {
             crate::domains::runtime::prepare_automation_runtime_workflow(
                 conn, command, access, id, result,
