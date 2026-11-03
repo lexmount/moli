@@ -59,6 +59,7 @@ pub(crate) use navigation_cleanup::{
     PreparedNavigationFailureCleanup, prepare_failed_navigation_cleanup,
 };
 mod javascript_dialog;
+pub(crate) use javascript_dialog::dismiss_unhandled_javascript_dialogs;
 pub(in crate::domains) use javascript_dialog::emit_javascript_dialog_activity_background_events;
 pub(in crate::domains) use javascript_dialog::prepare_page_session_disposal;
 use javascript_dialog::*;
@@ -643,18 +644,16 @@ fn enable_page_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutput
 fn disable_page_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
     // Chromium cancels a pending dialog when an observing Page handler is
     // disabled and there is no native dialog manager to take over.
-    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
-    let subscription = conn.page_domain_subscription_generation_for_session_owner(cmd.session_id);
-    if !conn.disable_page_domain_for_session_owner(cmd.session_id) {
+    let Some(events) = javascript_dialog::end_page_dialog_subscription(
+        conn,
+        cmd.session_id,
+        PageDialogSubscriptionEnd::Disable,
+    ) else {
         return CommandOutputPlan::error(-31998, "BrowserContextNotLoaded");
-    }
+    };
     let mut plan = CommandOutputPlan::default();
-    if let Some(generation) = subscription {
-        for event in
-            javascript_dialog::dismiss_dialogs_for_page_subscription(conn, &owner, generation)
-        {
-            plan.push_background_event(event);
-        }
+    for event in events {
+        plan.push_background_event(event);
     }
     plan.push_success();
     let dialog_handler_enabled = conn

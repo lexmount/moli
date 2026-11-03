@@ -133,29 +133,6 @@ impl CdpConnection {
         command: AutomationCommand,
     ) -> Result<AutomationCommandDispatchOutcome, Box<AutomationCommand>> {
         let context = command.context().clone();
-        if context.protocol != crate::automation::FrontendProtocol::Cdp {
-            let owner_context = self
-                .command_owner_scope_for_devtools_context(&context)
-                .and_then(|owner| self.target_owner_identity_for_owner(&owner))
-                .map(|(context, _)| context);
-            let context_id = if context.target_id.is_some() {
-                owner_context
-            } else {
-                context
-                    .browser_context_id
-                    .as_ref()
-                    .map(|id| id.as_str().to_owned())
-                    .or(owner_context)
-            };
-            if let Some(context) = context_id
-                .as_deref()
-                .and_then(|id| self.browser_context_by_id_mut(id))
-            {
-                // Native clients can handle dialogs without a CDP Page callback.
-                // Their existing choice of modal waiting remains independent.
-                context.automation_javascript_dialog_handler_available = true;
-            }
-        }
         let (result, events) = match command {
             command @ (AutomationCommand::GetTargets(_)
             | AutomationCommand::GetServiceWorkerLogs(_)

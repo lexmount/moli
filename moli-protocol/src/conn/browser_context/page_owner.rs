@@ -655,7 +655,7 @@ impl CdpConnection {
         browser_context
             .renderer_runtime()
             .set_javascript_dialog_handler_enabled(
-                browser_context.automation_javascript_dialog_wait_enabled
+                self.automation_javascript_dialog_wait_enabled()
                     || browser_context_has_page_domain_enabled_session(browser_context),
             );
     }

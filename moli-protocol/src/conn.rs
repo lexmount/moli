@@ -19,6 +19,7 @@ use serde_json::json;
 
 use crate::automation::{
     AutomationContext, DevToolsTargetFilterEntry, DevToolsTargetInfo, DevToolsTargetKind,
+    FrontendProtocol,
 };
 
 use moli_core::{
@@ -75,6 +76,7 @@ pub use document_activity_work::CompletedDocumentActivityUpdate;
 pub(crate) use downloads::PreparedDownloadActivationDelivery;
 mod fetch_support;
 mod inspector_route;
+mod javascript_dialog;
 mod navigation_error;
 mod output;
 mod owned_wait_task;
@@ -1254,6 +1256,9 @@ pub struct CdpConnection {
     // Browser/session routing state.
     pub browser_context: Option<BrowserContext>,
     pub inactive_browser_contexts: Vec<BrowserContext>,
+    /// Native adapters own these registrations for their session lifetime.
+    /// Presence permits handling dialogs; the value separately controls modal waits.
+    automation_javascript_dialog_handlers: HashMap<FrontendProtocol, bool>,
     /// Root/browser owner Target discovery mirror for diagnostics and
     /// cross-crate schedulers. Event routing uses `target_handlers`.
     pub(crate) target_discovery_enabled: bool,
@@ -1452,17 +1457,6 @@ impl CdpConnection {
             .any(BrowserContext::has_pending_javascript_dialog)
     }
 
-    pub fn set_automation_javascript_dialog_handler_enabled(&mut self, enabled: bool) -> bool {
-        let Some(browser_context) = self.browser_context.as_mut() else {
-            return false;
-        };
-        browser_context.automation_javascript_dialog_wait_enabled = enabled;
-        browser_context.automation_javascript_dialog_handler_available = enabled;
-        let context_id = browser_context.id.clone();
-        self.sync_javascript_dialog_handler_enabled_for_browser_context(&context_id);
-        true
-    }
-
     pub fn new_with_initial_cookies(initial_cookies: Vec<StoredCookie>) -> Self {
         Self::new_with_initial_storage_partition(CdpInitialStoragePartition::with_cookies(
             initial_cookies,
@@ -1612,6 +1606,7 @@ impl CdpConnection {
         Self {
             browser_context: None,
             inactive_browser_contexts: Vec::new(),
+            automation_javascript_dialog_handlers: HashMap::new(),
             target_discovery_enabled: false,
             target_info_change_events_enabled: false,
             target_discovery_filter: None,
@@ -3226,6 +3221,11 @@ impl CdpConnection {
     }
 
     fn initialize_browser_context_state(&self, browser_context: &mut BrowserContext) {
+        browser_context
+            .renderer_runtime()
+            .set_javascript_dialog_handler_enabled(
+                self.automation_javascript_dialog_wait_enabled(),
+            );
         browser_context.startup_document_start_scripts =
             self.startup_document_start_scripts.clone();
         browser_context.global_cache_disabled = self.global_cache_disabled;

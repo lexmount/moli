@@ -242,7 +242,10 @@ async fn last_cdp_subscriber_detach_preserves_native_dialog_handler() {
     let mut ctx = shared_dialog_context();
     ctx.with_fixture(|conn| {
         assert!(conn.disable_page_domain_for_session_owner(Some("SID-primary")));
-        assert!(conn.set_automation_javascript_dialog_handler_enabled(true));
+        assert!(conn.register_automation_javascript_dialog_handler(
+            FrontendProtocol::WebDriverClassic,
+            true,
+        ));
     });
     let completion = RendererJavaScriptDialogCompletion::pending();
     push_dialog_for_session(
@@ -294,7 +297,13 @@ async fn last_cdp_subscriber_detach_preserves_native_dialog_handler() {
 async fn bidi_dialog_handler_survives_last_cdp_detach_without_enabling_modal_waits() {
     let mut ctx = shared_dialog_context();
     ctx.with_fixture(|conn| {
-        assert!(conn.disable_page_domain_for_session_owner(Some("SID-primary")))
+        assert!(conn.disable_page_domain_for_session_owner(Some("SID-primary")));
+        assert!(
+            conn.register_automation_javascript_dialog_handler(
+                FrontendProtocol::WebDriverBidi,
+                false,
+            )
+        );
     });
     let completion = RendererJavaScriptDialogCompletion::pending();
     push_dialog_for_session(
@@ -361,9 +370,7 @@ async fn assert_page_disable_preserves_native_dialog_handler(
     let native_modal_wait = protocol == FrontendProtocol::WebDriverClassic;
     ctx.with_fixture(|conn| {
         assert!(conn.disable_page_domain_for_session_owner(Some(other)));
-        if native_modal_wait {
-            assert!(conn.set_automation_javascript_dialog_handler_enabled(true));
-        }
+        assert!(conn.register_automation_javascript_dialog_handler(protocol, native_modal_wait));
     });
     let completion = RendererJavaScriptDialogCompletion::pending();
     push_dialog_for_session(
@@ -488,6 +495,190 @@ async fn attached_page_disable_preserves_native_bidi_dialog_handler() {
         FrontendProtocol::WebDriverBidi,
     )
     .await;
+}
+
+async fn assert_native_dialog_handler_release_preserves_peer(
+    releasing: FrontendProtocol,
+    remaining: FrontendProtocol,
+) {
+    let mut ctx = shared_dialog_context();
+    ctx.with_fixture(|conn| {
+        assert!(conn.register_automation_javascript_dialog_handler(
+            FrontendProtocol::WebDriverClassic,
+            true
+        ));
+        assert!(
+            conn.register_automation_javascript_dialog_handler(
+                FrontendProtocol::WebDriverBidi,
+                false
+            )
+        );
+    });
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-primary"),
+        renderer_dialog_for_test(
+            None,
+            "prompt",
+            "retained native prompt",
+            "",
+            Some(completion.clone()),
+        ),
+    );
+    for (id, session) in [(220, "SID-primary"), (221, "SID-attached")] {
+        ctx.process_async(json!({"id": id, "method": "Page.disable", "sessionId": session}))
+            .await;
+        assert_eq!(take_response_by_id(&mut ctx, id)["result"], json!({}));
+    }
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.unregister_automation_javascript_dialog_handler(releasing)
+                .is_empty()
+        );
+        assert!(conn.has_pending_javascript_dialog());
+        assert!(conn.has_automation_javascript_dialog_handler());
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .renderer_runtime()
+                .javascript_dialog_handler_enabled(),
+            remaining == FrontendProtocol::WebDriverClassic,
+        );
+    });
+    ctx.execute_automation_command_through_renderer_fence_for_test(
+        AutomationCommand::HandleJavaScriptDialog(
+            crate::automation::DevToolsHandleJavaScriptDialogCommand {
+                context: AutomationContext {
+                    protocol: remaining,
+                    session_id: None,
+                    target_id: Some("TID-1".into()),
+                    browser_context_id: None,
+                },
+                accept: true,
+                prompt_text: "peer answer".to_owned(),
+            },
+        ),
+    )
+    .await
+    .expect("the remaining native adapter handles the prompt");
+    assert!(!completion.finish(false, String::new()));
+    let result = completion.wait();
+    assert!(result.accepted);
+    assert_eq!(result.user_input, "peer answer");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn releasing_bidi_handler_preserves_classic_handler_and_modal_waits() {
+    assert_native_dialog_handler_release_preserves_peer(
+        FrontendProtocol::WebDriverBidi,
+        FrontendProtocol::WebDriverClassic,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn releasing_classic_handler_preserves_non_modal_bidi_handler() {
+    assert_native_dialog_handler_release_preserves_peer(
+        FrontendProtocol::WebDriverClassic,
+        FrontendProtocol::WebDriverBidi,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn releasing_last_native_handler_settles_every_abandoned_dialog() {
+    let mut ctx = shared_dialog_context();
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.register_automation_javascript_dialog_handler(
+                FrontendProtocol::WebDriverBidi,
+                false
+            )
+        );
+    });
+    let completions = [
+        RendererJavaScriptDialogCompletion::pending(),
+        RendererJavaScriptDialogCompletion::pending(),
+    ];
+    for completion in &completions {
+        push_dialog_for_session(
+            &mut ctx,
+            Some("SID-primary"),
+            renderer_dialog_for_test(
+                None,
+                "confirm",
+                "abandoned native prompt",
+                "",
+                Some(completion.clone()),
+            ),
+        );
+    }
+    for (id, session) in [(222, "SID-primary"), (223, "SID-attached")] {
+        ctx.process_async(json!({"id": id, "method": "Page.disable", "sessionId": session}))
+            .await;
+        assert_eq!(take_response_by_id(&mut ctx, id)["result"], json!({}));
+    }
+    let events = ctx.with_fixture(|conn| {
+        let events =
+            conn.unregister_automation_javascript_dialog_handler(FrontendProtocol::WebDriverBidi);
+        assert!(!conn.has_automation_javascript_dialog_handler());
+        assert!(!conn.has_pending_javascript_dialog());
+        assert!(
+            conn.unregister_automation_javascript_dialog_handler(FrontendProtocol::WebDriverBidi)
+                .is_empty()
+        );
+        events
+    });
+    assert_eq!(events.len(), 2);
+    for event in events {
+        assert!(!event.has_protocol_wire_message());
+        assert!(
+            matches!(event.into_parts().1, Some(AutomationEvent::UserPromptClosed(closed)) if !closed.accepted)
+        );
+    }
+    for completion in completions {
+        assert!(!completion.finish(true, String::new()));
+        assert!(!completion.wait().accepted);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn releasing_last_native_handler_preserves_original_page_subscribers() {
+    let mut ctx = shared_dialog_context();
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.register_automation_javascript_dialog_handler(
+                FrontendProtocol::WebDriverBidi,
+                false
+            )
+        );
+    });
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-primary"),
+        renderer_dialog_for_test(
+            None,
+            "confirm",
+            "original CDP observer",
+            "",
+            Some(completion.clone()),
+        ),
+    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.unregister_automation_javascript_dialog_handler(FrontendProtocol::WebDriverBidi)
+                .is_empty()
+        );
+        assert!(!conn.has_automation_javascript_dialog_handler());
+        assert!(conn.has_pending_javascript_dialog());
+    });
+    ctx.process_async(json!({"id": 224, "method": "Page.handleJavaScriptDialog", "sessionId": "SID-attached", "params": {"accept": true}})).await;
+    assert_eq!(take_response_by_id(&mut ctx, 224)["result"], json!({}));
+    assert!(!completion.finish(false, String::new()));
+    assert!(completion.wait().accepted);
 }
 
 #[tokio::test(flavor = "multi_thread")]
