@@ -1046,7 +1046,10 @@ fn location_accessors_throw_on_invalid_receivers_without_navigation() {
 #[test]
 fn standalone_dialog_handler_without_page_residence_uses_headless_defaults() {
     let mut vm = new_storage_test_vm_without_page_residence("https://dialog-fallback.test/");
-    vm.set_javascript_dialog_handler_enabled(true);
+    vm._context_host
+        .borrow()
+        .browser_context_runtime()
+        .set_javascript_dialog_handler_enabled(true);
 
     let result = vm
         .eval(
@@ -1066,6 +1069,58 @@ fn standalone_dialog_handler_without_page_residence_uses_headless_defaults() {
         "a realm without an exact Page residence must not claim a protocol dialog"
     );
 }
+
+#[tokio::test]
+async fn shared_dialog_mode_updates_page_vms_created_while_enabled() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let context_owner = crate::runtime::RendererBrowserContextRuntime::new();
+    let runtime = context_owner.handle();
+    runtime.set_javascript_dialog_handler_enabled(true);
+    let mut pages = [
+        "https://shared-dialogs.test/a",
+        "https://shared-dialogs.test/b",
+    ]
+    .map(|url| {
+        crate::runtime::PageVmTaskExecutorTestHarness::new_with_browser_context_runtime(
+            url::Url::parse(url).unwrap(),
+            &loader,
+            runtime.clone(),
+        )
+    });
+
+    runtime.set_javascript_dialog_handler_enabled(false);
+    for page in &mut pages {
+        assert!(
+            !page
+                ._context_host
+                .borrow()
+                .javascript_dialog_handler_enabled(),
+            "an existing VM must observe the shared switch turning off"
+        );
+        assert_eq!(
+            page.eval("[String(alert('shared alert')), String(confirm('shared confirm')), String(prompt('shared prompt', 'default'))].join('|')").unwrap(),
+            "undefined|false|null",
+        );
+    }
+    runtime.set_javascript_dialog_handler_enabled(true);
+    for page in &pages {
+        assert!(
+            page._context_host
+                .borrow()
+                .javascript_dialog_handler_enabled()
+        );
+    }
+    runtime.set_javascript_dialog_handler_enabled(false);
+    for page in &pages {
+        assert!(
+            !page
+                ._context_host
+                .borrow()
+                .javascript_dialog_handler_enabled()
+        );
+    }
+}
+
 #[tokio::test]
 async fn sandboxed_child_without_allow_modals_uses_dialog_defaults_without_opening_one() {
     let mut vm = new_storage_test_vm("https://sandbox-dialogs.test/");

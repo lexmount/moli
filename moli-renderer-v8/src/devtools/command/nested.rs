@@ -80,7 +80,6 @@ impl RendererPageCommand {
             | Self::ChildFrameDocumentRootNodeReference { .. }
             | Self::PendingSubresourceRequestCount
             | Self::SetFetchSubresourceInterception { .. }
-            | Self::SetJavaScriptDialogHandlerEnabled(..)
             | Self::SetExtraHttpHeaders(..)
             | Self::SetNetworkRequestPolicy { .. }
             | Self::SetPermissionOverrides(..)

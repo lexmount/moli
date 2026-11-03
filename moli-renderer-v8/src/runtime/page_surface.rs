@@ -5270,7 +5270,6 @@ pub enum RendererPageCommand {
         enabled: bool,
         resource_type: Option<crate::SubresourceResourceType>,
     },
-    SetJavaScriptDialogHandlerEnabled(bool),
     ReplaceBrowserResourceRuntime {
         resource_runtime: crate::network::BrowserResourceRuntime,
         navigator_identity: moli_browser_profile::BrowserIdentityProfile,

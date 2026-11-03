@@ -1048,11 +1048,6 @@ impl PageVm {
                 self.set_fetch_subresource_interception(enabled, resource_type);
                 Ok(RendererPageReply::Unit)
             }
-            RendererPageCommand::SetJavaScriptDialogHandlerEnabled(enabled) => {
-                self.vm_mut()
-                    .set_javascript_dialog_handler_enabled(enabled);
-                Ok(RendererPageReply::Unit)
-            }
             RendererPageCommand::ReplaceBrowserResourceRuntime {
                 resource_runtime,
                 navigator_identity,

@@ -411,6 +411,7 @@ fn assert_child_frame_attached(
 
 mod capture;
 mod dialog;
+mod dialog_handler_state;
 mod document_content;
 mod frame_tree;
 mod lifecycle;
