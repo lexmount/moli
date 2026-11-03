@@ -93,6 +93,391 @@ fn shared_dialog_context() -> TestContext {
     ctx
 }
 
+async fn assert_last_dialog_subscriber_detach_dismisses(ending: &str, other: &str) {
+    let mut ctx = shared_dialog_context();
+    ctx.with_fixture(|conn| assert!(conn.disable_page_domain_for_session_owner(Some(other))));
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some(ending),
+        renderer_dialog_for_test(
+            Some("TID-1"),
+            "confirm",
+            "last original subscriber",
+            "",
+            Some(completion.clone()),
+        ),
+    );
+    ctx.process_async(json!({"id": 201, "method": "Page.enable", "sessionId": "SID-disabled"}))
+        .await;
+    assert_eq!(take_response_by_id(&mut ctx, 201)["result"], json!({}));
+    ctx.process_async(json!({
+        "id": 202, "method": "Target.detachFromTarget", "params": {"sessionId": ending},
+    }))
+    .await;
+    assert_eq!(take_response_by_id(&mut ctx, 202)["result"], json!({}));
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_pending_javascript_dialog(),
+            "a late Page subscriber cannot handle the abandoned dialog; detach must dismiss it"
+        )
+    });
+    assert!(
+        !completion.finish(true, String::new()),
+        "detach must settle the renderer completion once"
+    );
+    assert!(!completion.wait().accepted);
+    let closed = ctx
+        .take_all()
+        .into_iter()
+        .filter(|message| message["method"] == "Page.javascriptDialogClosed")
+        .collect::<Vec<_>>();
+    assert_eq!(closed.len(), 1);
+    assert_eq!(closed[0]["sessionId"], "SID-disabled");
+    assert_eq!(closed[0]["params"]["result"], false);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn last_primary_dialog_subscriber_detach_dismisses_with_late_observer() {
+    assert_last_dialog_subscriber_detach_dismisses("SID-primary", "SID-attached").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn last_attached_dialog_subscriber_detach_dismisses_with_late_observer() {
+    assert_last_dialog_subscriber_detach_dismisses("SID-attached", "SID-primary").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn page_disable_dismisses_every_dialog_observed_by_that_subscription() {
+    let mut ctx = shared_dialog_context();
+    let completions = [
+        RendererJavaScriptDialogCompletion::pending(),
+        RendererJavaScriptDialogCompletion::pending(),
+    ];
+    for (index, completion) in completions.iter().enumerate() {
+        push_dialog_for_session(
+            &mut ctx,
+            Some("SID-primary"),
+            renderer_dialog_for_test(
+                Some("TID-1"),
+                "confirm",
+                &format!("queued dialog {index}"),
+                "",
+                Some(completion.clone()),
+            ),
+        );
+    }
+    ctx.process_async(json!({"id": 203, "method": "Page.disable", "sessionId": "SID-attached"}))
+        .await;
+    assert_eq!(take_response_by_id(&mut ctx, 203)["result"], json!({}));
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_pending_javascript_dialog(),
+            "Page.disable must cancel the entire observed queue"
+        )
+    });
+    for completion in completions {
+        assert!(!completion.finish(true, String::new()));
+        assert!(!completion.wait().accepted);
+    }
+    assert_eq!(
+        ctx.take_all()
+            .iter()
+            .filter(|message| message["method"] == "Page.javascriptDialogClosed")
+            .count(),
+        2
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn page_disable_dismisses_observed_tail_without_consuming_unobserved_head() {
+    let mut ctx = shared_dialog_context();
+    ctx.with_fixture(|conn| {
+        assert!(conn.disable_page_domain_for_session_owner(Some("SID-attached")))
+    });
+    let head = RendererJavaScriptDialogCompletion::pending();
+    let tail = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-primary"),
+        renderer_dialog_for_test(
+            Some("TID-1"),
+            "confirm",
+            "unobserved head",
+            "",
+            Some(head.clone()),
+        ),
+    );
+    ctx.process_async(json!({"id": 204, "method": "Page.enable", "sessionId": "SID-attached"}))
+        .await;
+    assert_eq!(take_response_by_id(&mut ctx, 204)["result"], json!({}));
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-primary"),
+        renderer_dialog_for_test(
+            Some("TID-1"),
+            "confirm",
+            "observed tail",
+            "",
+            Some(tail.clone()),
+        ),
+    );
+    ctx.process_async(json!({"id": 205, "method": "Page.disable", "sessionId": "SID-attached"}))
+        .await;
+    assert_eq!(take_response_by_id(&mut ctx, 205)["result"], json!({}));
+    assert!(
+        !tail.finish(true, String::new()),
+        "disable must cancel its queued callback even when it is not the head"
+    );
+    assert!(!tail.wait().accepted);
+    ctx.process_async(json!({"id": 206, "method": "Page.handleJavaScriptDialog", "sessionId": "SID-primary", "params": {"accept": true}})).await;
+    assert_eq!(take_response_by_id(&mut ctx, 206)["result"], json!({}));
+    assert!(!head.finish(false, String::new()));
+    assert!(head.wait().accepted);
+    ctx.with_fixture(|conn| assert!(!conn.has_pending_javascript_dialog()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn last_cdp_subscriber_detach_preserves_native_dialog_handler() {
+    let mut ctx = shared_dialog_context();
+    ctx.with_fixture(|conn| {
+        assert!(conn.disable_page_domain_for_session_owner(Some("SID-primary")));
+        assert!(conn.set_automation_javascript_dialog_handler_enabled(true));
+    });
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-attached"),
+        renderer_dialog_for_test(
+            Some("TID-1"),
+            "prompt",
+            "native handler survives",
+            "",
+            Some(completion.clone()),
+        ),
+    );
+    ctx.process_async(json!({"id": 207, "method": "Target.detachFromTarget", "params": {"sessionId": "SID-attached"}})).await;
+    assert_eq!(take_response_by_id(&mut ctx, 207)["result"], json!({}));
+    ctx.with_fixture(|conn| {
+        assert!(conn.has_pending_javascript_dialog());
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .renderer_runtime()
+                .javascript_dialog_handler_enabled()
+        );
+    });
+    ctx.execute_automation_command_through_renderer_fence_for_test(
+        AutomationCommand::HandleJavaScriptDialog(
+            crate::automation::DevToolsHandleJavaScriptDialogCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverClassic,
+                    session_id: None,
+                    target_id: Some(DevToolsTargetId::from("TID-1")),
+                    browser_context_id: None,
+                },
+                accept: true,
+                prompt_text: "native answer".to_owned(),
+            },
+        ),
+    )
+    .await
+    .expect("native handler retains access to the shared dialog");
+    assert!(!completion.finish(false, String::new()));
+    let result = completion.wait();
+    assert!(result.accepted);
+    assert_eq!(result.user_input, "native answer");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bidi_dialog_handler_survives_last_cdp_detach_without_enabling_modal_waits() {
+    let mut ctx = shared_dialog_context();
+    ctx.with_fixture(|conn| {
+        assert!(conn.disable_page_domain_for_session_owner(Some("SID-primary")))
+    });
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-attached"),
+        renderer_dialog_for_test(
+            Some("TID-1"),
+            "confirm",
+            "BiDi handler",
+            "",
+            Some(completion.clone()),
+        ),
+    );
+    let context = AutomationContext {
+        protocol: FrontendProtocol::WebDriverBidi,
+        session_id: None,
+        target_id: Some(DevToolsTargetId::from("TID-1")),
+        browser_context_id: None,
+    };
+    ctx.execute_automation_command_through_renderer_fence_for_test(
+        AutomationCommand::GetJavaScriptDialog(
+            crate::automation::DevToolsGetJavaScriptDialogCommand {
+                context: context.clone(),
+            },
+        ),
+    )
+    .await
+    .expect("BiDi can observe the prompt without a CDP Page callback");
+    ctx.process_async(json!({"id": 210, "method": "Target.detachFromTarget", "params": {"sessionId": "SID-attached"}})).await;
+    assert_eq!(take_response_by_id(&mut ctx, 210)["result"], json!({}));
+    ctx.with_fixture(|conn| {
+        assert!(conn.has_pending_javascript_dialog());
+        assert!(
+            !conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .renderer_runtime()
+                .javascript_dialog_handler_enabled(),
+            "recording a native handler must preserve its existing non-modal mode"
+        );
+    });
+    ctx.execute_automation_command_through_renderer_fence_for_test(
+        AutomationCommand::HandleJavaScriptDialog(
+            crate::automation::DevToolsHandleJavaScriptDialogCommand {
+                context,
+                accept: true,
+                prompt_text: String::new(),
+            },
+        ),
+    )
+    .await
+    .expect("BiDi retains access after the last CDP subscriber detaches");
+    assert!(!completion.finish(false, String::new()));
+    assert!(completion.wait().accepted);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dialog_broadcast_emits_one_native_event_per_physical_dialog() {
+    let mut ctx = shared_dialog_context();
+    page_owner_for_test(&mut ctx, Some("SID-primary"));
+    let dialog = ctx.with_fixture(|conn| {
+        crate::conn::TargetPreparedJavaScriptDialog::capture(
+            conn.target_page_protocol_attachment_identity_for_session(Some("SID-primary"))
+                .unwrap(),
+            conn.runtime_session_owner_slot(Some("SID-primary"))
+                .unwrap()
+                .javascript_dialog_scope_observer(),
+            "TID-1",
+            dialog_for_test(None, "confirm", "one physical dialog"),
+        )
+    });
+    let mut opening = Vec::new();
+    ctx.with_fixture(|conn| {
+        crate::domains::page::javascript_dialog::emit_prepared(conn, &mut opening, vec![dialog])
+    });
+    let native_openings = opening
+        .iter()
+        .filter(|event| {
+            matches!(
+                (*event).clone().into_parts().1,
+                Some(AutomationEvent::PageJavaScriptDialogOpening(_))
+            )
+        })
+        .count();
+    assert_eq!(
+        native_openings, 1,
+        "CDP fan-out must not duplicate native opening events"
+    );
+    assert_eq!(
+        opening
+            .iter()
+            .filter(|event| (*event).clone().into_wire_message().is_some())
+            .count(),
+        2
+    );
+    let (result, _, closing) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::HandleJavaScriptDialog(
+            crate::automation::DevToolsHandleJavaScriptDialogCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverClassic,
+                    session_id: None,
+                    target_id: Some(DevToolsTargetId::from("TID-1")),
+                    browser_context_id: None,
+                },
+                accept: true,
+                prompt_text: String::new(),
+            },
+        ))
+        .await
+        .into_parts_with_protocol_events();
+    result.expect("shared dialog should close");
+    assert_eq!(
+        closing
+            .iter()
+            .filter(|event| matches!(
+                (*event).clone().into_parts().1,
+                Some(AutomationEvent::UserPromptClosed(_))
+            ))
+            .count(),
+        1,
+        "CDP fan-out must not duplicate native closing events"
+    );
+    assert_eq!(
+        closing
+            .iter()
+            .filter(|event| (*event).clone().into_wire_message().is_some())
+            .count(),
+        2
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn prepared_dialog_arriving_after_last_page_disable_is_dismissed() {
+    let mut ctx = shared_dialog_context();
+    page_owner_for_test(&mut ctx, Some("SID-primary"));
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    let dialog = ctx.with_fixture(|conn| {
+        crate::conn::TargetPreparedJavaScriptDialog::capture(
+            conn.target_page_protocol_attachment_identity_for_session(Some("SID-primary"))
+                .unwrap(),
+            conn.runtime_session_owner_slot(Some("SID-primary"))
+                .unwrap()
+                .javascript_dialog_scope_observer(),
+            "TID-1",
+            renderer_dialog_for_test(
+                None,
+                "confirm",
+                "delayed renderer prefix",
+                "",
+                Some(completion.clone()),
+            ),
+        )
+    });
+    for (id, session) in [(208, "SID-primary"), (209, "SID-attached")] {
+        ctx.process_async(json!({"id": id, "method": "Page.disable", "sessionId": session}))
+            .await;
+        assert_eq!(take_response_by_id(&mut ctx, id)["result"], json!({}));
+    }
+    let mut events = Vec::new();
+    ctx.with_fixture(|conn| {
+        crate::domains::page::javascript_dialog::emit_prepared(conn, &mut events, vec![dialog]);
+        assert!(!conn.has_pending_javascript_dialog());
+    });
+    assert!(
+        !completion.finish(true, String::new()),
+        "a delayed prefix must not install an orphaned renderer wait"
+    );
+    assert!(!completion.wait().accepted);
+    assert!(
+        events
+            .iter()
+            .all(|event| !event.has_protocol_wire_message())
+    );
+    let native = events
+        .into_iter()
+        .filter_map(|event| event.into_parts().1)
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(native.as_slice(), [AutomationEvent::PageJavaScriptDialogOpening(_), AutomationEvent::UserPromptClosed(closed)] if !closed.accepted)
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn primary_detach_preserves_shared_javascript_dialog_and_completion() {
     let mut ctx = shared_dialog_context();

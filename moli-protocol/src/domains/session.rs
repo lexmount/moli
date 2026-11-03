@@ -318,7 +318,10 @@ pub(crate) enum PreparedSessionHandlerDisposal {
     Tracing(Option<super::tracing::PendingTraceCancel>),
     Fetch(Option<Box<super::fetch::PreparedFetchCleanup>>),
     Runtime(Option<crate::conn::SessionWorkerCleanup>),
-    Scripts(crate::conn::SessionScriptCleanup),
+    Page {
+        scripts: crate::conn::SessionScriptCleanup,
+        events: Vec<BackgroundProtocolEvent>,
+    },
     PageUpdates {
         owner: CommandOwnerScope,
         updates: crate::conn::SessionPageUpdates,
@@ -352,7 +355,11 @@ impl PreparedSessionHandlerDisposal {
                     .then(|| conn.prepare_session_worker_cleanup(session_id)),
             ),
             DevToolsSessionDomainHandler::Page => {
-                Self::Scripts(conn.prepare_session_script_cleanup(session_id))
+                let events = super::page::prepare_page_session_disposal(conn, session_id);
+                Self::Page {
+                    events,
+                    scripts: conn.prepare_session_script_cleanup(session_id),
+                }
             }
             DevToolsSessionDomainHandler::Emulation => Self::PageUpdates {
                 owner: CommandOwnerScope::capture(conn, Some(session_id)),
@@ -428,11 +435,12 @@ impl PreparedSessionHandlerDisposal {
                 protocol_events.extend(protocol);
                 Ok(Default::default())
             }
-            Self::Scripts(pending) => {
-                let completed = pending.wait().await;
+            Self::Page { scripts, events } => {
+                protocol_events.extend(events);
+                let removed_scripts = scripts.wait().await;
                 let identity = identity.clone();
                 driver.with_state(move |state| {
-                    state.finish_session_script_cleanup(&identity, completed)
+                    state.finish_session_script_cleanup(&identity, removed_scripts)
                 })
             }
             Self::PageUpdates { owner, updates } => {

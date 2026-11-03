@@ -711,7 +711,7 @@ pub(crate) use state::{
     RendererMainDocumentCommitSeed, RendererPageResidenceIdentity,
     ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
     SiteDataClearOptions, TargetIdentityState, TargetInitialEmptyDocumentCreator,
-    TargetJavaScriptDialogState, TargetOwnerState, TargetPageAttachmentId,
+    TargetJavaScriptDialog, TargetJavaScriptDialogState, TargetOwnerState, TargetPageAttachmentId,
     TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity,
     TargetPageResidenceObservation, TargetPageResidenceToken, TargetPageSessionState,
     TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
@@ -733,8 +733,8 @@ pub use state::{
 };
 #[cfg(test)]
 pub(crate) use state::{
-    DevToolsSessionState, TargetJavaScriptDialog, TargetJavaScriptDialogScopeObserver,
-    TargetPageSlot, TargetRuntimeSessionState,
+    DevToolsSessionState, TargetJavaScriptDialogScopeObserver, TargetPageSlot,
+    TargetRuntimeSessionState,
 };
 pub(crate) use target::{
     PreparedDefaultTargetClose, PreparedTargetAttach, PreparedTargetHostClosure,
@@ -1453,12 +1453,13 @@ impl CdpConnection {
     }
 
     pub fn set_automation_javascript_dialog_handler_enabled(&mut self, enabled: bool) -> bool {
-        let Some(browser_context) = self.browser_context.as_ref() else {
+        let Some(browser_context) = self.browser_context.as_mut() else {
             return false;
         };
-        browser_context
-            .renderer_runtime()
-            .set_javascript_dialog_handler_enabled(enabled);
+        browser_context.automation_javascript_dialog_wait_enabled = enabled;
+        browser_context.automation_javascript_dialog_handler_available = enabled;
+        let context_id = browser_context.id.clone();
+        self.sync_javascript_dialog_handler_enabled_for_browser_context(&context_id);
         true
     }
 

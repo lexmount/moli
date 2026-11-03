@@ -385,15 +385,20 @@ async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback
         super::emit_javascript_dialog_activity_background_events(conn, &mut out, &mut prepared)
     });
 
-    assert_eq!(out.len(), 1);
-    let (message, automation_event) = out.remove(0).into_parts();
+    assert_eq!(out.len(), 2);
+    let message = out
+        .iter()
+        .cloned()
+        .find_map(BackgroundProtocolEvent::into_wire_message)
+        .expect("CDP opening");
+    let automation_event = out.into_iter().find_map(|event| event.into_parts().1);
     assert_eq!(message["method"], json!("Page.javascriptDialogOpening"));
     assert_eq!(message["params"]["frameId"], json!("FRAME-1"));
     assert_eq!(message["params"]["type"], json!("alert"));
     assert_eq!(message["params"]["message"], json!("prepared dialog"));
     assert_eq!(message["sessionId"], json!("SID-1"));
     let Some(AutomationEvent::PageJavaScriptDialogOpening(event)) = automation_event else {
-        panic!("expected typed Page.javascriptDialogOpening sidecar");
+        panic!("expected a separate native Page.javascriptDialogOpening fact");
     };
     assert_eq!(
         event.frame_id.as_ref().map(|frame_id| frame_id.as_str()),
@@ -455,8 +460,11 @@ async fn child_dialog_output_stays_with_its_exact_protocol_attachment() {
         super::emit_javascript_dialog_activity_background_events(conn, &mut out, &mut prepared)
     });
 
-    assert_eq!(out.len(), 1);
-    let message = out.remove(0).into_protocol_message();
+    assert_eq!(out.len(), 2);
+    let message = out
+        .into_iter()
+        .find_map(BackgroundProtocolEvent::into_wire_message)
+        .expect("CDP opening");
     assert_eq!(message["sessionId"], json!("SID-attached"));
     assert_eq!(message["params"]["frameId"], json!("FRAME-child"));
     ctx.with_fixture(|conn| {
@@ -651,6 +659,7 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
     browser_context.set_active_target_id("TID-opener");
     browser_context.attach_active_session("SID-opener");
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    ctx.with_fixture(|conn| assert!(conn.set_automation_javascript_dialog_handler_enabled(true)));
     ctx.with_fixture(|conn| {
         conn.set_auto_attach_owner(
             None,
@@ -1118,8 +1127,11 @@ async fn javascript_dialog_projection_uses_captured_url_and_frame() {
         super::emit_javascript_dialog_activity_background_events(conn, &mut out, &mut prepared)
     });
 
-    assert_eq!(out.len(), 1);
-    let message = out.remove(0).into_protocol_message();
+    assert_eq!(out.len(), 2);
+    let message = out
+        .into_iter()
+        .find_map(BackgroundProtocolEvent::into_wire_message)
+        .expect("CDP opening");
     assert_eq!(message["params"]["frameId"], json!("FRAME-source"));
     assert_eq!(
         message["params"]["url"],
