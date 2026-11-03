@@ -221,7 +221,10 @@ pub(crate) fn render<D: Dom + ?Sized>(
                 }
             }
             Task::Node(node, depth, mode) => {
-                if depth >= limit || crate::visibility::nonrendered_serialized_state(dom, node) {
+                if depth >= limit
+                    || (!matches!(mode, TextMode::Pre)
+                        && crate::visibility::nonrendered_serialized_state(dom, node))
+                {
                     continue;
                 }
                 let code = !matches!(mode, TextMode::Normal);
