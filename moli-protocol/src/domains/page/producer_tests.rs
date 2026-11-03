@@ -3556,7 +3556,7 @@ async fn initial_document_navigation_latest_request_wins_in_either_resume_order(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn initial_document_navigation_cannot_override_newer_same_document_navigation() {
+async fn initial_document_navigation_survives_newer_fragment_navigation() {
     for via_protocol in [false, true] {
         let (mut ctx, owner) = initial_document_navigation_context_for_test();
         let pending = ctx.with_fixture(|conn| {
@@ -3610,6 +3610,17 @@ async fn initial_document_navigation_cannot_override_newer_same_document_navigat
                 ctx.route_direct_command_output_for_test(Vec::new(), scheduler)
                     .await;
             }
+            assert_eq!(
+                ctx.evaluate_fixture_page_expression(
+                    Some("SID-initial-navigation"),
+                    "location.href",
+                    false,
+                )
+                .await
+                .unwrap(),
+                json!({"type": "string", "value": "about:blank#newer"}),
+                "the fragment must apply before the pending cross-Document navigation resumes",
+            );
             ctx.drive_owned_wait(running).await.unwrap();
         }
         assert_eq!(
@@ -3620,23 +3631,140 @@ async fn initial_document_navigation_cannot_override_newer_same_document_navigat
             )
             .await
             .unwrap(),
-            json!({"type": "string", "value": "about:blank#newer"}),
-            "the newer same-Document navigation must remain visible in the renderer",
+            json!({"type": "string", "value": "data:text/html,older"}),
+            "a fragment navigation must not abort an ongoing cross-Document navigation",
         );
         ctx.with_fixture(|conn| {
             context.finish_projection(conn, &mut command);
             assert_eq!(
                 conn.browser_context.as_ref().unwrap().target_url(),
-                "about:blank#newer"
+                "data:text/html,older"
             );
             assert_eq!(
                 conn.loaded_page_mut_for_owner(&owner)
                     .unwrap()
                     .final_url()
                     .as_str(),
-                "about:blank#newer"
+                "data:text/html,older"
             );
         });
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initial_document_navigation_only_committed_root_traversal_supersedes() {
+    use moli_page_types::SessionHistoryUpdateKind;
+
+    for (update, url, index, length, root_steps, supersedes) in [
+        (
+            SessionHistoryUpdateKind::Push,
+            "about:blank#new",
+            2,
+            3,
+            &[2][..],
+            false,
+        ),
+        (
+            SessionHistoryUpdateKind::Replace,
+            "about:blank#new",
+            1,
+            2,
+            &[1][..],
+            false,
+        ),
+        (
+            SessionHistoryUpdateKind::Traverse { delta: -1 },
+            "about:blank#first",
+            0,
+            2,
+            &[0][..],
+            true,
+        ),
+        // Distinct root entries may have the same URL. Conversely, joint
+        // steps from child navigations can share one root entry.
+        (
+            SessionHistoryUpdateKind::Traverse { delta: -1 },
+            "about:blank#second",
+            0,
+            2,
+            &[0][..],
+            true,
+        ),
+        (
+            SessionHistoryUpdateKind::Traverse { delta: -1 },
+            "about:blank#second",
+            0,
+            2,
+            &[0, 1][..],
+            false,
+        ),
+    ] {
+        let (ctx, owner) = initial_document_navigation_context_for_test();
+        let (page, mut build, admission) = ctx.with_fixture(|conn| {
+            bind_pending_initial_navigation_page_for_test(conn, &owner);
+            let state = &mut conn
+                .browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .owner_state;
+            for (index, entry_url) in ["about:blank#first", "about:blank#second"]
+                .into_iter()
+                .enumerate()
+            {
+                let entry_url = if root_steps.contains(&index) {
+                    url
+                } else {
+                    entry_url
+                };
+                state.record_loaded_page_navigation_history((entry_url.to_owned(), String::new()));
+            }
+            let page = conn
+                .pending_target_page_residence_identity_for_owner(&owner)
+                .unwrap();
+            let slot = conn
+                .runtime_session_owner_slot_mut_for_owner(&owner)
+                .unwrap();
+            let (build, admission) = slot.reserve_initial_document_navigation().unwrap();
+            (page, Box::pin(build.wait()), admission)
+        });
+        assert!(futures_util::poll!(&mut build).is_pending());
+        assert!(admission.is_active());
+
+        // Exercise the owner-side effect of the native commit, independently
+        // of Page adoption. Cancellation or rejection emits no such update.
+        ctx.with_fixture(|conn| {
+            conn.record_session_history_update_for_owner(
+                &owner,
+                &moli_page_types::SessionHistoryUpdate {
+                    position: moli_session_history::SessionHistoryPosition::new(index, length)
+                        .unwrap(),
+                    update,
+                    root_url: url.to_owned(),
+                    root_entry_steps: root_steps.to_vec(),
+                },
+            );
+            assert_eq!(conn.browser_context.as_ref().unwrap().target_url(), url);
+            assert_eq!(
+                conn.pending_target_page_residence_identity_for_owner(&owner),
+                Some(page)
+            );
+        });
+        assert_eq!(
+            admission.is_active(),
+            !supersedes,
+            "{update:?}, root steps {root_steps:?}"
+        );
+        assert!(
+            futures_util::poll!(&mut build).is_pending(),
+            "committed traversal supersedes navigation without cancelling Page construction",
+        );
+        ctx.with_fixture(|conn| {
+            conn.runtime_session_owner_slot_mut_for_owner(&owner)
+                .unwrap()
+                .fail_initial_document_page_build("test teardown".to_owned());
+        });
+        assert!(build.await.is_err());
     }
 }
 

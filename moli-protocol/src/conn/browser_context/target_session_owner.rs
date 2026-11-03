@@ -2830,6 +2830,20 @@ impl CdpConnection {
         let Some(mut target_owner) = self.target_session_owner_mut_for_owner(owner) else {
             return;
         };
+        // Only a committed traversal that changes the root entry supersedes
+        // its buffered navigation. Joint steps sharing that entry merely
+        // traverse children; fragment and pushState/replaceState are not
+        // traversals at all. Queuing a native command is not a commit.
+        if let moli_core::page::SessionHistoryUpdateKind::Traverse { delta } = update.update
+            && delta != 0
+            && let Ok(source_index) =
+                usize::try_from(update.position.index() as i128 - i128::from(delta))
+            && !update.root_entry_steps.contains(&source_index)
+        {
+            target_owner
+                .runtime_slot_mut()
+                .supersede_buffered_navigation();
+        }
         target_owner.record_session_history_update(&url, update.update);
         target_owner
             .target_mut()
