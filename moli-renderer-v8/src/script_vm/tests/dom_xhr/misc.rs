@@ -125,6 +125,16 @@ fn child_window_exposes_browser_surface_aliases() {
     );
 }
 #[test]
+fn current_script_stays_with_the_execution_document_after_adoption() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://current-script-adoption.test/");
+    let source = format!(
+        "(() => {{const checks = {}; return JSON.stringify([checks.length, checks.filter(row => !row.passed)]);}})()",
+        include_str!("../document_current_script_adoption.js")
+    );
+    assert_eq!(vm.eval(&source).unwrap(), "[27,[]]");
+}
+
+#[test]
 fn current_script_is_null_while_script_remains_in_shadow_tree() {
     let mut vm = new_storage_test_vm("https://shadow-current-script.test/");
     vm.exec(
