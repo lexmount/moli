@@ -31,6 +31,7 @@ fn xhr_response_headers_are_filtered_combined_and_sorted_before_events() {
                 status: 200,
                 headers: headers.clone(),
                 request_cookie_report: None,
+                request_include_credentials: false,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
                 redirect_chain: Vec::new(),

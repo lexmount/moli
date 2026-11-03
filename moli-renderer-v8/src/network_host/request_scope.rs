@@ -125,3 +125,23 @@ pub(in crate::network_host) fn effective_subresource_referrer_policy(
     }?;
     crate::context_bootstrap::document_referrer_policy_for_native_document(host, document)
 }
+
+pub(crate) fn current_subresource_policy_environment(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<(moli_url::WebOrigin, crate::types::SubresourcePolicyContext)> {
+    if let Some(state) = crate::worker::get_worker_state(scope) {
+        let policy = state.borrow().subresource_policy_context();
+        return crate::worker::worker_global_origin(scope).map(|origin| (origin, policy));
+    }
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    // The current context keeps its owning host alive for this callback.
+    let host = unsafe { &*host_ptr };
+    let owner = effective_subresource_request_owner(scope, host);
+    let target = host.current_window_document_task_target_for_dispatch_scope(owner)?;
+    let loader = host.document_resource_loader_for_window_owner(target.owner())?;
+    let environment = host.subresource_request_environment(&loader, owner)?;
+    Some((
+        environment.request_origin,
+        effective_subresource_policy_context(scope, host, owner),
+    ))
+}

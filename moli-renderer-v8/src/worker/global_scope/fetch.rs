@@ -149,6 +149,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
     document_url: Url,
     referrer_policy: Option<String>,
     network_partition_key: Option<String>,
+    policy_context: SubresourcePolicyContext,
     resolved_url: Url,
     method: String,
     body: Option<bytes::Bytes>,
@@ -195,6 +196,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                         .with_initiator_url(&document_url)
                         .with_request_mode(request_mode)
                         .with_credentials_mode(credentials_mode)
+                        .with_credentialless(policy_context.is_credentialless())
                         .with_redirect_mode(redirect_mode)
                         .with_cache_mode(worker_fetch_cache_mode(&request_metadata.cache))
                         .with_fetch_priority_hint(priority)
@@ -456,6 +458,7 @@ fn spawn_worker_fetch_service_worker(
                 document_url,
                 referrer_policy,
                 network_partition_key,
+                policy_context,
                 resolved_url,
                 method,
                 body,
@@ -725,6 +728,7 @@ pub(in crate::worker) fn continue_pending_worker_fetch(
         document_url,
         state.borrow().referrer_policy.clone(),
         network_partition_key,
+        state.borrow().policy_context,
         resolved_url,
         method,
         body,
@@ -2368,6 +2372,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                 document_url,
                 referrer_policy,
                 network_partition_key,
+                policy_context,
                 resolved_url,
                 method,
                 body,
@@ -2485,6 +2490,7 @@ pub(in crate::worker) fn worker_response_from_body(
     body: RendererSyntheticResponseBody,
 ) -> Response {
     body.into_fetch_response(ResponseHead {
+        request_include_credentials: false,
         status_text: None,
         final_url,
         status,
@@ -2606,11 +2612,13 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
             None
         } else {
             let mut observable_head = started.head.clone();
-            observable_head.headers = filter_cors_exposed_response_headers(
-                &pending.document_url,
-                &observable_head,
-                pending.credentials_mode,
-            );
+            if pending.request_mode == RequestMode::Cors {
+                observable_head.headers = filter_cors_exposed_response_headers(
+                    &pending.document_url,
+                    &observable_head,
+                    pending.credentials_mode,
+                );
+            }
             pending.streaming_body_source_id = Some(started.body_source_id);
             Some((
                 pending.resolver.clone(),
@@ -2862,6 +2870,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         request_body: request_body_text(&record.request_body_bytes),
                         resource_type: SubresourceResourceType::Fetch,
                         request_cookie_report: response_head.request_cookie_report.clone(),
+                        request_include_credentials: response_head.request_include_credentials,
                         network_request_headers: record.initial_network_request_headers.clone(),
                         challenge,
                         intercept_response: record.intercept_response,
@@ -2900,6 +2909,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         request_body: request_body_text(&record.request_body_bytes),
                         resource_type: SubresourceResourceType::Fetch,
                         request_cookie_report: response_head.request_cookie_report.clone(),
+                        request_include_credentials: response_head.request_include_credentials,
                         network_request_headers: record.initial_network_request_headers.clone(),
                         response_status: response_head.status,
                         response_headers: response_head.headers.clone(),
@@ -3006,11 +3016,17 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     },
                 ));
             }
-            let filtered_headers = filter_cors_exposed_response_headers(
-                &pending.document_url,
-                &response_head,
-                pending.credentials_mode,
-            );
+            // Opaque responses hide headers at the JS surface; native policy
+            // checks and CacheStorage still require the unfiltered CORP header.
+            let filtered_headers = if pending.request_mode == RequestMode::Cors {
+                filter_cors_exposed_response_headers(
+                    &pending.document_url,
+                    &response_head,
+                    pending.credentials_mode,
+                )
+            } else {
+                response_head.headers.clone()
+            };
             let response_obj = match response.into_fetch_parts() {
                 WorkerFetchResponseParts::Materialized { mut head, body } => {
                     head.headers = filtered_headers;

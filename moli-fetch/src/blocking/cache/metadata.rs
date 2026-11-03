@@ -36,6 +36,7 @@ pub(super) fn cache_metadata_for_response_parts(
         policy.expires_at_unix_ms,
         vary_headers,
     );
+    metadata.request_include_credentials = request.allows_credentials_for_url(final_url);
     metadata.status_text = status_text.map(str::to_owned);
     Some(metadata)
 }

@@ -686,6 +686,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
                     status: 200,
                     headers: Vec::new(),
                     request_cookie_report: None,
+                    request_include_credentials: false,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
                     redirect_chain: Vec::new(),

@@ -88,13 +88,12 @@ pub(crate) fn validate_fetch_response_security_policy(
         return Ok(());
     }
     if request_mode == RequestMode::NoCors {
-        validate_cross_origin_resource_policy(&request_origin, &head.final_url, &head.headers)?;
         validate_cross_origin_embedder_and_document_isolation_policy(
             &request_origin,
             &head.final_url,
             &head.headers,
             request_mode,
-            credentials_mode,
+            head.request_include_credentials,
             policy_context.cross_origin_embedder_policy,
             policy_context.document_isolation_policy,
         )?;
@@ -140,14 +139,12 @@ pub(crate) fn validate_fetch_response_security_policy_with_body_classified(
         return Ok(());
     }
     if request_mode == RequestMode::NoCors {
-        validate_cross_origin_resource_policy(&request_origin, &head.final_url, &head.headers)
-            .map_err(FetchResponseSecurityViolation::Rejected)?;
         validate_cross_origin_embedder_and_document_isolation_policy(
             &request_origin,
             &head.final_url,
             &head.headers,
             request_mode,
-            credentials_mode,
+            head.request_include_credentials,
             policy_context.cross_origin_embedder_policy,
             policy_context.document_isolation_policy,
         )
@@ -210,7 +207,7 @@ fn validate_cross_origin_embedder_policy(
     response_url: &url::Url,
     response_headers: &[(String, Vec<u8>)],
     request_mode: RequestMode,
-    credentials_mode: RequestCredentialsMode,
+    request_include_credentials: bool,
     embedder_policy: CrossOriginEmbedderPolicy,
 ) -> Result<(), String> {
     let request_origin = request_origin.into();
@@ -219,7 +216,7 @@ fn validate_cross_origin_embedder_policy(
         response_url,
         response_headers,
         request_mode,
-        credentials_mode,
+        request_include_credentials,
         embedder_policy,
         DocumentIsolationPolicy::None,
     )
@@ -230,52 +227,102 @@ pub(crate) fn validate_cross_origin_embedder_and_document_isolation_policy(
     response_url: &url::Url,
     response_headers: &[(String, Vec<u8>)],
     request_mode: RequestMode,
-    credentials_mode: RequestCredentialsMode,
+    request_include_credentials: bool,
     embedder_policy: CrossOriginEmbedderPolicy,
     document_isolation_policy: DocumentIsolationPolicy,
 ) -> Result<(), String> {
+    if request_mode != RequestMode::NoCors {
+        return Ok(());
+    }
     let request_origin = request_origin.into();
-    if request_mode != RequestMode::NoCors
-        || !matches!(response_url.scheme(), "http" | "https")
-        || request_origin.same_origin(&response_url.into())
+    check_opaque_response_policy(
+        &request_origin,
+        response_url,
+        response_headers,
+        request_include_credentials,
+        embedder_policy,
+        document_isolation_policy,
+    ).map_err(|violation| {
+        let due_to_coep = violation.is_due_to_coep();
+        let due_to_dip = violation.is_due_to_dip();
+        match violation {
+        OpaqueResponsePolicyViolation::Explicit(message) => message,
+        OpaqueResponsePolicyViolation::Defaulted { .. } => {
+            let label = defaulted_corp_policy_label(due_to_coep, embedder_policy, due_to_dip, document_isolation_policy);
+            format!("{label} check failed: requires a valid Cross-Origin-Resource-Policy for {} to load {response_url}", request_origin.ascii_serialization())
+        }
+        }
+    })
+}
+
+#[derive(Debug)]
+pub(crate) enum OpaqueResponsePolicyViolation {
+    Explicit(String),
+    Defaulted { due_to_coep: bool, due_to_dip: bool },
+}
+
+impl OpaqueResponsePolicyViolation {
+    pub(crate) fn is_due_to_coep(&self) -> bool {
+        matches!(
+            self,
+            Self::Defaulted {
+                due_to_coep: true,
+                ..
+            }
+        )
+    }
+
+    pub(crate) fn is_due_to_dip(&self) -> bool {
+        matches!(
+            self,
+            Self::Defaulted {
+                due_to_dip: true,
+                ..
+            }
+        )
+    }
+}
+
+/// Shared no-cors CORP decision for network responses and stored opaque
+/// responses. Cache reads use the original response's native credentials flag,
+/// never the Request used to look up the entry or the presence of Cookie headers.
+pub(crate) fn check_opaque_response_policy(
+    request_origin: &WebOrigin,
+    response_url: &url::Url,
+    response_headers: &[(String, Vec<u8>)],
+    request_include_credentials: bool,
+    embedder_policy: CrossOriginEmbedderPolicy,
+    document_isolation_policy: DocumentIsolationPolicy,
+) -> Result<(), OpaqueResponsePolicyViolation> {
+    if !matches!(response_url.scheme(), "http" | "https")
+        || request_origin.same_origin_url(response_url)
     {
         return Ok(());
     }
-
-    let request_includes_credentials =
-        request_includes_credentials(&request_origin, response_url, credentials_mode);
-    let requires_corp_due_to_coep = match embedder_policy {
-        CrossOriginEmbedderPolicy::None => false,
-        CrossOriginEmbedderPolicy::RequireCorp => true,
-        CrossOriginEmbedderPolicy::Credentialless => {
-            request_mode == RequestMode::Navigate || request_includes_credentials
-        }
-    };
-    let requires_corp_due_to_dip = match document_isolation_policy {
-        DocumentIsolationPolicy::None => false,
-        DocumentIsolationPolicy::IsolateAndRequireCorp => true,
-        DocumentIsolationPolicy::IsolateAndCredentialless => {
-            request_mode == RequestMode::Navigate || request_includes_credentials
-        }
-    };
-    let requires_corp = requires_corp_due_to_coep || requires_corp_due_to_dip;
-    if !requires_corp {
+    if let Some(policy) = moli_fetch::CrossOriginResourcePolicy::from_headers(response_headers) {
+        policy
+            .check(request_origin, response_url)
+            .map_err(OpaqueResponsePolicyViolation::Explicit)?;
         return Ok(());
     }
-
-    let policy_label = defaulted_corp_policy_label(
-        requires_corp_due_to_coep,
-        embedder_policy,
-        requires_corp_due_to_dip,
-        document_isolation_policy,
-    );
-    if let Some(policy) = moli_fetch::CrossOriginResourcePolicy::from_headers(response_headers) {
-        return policy.check(&request_origin, response_url);
+    let due_to_coep = match embedder_policy {
+        CrossOriginEmbedderPolicy::None => false,
+        CrossOriginEmbedderPolicy::RequireCorp => true,
+        CrossOriginEmbedderPolicy::Credentialless => request_include_credentials,
+    };
+    let due_to_dip = match document_isolation_policy {
+        DocumentIsolationPolicy::None => false,
+        DocumentIsolationPolicy::IsolateAndRequireCorp => true,
+        DocumentIsolationPolicy::IsolateAndCredentialless => request_include_credentials,
+    };
+    if due_to_coep || due_to_dip {
+        Err(OpaqueResponsePolicyViolation::Defaulted {
+            due_to_coep,
+            due_to_dip,
+        })
+    } else {
+        Ok(())
     }
-    Err(format!(
-        "{policy_label} check failed: requires a valid Cross-Origin-Resource-Policy for {} to load {response_url}",
-        request_origin.ascii_serialization()
-    ))
 }
 
 fn defaulted_corp_policy_label(
@@ -301,20 +348,8 @@ fn defaulted_corp_policy_label(
     }
 }
 
-fn request_includes_credentials(
-    request_origin: impl Into<WebOrigin>,
-    response_url: &url::Url,
-    credentials_mode: RequestCredentialsMode,
-) -> bool {
-    let request_origin = request_origin.into();
-    match credentials_mode {
-        RequestCredentialsMode::Include => true,
-        RequestCredentialsMode::Omit => false,
-        RequestCredentialsMode::SameOrigin => request_origin.same_origin(&response_url.into()),
-    }
-}
-
-pub(crate) fn validate_cross_origin_resource_policy(
+#[cfg(test)]
+fn validate_cross_origin_resource_policy(
     request_origin: impl Into<WebOrigin>,
     response_url: &url::Url,
     response_headers: &[(String, Vec<u8>)],
@@ -539,6 +574,7 @@ mod tests {
         headers: Vec<(String, Vec<u8>)>,
     ) -> moli_fetch::ResponseHead {
         moli_fetch::ResponseHead {
+            request_include_credentials: false,
             status_text: None,
             final_url,
             status: 200,
@@ -557,6 +593,7 @@ mod tests {
     fn cors_response_chain_checks_network_redirects_without_extra_info() {
         for from_cache in [false, true] {
             let mut head = moli_fetch::ResponseHead {
+                request_include_credentials: false,
                 status_text: None,
                 final_url: url("https://final.test/script.js"),
                 status: 200,
@@ -1219,6 +1256,126 @@ mod tests {
     }
 
     #[test]
+    fn opaque_response_policy_distinguishes_explicit_corp_and_policy_defaulting() {
+        let origin = WebOrigin::from_url(&url("https://example.test/"));
+        let target = url("https://cdn.test/body");
+        let explicit = [(
+            "Cross-Origin-Resource-Policy".to_owned(),
+            b"same-origin".to_vec(),
+        )];
+        let violation = check_opaque_response_policy(
+            &origin,
+            &target,
+            &explicit,
+            true,
+            CrossOriginEmbedderPolicy::RequireCorp,
+            DocumentIsolationPolicy::None,
+        )
+        .unwrap_err();
+        assert!(!violation.is_due_to_coep());
+        for headers in [
+            Vec::new(),
+            vec![(
+                "Cross-Origin-Resource-Policy".to_owned(),
+                b"Cross-Origin".to_vec(),
+            )],
+            vec![(
+                "Cross-Origin-Resource-Policy".to_owned(),
+                b"cross-origin, cross-origin".to_vec(),
+            )],
+            vec![
+                (
+                    "Cross-Origin-Resource-Policy".to_owned(),
+                    b"cross-origin".to_vec(),
+                ),
+                (
+                    "Cross-Origin-Resource-Policy".to_owned(),
+                    b"cross-origin".to_vec(),
+                ),
+            ],
+            vec![(
+                "Cross-Origin-Resource-Policy".to_owned(),
+                b"\xa0cross-origin\xa0".to_vec(),
+            )],
+        ] {
+            let violation = check_opaque_response_policy(
+                &origin,
+                &target,
+                &headers,
+                true,
+                CrossOriginEmbedderPolicy::RequireCorp,
+                DocumentIsolationPolicy::None,
+            )
+            .unwrap_err();
+            assert!(violation.is_due_to_coep());
+            assert!(
+                check_opaque_response_policy(
+                    &origin,
+                    &target,
+                    &headers,
+                    false,
+                    CrossOriginEmbedderPolicy::Credentialless,
+                    DocumentIsolationPolicy::None
+                )
+                .is_ok()
+            );
+            assert!(
+                check_opaque_response_policy(
+                    &origin,
+                    &target,
+                    &headers,
+                    true,
+                    CrossOriginEmbedderPolicy::None,
+                    DocumentIsolationPolicy::None
+                )
+                .is_ok()
+            );
+        }
+        assert!(
+            check_opaque_response_policy(
+                &origin,
+                &target,
+                &[(
+                    "Cross-Origin-Resource-Policy".to_owned(),
+                    b"\tcross-origin \t".to_vec()
+                )],
+                true,
+                CrossOriginEmbedderPolicy::RequireCorp,
+                DocumentIsolationPolicy::IsolateAndRequireCorp
+            )
+            .is_ok()
+        );
+        assert!(
+            check_opaque_response_policy(
+                &origin,
+                &url("https://example.test/body"),
+                &[],
+                true,
+                CrossOriginEmbedderPolicy::RequireCorp,
+                DocumentIsolationPolicy::IsolateAndRequireCorp
+            )
+            .is_ok()
+        );
+        let violation = check_opaque_response_policy(
+            &origin,
+            &target,
+            &[],
+            true,
+            CrossOriginEmbedderPolicy::None,
+            DocumentIsolationPolicy::IsolateAndRequireCorp,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            violation,
+            OpaqueResponsePolicyViolation::Defaulted {
+                due_to_coep: false,
+                due_to_dip: true
+            }
+        ));
+        assert!(!violation.is_due_to_coep());
+    }
+
+    #[test]
     fn corp_same_site_uses_schemeless_site_with_asymmetric_https_requirement() {
         let same_site = validate_cross_origin_resource_policy(
             &url("https://app.example.test/page"),
@@ -1253,6 +1410,62 @@ mod tests {
     }
 
     #[test]
+    fn opaque_policy_uses_original_response_credentials_instead_of_lookup_request_mode() {
+        let origin = WebOrigin::from_url(&url("https://page.test/"));
+        for (coep, dip) in [
+            (
+                CrossOriginEmbedderPolicy::Credentialless,
+                DocumentIsolationPolicy::None,
+            ),
+            (
+                CrossOriginEmbedderPolicy::None,
+                DocumentIsolationPolicy::IsolateAndCredentialless,
+            ),
+        ] {
+            let policy = crate::types::SubresourcePolicyContext {
+                cross_origin_embedder_policy: coep,
+                document_isolation_policy: dip,
+                ..Default::default()
+            };
+            for original_credentials in [true, false] {
+                let mut head = header_response(
+                    url("https://cdn.test/image"),
+                    vec![("content-type".into(), b"image/png".to_vec())],
+                );
+                head.request_include_credentials = original_credentials;
+                for lookup_mode in [
+                    RequestCredentialsMode::Omit,
+                    RequestCredentialsMode::Include,
+                ] {
+                    assert_eq!(
+                        validate_fetch_response_security_policy(
+                            &origin,
+                            &head,
+                            RequestMode::NoCors,
+                            lookup_mode,
+                            policy
+                        )
+                        .is_ok(),
+                        !original_credentials
+                    );
+                    assert_eq!(
+                        validate_fetch_response_security_policy_with_body(
+                            &origin,
+                            &head,
+                            b"\x89PNG\r\n\x1a\n",
+                            RequestMode::NoCors,
+                            lookup_mode,
+                            policy
+                        )
+                        .is_ok(),
+                        !original_credentials
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn coep_credentialless_requires_corp_only_when_request_includes_credentials() {
         let document_url = url("https://example.test/page");
         let response_url = url("https://cdn.test/data");
@@ -1262,7 +1475,7 @@ mod tests {
             &response_url,
             &[],
             RequestMode::NoCors,
-            RequestCredentialsMode::SameOrigin,
+            false,
             CrossOriginEmbedderPolicy::Credentialless,
         );
         assert!(non_credentialed.is_ok());
@@ -1272,7 +1485,7 @@ mod tests {
             &response_url,
             &[],
             RequestMode::NoCors,
-            RequestCredentialsMode::Include,
+            true,
             CrossOriginEmbedderPolicy::Credentialless,
         )
         .expect_err("credentialed no-cors response should require CORP");
@@ -1289,7 +1502,7 @@ mod tests {
             &response_url,
             &[],
             RequestMode::NoCors,
-            RequestCredentialsMode::SameOrigin,
+            false,
             CrossOriginEmbedderPolicy::None,
             DocumentIsolationPolicy::IsolateAndRequireCorp,
         )
@@ -1308,7 +1521,7 @@ mod tests {
             &response_url,
             &[],
             RequestMode::NoCors,
-            RequestCredentialsMode::SameOrigin,
+            false,
             CrossOriginEmbedderPolicy::None,
             DocumentIsolationPolicy::IsolateAndCredentialless,
         );
@@ -1319,7 +1532,7 @@ mod tests {
             &response_url,
             &[],
             RequestMode::NoCors,
-            RequestCredentialsMode::Include,
+            true,
             CrossOriginEmbedderPolicy::None,
             DocumentIsolationPolicy::IsolateAndCredentialless,
         )

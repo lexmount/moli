@@ -863,6 +863,7 @@ impl ScriptVm {
             request_body: request_body.clone(),
             resource_type: pending.info.resource_type,
             request_cookie_report: response.request_cookie_report.clone(),
+            request_include_credentials: response.request_include_credentials,
             network_request_headers: response
                 .network_request_headers()
                 .map(|headers| headers.to_vec()),
@@ -1120,6 +1121,17 @@ impl ScriptVm {
             status: response_code,
             headers: response_headers.clone(),
             request_cookie_report: info.request_cookie_report.clone(),
+            request_include_credentials: moli_fetch::Request::new_browser(
+                "GET",
+                info.url.clone(),
+                None,
+                Vec::new(),
+                request_origin.clone(),
+            )
+            .with_request_mode(request_mode)
+            .with_credentials_mode(credentials_mode)
+            .with_credentialless(policy_context.is_credentialless())
+            .allows_credentials_for_url(&info.url),
             cookie_set_reports: Vec::new(),
             redirected: false,
             redirect_chain: Vec::new(),
@@ -1866,6 +1878,7 @@ impl ScriptVm {
                 status: response_code,
                 headers: response_headers.clone(),
                 request_cookie_report: pending.response.request_cookie_report.clone(),
+                request_include_credentials: pending.response.request_include_credentials,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
                 redirect_chain: Vec::new(),
@@ -1931,6 +1944,7 @@ impl ScriptVm {
                 status: response_code,
                 headers: response_headers.clone(),
                 request_cookie_report: pending.response.request_cookie_report.clone(),
+                request_include_credentials: pending.response.request_include_credentials,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
                 redirect_chain: Vec::new(),
@@ -2005,6 +2019,7 @@ impl ScriptVm {
                     status: response_code,
                     headers: response_headers,
                     request_cookie_report: pending.response.request_cookie_report,
+                    request_include_credentials: pending.response.request_include_credentials,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
                     redirect_chain: Vec::new(),

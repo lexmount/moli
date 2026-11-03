@@ -2882,6 +2882,7 @@ opening.onsuccess = () => { globalThis.db = opening.result; dbReady = true; };
                     "reservation",
                     "/reserved",
                     moli_storage_service::StorageBucketCachedResponse {
+                        request_include_credentials: true,
                         response_type: "default".into(),
                         url: format!("{page_url}reserved"),
                         redirected: false,
@@ -2987,6 +2988,7 @@ fn default_bucket_quota_is_shared_by_cache_indexed_db_and_opfs() {
                     "fixture",
                     "/reserved",
                     moli_storage_service::StorageBucketCachedResponse {
+                        request_include_credentials: true,
                         response_type: "default".to_owned(),
                         url: format!("{page_url}reserved"),
                         redirected: false,

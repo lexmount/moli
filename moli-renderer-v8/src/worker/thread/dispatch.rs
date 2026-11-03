@@ -2803,6 +2803,7 @@ fn service_worker_fetch_response_from_materialized(
 ) -> ServiceWorkerFetchResponse {
     let response = head.with_body(body);
     ServiceWorkerFetchResponse {
+        request_include_credentials: response.request_include_credentials,
         final_url: response.final_url,
         response_type: response.response_type,
         redirected: response.redirected,
@@ -2817,6 +2818,7 @@ fn service_worker_fetch_response_head_from_materialized(
     head: &MaterializedResponseHead,
 ) -> MaterializedServiceWorkerFetchResponseHead {
     MaterializedServiceWorkerFetchResponseHead {
+        request_include_credentials: head.request_include_credentials,
         status_text: head.status_text.clone(),
         final_url: head.final_url.clone(),
         response_type: head.response_type.clone(),
@@ -3009,6 +3011,7 @@ fn start_service_worker_navigation_preload_response_in_context(
     };
 
     let head = moli_fetch::ResponseHead {
+        request_include_credentials: false,
         status_text: Some(started.response_head.status_text.clone()),
         final_url: started
             .response_head

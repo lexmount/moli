@@ -141,6 +141,7 @@ fn is_false(value: &bool) -> bool {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorageBucketCachedResponse {
+    pub request_include_credentials: bool,
     pub response_type: String,
     pub url: String,
     pub redirected: bool,
@@ -395,6 +396,8 @@ struct StorageBucketCacheJson {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StorageBucketCacheJsonEntry {
+    #[serde(default = "default_cached_response_credentials")]
+    request_include_credentials: bool,
     usage_bytes: u64,
     #[serde(
         default = "default_cache_request_method",
@@ -2187,6 +2190,7 @@ fn load_storage_bucket_cache_file(
                         headers: entry.request_headers,
                     },
                     response: StorageBucketCachedResponse {
+                        request_include_credentials: entry.request_include_credentials,
                         response_type: entry.response_type,
                         url: entry.url,
                         redirected: entry.redirected,
@@ -2218,6 +2222,7 @@ fn save_storage_bucket_cache_file(
                 (
                     request_key.clone(),
                     StorageBucketCacheJsonEntry {
+                        request_include_credentials: entry.response.request_include_credentials,
                         usage_bytes: entry.usage_bytes,
                         request_method: entry.request.method.clone(),
                         request_headers: entry.request.headers.clone(),
@@ -2649,6 +2654,11 @@ fn storage_buckets_json_version(bytes: &[u8], path: &Path) -> Result<u32> {
     Ok(version.version)
 }
 
+// Old entries cannot establish that the original response omitted credentials.
+fn default_cached_response_credentials() -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2931,6 +2941,7 @@ mod tests {
                 "cache",
                 "request",
                 StorageBucketCachedResponse {
+                    request_include_credentials: true,
                     response_type: "default".to_owned(),
                     url: "https://quota.test/resource".to_owned(),
                     redirected: false,
@@ -3008,6 +3019,7 @@ mod tests {
                 "cache",
                 "request",
                 StorageBucketCachedResponse {
+                    request_include_credentials: true,
                     response_type: "default".to_owned(),
                     url: "https://default-quota.test/resource".to_owned(),
                     redirected: false,
@@ -3243,6 +3255,7 @@ mod tests {
         let identity = store.open_bucket("https://a.test", "bucket")?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let response = StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3288,6 +3301,7 @@ mod tests {
         let identity = store.open_bucket("https://a.test", "bucket")?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let first_response = StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3344,6 +3358,7 @@ mod tests {
         );
 
         let replacement_response = StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3398,6 +3413,7 @@ mod tests {
         let identity = store.open_bucket("https://a.test", "bucket")?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let response = |body: &str, headers: Vec<(String, Vec<u8>)>| StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3490,6 +3506,7 @@ mod tests {
             .open_cache_handle_for_identity(&identity, "cache")?
             .expect("bucket should remain current");
         let response = StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3554,6 +3571,7 @@ mod tests {
         )?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let original = StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3563,6 +3581,7 @@ mod tests {
             body: b"small".to_vec(),
         };
         let oversized = StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3672,6 +3691,7 @@ mod tests {
                     "global-cache",
                     "/entry",
                     StorageBucketCachedResponse {
+                        request_include_credentials: true,
                         response_type: "default".to_owned(),
                         url: "https://a.test/entry".to_owned(),
                         redirected: false,
@@ -3910,6 +3930,7 @@ mod tests {
                         "cache",
                         "/cached.txt",
                         StorageBucketCachedResponse {
+                            request_include_credentials: true,
                             response_type: "default".to_owned(),
                             url: String::new(),
                             redirected: false,
@@ -4002,6 +4023,7 @@ mod tests {
         let temp = TempStorePath::new("cache-persist");
         let cache_root = temp.cache_root();
         let response = StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4079,6 +4101,7 @@ mod tests {
     #[test]
     fn json_storage_bucket_cache_crash_points_recover_one_committed_root() -> Result<()> {
         let old_response = StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4088,6 +4111,7 @@ mod tests {
             body: b"old committed cache body".to_vec(),
         };
         let new_response = StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4172,6 +4196,7 @@ mod tests {
         let temp = TempStorePath::new("cache-promote-next");
         let cache_root = temp.cache_root();
         let response = StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4224,6 +4249,7 @@ mod tests {
         let temp = TempStorePath::new("cache-restore-previous");
         let cache_root = temp.cache_root();
         let response = StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4279,6 +4305,7 @@ mod tests {
         let indexed_db_manager = new_indexed_db_manager(None).map_err(anyhow::Error::msg)?;
         let storage_service = StorageService::on_disk(temp.opfs_root())?;
         let response = StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -4638,6 +4665,7 @@ mod tests {
         let bucket_name = "bucket";
         let bucket_id = StorageBucketId::new(17).unwrap();
         let response = StorageBucketCachedResponse {
+            request_include_credentials: true,
             response_type: "default".to_owned(),
             url: "https://a.test/cached".to_owned(),
             redirected: false,
@@ -4738,6 +4766,60 @@ mod tests {
                 .to_string()
                 .contains("duplicate persistent storage bucket ID 1")
         );
+        Ok(())
+    }
+    #[test]
+    fn opaque_cache_credentials_survive_disk_roundtrip_and_legacy_entries_fail_closed() -> Result<()>
+    {
+        let temp = TempStorePath::new("opaque-response-credentials");
+        let path = temp.path.with_extension("cache.json");
+        let entries = [true, false]
+            .into_iter()
+            .enumerate()
+            .map(|(index, flag)| {
+                (
+                    index.to_string(),
+                    StorageBucketCacheEntry {
+                        usage_bytes: 4,
+                        insertion_order: index as u64 + 1,
+                        request: StorageBucketCachedRequest::default(),
+                        response: StorageBucketCachedResponse {
+                            request_include_credentials: flag,
+                            response_type: "opaque".into(),
+                            url: "https://remote.test/image".into(),
+                            redirected: false,
+                            status: 200,
+                            status_text: "OK".into(),
+                            headers: vec![(
+                                "Cross-Origin-Resource-Policy".into(),
+                                b"cross-origin".to_vec(),
+                            )],
+                            body: b"body".to_vec(),
+                        },
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        save_storage_bucket_cache_file(&path, &entries)?;
+        let loaded = super::load_storage_bucket_cache_file(&path)?;
+        for (key, entry) in &entries {
+            assert_eq!(loaded[key].response, entry.response);
+        }
+        let mut legacy: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+        for entry in legacy["entries"].as_object_mut().unwrap().values_mut() {
+            entry
+                .as_object_mut()
+                .unwrap()
+                .remove("requestIncludeCredentials");
+        }
+        fs::write(&path, serde_json::to_vec(&legacy)?)?;
+        let legacy = super::load_storage_bucket_cache_file(&path)?;
+        assert!(
+            legacy
+                .values()
+                .all(|entry| entry.response.request_include_credentials)
+        );
+        fs::remove_file(path)?;
         Ok(())
     }
 }

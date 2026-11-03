@@ -70,7 +70,7 @@ fn cache_key_material_for_request(request: &Request, request_url: &Url) -> Strin
     // is narrow, but baking browser partition dimensions into the key prevents
     // accidental cross-frame reuse when the cacheable request surface expands.
     format!(
-        "moli-http-cache-key-v3\nurl:{}\nsite-for-cookies:{}\ntop-frame-origin:{}\nnetwork-partition-key:{}\nrequest-type:{:?}\ncredentials:{}\nstorage-access:{:?}",
+        "moli-http-cache-key-v4\nurl:{}\nsite-for-cookies:{}\ntop-frame-origin:{}\nnetwork-partition-key:{}\nrequest-type:{:?}\ncredentials:{}\ninclude-credentials:{}\nstorage-access:{:?}",
         normalized_request_url,
         cache_partition_url_component(browser_context.site_for_cookies_url.as_ref(), request_url),
         cache_partition_url_component(
@@ -83,6 +83,7 @@ fn cache_key_material_for_request(request: &Request, request_url: &Url) -> Strin
         request.network_partition_key().unwrap_or(""),
         request.cookie_context.request_type,
         request.credentials_mode.as_ref(),
+        request.allows_credentials_for_url(request_url),
         browser_context.storage_access_status,
     )
 }

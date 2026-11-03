@@ -66,6 +66,7 @@ impl RendererPreparedNetworkResourceLoad {
                 body,
                 completion_error,
                 request_cookie_report: head.request_cookie_report,
+                request_include_credentials: head.request_include_credentials,
                 cookie_set_reports: head.cookie_set_reports,
                 redirect_chain: head.redirect_chain.into_iter().map(Into::into).collect(),
                 from_cache: head.from_cache,
@@ -90,6 +91,7 @@ pub struct RendererNetworkResourceLoadResponse {
     pub body: Vec<u8>,
     pub completion_error: Option<String>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
+    pub request_include_credentials: bool,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
     pub redirect_chain: Vec<NavigationRedirect>,
     pub from_cache: bool,
@@ -106,6 +108,7 @@ impl RendererNetworkResourceLoadResponse {
             status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             request_cookie_report: self.request_cookie_report.clone(),
+            request_include_credentials: self.request_include_credentials,
             cookie_set_reports: self.cookie_set_reports.clone(),
             redirected: !self.redirect_chain.is_empty(),
             redirect_chain: self

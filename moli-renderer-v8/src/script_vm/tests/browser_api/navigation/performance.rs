@@ -584,6 +584,7 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
                 b"Application/JavaScript; charset=utf-8".to_vec(),
             )],
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: false,
             redirect_chain: Vec::new(),

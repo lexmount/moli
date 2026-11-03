@@ -86,6 +86,7 @@ async fn external_raw_bridge_drop_after_body_eof_cancels_pending_fetch_completio
             status: 200,
             headers: vec![("content-type".to_owned(), b"text/html".to_vec())],
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: false,
             redirect_chain: Vec::new(),

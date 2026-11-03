@@ -60,6 +60,8 @@ const STORAGE_BUCKET_CACHE_PUT_REQUEST_METHOD_SLOT: &str =
     "__moliStorageBucketCachePutRequestMethod";
 const STORAGE_BUCKET_CACHE_PUT_REQUEST_HEADERS_SLOT: &str =
     "__moliStorageBucketCachePutRequestHeaders";
+const STORAGE_BUCKET_CACHE_PUT_RESPONSE_CREDENTIALS_SLOT: &str =
+    "__moliStorageBucketCachePutResponseCredentials";
 const STORAGE_BUCKET_CACHE_PUT_RESPONSE_TYPE_SLOT: &str = "__moliStorageBucketCachePutResponseType";
 const STORAGE_BUCKET_CACHE_PUT_RESPONSE_URL_SLOT: &str = "__moliStorageBucketCachePutResponseUrl";
 const STORAGE_BUCKET_CACHE_PUT_RESPONSE_REDIRECTED_SLOT: &str =
@@ -453,6 +455,9 @@ struct StorageBucketCachePutPendingDataDeclaration<'scope> {
 
     #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_REQUEST_HEADERS_SLOT)]
     request_headers_json: String,
+
+    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_CREDENTIALS_SLOT)]
+    response_request_include_credentials: bool,
 
     #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_TYPE_SLOT)]
     response_type: String,
@@ -1800,6 +1805,7 @@ fn storage_bucket_cache_put_pending_body<'s>(
         request_method: request.method,
         request_headers_json: serde_json::to_string(&request.headers)
             .unwrap_or_else(|_| "[]".to_owned()),
+        response_request_include_credentials: head.request_include_credentials,
         response_type: head.response_type,
         response_url: head
             .final_url
@@ -1867,6 +1873,7 @@ fn storage_bucket_cache_put_body_fulfilled_callback<'s>(
         }
     };
     let response = StorageBucketCachedResponse {
+        request_include_credentials: pending.response_request_include_credentials,
         response_type: pending.response_type,
         url: pending.response_url,
         redirected: pending.response_redirected,
@@ -1910,6 +1917,7 @@ struct StorageBucketCachePutPendingData<'scope> {
     handle: StorageBucketCacheHandle,
     request: CacheRequestInfo,
     response_type: String,
+    response_request_include_credentials: bool,
     response_url: String,
     response_redirected: bool,
     response_status: u16,
@@ -1988,6 +1996,11 @@ fn storage_bucket_cache_put_pending_data<'s>(
             headers: request_headers,
         },
         response_type,
+        response_request_include_credentials: data_private_bool(
+            scope,
+            data,
+            STORAGE_BUCKET_CACHE_PUT_RESPONSE_CREDENTIALS_SLOT,
+        ),
         response_url,
         response_redirected,
         response_status,
@@ -2844,6 +2857,7 @@ fn storage_bucket_cached_response_from_head_body(
     body: Vec<u8>,
 ) -> StorageBucketCachedResponse {
     StorageBucketCachedResponse {
+        request_include_credentials: head.request_include_credentials,
         response_type: head.response_type,
         url: head
             .final_url
@@ -2933,13 +2947,44 @@ fn build_storage_bucket_cached_response_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response: StorageBucketCachedResponse,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    if response.response_type == "opaque"
+        && let Some((origin, policy)) =
+            crate::network_host::current_subresource_policy_environment(scope)
+        && let Ok(url) = url::Url::parse(&response.url)
+        && crate::network_host::validate_cross_origin_embedder_and_document_isolation_policy(
+            origin,
+            &url,
+            &response.headers,
+            moli_fetch::RequestMode::NoCors,
+            response.request_include_credentials,
+            policy.cross_origin_embedder_policy,
+            policy.document_isolation_policy,
+        )
+        .is_err()
+    {
+        return None;
+    }
     if matches!(response.response_type.as_str(), "opaque" | "opaqueredirect") {
-        return crate::network_host::build_filtered_cached_response_object(
+        let object = crate::network_host::build_filtered_cached_response_object(
             scope,
             &response.response_type,
             &response.url,
             response.body,
+        )?;
+        crate::network_host::set_response_slot_bool(
+            scope,
+            object,
+            crate::network_host::RESPONSE_REQUEST_INCLUDE_CREDENTIALS_SLOT,
+            response.request_include_credentials,
         );
+        crate::network_host::set_filtered_response_internal_head(
+            scope,
+            object,
+            response.status,
+            &response.status_text,
+            &moli_fetch::headers_to_byte_strings(&response.headers),
+        );
+        return Some(object);
     }
     let body: v8::Local<'s, v8::Value> = if matches!(response.status, 204 | 205 | 304) {
         v8::null(scope).into()
@@ -2981,6 +3026,12 @@ fn build_storage_bucket_cached_response_object<'s>(
         response_obj,
         crate::network_host::RESPONSE_REDIRECTED_SLOT,
         response.redirected,
+    );
+    crate::network_host::set_response_slot_bool(
+        scope,
+        response_obj,
+        crate::network_host::RESPONSE_REQUEST_INCLUDE_CREDENTIALS_SLOT,
+        response.request_include_credentials,
     );
     Some(response_obj)
 }
