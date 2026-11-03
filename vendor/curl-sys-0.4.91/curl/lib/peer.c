@@ -76,6 +76,7 @@
 #include "url.h"
 #include "urlapi-int.h"
 #include "vtls/vtls.h"
+#include "moli_refcount.h"
 
 struct peer_parse {
   const struct Curl_scheme *scheme;
@@ -296,10 +297,8 @@ void Curl_peer_link(struct Curl_peer **pdest, struct Curl_peer *src)
   if(*pdest != src) {
     Curl_peer_unlink(pdest);
     *pdest = src;
-    if(src) {
-      DEBUGASSERT(src->refcount < UINT32_MAX);
-      src->refcount++;
-    }
+    if(src)
+      moli_refcount_link(&src->refcount);
   }
 }
 
@@ -308,11 +307,8 @@ void Curl_peer_unlink(struct Curl_peer **ppeer)
   if(*ppeer) {
     struct Curl_peer *peer = *ppeer;
 
-    DEBUGASSERT(peer->refcount);
     *ppeer = NULL;
-    if(peer->refcount)
-      peer->refcount--;
-    if(!peer->refcount) {
+    if(moli_refcount_unlink(&peer->refcount)) {
       curlx_free(peer);
     }
   }
