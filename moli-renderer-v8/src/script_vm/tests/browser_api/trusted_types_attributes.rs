@@ -2,7 +2,11 @@ use super::*;
 
 #[tokio::test]
 async fn adopted_attribute_sinks_use_the_node_document_global_and_preserve_exception_realms() {
-    let mut vm = new_storage_test_vm("https://adopted-attribute-types.test/");
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://adopted-attribute-types.test/",
+        &loader,
+    );
     vm.eval(r#"
 (() => {
   const root = document.documentElement || document.appendChild(document.createElement("html"));
@@ -13,7 +17,14 @@ async fn adopted_attribute_sinks_use_the_node_document_global_and_preserve_excep
   body.appendChild(frame);
 })()
 "#).expect("Trusted Types child setup should evaluate");
-    run_child_navigation_commit_and_host_load_for_test(&mut vm, "TT child should commit").await;
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        r#"document.getElementById('tt-frame').contentDocument?.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content"#,
+        "require-trusted-types-for 'script'",
+        "TT child should commit",
+    )
+    .await;
     let result = vm.eval(r#"
 (() => {
   const child = document.getElementById("tt-frame").contentWindow;
@@ -83,7 +94,7 @@ async fn adopted_attribute_sinks_use_the_node_document_global_and_preserve_excep
         "defaulted": converted, "secondaryDefaulted": converted, "calls": vec!["child"; 18]
         })
     );
-    drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+    drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await;
     assert_eq!(
         vm.eval("JSON.stringify([__attributeReports.top.length, __attributeReports.child.length])")
             .unwrap(),

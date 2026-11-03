@@ -761,8 +761,8 @@ async fn response_modulepreload_reports_csp_without_dispatching_into_replacement
                 replace_realm
             );
             let events = page_vm
-                .vm_mut()
-                .drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test();
+                .drain_content_security_policy_violation_tasks_for_test()
+                .await?;
             assert_eq!(
                 events, 0,
                 "networking CSP tasks must not add a duplicate post-parse event"

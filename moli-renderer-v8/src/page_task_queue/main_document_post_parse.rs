@@ -7,6 +7,9 @@
 //! [`MainDocumentPostParseExecution`] is short-lived: it is never queued and
 //! can only be consumed by the PageVm task-completion coordinator.
 
+#[cfg(test)]
+use crate::types::ScriptRun;
+
 use crate::{
     frame_owner_model::{
         FrameDocumentTaskOwner, MainDocumentLoadCompletionState, MainDocumentScriptLoadDelayKind,
@@ -14,13 +17,11 @@ use crate::{
     },
     host::ScriptEventTask,
     stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput,
-    types::ScriptRun,
 };
 
-use super::{
-    ContentSecurityPolicyViolationEventTask, PostParseLifecycleWork, PostParsePageOwnedWork,
-    WindowScriptFailureReportTask,
-};
+#[cfg(test)]
+use super::ContentSecurityPolicyViolationEventTask;
+use super::{PostParseLifecycleWork, PostParsePageOwnedWork, WindowScriptFailureReportTask};
 
 /// Exact main-Document binding selected by a post-parse carrier.
 ///
@@ -49,7 +50,9 @@ impl MainDocumentPostParseOwner {
 #[derive(Debug)]
 pub(crate) enum MainDocumentPostParseWork {
     SeedDocumentOwnedBlockingStylesheets(Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>),
+    #[cfg(test)]
     RecordDocumentScriptRun(ScriptRun),
+    #[cfg(test)]
     DispatchContentSecurityPolicyViolation(ContentSecurityPolicyViolationEventTask),
     DispatchScriptEvent(ScriptEventTask),
     ReportWindowScriptFailure(WindowScriptFailureReportTask),
@@ -57,6 +60,7 @@ pub(crate) enum MainDocumentPostParseWork {
     CheckMainDocumentCompletion {
         owner: FrameDocumentTaskOwner,
     },
+    #[cfg(test)]
     RecordDetachedPostParseRuns(Vec<ScriptRun>),
     FinishNavigationImageDocument {
         owner: FrameDocumentTaskOwner,
@@ -86,9 +90,11 @@ impl MainDocumentPostParseWork {
             PostParseLifecycleWork::SeedDocumentOwnedBlockingStylesheets(inputs) => {
                 Ok(Self::SeedDocumentOwnedBlockingStylesheets(inputs))
             }
+            #[cfg(test)]
             PostParseLifecycleWork::RecordDocumentScriptRun { run, .. } => {
                 Ok(Self::RecordDocumentScriptRun(run))
             }
+            #[cfg(test)]
             PostParseLifecycleWork::DispatchContentSecurityPolicyViolation(task) => {
                 Ok(Self::DispatchContentSecurityPolicyViolation(task))
             }
@@ -104,6 +110,7 @@ impl MainDocumentPostParseWork {
             PostParseLifecycleWork::CheckMainDocumentCompletion { owner } => {
                 Ok(Self::CheckMainDocumentCompletion { owner })
             }
+            #[cfg(test)]
             PostParseLifecycleWork::RecordDetachedPostParseRuns(runs) => {
                 Ok(Self::RecordDetachedPostParseRuns(runs))
             }
@@ -125,11 +132,13 @@ impl MainDocumentPostParseWork {
                     MainDocumentPostParseStateExecution::new(target, 0),
                 )
             }
+            #[cfg(test)]
             Self::RecordDocumentScriptRun(run) => {
                 MainDocumentPostParseExecution::RecordDocumentScriptRun(
                     MainDocumentPostParseStateExecution::new(target, run),
                 )
             }
+            #[cfg(test)]
             Self::DispatchContentSecurityPolicyViolation(_) => {
                 MainDocumentPostParseExecution::DispatchContentSecurityPolicyViolation(
                     MainDocumentPostParseCallbackExecution::not_entered(target),
@@ -159,6 +168,7 @@ impl MainDocumentPostParseWork {
                     ),
                 )
             }
+            #[cfg(test)]
             Self::RecordDetachedPostParseRuns(runs) => {
                 MainDocumentPostParseExecution::RecordDetachedPostParseRuns(
                     MainDocumentPostParseStateExecution::new(target, runs),
@@ -384,7 +394,9 @@ pub(crate) enum MainDocumentPostParseTaskEnd {
 #[derive(Debug)]
 pub(crate) enum MainDocumentPostParseExecution {
     SeedDocumentOwnedBlockingStylesheets(MainDocumentPostParseStateExecution<usize>),
+    #[cfg(test)]
     RecordDocumentScriptRun(MainDocumentPostParseStateExecution<ScriptRun>),
+    #[cfg(test)]
     DispatchContentSecurityPolicyViolation(MainDocumentPostParseCallbackExecution),
     DispatchScriptEvent(MainDocumentPostParseCallbackExecution),
     ReportWindowScriptFailure(MainDocumentPostParseCallbackExecution),
@@ -394,6 +406,7 @@ pub(crate) enum MainDocumentPostParseExecution {
     CheckMainDocumentCompletion(
         MainDocumentPostParseStateExecution<MainDocumentCompletionRecheckEffect>,
     ),
+    #[cfg(test)]
     RecordDetachedPostParseRuns(MainDocumentPostParseStateExecution<Vec<ScriptRun>>),
     FinishNavigationImageDocument(MainDocumentPostParseStateExecution<()>),
 }
@@ -402,12 +415,15 @@ impl MainDocumentPostParseExecution {
     pub(crate) const fn kind(&self) -> &'static str {
         match self {
             Self::SeedDocumentOwnedBlockingStylesheets(_) => "stylesheet-seed",
+            #[cfg(test)]
             Self::RecordDocumentScriptRun(_) => "document-script-run-record",
+            #[cfg(test)]
             Self::DispatchContentSecurityPolicyViolation(_) => "csp-violation",
             Self::DispatchScriptEvent(_) => "script-event",
             Self::ReportWindowScriptFailure(_) => "window-script-failure",
             Self::SettleMainDocumentScriptLoadDelay(_) => "script-load-delay-settlement",
             Self::CheckMainDocumentCompletion(_) => "main-document-completion-recheck",
+            #[cfg(test)]
             Self::RecordDetachedPostParseRuns(_) => "detached-run-record",
             Self::FinishNavigationImageDocument(_) => "navigation-image-response",
         }
@@ -416,12 +432,16 @@ impl MainDocumentPostParseExecution {
     pub(crate) const fn target(&self) -> MainDocumentPostParseTargetEffect {
         match self {
             Self::SeedDocumentOwnedBlockingStylesheets(execution) => execution.target(),
+            #[cfg(test)]
             Self::RecordDocumentScriptRun(execution) => execution.target(),
-            Self::DispatchContentSecurityPolicyViolation(execution)
-            | Self::DispatchScriptEvent(execution)
-            | Self::ReportWindowScriptFailure(execution) => execution.target(),
+            #[cfg(test)]
+            Self::DispatchContentSecurityPolicyViolation(execution) => execution.target(),
+            Self::DispatchScriptEvent(execution) | Self::ReportWindowScriptFailure(execution) => {
+                execution.target()
+            }
             Self::SettleMainDocumentScriptLoadDelay(execution) => execution.target(),
             Self::CheckMainDocumentCompletion(execution) => execution.target(),
+            #[cfg(test)]
             Self::RecordDetachedPostParseRuns(execution) => execution.target(),
             Self::FinishNavigationImageDocument(execution) => execution.target(),
         }
@@ -429,9 +449,11 @@ impl MainDocumentPostParseExecution {
 
     pub(crate) const fn callback(&self) -> Option<MainDocumentPostParseCallbackEffect> {
         match self {
-            Self::DispatchContentSecurityPolicyViolation(execution)
-            | Self::DispatchScriptEvent(execution)
-            | Self::ReportWindowScriptFailure(execution) => Some(execution.callback()),
+            #[cfg(test)]
+            Self::DispatchContentSecurityPolicyViolation(execution) => Some(execution.callback()),
+            Self::DispatchScriptEvent(execution) | Self::ReportWindowScriptFailure(execution) => {
+                Some(execution.callback())
+            }
             _ => None,
         }
     }

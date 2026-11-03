@@ -1,5 +1,8 @@
 use std::collections::HashSet;
 
+#[cfg(test)]
+use crate::types::ScriptRun;
+
 use crate::{
     document_runtime::ReadyConnectedStyleLoad,
     document_script_scheduler::PageOwnedDocumentScriptWork,
@@ -11,10 +14,11 @@ use crate::{
     planning::PreparedScript,
     stylesheet_blocking::DocumentBlockingStylesheetSignature,
     stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput,
-    types::ScriptRun,
 };
 
-use super::{ContentSecurityPolicyViolationEventTask, PageTask, WindowScriptFailureReportTask};
+#[cfg(test)]
+use super::ContentSecurityPolicyViolationEventTask;
+use super::{PageTask, WindowScriptFailureReportTask};
 
 #[derive(Debug)]
 pub(crate) enum PostParsePageOwnedWork {
@@ -33,10 +37,12 @@ pub(crate) enum PostParseLifecycleWork {
         owner: FrameDocumentTaskOwner,
         initial_count: usize,
     },
+    #[cfg(test)]
     RecordDocumentScriptRun {
         position: usize,
         run: ScriptRun,
     },
+    #[cfg(test)]
     DispatchContentSecurityPolicyViolation(ContentSecurityPolicyViolationEventTask),
     DispatchScriptEvent(ScriptEventTask),
     ReportWindowScriptFailure(WindowScriptFailureReportTask),
@@ -53,6 +59,7 @@ pub(crate) enum PostParseLifecycleWork {
         owner: FrameDocumentTaskOwner,
     },
     DispatchConnectedStyleLoad(ReadyConnectedStyleLoad),
+    #[cfg(test)]
     RecordDetachedPostParseRuns(Vec<ScriptRun>),
     DispatchWindowLoad {
         owner: FrameDocumentTaskOwner,
@@ -78,10 +85,11 @@ impl PostParseLifecycleWork {
         {
             return false;
         }
-        !matches!(
-            self,
-            Self::DispatchContentSecurityPolicyViolation(task) if task.owner() != owner
-        )
+        #[cfg(test)]
+        if let Self::DispatchContentSecurityPolicyViolation(task) = self {
+            return task.owner() == owner;
+        }
+        true
     }
 
     #[cfg(test)]
@@ -105,6 +113,12 @@ impl PostParseLifecycleWork {
         }
     }
 
+    #[cfg(not(test))]
+    pub(crate) fn from_parse_time_page_task(task: PageTask) -> Self {
+        match task {}
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_parse_time_page_task(task: PageTask) -> Self {
         match task {
             PageTask::SeedDocumentOwnedBlockingStylesheets(inputs) => {
@@ -156,6 +170,7 @@ impl PostParseLifecycleWork {
         Some(Self::from_parse_time_page_task(task))
     }
 
+    #[cfg(test)]
     pub(crate) fn into_page_task(self) -> PageTask {
         match self {
             Self::SeedDocumentOwnedBlockingStylesheets(inputs) => {
@@ -164,6 +179,7 @@ impl PostParseLifecycleWork {
             Self::AdvanceMainParserDeferredScripts { .. } => {
                 panic!("main parser-deferred work has no generic PageTask projection")
             }
+            #[cfg(test)]
             Self::RecordDocumentScriptRun { position, run } => {
                 PageTask::RecordDocumentScriptRun { position, run }
             }
@@ -188,6 +204,7 @@ impl PostParseLifecycleWork {
                 PageTask::CheckMainDocumentCompletion { owner }
             }
             Self::DispatchConnectedStyleLoad(ready) => PageTask::DispatchConnectedStyleLoad(ready),
+            #[cfg(test)]
             Self::RecordDetachedPostParseRuns(runs) => PageTask::RecordDetachedPostParseRuns(runs),
             Self::DispatchWindowLoad { .. } => PageTask::DispatchWindowLoad,
         }
@@ -197,7 +214,9 @@ impl PostParseLifecycleWork {
         match self {
             Self::SeedDocumentOwnedBlockingStylesheets(_) => "stylesheet seed task",
             Self::AdvanceMainParserDeferredScripts { .. } => "main parser-deferred script task",
+            #[cfg(test)]
             Self::RecordDocumentScriptRun { .. } => "document script run record task",
+            #[cfg(test)]
             Self::DispatchContentSecurityPolicyViolation(_) => {
                 "security policy violation event task"
             }
@@ -214,6 +233,7 @@ impl PostParseLifecycleWork {
             Self::FinishNavigationImageDocument { .. } => "navigation image response task",
             Self::CheckMainDocumentCompletion { .. } => "main document completion recheck task",
             Self::DispatchConnectedStyleLoad(_) => "connected style load task",
+            #[cfg(test)]
             Self::RecordDetachedPostParseRuns(_) => "detached post-parse runs task",
             Self::DispatchWindowLoad { .. } => "window load task",
         }
@@ -224,15 +244,19 @@ impl PostParseLifecycleWork {
             Self::SeedDocumentOwnedBlockingStylesheets(_)
             | Self::ApplyMainDocumentInteractive(_) => (0, self.position()),
             Self::AdvanceMainParserDeferredScripts { .. } => (1, self.position()),
+            #[cfg(test)]
             Self::RecordDocumentScriptRun { .. } => (1, self.position()),
-            Self::DispatchContentSecurityPolicyViolation(_)
-            | Self::DispatchScriptEvent(_)
-            | Self::ReportWindowScriptFailure(_) => (3, self.position()),
+            #[cfg(test)]
+            Self::DispatchContentSecurityPolicyViolation(_) => (3, self.position()),
+            Self::DispatchScriptEvent(_) | Self::ReportWindowScriptFailure(_) => {
+                (3, self.position())
+            }
             Self::SettleMainDocumentScriptLoadDelay(_) => (3, self.position()),
             Self::DispatchDomContentLoaded { .. } => (4, self.position()),
             Self::FinishNavigationImageDocument { .. } => (6, self.position()),
             Self::CheckMainDocumentCompletion { .. } => (7, self.position()),
             Self::DispatchConnectedStyleLoad(_) => (6, self.position()),
+            #[cfg(test)]
             Self::RecordDetachedPostParseRuns(_) => (6, self.position()),
             Self::DispatchWindowLoad { .. } => (7, self.position()),
         }
@@ -243,7 +267,9 @@ impl PostParseLifecycleWork {
             Self::SeedDocumentOwnedBlockingStylesheets(_)
             | Self::ApplyMainDocumentInteractive(_) => usize::MIN,
             Self::AdvanceMainParserDeferredScripts { .. } => 1,
+            #[cfg(test)]
             Self::RecordDocumentScriptRun { position, .. } => *position,
+            #[cfg(test)]
             Self::DispatchContentSecurityPolicyViolation(_) => usize::MAX - 7,
             Self::DispatchScriptEvent(_) => usize::MAX - 6,
             Self::ReportWindowScriptFailure(_) => usize::MAX - 5,
@@ -252,6 +278,7 @@ impl PostParseLifecycleWork {
             Self::FinishNavigationImageDocument { .. } => usize::MAX - 2,
             Self::CheckMainDocumentCompletion { .. } => usize::MAX - 1,
             Self::DispatchConnectedStyleLoad(_) => usize::MAX - 2,
+            #[cfg(test)]
             Self::RecordDetachedPostParseRuns(_) => usize::MAX - 1,
             Self::DispatchWindowLoad { .. } => usize::MAX,
         }
@@ -271,7 +298,11 @@ impl PostParseLifecycleWork {
     }
 
     pub(crate) fn is_document_script_run_record_task(&self) -> bool {
-        matches!(self, Self::RecordDocumentScriptRun { .. })
+        #[cfg(test)]
+        if matches!(self, Self::RecordDocumentScriptRun { .. }) {
+            return true;
+        }
+        false
     }
 
     pub(crate) fn main_parser_deferred_scripts_owner(&self) -> Option<FrameDocumentTaskOwner> {
@@ -305,24 +336,29 @@ impl PostParseLifecycleWork {
     }
 
     pub(crate) fn starts_after_domcontentloaded_boundary(&self) -> bool {
-        matches!(
-            self,
-            Self::RecordDetachedPostParseRuns(_) | Self::FinishNavigationImageDocument { .. }
-        )
+        #[cfg(test)]
+        if matches!(self, Self::RecordDetachedPostParseRuns(_)) {
+            return true;
+        }
+        matches!(self, Self::FinishNavigationImageDocument { .. })
     }
 
     pub(crate) fn detached_run_count(&self) -> usize {
-        match self {
-            Self::RecordDetachedPostParseRuns(runs) => runs.len(),
-            _ => 0,
+        #[cfg(test)]
+        if let Self::RecordDetachedPostParseRuns(runs) = self {
+            return runs.len();
         }
+        0
     }
 
     pub(crate) fn requires_runtime_followup_publication(&self) -> bool {
+        #[cfg(test)]
+        if matches!(self, Self::DispatchContentSecurityPolicyViolation(_)) {
+            return true;
+        }
         matches!(
             self,
             Self::DispatchConnectedStyleLoad(_)
-                | Self::DispatchContentSecurityPolicyViolation(_)
                 | Self::DispatchScriptEvent(_)
                 | Self::ReportWindowScriptFailure(_)
                 | Self::ApplyMainDocumentInteractive(_)
@@ -562,6 +598,7 @@ impl PostParsePageOwnedWork {
             Self::Lifecycle(work) => Some(match work.as_ref() {
                 PostParseLifecycleWork::SeedDocumentOwnedBlockingStylesheets(_) => return None,
                 PostParseLifecycleWork::AdvanceMainParserDeferredScripts { .. } => return None,
+                #[cfg(test)]
                 PostParseLifecycleWork::RecordDocumentScriptRun { position, run } => {
                     PageTask::RecordDocumentScriptRun {
                         position: *position,
@@ -589,6 +626,7 @@ impl PostParsePageOwnedWork {
                 PostParseLifecycleWork::DispatchConnectedStyleLoad(ready) => {
                     PageTask::DispatchConnectedStyleLoad(ready.clone())
                 }
+                #[cfg(test)]
                 PostParseLifecycleWork::RecordDetachedPostParseRuns(runs) => {
                     PageTask::RecordDetachedPostParseRuns(runs.clone())
                 }

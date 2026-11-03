@@ -2049,7 +2049,7 @@ impl ScriptVmPageRealmBootstrap {
         mut dom_host: DomHost,
         document_settings: &moli_page_types::DocumentSettings,
         page_task_tx: RuntimePageTaskSender,
-        page_task_parser_boundary_injection_tx: tokio::sync::mpsc::UnboundedSender<PageTask>,
+        _page_task_parser_boundary_injection_tx: tokio::sync::mpsc::UnboundedSender<PageTask>,
         resource_completion_tx: RendererResourceCompletionSender,
         initial_document_loader_bootstrap: crate::network::context::DocumentResourceLoaderBootstrap,
         browser_context_runtime: RendererBrowserContextRuntime,
@@ -2137,7 +2137,8 @@ impl ScriptVmPageRealmBootstrap {
             dom_host,
             main_document_owner,
             Some(post_domcontentloaded_page_task_tx.clone()),
-            page_task_parser_boundary_injection_tx,
+            #[cfg(test)]
+            _page_task_parser_boundary_injection_tx,
             stylesheet_task_sender,
             main_parser_continuation_sender,
         ));

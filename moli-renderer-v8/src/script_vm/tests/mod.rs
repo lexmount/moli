@@ -1141,39 +1141,24 @@ async fn run_child_modulepreload_event_after_predecessors_for_test(
     panic!("{message}: child predecessor sequence did not converge: {predecessors:?}")
 }
 
-fn drain_pre_domcontentloaded_non_script_page_tasks_for_test(vm: &mut ScriptVm) -> usize {
-    vm.drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test()
+async fn drain_content_security_policy_violation_tasks_for_test(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+) -> usize {
+    let mut count = 0;
+    while vm
+        .run_one_exact_selected_page_task_executor_turn(
+            crate::runtime::PageSelectedTaskTestSelector::ContentSecurityPolicyViolation,
+            loader,
+        )
+        .await
+        .expect("focused CSP fixture should run the selected native task")
+    {
+        count += 1;
+    }
+    count
 }
 
-impl ScriptVm {
-    pub(crate) fn drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test(
-        &mut self,
-    ) -> usize {
-        let mut task_count = 0;
-        while let Some(action) = self
-            .document_runtime
-            .pop_parser_owned_pre_domcontentloaded_action()
-        {
-            let DocumentProcessingAction::PostParsePageOwnedWork(work) = action else {
-                panic!("focused CSP task runner must not consume script work: {action:?}");
-            };
-            let PostParsePageOwnedWork::Lifecycle(work) = *work else {
-                panic!("focused CSP task runner must not consume document script work");
-            };
-            assert!(
-                matches!(
-                    work.as_ref(),
-                    PostParseLifecycleWork::DispatchContentSecurityPolicyViolation(_)
-                ),
-                "focused CSP task runner must not consume unrelated lifecycle work: {work:?}"
-            );
-            self.execute_post_parse_lifecycle_work_best_effort(*work)
-                .expect("focused pre-DCL CSP page task should run");
-            task_count += 1;
-        }
-        task_count
-    }
-}
 trait StoragePageTaskExecutorTestWaitExt {
     fn eval_after_selected_page_tasks(&mut self, source: &str) -> anyhow::Result<String>;
 }

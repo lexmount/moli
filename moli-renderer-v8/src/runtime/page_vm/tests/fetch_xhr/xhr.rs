@@ -2219,8 +2219,7 @@ async fn xhr_document_csp_blocks_cross_origin_redirect_before_wire_and_reports_i
                     {}
                     assert_eq!(
                         page_vm
-                            .vm_mut()
-                            .drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test(),
+                            .drain_content_security_policy_violation_tasks_for_test().await?,
                         0,
                         "the networking CSP task must already have dispatched the event"
                     );

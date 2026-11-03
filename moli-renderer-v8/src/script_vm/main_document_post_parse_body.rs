@@ -7,16 +7,16 @@
 //! priming in its sibling completion coordinator.
 
 use super::ScriptVm;
+#[cfg(test)]
 use super::security_policy::ContentSecurityPolicyViolationBodyExecution;
-use crate::{
-    dom::native::DocumentReadyState,
-    page_task_queue::{
-        MainDocumentCompletionRecheckEffect, MainDocumentPostParseCallbackExecution,
-        MainDocumentPostParseCallbackSettlement, MainDocumentPostParseExecution,
-        MainDocumentPostParseOwner, MainDocumentPostParseStateExecution,
-        MainDocumentPostParseTargetEffect, MainDocumentPostParseWork,
-        MainDocumentScriptLoadDelayEffect,
-    },
+#[cfg(test)]
+use crate::dom::native::DocumentReadyState;
+use crate::page_task_queue::{
+    MainDocumentCompletionRecheckEffect, MainDocumentPostParseCallbackExecution,
+    MainDocumentPostParseCallbackSettlement, MainDocumentPostParseExecution,
+    MainDocumentPostParseOwner, MainDocumentPostParseStateExecution,
+    MainDocumentPostParseTargetEffect, MainDocumentPostParseWork,
+    MainDocumentScriptLoadDelayEffect,
 };
 
 impl ScriptVm {
@@ -84,6 +84,7 @@ impl ScriptVm {
                     ),
                 )
             }
+            #[cfg(test)]
             MainDocumentPostParseWork::RecordDocumentScriptRun(run) => {
                 self.document_runtime
                     .set_document_ready_state(DocumentReadyState::Loading);
@@ -94,6 +95,7 @@ impl ScriptVm {
                     ),
                 )
             }
+            #[cfg(test)]
             MainDocumentPostParseWork::DispatchContentSecurityPolicyViolation(task) => {
                 if task.owner() != selected_owner.document_owner() {
                     return MainDocumentPostParseWork::DispatchContentSecurityPolicyViolation(task)
@@ -220,6 +222,7 @@ impl ScriptVm {
                     ),
                 )
             }
+            #[cfg(test)]
             MainDocumentPostParseWork::RecordDetachedPostParseRuns(runs) => {
                 MainDocumentPostParseExecution::RecordDetachedPostParseRuns(
                     MainDocumentPostParseStateExecution::new(

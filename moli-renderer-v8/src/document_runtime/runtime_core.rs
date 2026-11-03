@@ -18,7 +18,9 @@ impl DocumentRuntime {
         dom_host: DomHost,
         main_document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
         page_task_tx: Option<crate::page_task_queue::PageTaskSender>,
-        page_task_parser_boundary_injection_tx: tokio::sync::mpsc::UnboundedSender<PageTask>,
+        #[cfg(test)] page_task_parser_boundary_injection_tx: tokio::sync::mpsc::UnboundedSender<
+            PageTask,
+        >,
         stylesheet_task_sender: crate::page_task_queue::RendererPageStylesheetTaskSender,
         main_parser_continuation_sender: crate::page_task_queue::RendererPageMainParserContinuationSender,
     ) -> Self {
@@ -26,6 +28,7 @@ impl DocumentRuntime {
             dom_host,
             DocumentRuntimeIncarnationIdentity::MainFrame(main_document_owner),
             page_task_tx,
+            #[cfg(test)]
             page_task_parser_boundary_injection_tx,
             stylesheet_task_sender,
             main_parser_continuation_sender,
@@ -47,7 +50,9 @@ impl DocumentRuntime {
         dom_host: DomHost,
         document_incarnation: DocumentRuntimeIncarnationIdentity,
         page_task_tx: Option<crate::page_task_queue::PageTaskSender>,
-        page_task_parser_boundary_injection_tx: tokio::sync::mpsc::UnboundedSender<PageTask>,
+        #[cfg(test)] page_task_parser_boundary_injection_tx: tokio::sync::mpsc::UnboundedSender<
+            PageTask,
+        >,
         stylesheet_task_sender: crate::page_task_queue::RendererPageStylesheetTaskSender,
         main_parser_continuation_sender: crate::page_task_queue::RendererPageMainParserContinuationSender,
     ) -> Self {
@@ -65,6 +70,7 @@ impl DocumentRuntime {
         let _ = dom_host.set_document_ready_state(document.ready_state());
         let document_handle = dom_host.document_handle();
         dom_host.set_document_allow_declarative_shadow_roots_for_handle(document_handle, true);
+        #[cfg(test)]
         let parser_boundary_lifecycle_tx = page_task_parser_boundary_injection_tx.clone();
         let mut runtime = Self {
             dom_host,
@@ -111,6 +117,7 @@ impl DocumentRuntime {
                 page_task_tx
                     .map(HostScriptScheduler::with_page_task_injection)
                     .unwrap_or_default(),
+                #[cfg(test)]
                 parser_boundary_lifecycle_tx,
             ),
             parser_script_start_positions: HashMap::new(),

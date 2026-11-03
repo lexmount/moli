@@ -1334,8 +1334,7 @@ location.href = "javascript:globalThis.__jsUrlRan=true";
                 ));
                 assert_eq!(
                     page_vm
-                        .vm_mut()
-                        .drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test(),
+                        .drain_content_security_policy_violation_tasks_for_test().await?,
                     1
                 );
                 page_vm.vm_mut().eval(

@@ -2063,6 +2063,20 @@ pub(crate) struct RendererPageOwnedTaskSourcesTestHarness {
 
 #[cfg(test)]
 impl RendererPageOwnedTaskSourcesTestHarness {
+    /// A focused CSP fixture must not skip or consume a neighboring API's
+    /// callback from this shared FIFO.
+    pub(crate) fn take_content_security_policy_violation_for_executor_test(
+        &self,
+    ) -> Option<RendererPageMiscPlatformApiTask> {
+        let mut sources = self.sources.borrow_mut();
+        let head = sources.misc_platform_api.next_ready_head()?;
+        if head.kind() != super::RendererPageMiscPlatformApiTaskKind::ContentSecurityPolicyViolation
+        {
+            return None;
+        }
+        sources.misc_platform_api.pop_front().map(|(_, task)| task)
+    }
+
     pub(crate) fn next_internal_loading_deadline(
         &self,
         current_owner: Option<RendererPageInternalLoadingOwner>,

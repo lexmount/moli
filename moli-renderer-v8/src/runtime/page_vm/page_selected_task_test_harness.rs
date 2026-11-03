@@ -57,6 +57,7 @@ pub(crate) enum PageSelectedTaskTestSelector {
     DynamicImportOwnerAction,
     FileReading,
     MiscPlatformApi,
+    ContentSecurityPolicyViolation,
     DeviceSensor,
     CanvasBlobSerialization,
     HistoryTraversal,
@@ -296,6 +297,10 @@ impl PageSelectedTaskTestSelector {
             Self::FileReading => {
                 matches!(descriptor, RendererPageReadyDescriptor::FileReading { .. })
             }
+            Self::ContentSecurityPolicyViolation => matches!(
+                descriptor,
+                RendererPageReadyDescriptor::MiscPlatformApi { .. }
+            ),
             Self::MiscPlatformApi => {
                 matches!(
                     descriptor,
@@ -504,6 +509,9 @@ impl PageSelectedTaskTestSelector {
                     RendererPageNetworkingTask::StylesheetCompletion(_),
                 ),
             ) => true,
+            (Self::ContentSecurityPolicyViolation, RendererPageSchedulerTask::MiscPlatformApi(task)) => {
+                task.kind() == crate::page_task_queue::RendererPageMiscPlatformApiTaskKind::ContentSecurityPolicyViolation
+            }
             _ => false,
         }
     }
@@ -639,6 +647,9 @@ impl PageVm {
     ) -> Option<ClaimedPageSelectedTaskForTest> {
         let sources = self.page_task_executor_sources_for_test();
         let task = match selector {
+            PageSelectedTaskTestSelector::ContentSecurityPolicyViolation => sources
+                .take_content_security_policy_violation_for_executor_test()
+                .map(RendererPageSchedulerTask::MiscPlatformApi),
             PageSelectedTaskTestSelector::ChildModuleScriptTerminal => sources
                 .take_child_module_script_terminal_for_executor_test(|owner| {
                     self.page_child_module_script_terminal_is_eligible_for_owner_turn(owner)
@@ -701,5 +712,25 @@ impl PageVm {
                 .await?;
             Ok(true)
         })
+    }
+
+    pub(crate) async fn drain_content_security_policy_violation_tasks_for_test(
+        &mut self,
+    ) -> anyhow::Result<usize> {
+        let loader = self
+            .main_document_resource_loader()
+            .request_client()
+            .clone();
+        let mut count = 0;
+        while self
+            .run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::ContentSecurityPolicyViolation,
+                &loader,
+            )
+            .await?
+        {
+            count += 1;
+        }
+        Ok(count)
     }
 }

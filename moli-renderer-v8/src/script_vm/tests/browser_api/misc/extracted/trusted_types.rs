@@ -374,15 +374,19 @@ fn trusted_types_eval_function_like_source_uses_the_eval_sink() {
         r#"{"evalResult":"EvalError:true","constructed":42,"calls":["eval","Function"]}"#
     );
 }
-#[test]
-fn trusted_types_eval_keyword_does_not_override_another_csp_policy() {
+#[tokio::test(flavor = "current_thread")]
+async fn trusted_types_eval_keyword_does_not_override_another_csp_policy() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let restrictive = "require-trusted-types-for 'script'; script-src 'self'";
     let trusted_types_eval = "default-src 'trusted-types-eval'";
     for policies in [
         [restrictive.to_owned(), trusted_types_eval.to_owned()],
         [trusted_types_eval.to_owned(), restrictive.to_owned()],
     ] {
-        let mut vm = new_storage_test_vm("https://trusted-types-eval-multi-policy.test/");
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://trusted-types-eval-multi-policy.test/",
+            &loader,
+        );
         vm.set_response_content_security_policies(&policies);
 
         let result = vm
@@ -422,7 +426,7 @@ fn trusted_types_eval_keyword_does_not_override_another_csp_policy() {
 
         assert_eq!(result, "queued");
         assert_eq!(
-            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+            drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
             2
         );
         assert_eq!(
@@ -432,9 +436,13 @@ fn trusted_types_eval_keyword_does_not_override_another_csp_policy() {
         );
     }
 }
-#[test]
-fn range_create_contextual_fragment_enforces_trusted_html_sink() {
-    let mut vm = new_storage_test_vm("https://range-contextual-fragment-trusted-types.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn range_create_contextual_fragment_enforces_trusted_html_sink() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://range-contextual-fragment-trusted-types.test/",
+        &loader,
+    );
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
 
     let result = vm
@@ -491,7 +499,7 @@ fn range_create_contextual_fragment_enforces_trusted_html_sink() {
 
     assert_eq!(result, "queued");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(
@@ -500,9 +508,13 @@ fn range_create_contextual_fragment_enforces_trusted_html_sink() {
         r#"{"trustedText":"ok","stringThrow":"TypeError:true","defaultSink":"Range createContextualFragment","defaultText":"allowed","events":[{"blockedURI":"trusted-types-sink","effectiveDirective":"require-trusted-types-for","disposition":"enforce","sample":"Range createContextualFragment|<i>blocked</i>","instance":true}]}"#
     );
 }
-#[test]
-fn trusted_types_eval_reports_sanitized_source_url() {
-    let mut vm = new_storage_test_vm("https://trusted-types-source.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn trusted_types_eval_reports_sanitized_source_url() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://trusted-types-source.test/",
+        &loader,
+    );
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
 
     let result = vm
@@ -538,7 +550,7 @@ fn trusted_types_eval_reports_sanitized_source_url() {
 
     assert_eq!(result, "queued");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         4
     );
     assert_eq!(

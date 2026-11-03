@@ -2866,14 +2866,16 @@ mod tests {
         let post_domcontentloaded_page_task_sender =
             page_task_queue.owner_attached_runtime_page_task_sender_for_test();
         let page_task_front_injection_tx = page_task_queue.parser_boundary_sender();
-        ScriptVmDefaultWorldBootstrap::standalone_from_dom_host_for_test(
+        let mut vm = ScriptVmDefaultWorldBootstrap::standalone_from_dom_host_for_test(
             DomHost::from_dom(NativeDom::new(url::Url::parse(url).expect("test url"))),
             post_domcontentloaded_page_task_sender,
             page_task_front_injection_tx,
         )
         .expect("script vm bootstrap should succeed")
         .finish()
-        .expect("script vm finish should succeed")
+        .expect("script vm finish should succeed");
+        vm.install_page_task_residence_for_executor_test(page_task_queue.residence());
+        vm
     }
 
     #[test]

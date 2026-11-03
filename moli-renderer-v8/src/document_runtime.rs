@@ -1,4 +1,6 @@
 use crate::content_security_policy::ContentSecurityPolicy;
+#[cfg(test)]
+use crate::page_task_queue::PostParseLifecycleWork;
 
 use std::{
     cell::RefCell,
@@ -45,7 +47,7 @@ use super::{
     },
     mutation_coordinator::{MutationCoordinator, RuntimeMutationOptions},
     native_bridge::{self, JsContextHost},
-    page_task_queue::{PageTask, PageTaskQueue, PostParseLifecycleWork, PostParsePageOwnedWork},
+    page_task_queue::{PageTask, PageTaskQueue, PostParsePageOwnedWork},
     planning::PreparedScript,
     runtime::RendererBrowserContextRuntime,
     stylesheet_blocking::{

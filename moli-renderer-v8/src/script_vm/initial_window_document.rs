@@ -53,7 +53,7 @@ impl ScriptVm {
         &mut self,
         bootstrap_document: &DomHost,
         page_task_tx: RuntimePageTaskSender,
-        parser_boundary: tokio::sync::mpsc::UnboundedSender<PageTask>,
+        _parser_boundary: tokio::sync::mpsc::UnboundedSender<PageTask>,
         resource_completion: RendererResourceCompletionSender,
         loader_bootstrap: crate::network::context::DocumentResourceLoaderBootstrap,
         env: &crate::runtime::PageVmEnvConfig,
@@ -106,7 +106,8 @@ impl ScriptVm {
                     dom_host,
                     transition.current_owner(),
                     Some(page_task_tx.page_task_sender()),
-                    parser_boundary,
+                    #[cfg(test)]
+                    _parser_boundary,
                     page_task_tx.stylesheet_task_sender(),
                     page_task_tx.main_parser_continuation_sender(),
                 );

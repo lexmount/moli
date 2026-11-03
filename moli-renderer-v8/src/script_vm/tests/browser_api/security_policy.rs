@@ -970,7 +970,11 @@ JSON.stringify({
 
 #[tokio::test]
 async fn external_stylesheet_csp_blocks_before_fetch_and_dispatches_async_error() {
-    let mut vm = new_storage_test_vm("https://external-style-csp.test/page.html");
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://external-style-csp.test/page.html",
+        &loader,
+    );
     vm.set_response_content_security_policies(&["style-src 'none'".to_owned()]);
 
     assert_eq!(
@@ -1040,7 +1044,7 @@ async fn external_stylesheet_csp_blocks_before_fetch_and_dispatches_async_error(
     );
 
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(
@@ -1048,7 +1052,16 @@ async fn external_stylesheet_csp_blocks_before_fetch_and_dispatches_async_error(
             .expect("stylesheet CSP violation should be observable"),
         r#"[{"target":true,"directive":"style-src-elem","blockedURI":"https://styles.invalid/blocked.css"}]"#
     );
-    assert!(vm.apply_connected_style_lifecycle_bodies_for_test());
+    assert!(
+        vm.run_one_exact_selected_page_task_executor_turn(
+            crate::runtime::PageSelectedTaskTestSelector::DomManipulation(
+                crate::runtime::PageDomManipulationTestFamily::ConnectedStyleEvent,
+            ),
+            &loader,
+        )
+        .await
+        .unwrap()
+    );
     assert_eq!(
         vm.eval("JSON.stringify(globalThis.__blockedExternalStyle.events)")
             .expect("blocked external stylesheet error should be observable"),
@@ -1126,13 +1139,17 @@ async fn hidden_link_nonce_authorizes_stylesheet_csp_before_resource_admission()
 
 #[tokio::test]
 async fn style_preload_csp_blocks_before_typed_resource_and_dispatches_async_error() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("style preload CSP server");
     let addr = listener
         .local_addr()
         .expect("style preload CSP server address");
-    let mut vm = new_storage_test_vm("https://style-preload-csp.test/page.html");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://style-preload-csp.test/page.html",
+        &loader,
+    );
     vm.set_response_content_security_policies(&["style-src 'none'".to_owned()]);
 
     assert_eq!(
@@ -1173,10 +1190,19 @@ async fn style_preload_csp_blocks_before_typed_resource_and_dispatches_async_err
     );
 
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
-    assert!(vm.apply_connected_style_lifecycle_bodies_for_test());
+    assert!(
+        vm.run_one_exact_selected_page_task_executor_turn(
+            crate::runtime::PageSelectedTaskTestSelector::DomManipulation(
+                crate::runtime::PageDomManipulationTestFamily::ConnectedStyleEvent,
+            ),
+            &loader,
+        )
+        .await
+        .unwrap()
+    );
     assert_eq!(
         vm.eval("globalThis.__blockedStylePreload.events.join(',')")
             .expect("style preload error should be observable"),
@@ -1197,9 +1223,13 @@ async fn style_preload_csp_blocks_before_typed_resource_and_dispatches_async_err
     );
 }
 
-#[test]
-fn linked_stylesheet_import_csp_violation_targets_the_document() {
-    let mut vm = new_storage_test_vm("https://style-import-csp.test/page.html");
+#[tokio::test(flavor = "current_thread")]
+async fn linked_stylesheet_import_csp_violation_targets_the_document() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://style-import-csp.test/page.html",
+        &loader,
+    );
     vm.set_response_content_security_policies(&["style-src 'self'".to_owned()]);
 
     assert_eq!(
@@ -1230,7 +1260,7 @@ JSON.stringify(globalThis.__styleImportViolations)
         "[]"
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(
@@ -1448,6 +1478,7 @@ async fn prepared_parser_inline_script_csp_blocks_before_v8_execution_and_report
 
 #[tokio::test]
 async fn eval_csp_violation_reports_external_script_scheme_and_call_location() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let source = r#"
 globalThis.__evalCspErrorName = "";
 try {
@@ -1467,7 +1498,10 @@ try {
     .into_iter()
     .enumerate()
     {
-        let mut vm = new_storage_test_vm("https://eval-source-location.test/page.html");
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://eval-source-location.test/page.html",
+            &loader,
+        );
         vm.set_response_content_security_policies(&["script-src data: blob:".to_owned()]);
         vm.eval(
             r#"
@@ -1505,7 +1539,7 @@ document.addEventListener("securitypolicyviolation", event => {
             .await
             .expect("external script with blocked eval should complete");
         assert_eq!(
-            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+            drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
             1
         );
         assert_eq!(
@@ -1524,9 +1558,13 @@ document.addEventListener("securitypolicyviolation", event => {
     }
 }
 
-#[test]
-fn repeated_eval_violations_report_once_per_location_but_dispatch_every_event() {
-    let mut vm = new_storage_test_vm("https://eval-report-dedup.test/page.html");
+#[tokio::test(flavor = "current_thread")]
+async fn repeated_eval_violations_report_once_per_location_but_dispatch_every_event() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://eval-report-dedup.test/page.html",
+        &loader,
+    );
     vm.set_fetch_subresource_interception(
         true,
         Some(crate::types::SubresourceResourceType::CspReport),
@@ -1552,7 +1590,7 @@ fn repeated_eval_violations_report_once_per_location_but_dispatch_every_event() 
         2
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         6
     );
     assert_eq!(vm.eval("violations").unwrap(), "6");

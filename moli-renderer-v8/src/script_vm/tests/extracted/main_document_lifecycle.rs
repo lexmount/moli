@@ -2426,10 +2426,14 @@ globalThis.__detachedShadowStylesheetHost = host;
     );
 }
 
-#[test]
-fn fetch_csp_redirect_reports_initial_url_without_a_script_location() {
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_csp_redirect_reports_initial_url_without_a_script_location() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     for enforce in [false, true] {
-        let mut vm = new_storage_test_vm("https://fetch-csp-redirect.test/page.html");
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://fetch-csp-redirect.test/page.html",
+            &loader,
+        );
         vm.eval(
             r#"
 globalThis.redirectCspEvents = [];
@@ -2477,7 +2481,7 @@ document.addEventListener('securitypolicyviolation', e => {
             result: Ok(redirected_fetch_response(&request_url, final_url)).into(),
         })
         .unwrap();
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await;
         assert_eq!(
             vm.eval("JSON.stringify(redirectCspEvents)").unwrap(),
             r#"[["https://fetch-csp-redirect.test/request?public","",0,0]]"#,
@@ -2486,10 +2490,14 @@ document.addEventListener('securitypolicyviolation', e => {
     }
 }
 
-#[test]
-fn async_fetch_csp_violation_survives_abort_and_keeps_its_source_document() {
+#[tokio::test(flavor = "current_thread")]
+async fn async_fetch_csp_violation_survives_abort_and_keeps_its_source_document() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     for replace_document in [false, true] {
-        let mut vm = new_storage_test_vm("https://fetch-csp-queued.test/source");
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://fetch-csp-queued.test/source",
+            &loader,
+        );
         vm.set_fetch_subresource_interception(
             true,
             Some(crate::types::SubresourceResourceType::CspReport),
@@ -2557,7 +2565,7 @@ fn async_fetch_csp_violation_survives_abort_and_keeps_its_source_document() {
             ),
             !replace_document
         );
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await;
         assert_eq!(
             vm.eval("String(queuedCspEvents)").unwrap(),
             if replace_document { "0" } else { "1" }

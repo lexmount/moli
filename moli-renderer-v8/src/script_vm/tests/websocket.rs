@@ -127,9 +127,13 @@ fn websocket_minimal_surface_is_feature_detectable() {
     );
 }
 
-#[test]
-fn websocket_document_csp_blocks_connect_src_and_dispatches_event() {
-    let mut vm = new_storage_test_vm("https://websocket-connect-csp.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn websocket_document_csp_blocks_connect_src_and_dispatches_event() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://websocket-connect-csp.test/",
+        &loader,
+    );
     vm.set_response_content_security_policies(&[String::from("connect-src 'none'")]);
     vm.set_response_content_security_report_only_policies(&[String::from("connect-src 'none'")]);
 
@@ -156,7 +160,7 @@ fn websocket_document_csp_blocks_connect_src_and_dispatches_event() {
 
     assert_eq!(result, "0");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         2
     );
     assert_eq!(
@@ -166,9 +170,13 @@ fn websocket_document_csp_blocks_connect_src_and_dispatches_event() {
     );
 }
 
-#[test]
-fn websocket_document_csp_block_precedes_mixed_content_rejection() {
-    let mut vm = new_storage_test_vm("http://localhost:8000/trusted-types/reporting.html");
+#[tokio::test(flavor = "current_thread")]
+async fn websocket_document_csp_block_precedes_mixed_content_rejection() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "http://localhost:8000/trusted-types/reporting.html",
+        &loader,
+    );
     vm.set_response_content_security_policies(&[String::from("connect-src 'none'")]);
 
     let result = vm
@@ -199,7 +207,7 @@ fn websocket_document_csp_block_precedes_mixed_content_rejection() {
 
     assert_eq!(result, "socket:0:ws://common/blank.html");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(
@@ -209,9 +217,13 @@ fn websocket_document_csp_block_precedes_mixed_content_rejection() {
     );
 }
 
-#[test]
-fn websocket_document_csp_report_only_dispatches_without_blocking() {
-    let mut vm = new_storage_test_vm("https://websocket-connect-report-only.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn websocket_document_csp_report_only_dispatches_without_blocking() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://websocket-connect-report-only.test/",
+        &loader,
+    );
     vm.set_response_content_security_report_only_policies(&[String::from("connect-src 'none'")]);
 
     let result = vm
@@ -237,7 +249,7 @@ fn websocket_document_csp_report_only_dispatches_without_blocking() {
 
     assert_eq!(result, "0");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(

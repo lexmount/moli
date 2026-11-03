@@ -2679,8 +2679,7 @@ async fn window_fetch_document_csp_blocks_cross_origin_redirect_and_reports_init
                     {}
                     assert_eq!(
                         page_vm
-                            .vm_mut()
-                            .drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test(),
+                            .drain_content_security_policy_violation_tasks_for_test().await?,
                         0,
                         "the networking CSP task must already have dispatched the event"
                     );
@@ -2799,13 +2798,14 @@ async fn window_fetch_document_csp_report_only_redirect_reports_initial_url() {
                 )
                 .await?;
                 while page_vm
-                    .run_exact_page_websocket_selected_task_for_test().await?
+                    .run_exact_page_websocket_selected_task_for_test()
+                    .await?
                     .is_some()
                 {}
                 assert_eq!(
                     page_vm
-                        .vm_mut()
-                        .drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test(),
+                        .drain_content_security_policy_violation_tasks_for_test()
+                        .await?,
                     0,
                     "the networking CSP task must already have dispatched the event"
                 );

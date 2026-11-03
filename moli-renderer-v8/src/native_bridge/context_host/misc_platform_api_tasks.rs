@@ -83,6 +83,18 @@ impl JsContextHost {
                 );
             }
         }
+        self.queue_content_security_policy_violation_event_task(target, element, violation)
+    }
+
+    /// All newly queued CSP violation events share this exact-owner source,
+    /// including checks that have already recorded their inspector issue and
+    /// sent their network reports.
+    pub(crate) fn queue_content_security_policy_violation_event_task(
+        &mut self,
+        target: WindowDocumentTaskTarget,
+        element: Option<DomHandle>,
+        violation: &DocumentContentSecurityPolicyViolation,
+    ) -> bool {
         let task_id = self
             .misc_platform_api_tasks
             .allocate_task_id(RendererPageMiscPlatformApiTaskId::from_raw);

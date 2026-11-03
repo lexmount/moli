@@ -316,9 +316,11 @@ fn csp_request_treats_missing_dynamic_script_node_as_not_parser_inserted() {
     );
 }
 
-#[test]
-fn external_script_redirect_final_url_obeys_script_src_csp() {
-    let mut vm = new_storage_test_vm("https://app.test/page.html");
+#[tokio::test(flavor = "current_thread")]
+async fn external_script_redirect_final_url_obeys_script_src_csp() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://app.test/page.html", &loader);
     vm.set_response_content_security_policies(&["script-src 'self'".to_owned()]);
     vm.eval(
         r#"
@@ -373,7 +375,7 @@ fn external_script_redirect_final_url_obeys_script_src_csp() {
         .expect_err("redirected script final URL should be blocked by script-src");
     assert!(error.message().contains("Content Security Policy"));
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(
@@ -386,9 +388,11 @@ fn external_script_redirect_final_url_obeys_script_src_csp() {
     );
 }
 
-#[test]
-fn module_graph_redirect_final_url_obeys_script_src_csp() {
-    let mut vm = new_storage_test_vm("https://app.test/page.html");
+#[tokio::test(flavor = "current_thread")]
+async fn module_graph_redirect_final_url_obeys_script_src_csp() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://app.test/page.html", &loader);
     vm.set_response_content_security_report_only_policies(&["script-src 'self'".to_owned()]);
     vm.set_response_content_security_policies(&["script-src 'self'".to_owned()]);
     vm.eval(
@@ -421,7 +425,7 @@ fn module_graph_redirect_final_url_obeys_script_src_csp() {
         .expect_err("redirected module final URL should be blocked by script-src");
     assert!(error.message().contains("Content Security Policy"));
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         2
     );
     assert_eq!(
@@ -1172,9 +1176,13 @@ fn window_string_timers_apply_trusted_types_default_policy() {
     );
 }
 
-#[test]
-fn window_string_timers_apply_eval_csp_before_scheduling() {
-    let mut vm = new_storage_test_vm("https://string-timer-csp.test/page.html");
+#[tokio::test(flavor = "current_thread")]
+async fn window_string_timers_apply_eval_csp_before_scheduling() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://string-timer-csp.test/page.html",
+        &loader,
+    );
     vm.set_response_content_security_policies(&["script-src 'self' 'unsafe-inline'".to_owned()]);
     vm.eval(
         r#"
@@ -1206,7 +1214,7 @@ fn window_string_timers_apply_eval_csp_before_scheduling() {
         crate::host::HostTimeoutRunResult::Idle
     ));
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         2
     );
     assert_eq!(
@@ -1218,9 +1226,13 @@ fn window_string_timers_apply_eval_csp_before_scheduling() {
     );
 }
 
-#[test]
-fn window_string_timer_report_only_eval_csp_reports_and_runs() {
-    let mut vm = new_storage_test_vm("https://string-timer-csp-report-only.test/page.html");
+#[tokio::test(flavor = "current_thread")]
+async fn window_string_timer_report_only_eval_csp_reports_and_runs() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://string-timer-csp-report-only.test/page.html",
+        &loader,
+    );
     vm.set_response_content_security_report_only_policies(&["script-src 'self'".to_owned()]);
     vm.eval(
         r#"
@@ -1245,7 +1257,7 @@ fn window_string_timer_report_only_eval_csp_reports_and_runs() {
         crate::host::HostTimeoutRunResult::Consumed
     ));
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(
@@ -1257,9 +1269,13 @@ fn window_string_timer_report_only_eval_csp_reports_and_runs() {
     );
 }
 
-#[test]
-fn window_string_timer_unsafe_eval_runs_without_reporting() {
-    let mut vm = new_storage_test_vm("https://string-timer-csp-allowed.test/page.html");
+#[tokio::test(flavor = "current_thread")]
+async fn window_string_timer_unsafe_eval_runs_without_reporting() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://string-timer-csp-allowed.test/page.html",
+        &loader,
+    );
     vm.set_response_content_security_policies(&["script-src 'self' 'unsafe-eval'".to_owned()]);
     vm.eval(
         r#"
@@ -1280,7 +1296,7 @@ fn window_string_timer_unsafe_eval_runs_without_reporting() {
         crate::host::HostTimeoutRunResult::Consumed
     ));
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         0
     );
     assert_eq!(
@@ -1292,9 +1308,13 @@ fn window_string_timer_unsafe_eval_runs_without_reporting() {
     );
 }
 
-#[test]
-fn window_string_timer_honors_trusted_types_eval_with_enforced_require() {
-    let mut vm = new_storage_test_vm("https://string-timer-trusted-types-eval.test/page.html");
+#[tokio::test(flavor = "current_thread")]
+async fn window_string_timer_honors_trusted_types_eval_with_enforced_require() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://string-timer-trusted-types-eval.test/page.html",
+        &loader,
+    );
     vm.set_response_content_security_policies(&[
         "script-src 'trusted-types-eval'; require-trusted-types-for 'script'".to_owned(),
     ]);
@@ -1318,7 +1338,7 @@ fn window_string_timer_honors_trusted_types_eval_with_enforced_require() {
         crate::host::HostTimeoutRunResult::Consumed
     ));
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         0
     );
     assert_eq!(

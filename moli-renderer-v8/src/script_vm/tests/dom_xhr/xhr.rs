@@ -2675,7 +2675,10 @@ async fn xml_http_request_dispatches_download_progress_before_done() {
 #[tokio::test(flavor = "current_thread")]
 async fn xml_http_request_document_csp_blocks_connect_src_and_dispatches_event() {
     let loader = static_http_loader(std::iter::empty::<String>());
-    let mut vm = new_storage_test_vm("https://xhr-connect-csp.test/");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://xhr-connect-csp.test/",
+        &loader,
+    );
     vm.set_response_content_security_policies(&[String::from("connect-src 'none'")]);
 
     vm.eval(
@@ -2703,7 +2706,7 @@ async fn xml_http_request_document_csp_blocks_connect_src_and_dispatches_event()
     )
     .expect("XHR CSP block setup should run");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     vm.advance_timers_until_deadline_for_test(&loader)
@@ -2722,7 +2725,10 @@ async fn xml_http_request_document_csp_blocks_connect_src_and_dispatches_event()
 #[tokio::test(flavor = "current_thread")]
 async fn xml_http_request_document_csp_report_only_dispatches_without_blocking() {
     let loader = static_http_loader(std::iter::empty::<String>());
-    let mut vm = new_storage_test_vm("https://xhr-connect-report-only.test/");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://xhr-connect-report-only.test/",
+        &loader,
+    );
     vm.set_response_content_security_report_only_policies(&[String::from("connect-src 'none'")]);
 
     vm.eval(
@@ -2750,7 +2756,7 @@ async fn xml_http_request_document_csp_report_only_dispatches_without_blocking()
     )
     .expect("XHR CSP report-only setup should run");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     vm.advance_timers_until_deadline_for_test(&loader)
