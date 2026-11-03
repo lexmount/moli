@@ -167,8 +167,8 @@ impl ScriptVm {
                 continue;
             }
 
-            // Admission can synchronously deliver a child Document's CSP
-            // event. Use one budget, starting with the first actual candidate.
+            // Keep one budget across all candidate documents. CSP events
+            // have their own task and budget.
             let watchdog =
                 watchdog.get_or_insert_with(|| V8ExecutionWatchdog::arm_lifecycle(scope));
             let finished = watchdog.with_callback_dispatch_budget(scope, |scope| {

@@ -39,14 +39,22 @@ impl PageVm {
                 let (_, accepted_count) = execution.into_parts();
                 tracing::debug!(accepted_count, "completed blocking stylesheet seed task");
             }
+            #[cfg(test)]
             MainDocumentPostParseExecution::RecordDocumentScriptRun(execution) => {
                 let (target, run) = execution.into_parts();
                 if target.applied_to_selected_owner() {
                     self.report.runs.push(run);
                 }
             }
-            MainDocumentPostParseExecution::DispatchContentSecurityPolicyViolation(execution)
-            | MainDocumentPostParseExecution::DispatchScriptEvent(execution)
+            #[cfg(test)]
+            MainDocumentPostParseExecution::DispatchContentSecurityPolicyViolation(execution) => {
+                tracing::debug!(
+                    callback = ?execution.callback(),
+                    settlement = ?execution.settlement(),
+                    "completed legacy post-parse CSP callback test task"
+                );
+            }
+            MainDocumentPostParseExecution::DispatchScriptEvent(execution)
             | MainDocumentPostParseExecution::ReportWindowScriptFailure(execution) => {
                 tracing::debug!(
                     callback = ?execution.callback(),
@@ -92,6 +100,7 @@ impl PageVm {
                     }
                 }
             }
+            #[cfg(test)]
             MainDocumentPostParseExecution::RecordDetachedPostParseRuns(execution) => {
                 let (target, runs) = execution.into_parts();
                 if target.applied_to_selected_owner() {

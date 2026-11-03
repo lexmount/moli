@@ -226,7 +226,7 @@ async fn media_load_honors_media_src_csp() {
     .expect("media CSP setup should evaluate");
 
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         2
     );
 
@@ -275,7 +275,7 @@ async fn media_report_only_csp_reports_without_blocking_load() {
     .expect("media report-only CSP setup should evaluate");
 
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
 
@@ -341,7 +341,7 @@ async fn media_invalid_base_url_fails_before_csp_check() {
     .expect("media fallback CSP setup should evaluate");
 
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         0,
         "an invalid base URL must fail before CSP queues a violation task"
     );
@@ -586,7 +586,7 @@ async fn media_dangling_markup_still_dispatches_report_only_csp() {
     .expect("media dangling markup CSP setup should evaluate");
 
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     run_next_page_media_element_event_for_test(
@@ -1767,7 +1767,7 @@ async fn media_text_track_load_honors_media_src_csp() {
         "track source should queue one typed load-start task"
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert!(

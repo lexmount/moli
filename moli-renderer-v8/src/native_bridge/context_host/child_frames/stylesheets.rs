@@ -252,7 +252,7 @@ impl PageScriptHost {
             return;
         };
         let load_delay_token = subscribers.load_delay_token;
-        if let Some((root_owner, target)) = self.current_main_document_task_owner().zip(
+        if let Some((_root_owner, target)) = self.current_main_document_task_owner().zip(
             self.current_window_document_task_target_for_dispatch_scope(
                 crate::native_bridge::OwnerDispatchScope::Child(completion.child_handle),
             ),
@@ -260,14 +260,9 @@ impl PageScriptHost {
             for violation in &completion.csp_violations {
                 // Use the existing Page task path: no JavaScript may run while
                 // this completion is still installing CSSOM and releasing blockers.
-                unsafe { &mut *self.document_runtime }
-                    .enqueue_content_security_policy_violation_event_task(
-                        crate::page_task_queue::ContentSecurityPolicyViolationEventTask::for_window(
-                            root_owner,
-                            target,
-                            violation.clone(),
-                        ),
-                    );
+                self.queue_content_security_policy_violation_event_task(
+                    target, None, violation, true,
+                );
             }
         }
         self.install_child_parser_stylesheet_result(

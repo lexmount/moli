@@ -65,13 +65,10 @@ impl ScriptVm {
             host.current_main_document_task_owner()
                 .zip(host.current_window_document_task_target_for_dispatch_scope(owner))
         };
-        if let Some((root_owner, target)) = target {
-            self.document_runtime
-                .enqueue_content_security_policy_violation_event_task(
-                    ContentSecurityPolicyViolationEventTask::for_window(
-                        root_owner, target, violation,
-                    ),
-                );
+        if let Some((_root_owner, target)) = target {
+            self._context_host
+                .borrow_mut()
+                .queue_content_security_policy_violation_event_task(target, None, &violation, true);
         }
     }
     pub(crate) fn queue_content_security_policy_violation_event_best_effort(

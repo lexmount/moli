@@ -118,6 +118,11 @@ impl<I: Copy, K: Copy, T: Copy> RendererPageWindowDocumentTaskSource<I, K, T> {
         self.source.front().map(|ready| ready.value().owner())
     }
 
+    #[cfg(test)]
+    pub(crate) fn next_ready_kind_for_test(&mut self) -> Option<K> {
+        self.source.front().map(|ready| ready.value().kind())
+    }
+
     pub(crate) fn pop_front(
         &mut self,
     ) -> Option<(

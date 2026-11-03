@@ -192,11 +192,6 @@ impl DocumentRuntime {
             .collect()
     }
 
-    pub(crate) fn enqueue_parser_boundary_lifecycle_work(&mut self, work: PostParseLifecycleWork) {
-        self.script_lifecycle
-            .enqueue_parser_boundary_lifecycle_work(work);
-    }
-
     pub(crate) fn host_dispatch_script_event(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

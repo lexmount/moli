@@ -491,9 +491,13 @@ fn trusted_type_factory_default_policy_getter_tracks_the_branded_policy() {
     );
 }
 
-#[test]
-fn trusted_type_policy_creation_reports_name_and_duplicate_csp_violations() {
-    let mut vm = new_storage_test_vm("https://trusted-type-policy-csp.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn trusted_type_policy_creation_reports_name_and_duplicate_csp_violations() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://trusted-type-policy-csp.test/",
+        &loader,
+    );
     vm.set_response_content_security_policies(&[
         "trusted-types allowed reportOnly duplicate".to_owned()
     ]);
@@ -547,7 +551,7 @@ fn trusted_type_policy_creation_reports_name_and_duplicate_csp_violations() {
         r#"{"names":["allowed","reportOnly","duplicate"],"duplicateError":"TypeError","blockedError":"TypeError","violations":[]}"#
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         5
     );
     assert_eq!(
@@ -557,8 +561,9 @@ fn trusted_type_policy_creation_reports_name_and_duplicate_csp_violations() {
     );
 }
 
-#[test]
-fn trusted_types_csp_name_grammar_preserves_enforcement_and_report_only_delivery() {
+#[tokio::test(flavor = "current_thread")]
+async fn trusted_types_csp_name_grammar_preserves_enforcement_and_report_only_delivery() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let policy = "trusted-types valid policy*name policy$name policy?name policy!name";
     let names = [
         "valid",
@@ -570,7 +575,10 @@ fn trusted_types_csp_name_grammar_preserves_enforcement_and_report_only_delivery
         "",
     ];
     for enforce in [false, true] {
-        let mut vm = new_storage_test_vm("https://trusted-types-name-grammar.test/");
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://trusted-types-name-grammar.test/",
+            &loader,
+        );
         if enforce {
             vm.set_response_content_security_policies(&[
                 policy.to_owned(),
@@ -620,7 +628,7 @@ JSON.stringify(['valid', 'policy*name', 'policy$name', 'policy?name', 'policy!na
             })
             .collect::<Vec<_>>();
         assert_eq!(
-            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+            drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
             expected.len(),
         );
         let actual = vm.eval("JSON.stringify(policyNameGrammarReports)").unwrap();
@@ -631,8 +639,9 @@ JSON.stringify(['valid', 'policy*name', 'policy$name', 'policy?name', 'policy!na
     }
 }
 
-#[test]
-fn trusted_type_policy_creation_reports_every_violated_policy() {
+#[tokio::test(flavor = "current_thread")]
+async fn trusted_type_policy_creation_reports_every_violated_policy() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let enforced = [
         "trusted-types allowed duplicate reportOnly",
         "trusted-types allowed duplicate reportOnly",
@@ -647,7 +656,10 @@ fn trusted_type_policy_creation_reports_every_violated_policy() {
     .map(str::to_owned);
 
     for enforce in [false, true] {
-        let mut vm = new_storage_test_vm("https://trusted-type-policy-csp.test/");
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://trusted-type-policy-csp.test/",
+            &loader,
+        );
         if enforce {
             vm.set_response_content_security_policies(&enforced);
         }
@@ -692,7 +704,7 @@ JSON.stringify(['allowed', 'reportOnly', 'duplicate', 'duplicate', 'blocked'].ma
             );
         }
         assert_eq!(
-            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+            drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
             expected.len()
         );
         let actual = vm.eval("JSON.stringify(policyReports)").unwrap();
@@ -1817,9 +1829,13 @@ fn iframe_srcdoc_property_applies_trusted_html_conversion() {
     );
 }
 
-#[test]
-fn script_src_enforces_trusted_script_url_and_applies_the_default_policy() {
-    let mut vm = new_storage_test_vm("https://script-src-trusted-types.test/base/");
+#[tokio::test(flavor = "current_thread")]
+async fn script_src_enforces_trusted_script_url_and_applies_the_default_policy() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://script-src-trusted-types.test/base/",
+        &loader,
+    );
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
 
     let result = vm
@@ -1879,7 +1895,7 @@ fn script_src_enforces_trusted_script_url_and_applies_the_default_policy() {
     );
 
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(
@@ -2213,6 +2229,121 @@ fn url_attribute_writes_enforce_only_the_current_non_iframe_script_url_sinks() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn svg_script_href_base_val_uses_the_owner_reflected_trusted_script_url_sink() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://svg-script-href-trusted-types.test/",
+        &loader,
+    );
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const violations = [];
+  document.addEventListener("securitypolicyviolation", event => {
+    violations.push({
+      blockedURI: event.blockedURI,
+      effectiveDirective: event.effectiveDirective,
+      sample: event.sample
+    });
+  });
+  globalThis.__svgScriptHrefViolations = violations;
+
+  const svgScript = document.createElementNS("http://www.w3.org/2000/svg", "script");
+  const href = svgScript.href;
+  let illegalConstructor = false;
+  try {
+    new SVGAnimatedString();
+  } catch (error) {
+    illegalConstructor = error instanceof TypeError;
+  }
+  let plainRejected = false;
+  try {
+    href.baseVal = "plain.js";
+  } catch (error) {
+    plainRejected = error instanceof TypeError;
+  }
+  const rejectedAttribute = svgScript.getAttribute("href");
+
+  const explicit = trustedTypes.createPolicy("svg-script-href", {
+    createScriptURL: value => value
+  });
+  href.baseVal = explicit.createScriptURL("trusted.js");
+  const trustedValues = [
+    svgScript.getAttribute("href"),
+    href.baseVal,
+    href.animVal
+  ];
+  svgScript.setAttribute("href", explicit.createScriptURL("attribute.js"));
+  const externallySynced = [href.baseVal, href.animVal];
+  const className = svgScript.className;
+  className.baseVal = explicit.createScriptURL("trusted-class");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  const useHref = use.href;
+  useHref.baseVal = explicit.createScriptURL("trusted-use");
+
+  const defaultCalls = [];
+  trustedTypes.createPolicy("default", {
+    createScriptURL: (value, type, sink) => {
+      defaultCalls.push([value, type, sink]);
+      return `safe-${value}`;
+    }
+  });
+  href.baseVal = "default-input";
+  className.baseVal = "plain-class";
+  useHref.baseVal = "plain-use";
+
+  return JSON.stringify({
+    shape: [
+      href instanceof SVGAnimatedString,
+      Object.prototype.toString.call(href),
+      svgScript.href === href,
+      illegalConstructor
+    ],
+    plainRejected,
+    rejectedAttribute,
+    trustedValues,
+    externallySynced,
+    ordinaryAnimatedStrings: [
+      className instanceof SVGAnimatedString,
+      svgScript.className === className,
+      className.baseVal,
+      className.animVal,
+      svgScript.getAttribute("class"),
+      useHref instanceof SVGAnimatedString,
+      use.href === useHref,
+      useHref.baseVal,
+      useHref.animVal,
+      use.getAttribute("href")
+    ],
+    defaulted: [svgScript.getAttribute("href"), href.baseVal, href.animVal],
+    defaultCalls,
+    violations
+  });
+})()
+"#,
+        )
+        .expect("SVGScriptElement href Trusted Types sink probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"shape":[true,"[object SVGAnimatedString]",true,true],"plainRejected":true,"rejectedAttribute":null,"trustedValues":["trusted.js","trusted.js","trusted.js"],"externallySynced":["attribute.js","attribute.js"],"ordinaryAnimatedStrings":[true,true,"plain-class","plain-class","plain-class",true,true,"plain-use","plain-use","plain-use"],"defaulted":["safe-default-input","safe-default-input","safe-default-input"],"defaultCalls":[["default-input","TrustedScriptURL","SVGScriptElement href"]],"violations":[]}"#
+    );
+
+    assert_eq!(
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
+        1
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__svgScriptHrefViolations)")
+            .expect("queued SVGScriptElement href violation should be observable"),
+        r#"[{"blockedURI":"trusted-types-sink","effectiveDirective":"require-trusted-types-for","sample":"SVGScriptElement href|plain.js"}]"#
+    );
+}
+
 #[test]
 fn attached_attribute_mutations_recheck_trusted_types_after_domstring_conversion() {
     let mut vm = new_storage_test_vm("https://attached-attribute-trusted-types.test/");
@@ -2322,9 +2453,13 @@ fn attached_attribute_mutations_recheck_trusted_types_after_domstring_conversion
     );
 }
 
-#[test]
-fn empty_default_policy_reports_each_rejected_element_sink() {
-    let mut vm = new_storage_test_vm("https://empty-default-policy.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn empty_default_policy_reports_each_rejected_element_sink() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://empty-default-policy.test/",
+        &loader,
+    );
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
 
     let result = vm
@@ -2356,7 +2491,7 @@ fn empty_default_policy_reports_each_rejected_element_sink() {
 
     assert_eq!(result, "[]");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         3
     );
     assert_eq!(
@@ -2366,9 +2501,13 @@ fn empty_default_policy_reports_each_rejected_element_sink() {
     );
 }
 
-#[test]
-fn empty_default_policy_report_only_allows_and_reports_each_element_sink() {
-    let mut vm = new_storage_test_vm("https://empty-default-policy-report-only.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn empty_default_policy_report_only_allows_and_reports_each_element_sink() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://empty-default-policy-report-only.test/",
+        &loader,
+    );
     vm.set_response_content_security_report_only_policies(&[
         "require-trusted-types-for 'script'".to_owned()
     ]);
@@ -2407,7 +2546,7 @@ fn empty_default_policy_report_only_allows_and_reports_each_element_sink() {
         r#"{"scriptUrl":"abc","markup":"abc","scriptText":"done","violations":[]}"#
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         3
     );
     assert_eq!(
@@ -2417,9 +2556,13 @@ fn empty_default_policy_report_only_allows_and_reports_each_element_sink() {
     );
 }
 
-#[test]
-fn report_only_function_constructors_preserve_brands_and_apply_default_conversion() {
-    let mut vm = new_storage_test_vm("https://trusted-types-function-report-only.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn report_only_function_constructors_preserve_brands_and_apply_default_conversion() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://trusted-types-function-report-only.test/",
+        &loader,
+    );
     vm.set_response_content_security_policies(&["script-src 'unsafe-eval'".to_owned()]);
     vm.set_response_content_security_report_only_policies(&[
         "require-trusted-types-for 'script'".to_owned()
@@ -2438,7 +2581,7 @@ fn report_only_function_constructors_preserve_brands_and_apply_default_conversio
     assert_eq!(result["rejected"], 4);
     assert_eq!(result["violations"], serde_json::json!([]));
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     let reports: serde_json::Value = serde_json::from_str(
@@ -2457,9 +2600,13 @@ fn report_only_function_constructors_preserve_brands_and_apply_default_conversio
     );
 }
 
-#[test]
-fn report_only_trusted_types_eval_runs_reports_and_applies_the_default_policy() {
-    let mut vm = new_storage_test_vm("https://trusted-types-eval-report-only.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn report_only_trusted_types_eval_runs_reports_and_applies_the_default_policy() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://trusted-types-eval-report-only.test/",
+        &loader,
+    );
     vm.set_response_content_security_policies(&["script-src 'unsafe-eval'".to_owned()]);
     vm.set_response_content_security_report_only_policies(&[
         "require-trusted-types-for 'script'".to_owned()
@@ -2502,7 +2649,7 @@ fn report_only_trusted_types_eval_runs_reports_and_applies_the_default_policy() 
         r#"{"value":3,"defaultPolicyCalls":[["globalThis.__reportOnlyEval = 3","TrustedScript","eval"]],"violations":[]}"#
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(
@@ -2512,11 +2659,15 @@ fn report_only_trusted_types_eval_runs_reports_and_applies_the_default_policy() 
     );
 }
 
-#[test]
-fn javascript_url_navigation_default_policy_is_silent_and_disposition_aware() {
+#[tokio::test(flavor = "current_thread")]
+async fn javascript_url_navigation_default_policy_is_silent_and_disposition_aware() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let policy = "require-trusted-types-for 'script'".to_owned();
 
-    let mut rewritten = new_storage_test_vm("https://javascript-url-rewritten.test/");
+    let mut rewritten = new_storage_page_task_executor_test_vm_with_loader(
+        "https://javascript-url-rewritten.test/",
+        &loader,
+    );
     rewritten.set_response_content_security_policies(std::slice::from_ref(&policy));
     rewritten
         .eval(
@@ -2552,7 +2703,7 @@ trustedTypes.createPolicy("default", {
         r#"{"original":0,"modified":1,"calls":[["globalThis.__javascriptUrlOriginal++","TrustedScript","Location href"]]}"#
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut rewritten),
+        drain_content_security_policy_violation_tasks_for_test(&mut rewritten, &loader).await,
         0
     );
 
@@ -2581,7 +2732,7 @@ trustedTypes.createPolicy("default", {
     ] {
         let base_url =
             Url::parse(&format!("https://javascript-url-{name}.test/")).expect("test URL");
-        let mut vm = new_storage_test_vm(base_url.as_str());
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(base_url.as_str(), &loader);
         if report_only {
             vm.set_response_content_security_report_only_policies(std::slice::from_ref(&policy));
         } else {
@@ -2611,7 +2762,7 @@ trustedTypes.createPolicy("default", {{
             None
         );
         assert_eq!(
-            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+            drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
             1
         );
         assert_eq!(
@@ -2627,9 +2778,13 @@ trustedTypes.createPolicy("default", {{
     }
 }
 
-#[test]
-fn report_only_default_policy_transforms_or_preserves_by_callback_outcome() {
-    let mut vm = new_storage_test_vm("https://default-policy-report-only.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn report_only_default_policy_transforms_or_preserves_by_callback_outcome() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://default-policy-report-only.test/",
+        &loader,
+    );
     vm.set_response_content_security_report_only_policies(&[
         "require-trusted-types-for 'script'".to_owned()
     ]);
@@ -2690,7 +2845,7 @@ fn report_only_default_policy_transforms_or_preserves_by_callback_outcome() {
         r#"{"values":{"script.src.abc":"sanitized: abc","script.src.null":"null","script.src.undefined":"undefined","div.innerHTML.abc":"sanitized: abc","div.innerHTML.null":"null","div.innerHTML.undefined":"undefined","script.text.abc":"sanitized: abc","script.text.null":"null","script.text.undefined":"undefined"},"errors":["script.src.throw:RangeError","script.src.typeerror:TypeError","div.innerHTML.throw:RangeError","div.innerHTML.typeerror:TypeError","script.text.throw:RangeError","script.text.typeerror:TypeError"],"calls":[["abc","TrustedScriptURL","HTMLScriptElement src"],["null","TrustedScriptURL","HTMLScriptElement src"],["undefined","TrustedScriptURL","HTMLScriptElement src"],["throw","TrustedScriptURL","HTMLScriptElement src"],["typeerror","TrustedScriptURL","HTMLScriptElement src"],["abc","TrustedHTML","Element innerHTML"],["null","TrustedHTML","Element innerHTML"],["undefined","TrustedHTML","Element innerHTML"],["throw","TrustedHTML","Element innerHTML"],["typeerror","TrustedHTML","Element innerHTML"],["abc","TrustedScript","HTMLScriptElement text"],["null","TrustedScript","HTMLScriptElement text"],["undefined","TrustedScript","HTMLScriptElement text"],["throw","TrustedScript","HTMLScriptElement text"],["typeerror","TrustedScript","HTMLScriptElement text"]],"violations":[]}"#
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         6
     );
     assert_eq!(
@@ -2700,9 +2855,13 @@ fn report_only_default_policy_transforms_or_preserves_by_callback_outcome() {
     );
 }
 
-#[test]
-fn rejected_default_policy_reports_both_dispositions_and_enforces_once() {
-    let mut vm = new_storage_test_vm("https://default-policy-both-dispositions.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn rejected_default_policy_reports_both_dispositions_and_enforces_once() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://default-policy-both-dispositions.test/",
+        &loader,
+    );
     let policy = "require-trusted-types-for 'script'".to_owned();
     vm.set_response_content_security_policies(std::slice::from_ref(&policy));
     vm.set_response_content_security_report_only_policies(&[policy]);
@@ -2737,7 +2896,7 @@ fn rejected_default_policy_reports_both_dispositions_and_enforces_once() {
 
     assert_eq!(result, r#"{"calls":1,"threw":true,"dispositions":[]}"#);
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         2
     );
     assert_eq!(
@@ -2747,9 +2906,13 @@ fn rejected_default_policy_reports_both_dispositions_and_enforces_once() {
     );
 }
 
-#[test]
-fn eval_csp_report_samples_use_trusted_types_compliant_source() {
-    let mut vm = new_storage_test_vm("https://eval-csp-report-sample.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn eval_csp_report_samples_use_trusted_types_compliant_source() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://eval-csp-report-sample.test/",
+        &loader,
+    );
     vm.set_response_content_security_policies(&[
         "require-trusted-types-for 'script'".to_owned(),
         "script-src 'nonce-test' 'report-sample'".to_owned(),
@@ -2799,7 +2962,7 @@ fn eval_csp_report_samples_use_trusted_types_compliant_source() {
         r#"{"errors":["EvalError:true","EvalError:true"],"defaultCalls":["default-source"],"samples":[]}"#
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         2
     );
     assert_eq!(
@@ -2809,9 +2972,13 @@ fn eval_csp_report_samples_use_trusted_types_compliant_source() {
     );
 }
 
-#[test]
-fn function_constructor_violations_sample_only_parameters_and_body() {
-    let mut vm = new_storage_test_vm("https://function-constructor-violation.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn function_constructor_violations_sample_only_parameters_and_body() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://function-constructor-violation.test/",
+        &loader,
+    );
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
 
     let result = vm
@@ -2851,7 +3018,7 @@ fn function_constructor_violations_sample_only_parameters_and_body() {
         r#"{"errors":["EvalError:true","EvalError:true","EvalError:true","EvalError:true"],"samples":[]}"#
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         4
     );
     assert_eq!(
@@ -2861,9 +3028,13 @@ fn function_constructor_violations_sample_only_parameters_and_body() {
     );
 }
 
-#[test]
-fn script_execution_violation_outside_javascript_stack_avoids_v8_frame_probe() {
-    let mut vm = new_storage_test_vm("https://script-execution-violation.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn script_execution_violation_outside_javascript_stack_avoids_v8_frame_probe() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://script-execution-violation.test/",
+        &loader,
+    );
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
 
     vm.eval(
@@ -2908,7 +3079,7 @@ fn script_execution_violation_outside_javascript_stack_avoids_v8_frame_probe() {
         None
     );
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(
@@ -3112,9 +3283,13 @@ fn service_worker_register_converts_options_before_the_default_policy() {
     );
 }
 
-#[test]
-fn transformed_trusted_script_rejection_does_not_report_a_sink_mismatch() {
-    let mut vm = new_storage_test_vm("https://trusted-script-compilation.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn transformed_trusted_script_rejection_does_not_report_a_sink_mismatch() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://trusted-script-compilation.test/",
+        &loader,
+    );
     vm.set_response_content_security_policies(&[
         "script-src 'unsafe-eval'; require-trusted-types-for 'script'".to_owned(),
     ]);
@@ -3133,6 +3308,6 @@ fn transformed_trusted_script_rejection_does_not_report_a_sink_mismatch() {
             return rejected;
         })()
     "#).unwrap(), "2");
-    let _ = drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+    let _ = drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await;
     assert_eq!(vm.eval("JSON.stringify(compilationReports)").unwrap(), "[]");
 }

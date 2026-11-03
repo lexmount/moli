@@ -7,6 +7,7 @@ use crate::{
         RendererPageMiscPlatformApiTaskId, RendererPageMiscPlatformApiTaskKind,
     },
     runtime::{AuthorizedCurrentPageMiscPlatformApiTask, RendererDocumentToken},
+    v8_execution_watchdog::V8ExecutionWatchdog,
 };
 
 impl ScriptVm {
@@ -50,14 +51,25 @@ impl ScriptVm {
             ));
         };
         self.with_default_context_scope(|scope, host_ptr| {
-            Ok(
-                unsafe { &mut *host_ptr }.dispatch_authorized_misc_platform_api_task(
+            let deliver = |scope: &mut v8::PinScope<'_, '_>| {
+                Ok(
+                    unsafe { &mut *host_ptr }.dispatch_authorized_misc_platform_api_task(
+                        scope,
+                        host_ptr,
+                        owner.target(),
+                        callback,
+                    ),
+                )
+            };
+            if kind == RendererPageMiscPlatformApiTaskKind::ContentSecurityPolicyViolation {
+                V8ExecutionWatchdog::with_lifecycle_budget(
                     scope,
-                    host_ptr,
-                    owner.target(),
-                    callback,
-                ),
-            )
+                    "Content Security Policy violation event",
+                    deliver,
+                )
+            } else {
+                deliver(scope)
+            }
         })
     }
 

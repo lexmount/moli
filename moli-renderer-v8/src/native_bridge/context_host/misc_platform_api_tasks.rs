@@ -31,6 +31,7 @@ pub(crate) enum MiscPlatformApiTask {
     MediaTrackConstraints(Box<MediaTrackConstraintsTask>),
     EncryptedMediaRequest(EncryptedMediaRequestTask),
     ContentSecurityPolicyViolation {
+        report: bool,
         element: Option<DomHandle>,
         violation: Box<DocumentContentSecurityPolicyViolation>,
     },
@@ -83,6 +84,19 @@ impl PageScriptHost {
                 );
             }
         }
+        self.queue_content_security_policy_violation_event_task(target, element, violation, false)
+    }
+
+    /// All newly queued CSP violation events share this exact-owner source,
+    /// including checks that have already recorded their inspector issue and
+    /// sent their network reports.
+    pub(crate) fn queue_content_security_policy_violation_event_task(
+        &mut self,
+        target: WindowDocumentTaskTarget,
+        element: Option<DomHandle>,
+        violation: &DocumentContentSecurityPolicyViolation,
+        report: bool,
+    ) -> bool {
         let task_id = self
             .misc_platform_api_tasks
             .allocate_task_id(RendererPageMiscPlatformApiTaskId::from_raw);
@@ -91,6 +105,7 @@ impl PageScriptHost {
             task_id,
             RendererPageMiscPlatformApiTaskKind::ContentSecurityPolicyViolation,
             MiscPlatformApiTask::ContentSecurityPolicyViolation {
+                report,
                 element,
                 violation: Box::new(violation.clone()),
             },
@@ -253,7 +268,11 @@ impl PageScriptHost {
             }
             MiscPlatformApiTask::MediaTrackConstraints(task) => task.invoke(scope),
             MiscPlatformApiTask::EncryptedMediaRequest(task) => task.invoke(scope),
-            MiscPlatformApiTask::ContentSecurityPolicyViolation { element, violation } => {
+            MiscPlatformApiTask::ContentSecurityPolicyViolation {
+                report,
+                element,
+                violation,
+            } => {
                 // CSP checks the shadow-including root at dispatch time, not
                 // at the earlier policy check. A stale owner has
                 // already been rejected by the Page task arbiter.
@@ -264,9 +283,37 @@ impl PageScriptHost {
                                 == Some(resolved.document_handle)
                     })
                     .unwrap_or(resolved.document_handle);
+                let report_owner = target.owner();
                 let target = EventTargetHandle::Node(event_target);
                 let metadata = self.document_csp_violation_metadata(resolved.document_handle);
                 let fields = metadata.event_fields(&violation);
+                if report {
+                    unsafe { &mut *self.document_runtime }
+                        .record_content_security_policy_inspector_issue(element, &violation);
+                    match report_owner {
+                        WindowDocumentOwner::Frame(document_owner) => {
+                            let child = match dispatch_scope {
+                                OwnerDispatchScope::Child(handle) => Some(handle),
+                                _ => None,
+                            };
+                            crate::network_host::send_content_security_policy_reports_for_window(
+                                scope,
+                                self,
+                                document_owner,
+                                child,
+                                &fields,
+                                &violation.report_uri_endpoints,
+                                &violation.report_to_endpoints,
+                            );
+                        }
+                        WindowDocumentOwner::LightweightPopup(document_owner) => {
+                            crate::network_host::send_content_security_policy_reports_for_lightweight_popup(
+                                scope, self, document_owner.popup_id(), document_owner, &fields,
+                                &violation.report_uri_endpoints, &violation.report_to_endpoints);
+                        }
+                    }
+                }
+
                 crate::host::event_target_value(scope, host_ptr, target)
                     .ok()
                     .and_then(|value| {

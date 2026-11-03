@@ -2839,8 +2839,6 @@ async fn service_worker_register_csp_blocks_before_fetch_or_registration() {
                 globalThis.__cspRegisterDone = true;
             });
         "#).unwrap();
-        // The standalone Page harness holds document CSP events in its pre-DCL queue.
-        vm.drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test();
         drain_service_worker_test_until_eval_equals(
             &mut vm,
             &runtime,

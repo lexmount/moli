@@ -51,7 +51,7 @@ fn realtime_history_push_state_leaves_frame_scheduler_idle() {
 }
 
 #[test]
-fn realtime_lazy_image_csp_timeout_settles_frame_and_recovers() {
+fn realtime_lazy_image_csp_reports_after_the_frame_and_recovers_from_timeout() {
     run_page_vm_large_stack_async_test("realtime-lazy-image-csp-budget", || async move {
         use crate::v8_execution_watchdog::{V8ExecutionWatchdog, V8ExecutionWatchdogKind};
 
@@ -89,7 +89,7 @@ fn realtime_lazy_image_csp_timeout_settles_frame_and_recovers() {
                     const end = performance.now() + 600;
                     while (performance.now() < end) {}
                     trace.push('listener finished');
-                });
+                }, {once:true});
                 child.addEventListener('securitypolicyviolation', () => trace.push('next listener'));
             "#,
                 )
@@ -110,16 +110,28 @@ fn realtime_lazy_image_csp_timeout_settles_frame_and_recovers() {
             "#,
                 )
                 .unwrap();
+            run_opportunity(&mut page, &loader).await.unwrap();
+            assert_eq!(
+                page.vm_mut().eval("trace.join('|')").unwrap(),
+                "rAF finished"
+            );
+
             let budget = V8ExecutionWatchdog::override_timeout_for_test(
                 V8ExecutionWatchdogKind::LifecycleEvent,
                 Duration::from_millis(100),
             );
-            let error = run_opportunity(&mut page, &loader).await.unwrap_err();
+            let error = page
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::ContentSecurityPolicyViolation,
+                    &loader,
+                )
+                .await
+                .unwrap_err();
             drop(budget);
             assert!(
-                error
-                    .to_string()
-                    .contains("Realtime lazy image admission exceeded 100ms and was terminated"),
+                error.to_string().contains(
+                    "Content Security Policy violation event exceeded 100ms and was terminated"
+                ),
                 "{error}"
             );
             let disposition = if report_only_first {
@@ -132,6 +144,19 @@ fn realtime_lazy_image_csp_timeout_settles_frame_and_recovers() {
                 page.vm_mut().eval("trace.join('|')").unwrap(),
                 interrupted_trace
             );
+            let expected = if report_only_first {
+                assert!(
+                    page.run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::ContentSecurityPolicyViolation,
+                        &loader,
+                    )
+                    .await
+                    .unwrap()
+                );
+                format!("{interrupted_trace}|next listener")
+            } else {
+                interrupted_trace
+            };
             assert!(
                 page.next_rendering_opportunity_deadline_for_test()
                     .is_none()
@@ -143,7 +168,7 @@ fn realtime_lazy_image_csp_timeout_settles_frame_and_recovers() {
             run_opportunity(&mut page, &loader).await.unwrap();
             assert_eq!(
                 page.vm_mut().eval("trace.join('|')").unwrap(),
-                format!("{interrupted_trace}|recovered")
+                format!("{expected}|recovered")
             );
             assert!(
                 page.next_rendering_opportunity_deadline_for_test()

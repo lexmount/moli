@@ -66,9 +66,13 @@ fn security_policy_violation_event_constructor_applies_init_defaults() {
         r#"{"defaults":["","","","","","","enforce","","",0,0,0],"initialized":{"type":"custom","documentURI":"https://example.test/document","referrer":"https://example.test/referrer","blockedURI":"https://example.test/blocked","violatedDirective":"default-src","effectiveDirective":"script-src","originalPolicy":"default-src 'none'","disposition":"report","sourceFile":"https://example.test/source.js","sample":"sample","statusCode":1,"lineNumber":4294967294,"columnNumber":3,"trusted":false,"instance":true}}"#
     );
 }
-#[test]
-fn eval_csp_checks_string_sources_after_type_discrimination() {
-    let mut blocked = new_storage_test_vm("https://eval-csp-blocked.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn eval_csp_checks_string_sources_after_type_discrimination() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut blocked = new_storage_page_task_executor_test_vm_with_loader(
+        "https://eval-csp-blocked.test/",
+        &loader,
+    );
     blocked.set_response_content_security_policies(&["script-src 'nonce-test'".to_owned()]);
     blocked.set_response_content_security_report_only_policies(&[
         "script-src 'nonce-test'".to_owned()
@@ -102,7 +106,7 @@ fn eval_csp_checks_string_sources_after_type_discrimination() {
         .expect("blocked eval CSP probe should evaluate");
     assert_eq!(blocked_result, "queued");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut blocked),
+        drain_content_security_policy_violation_tasks_for_test(&mut blocked, &loader).await,
         2
     );
     assert_eq!(
@@ -114,7 +118,10 @@ fn eval_csp_checks_string_sources_after_type_discrimination() {
         "EvalError:true|true|report:true,enforce:true"
     );
 
-    let mut allowed = new_storage_test_vm("https://eval-csp-allowed.test/");
+    let mut allowed = new_storage_page_task_executor_test_vm_with_loader(
+        "https://eval-csp-allowed.test/",
+        &loader,
+    );
     allowed.set_response_content_security_policies(&["script-src 'unsafe-eval'".to_owned()]);
     assert_eq!(
         allowed
@@ -386,9 +393,11 @@ fn runtime_evaluate_code_generation_policy_matches_inspector_scope() {
         .expect("page eval policy restoration probe should run");
     assert_eq!(restored, "EvalError");
 }
-#[test]
-fn webassembly_compile_obeys_document_csp_wasm_eval() {
-    let mut vm = new_storage_test_vm("https://wasm-csp.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn webassembly_compile_obeys_document_csp_wasm_eval() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://wasm-csp.test/", &loader);
     vm.document_runtime
         .dom_host_mut()
         .reset_html_document_shell();
@@ -431,7 +440,7 @@ fn webassembly_compile_obeys_document_csp_wasm_eval() {
 
     assert_eq!(result, "queued");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(
@@ -440,9 +449,13 @@ fn webassembly_compile_obeys_document_csp_wasm_eval() {
         r#"{"thrown":"CompileError|true","events":["script-src|script-src|script-src 'self' 'unsafe-inline'|wasm-eval|true"]}"#
     );
 }
-#[test]
-fn document_csp_violation_event_survives_mutated_event_globals() {
-    let mut vm = new_storage_test_vm("https://wasm-csp-mutated-event.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn document_csp_violation_event_survives_mutated_event_globals() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://wasm-csp-mutated-event.test/",
+        &loader,
+    );
     vm.document_runtime
         .dom_host_mut()
         .reset_html_document_shell();
@@ -494,7 +507,7 @@ fn document_csp_violation_event_survives_mutated_event_globals() {
 
     assert_eq!(result, "queued");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(
@@ -503,9 +516,13 @@ fn document_csp_violation_event_survives_mutated_event_globals() {
         r#"{"thrown":"CompileError","events":[{"type":"securitypolicyviolation","blockedURI":"wasm-eval","publicBlockedURI":"prototype-blocked-uri","bubbles":true,"cancelable":false,"composed":true,"effectiveDirective":"script-src","disposition":"enforce","instance":true}]}"#
     );
 }
-#[test]
-fn document_csp_report_only_wasm_eval_dispatches_without_blocking() {
-    let mut vm = new_storage_test_vm("https://wasm-csp-report-only.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn document_csp_report_only_wasm_eval_dispatches_without_blocking() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://wasm-csp-report-only.test/",
+        &loader,
+    );
     vm.set_response_content_security_report_only_policies(&[String::from(
         "script-src 'self' 'unsafe-inline'",
     )]);
@@ -536,7 +553,7 @@ fn document_csp_report_only_wasm_eval_dispatches_without_blocking() {
 
     assert_eq!(result, "queued");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         1
     );
     assert_eq!(
