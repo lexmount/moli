@@ -7,6 +7,16 @@ use crate::domains::page::PreparedRendererNavigationResult;
 use anyhow::{Context as _, Result};
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn prepare_renderer_navigation_owner_action(
+        self,
+        action: crate::conn::TopLevelNavigationOwnerAction,
+    ) -> Option<crate::domains::page::PreparedRendererNavigation> {
+        crate::domains::page::PreparedRendererNavigation::prepare_owner_action(
+            self.connection,
+            action,
+        )
+    }
+
     pub(crate) fn prepare_superseded_fetch_navigation(
         self,
         token: DocumentNavigationToken,
