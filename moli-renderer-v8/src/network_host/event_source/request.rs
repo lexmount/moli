@@ -385,6 +385,7 @@ fn dispatch_service_worker_event_source<'s>(
         service_worker_fetch_request_metadata(&native_request),
     );
     let dispatch = ServiceWorkerFetchDispatch {
+        request_body_owner: None,
         redirect_check: host.window_fetch_redirect_check(registered.internal_id),
         internal_id: registered.internal_id,
         request,

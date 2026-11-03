@@ -34,6 +34,7 @@ pub(crate) struct ControlledFetchStream {
     response: Option<Box<StreamedFetchResponse>>,
     delivered: usize,
     timing: crate::worker::WorkerResourceTiming,
+    response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
 }
 
 struct StreamedFetchResponse {
@@ -44,6 +45,9 @@ struct StreamedFetchResponse {
 }
 
 impl ControlledFetchStream {
+    pub(super) fn set_response_filter(&mut self, filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>) {
+        self.response_filter = filter;
+    }
     pub(super) fn policy_violations(
         &self,
         violations: Vec<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
@@ -83,6 +87,7 @@ impl ControlledFetchStream {
             response: None,
             delivered: 0,
             timing,
+            response_filter: None,
         }
     }
 
@@ -93,7 +98,12 @@ impl ControlledFetchStream {
         network_request_headers: Option<Vec<(String, String)>>,
         body: ResourceInterceptionBody,
     ) -> Result<(), String> {
+        let skip_fetch_security_validation = self.response_filter.as_ref().is_some_and(|filter| filter.service_worker_metadata().is_some());
+        if skip_fetch_security_validation {
+            self.timing.begin_synthetic_response();
+        }
         self.timing.observe_head(&head);
+        if !skip_fetch_security_validation {
         super::super::validate_fetch_response_headers(
             &self.request_origin,
             &head,
@@ -102,6 +112,7 @@ impl ControlledFetchStream {
             self.policy,
             self.load.request_client().web_security_disabled(),
         )?;
+        }
         let handle = info
             .network_request_handle
             .expect("native Fetch owns its request handle");
@@ -137,7 +148,7 @@ impl ControlledFetchStream {
             &self.request_origin,
             &head,
             self.mode,
-            None,
+            self.response_filter.as_ref(),
             self.load.request_client().web_security_disabled(),
         ));
         let mut observable_head = head.clone();
@@ -149,6 +160,8 @@ impl ControlledFetchStream {
         );
         let _ = self.completion.send(WorkerFetchEvent::StreamingStarted(
             WorkerFetchStreamingStarted {
+                response_filter: self.response_filter.clone(),
+                skip_fetch_security_validation,
                 fetch_id: self.fetch_id,
                 body_source_id,
                 head: observable_head,

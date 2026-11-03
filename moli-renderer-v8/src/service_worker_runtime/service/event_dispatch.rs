@@ -312,6 +312,10 @@ impl ServiceWorkerRuntimeService {
         let initial_redirect_count = native_request.redirect_count();
         let fetch_job = ServiceWorkerFetchJob {
             response_delivery,
+            direct_streaming_tx: None,
+            request_body_owner: dispatch.request_body_owner,
+            body_stream: request.body_stream.clone(),
+
             request: {
                 let native_request = if request.metadata.link_preload {
                     native_request.with_link_preload()

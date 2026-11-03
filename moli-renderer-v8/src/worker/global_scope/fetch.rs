@@ -13,6 +13,7 @@ use crate::types::{
     WebSocketNetworkEvent,
 };
 
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::worker) enum WorkerFetchKind {
     Fetch,
@@ -1208,7 +1209,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
         native_load::start(
             scope,
             &state,
-            native_load::NativeWorkerFetchRequest { request, blob_url_entry, kind, font_face, timing, body_stream, body_stream_locked },
+            native_load::NativeWorkerFetchRequest { request, blob_url_entry, kind, font_face, timing, body_stream, body_stream_locked, signal },
 
 
 
@@ -1219,6 +1220,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
         )
 
     }
+
 
 
 
@@ -1274,6 +1276,84 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
     event: WorkerFetchEvent,
 ) {
     match event {
+        WorkerFetchEvent::RequestBodyProducer {
+            fetch_id,
+            mut producer,
+        } => {
+            let delivery = {
+                let state = state.borrow();
+                state
+                    .pending_fetches
+                    .get(&fetch_id)
+                    .filter(|pending| !pending.load.is_cancelled())
+                    .map(|pending| {
+                        (
+                            pending.resolver.clone(),
+                            pending.load.task_runner(),
+                            state.fetch_completion_tx.clone(),
+                        )
+                    })
+            };
+            if let Some((resolver, runner, completion)) = delivery {
+                let stream = crate::context_bootstrap::build_readable_stream_clone_shell(scope);
+                let payload = producer.take_stream();
+                if crate::context_bootstrap::initialize_request_body_stream(scope, stream, &payload)
+                    .is_some()
+                {
+                    let resolver = v8::Local::new(scope, resolver);
+                    match crate::network_host::RequestUpload::with_sender(
+                        scope,
+                        stream,
+                        resolver,
+                        false,
+                        runner,
+                        producer.cancel.clone(),
+                        move |result| {
+                            let _ = completion
+                                .send(WorkerFetchEvent::RequestUploadReady { fetch_id, result });
+                        },
+                        producer.take_sender(),
+                    ) {
+                        Ok(upload) => {
+                            state
+                                .borrow_mut()
+                                .pending_fetches
+                                .get_mut(&fetch_id)
+                                .expect("body producer fetch")
+                                .upload = Some(upload.clone());
+                            upload.start(scope);
+                        }
+                        Err(reason) => {
+                            resolver.reject(scope, reason);
+                        }
+                    }
+                }
+            }
+        }
+        WorkerFetchEvent::ServiceWorkerUploadReady { event_id, result } => {
+            let upload = state
+                .borrow()
+                .pending_service_worker_request_uploads
+                .get(&event_id)
+                .cloned();
+            if let Some(upload) = upload {
+                upload.ready(scope, result);
+            }
+        }
+        WorkerFetchEvent::ServiceWorkerUploadFinished { event_id, result } => {
+            let upload = state
+                .borrow_mut()
+                .pending_service_worker_request_uploads
+                .remove(&event_id);
+            if let Some(upload) = upload {
+                if result.is_ok() {
+                    upload.finish(scope);
+                } else {
+                    let reason = v8::Exception::type_error(scope, v8str(scope, "Failed to fetch"));
+                    upload.stop(scope, reason);
+                }
+            }
+        }
         WorkerFetchEvent::RequestUploadReady { fetch_id, result } => {
             let upload = state
                 .borrow()

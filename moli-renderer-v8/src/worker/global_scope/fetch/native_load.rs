@@ -4,6 +4,7 @@ pub(super) struct NativeWorkerFetchRequest<'s> {
     pub(super) request: Request,
     pub(super) body_stream: Option<v8::Global<v8::Object>>,
     pub(super) body_stream_locked: bool,
+    pub(super) signal: Option<v8::Local<'s, v8::Object>>,
     pub(super) blob_url_entry: Option<CapturedBlobUrl>,
     pub(super) kind: WorkerFetchKind,
     pub(super) timing: WorkerResourceTiming,
@@ -19,7 +20,7 @@ pub(super) fn start<'s>(
     metadata: ServiceWorkerFetchRequestMetadata,
     policy_context: SubresourcePolicyContext,
 ) -> Option<v8::Local<'s, v8::Promise>> {
-    let NativeWorkerFetchRequest { mut request, blob_url_entry, kind, font_face, timing, body_stream, body_stream_locked } = request;
+    let NativeWorkerFetchRequest { mut request, blob_url_entry, kind, font_face, timing, body_stream, body_stream_locked, signal } = request;
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
     let cancel = FetchCancelHandle::new();
@@ -92,6 +93,26 @@ pub(super) fn start<'s>(
     let controlled = service_worker.as_ref().zip(service_worker_client).is_some_and(|(runtime, client)| {
         runtime.matching_controller_for_client_fetch(client, &request.url).is_some()
     });
+    let mut transferred = None;
+    let mut request_body_owner = None;
+    if controlled {
+        if metadata.body_source_is_null && let Some(stream) = body_stream.as_ref() {
+            let stream = v8::Local::new(scope, stream);
+            transferred = crate::context_bootstrap::transfer_request_body(scope, stream, body_stream_locked);
+            if transferred.is_none() {
+                state.borrow_mut().pending_fetches.remove(&fetch_id);
+                let _ = resolver.reject(scope, v8::Exception::type_error(scope, v8str(scope, "Failed to transfer request body")));
+                return Some(promise);
+            }
+            if let Some(signal) = signal {
+                crate::context_bootstrap::install_request_body_abort(scope, stream, signal);
+            }
+        }
+        let events = completion.clone();
+        request_body_owner = Some(crate::context_bootstrap::request_body_owner(scope, move |producer| {
+            let _ = events.send(WorkerFetchEvent::RequestBodyProducer { fetch_id, producer });
+        }));
+    }
     if !controlled && metadata.body_source_is_null && matches!(request.url.scheme(), "http" | "https") && let Some(stream) = body_stream.as_ref() {
         let stream = v8::Local::new(scope, stream);
         let completion = completion.clone();
@@ -121,6 +142,7 @@ pub(super) fn start<'s>(
             .with_redirect_owner(redirect_owner)
             .with_blob_url_entry(blob_url_entry)
             .with_service_worker(service_worker, service_worker_client, metadata)
+            .with_service_worker_request_body(transferred, request_body_owner)
             .run_fetch(completion, fetch_id, resource_timing, integrity, timing)
             .await;
     });

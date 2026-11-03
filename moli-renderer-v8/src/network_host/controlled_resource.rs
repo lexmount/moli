@@ -537,20 +537,21 @@ impl ControlledResourceLoad {
             if self.blob_url_entry.as_ref().is_some_and(|entry| entry.is_authorized_fetch(&self.request.url)) {
                 self.response_filter = Some(crate::types::FetchResponseType::Basic.into());
             }
+            let mut service_worker_response = None;
             if synthetic.is_none()
                 && let Some(source) = self.service_worker.clone()
                 && let Some(response) = self.fetch_service_worker_hop(source).await?
             {
-                synthetic = Some(response);
+                service_worker_response = Some(response);
             }
             let loader: ResourceRequestClient = self.load.request_client();
             let hop_cancel = self.cancel.child_for_subrequest();
-            let (response, is_synthetic, observations) = match synthetic.take() {
-                Some(response) => (
-                    LoadedResponse::from_response(response),
-                    true,
-                    NetworkObservationJournal::default(),
-                ),
+            let synthetic_response = synthetic
+                .take()
+                .map(LoadedResponse::from_response)
+                .or_else(|| service_worker_response.take());
+            let (response, is_synthetic, observations) = match synthetic_response {
+                Some(response) => (response, true, NetworkObservationJournal::default()),
                 None => {
                     if self.load.network_offline() {
                         return Err("Network emulation offline".into());
@@ -782,6 +783,9 @@ impl ControlledResourceLoad {
                 if let Some(stream) = stream.as_deref_mut() {
                     stream.policy_violations(std::mem::take(&mut self.csp_violations));
                 }
+                if let Some(ControlledResourceStream::WorkerFetch(fetch)) = stream.as_deref_mut() {
+                    fetch.set_response_filter(self.response_filter.clone());
+                }
                 // Whole-body security checks are needed for opaque responses,
                 // not for every request authored with mode: "no-cors".
                 let opaque_response =
@@ -792,13 +796,14 @@ impl ControlledResourceLoad {
                                 .expect("native Fetch has a requesting origin"),
                             &response.head,
                             self.request.request_mode,
+                            self.request.redirect_mode(),
                             self.load.request_client().web_security_disabled(),
                         )
                         .is_some();
                 let delivered = response
                     .deliver(
                         &self.info,
-                        if is_synthetic || manual || opaque_response {
+                        if manual || opaque_response || (is_synthetic && self.response_filter.as_ref().is_none_or(|filter| filter.service_worker_metadata().is_none())) {
                             None
                         } else {
                             stream.as_deref_mut()

@@ -18,6 +18,8 @@ async fn cache_keys_preserves_native_credential_urls_without_author_constructors
         let requests = v8::Array::new(scope, urls.len() as i32);
         for (index, url) in urls.iter().enumerate() {
             let source = ServiceWorkerFetchRequest {
+                body_stream: None,
+
                 client_id: ServiceWorkerClientId::from_u64_for_test(7),
                 resulting_client_id: None,
                 url: Url::parse(url).unwrap(),
@@ -112,6 +114,8 @@ async fn window_fetch_retains_native_request_urls_and_rejects_converted_credenti
     native_url.set_username("alice").unwrap();
     native_url.set_password(Some("secret")).unwrap();
     let request = ServiceWorkerFetchRequest {
+        body_stream: None,
+
         client_id: ServiceWorkerClientId::from_u64_for_test(7),
         resulting_client_id: None,
         url: native_url.clone(),

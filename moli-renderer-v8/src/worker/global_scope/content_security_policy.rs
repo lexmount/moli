@@ -413,6 +413,7 @@ fn send_worker_content_security_policy_report_for_state(
         .with_service_worker(runtime, client_id, metadata)
         .run()
         .await;
+
     });
 }
 

@@ -198,6 +198,7 @@ pub(super) struct ServiceWorkerRuntimeState {
     pub(super) versions: HashMap<ServiceWorkerVersionId, ServiceWorkerVersion>,
     pub(super) pending_ready_jobs: Vec<ServiceWorkerReadyJob>,
     pub(super) pending_fetch_jobs: HashMap<ServiceWorkerEventId, ServiceWorkerFetchJob>,
+    pub(super) pending_fetch_body_uploads: HashMap<ServiceWorkerEventId, ServiceWorkerRunOwner>,
     pub(super) lifecycle_watchers: Vec<ServiceWorkerLifecycleWatcher>,
     pub(super) live_clients: HashMap<ServiceWorkerClientId, ServiceWorkerClient>,
     pub(super) notification_records: Vec<ServiceWorkerNotificationRecord>,
@@ -304,6 +305,7 @@ impl ServiceWorkerRuntimeState {
             versions: HashMap::new(),
             pending_ready_jobs: Vec::new(),
             pending_fetch_jobs: HashMap::new(),
+            pending_fetch_body_uploads: HashMap::new(),
             lifecycle_watchers: Vec::new(),
             live_clients: HashMap::new(),
             notification_records: Vec::new(),
@@ -797,6 +799,12 @@ pub(super) enum ServiceWorkerFetchResponseDelivery {
 
 pub(super) struct ServiceWorkerFetchJob {
     pub(super) response_delivery: ServiceWorkerFetchResponseDelivery,
+    pub(super) direct_streaming_tx: Option<
+        tokio::sync::mpsc::UnboundedSender<super::events::ServiceWorkerDirectFetchStreamEvent>,
+    >,
+    pub(super) request_body_owner: Option<crate::context_bootstrap::RequestBodyOwner>,
+    pub(super) body_stream: Option<crate::context_bootstrap::ReadableStreamClonePayload>,
+
     pub(super) request: moli_fetch::Request,
     // Only redirects followed during this job transfer network fallback to it.
     pub(super) initial_redirect_count: usize,

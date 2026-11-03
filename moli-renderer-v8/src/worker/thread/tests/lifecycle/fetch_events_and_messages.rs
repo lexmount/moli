@@ -868,6 +868,7 @@ async fn service_worker_navigation_requests_preserve_native_flags_until_init_ove
         let native =
             moli_fetch::Request::get_with_url(url.clone()).with_browser_navigation_kind(kind);
         let request = ServiceWorkerFetchRequest {
+            body_stream: None,
             client_id: crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(7),
             resulting_client_id: None,
             url,
@@ -932,6 +933,7 @@ async fn service_worker_fetch_event_request_exposes_destination_metadata() {
     );
 
     let request = ServiceWorkerFetchRequest {
+        body_stream: None,
         client_id: crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(7),
         resulting_client_id: None,
         url: url::Url::parse("https://example.test/app/script.js").unwrap(),
@@ -1164,6 +1166,7 @@ async fn service_worker_fetch_event_exposes_resulting_client_metadata() {
     let resulting_client_id =
         crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(8);
     let request = ServiceWorkerFetchRequest {
+        body_stream: None,
         client_id,
         resulting_client_id: Some(resulting_client_id),
         url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -1358,6 +1361,7 @@ async fn service_worker_fetch_event_request_body_used_guards_inherited_body() {
     );
 
     let request = ServiceWorkerFetchRequest {
+        body_stream: None,
         client_id: crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(7),
         resulting_client_id: None,
         url: url::Url::parse("https://example.test/app/post").unwrap(),
@@ -2071,6 +2075,8 @@ async fn service_worker_soft_reload_exposes_native_cache_mode_on_request_copies(
                 .with_browser_navigation_kind(kind)
                 .with_cache_mode(cache);
             let request = ServiceWorkerFetchRequest {
+                body_stream: None,
+
                 client_id: crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(
                     7,
                 ),

@@ -878,6 +878,7 @@ mod tests {
         request_url: Url,
     ) -> ServiceWorkerFetchRequest {
         ServiceWorkerFetchRequest {
+            body_stream: None,
             client_id,
             resulting_client_id: None,
             url: request_url,
@@ -908,6 +909,9 @@ mod tests {
         ServiceWorkerFetchJob {
             response_delivery: Default::default(),
             initial_redirect_count: 0,
+            direct_streaming_tx: None,
+            request_body_owner: None,
+            body_stream: None,
             request: {
                 let origin = moli_url::WebOrigin::from_url(&document_url);
                 let initiator = (document_url).clone();
