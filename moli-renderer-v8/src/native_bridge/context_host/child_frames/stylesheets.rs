@@ -385,6 +385,9 @@ impl JsContextHost {
         let mut installed = 0;
         for result in &completion.network_results {
             let terminal = &result.terminal;
+            if terminal.failed_integrity() {
+                continue;
+            }
             let text = terminal
                 .ready_response()
                 .map_or("", |response| response.body_text());
