@@ -285,7 +285,7 @@ document.body.innerHTML = `
 }
 
 // The SVG decoder caches system fonts process-wide. Give this Linux regression
-// a child-only Fontconfig containing three checked-in, distinguishable faces;
+// a child-only Fontconfig containing checked-in, distinguishable faces;
 // neither host fonts nor other parallel tests can change the selected outlines.
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "current_thread")]
@@ -296,7 +296,7 @@ async fn screenshot_inline_svg_variant_faces_isolate_system_fonts() -> anyhow::R
         let directory = tempfile::tempdir()?;
         let fonts = directory.path().join("fonts");
         std::fs::create_dir(&fonts)?;
-        let fixtures: [(&str, &[u8]); 3] = [
+        let fixtures: [(&str, &[u8]); 6] = [
             (
                 "regular.ttf",
                 include_bytes!(concat!(
@@ -318,6 +318,27 @@ async fn screenshot_inline_svg_variant_faces_isolate_system_fonts() -> anyhow::R
                     "/../moli-layout/tests/fixtures/moli-svg-condensed.ttf"
                 )),
             ),
+            (
+                "semibold.ttf",
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../moli-layout/tests/fixtures/moli-svg-semibold.ttf"
+                )),
+            ),
+            (
+                "bold.ttf",
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../moli-layout/tests/fixtures/moli-svg-bold.ttf"
+                )),
+            ),
+            (
+                "fallback.ttf",
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../moli-layout/tests/fixtures/moli-ahem.ttf"
+                )),
+            ),
         ];
         for (name, bytes) in fixtures {
             std::fs::write(fonts.join(name), bytes)?;
@@ -332,11 +353,13 @@ async fn screenshot_inline_svg_variant_faces_isolate_system_fonts() -> anyhow::R
             .map(|generic| {
                 format!(
                     "<alias><family>{generic}</family><prefer>\
-                <family>Moli SVG Variants</family></prefer></alias>"
+                <family>Moli Ahem</family></prefer></alias>"
                 )
             })
             .join("");
         let config = directory.path().join("fonts.conf");
+        // A distinct fallback family makes a missing root font-family
+        // projection visible even when every requested SVG face is installed.
         std::fs::write(
             &config,
             format!(
@@ -391,9 +414,17 @@ async fn screenshot_inline_svg_variant_faces_isolate_system_fonts() -> anyhow::R
             serde_json::to_string(fixture)?,
         ))?;
         page_vm.vm_mut().sync_live_document_style_sources();
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "['lighter-inherited','bolder-inherited','bold-inherited'].map(id => { const svg = document.getElementById(id); return [getComputedStyle(svg).fontWeight, getComputedStyle(svg.querySelector('text')).fontWeight].join('/'); }).join('|')",
+            )?,
+            "700/400|500/700|700/700",
+            "the isolated SVG parse must agree with the live document's computed weights",
+        );
         let snapshot = page_vm.vm_mut()
-            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(300, 140, 1.0))?
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(300, 350, 1.0))?
             .expect("variant layout root");
+        assert_eq!(snapshot.svg_images.len(), 15, "all font variants must reach vector paint");
         let raster = moli_paint::raster_snapshot(&snapshot)?;
         let pixel = |x: u32, y: u32| {
             let index = ((y * raster.width + x) * 4) as usize;
@@ -442,6 +473,34 @@ async fn screenshot_inline_svg_variant_faces_isolate_system_fonts() -> anyhow::R
                 "{variant}: inherited/authored glyphs differ in {differing} pixels");
             println!("svg-variant {variant}: normal={normal_ink}, inherited={}, authored={}, mismatch={differing}",
                 lit(&inherited), lit(&authored));
+        }
+        for (variant, top, expected_weight) in [
+            ("lighter", 140, 400),
+            ("bolder", 210, 700),
+            ("bold", 280, 700),
+        ] {
+            let inherited = mask(0, top);
+            let authored = mask(100, top);
+            let control = mask(200, top);
+            let authored_ink = lit(&authored);
+            assert!(authored_ink > 200 && lit(&control) > 200,
+                "{variant}: reference and control must paint glyphs");
+            let control_difference = authored.iter().zip(&control).filter(|(a, b)| a != b).count();
+            assert!(control_difference > 100,
+                "{variant}: distinct weights must select distinct outlines, {control_difference} pixels differ");
+            for left in [0, 100, 200] {
+                assert_eq!(pixel(left + 45, top + 57), BADGE, "{variant}: badge background");
+            }
+            for left in [0, 100] {
+                assert!(ink(left + 12, top + 18), "{variant}: requested outline missing");
+                assert_eq!(ink(left + 30, top + 18), expected_weight == 400,
+                    "{variant}: expected the {expected_weight} outline");
+            }
+            let differing = inherited.iter().zip(&authored).filter(|(a, b)| a != b).count();
+            assert!(differing <= authored_ink / 50 + 2,
+                "{variant}: inherited/authored glyphs differ in {differing} pixels");
+            println!("svg-variant {variant}: inherited={}, authored={authored_ink}, control={}, mismatch={differing}",
+                lit(&inherited), lit(&control));
         }
         Ok::<_, anyhow::Error>(())
     }).await.expect("isolated SVG variant raster");

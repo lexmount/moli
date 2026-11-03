@@ -701,6 +701,79 @@ mod tests {
     }
 
     #[test]
+    fn relative_svg_font_weights_follow_css_ranges() {
+        let fonts = fonts_with_only_ahem();
+        for (inherited, relative, expected) in [
+            ("700", "lighter", 400),
+            ("500", "bolder", 700),
+            ("400", "lighter", 100),
+            ("100", "bolder", 400),
+            ("300", "bolder", 400),
+            ("400", "bolder", 700),
+            ("600", "bolder", 900),
+            ("800", "lighter", 700),
+            ("900", "lighter", 700),
+            ("900", "bolder", 900),
+            ("1", "lighter", 1),
+            ("99", "lighter", 99),
+            ("349.9", "bolder", 400),
+            ("350", "bolder", 700),
+            ("549.9", "bolder", 700),
+            ("550", "bolder", 900),
+            ("749.9", "lighter", 400),
+            ("750", "lighter", 700),
+            ("950", "bolder", 950),
+            ("1000", "bolder", 1000),
+        ] {
+            let source = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="90" height="60"
+                        font-family="Moli Ahem" font-weight="{inherited}">
+                    <text x="8" y="50" font-size="48" font-weight="{relative}">M</text>
+                </svg>"#,
+            );
+            let source = source.as_bytes();
+            let svg = decode_svg_image_with_fonts(
+                source,
+                probe_svg_image(source).expect("metadata"),
+                &fonts,
+            )
+            .expect("relative font weight must parse");
+            let mut texts = Vec::new();
+            text_nodes(svg.tree().root(), &mut texts);
+            assert_eq!(texts.len(), 1, "text must shape without system fonts");
+            assert_eq!(
+                texts[0].chunks()[0].spans()[0].font().weight(),
+                expected,
+                "inherited {inherited} with {relative}",
+            );
+        }
+    }
+
+    #[test]
+    fn relative_svg_font_weights_resolve_each_ancestor_once() {
+        let fonts = fonts_with_only_ahem();
+        let source = br#"<svg xmlns="http://www.w3.org/2000/svg" width="90" height="60"
+                font-family="Moli Ahem" font-weight="700">
+            <g font-weight="lighter"><g>
+                <text x="8" y="50" font-size="48" font-weight="bolder">M<tspan font-weight="lighter">M</tspan></text>
+            </g></g>
+        </svg>"#;
+        let svg =
+            decode_svg_image_with_fonts(source, probe_svg_image(source).expect("metadata"), &fonts)
+                .expect("nested relative font weights must parse");
+        let mut texts = Vec::new();
+        text_nodes(svg.tree().root(), &mut texts);
+        assert_eq!(texts.len(), 1);
+        let weights: Vec<_> = texts[0]
+            .chunks()
+            .iter()
+            .flat_map(|chunk| chunk.spans())
+            .map(|span| span.font().weight())
+            .collect();
+        assert_eq!(weights, [700, 400]);
+    }
+
+    #[test]
     fn unstyled_text_shapes_with_an_installed_default_family() {
         let fonts = fonts_with_only_ahem();
         // `fontdb` advertises defaults this database does not contain, which is
