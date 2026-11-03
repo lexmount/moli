@@ -109,6 +109,13 @@ impl fmt::Display for UploadBodyError {
 impl std::error::Error for UploadBodyError {}
 
 impl UploadBody {
+    /// Wait until the source reached EOF and curl transmitted its bytes.
+    pub fn transmission(
+        &self,
+    ) -> impl Future<Output = Result<(), UploadBodyError>> + Send + 'static + use<> {
+        transmission(&self.0.shared)
+    }
+
     /// Queue at most one chunk ahead of curl's current chunk. The producer
     /// awaits `send()` before pulling another chunk from its source.
     pub fn channel() -> (UploadBodySender, Self) {
@@ -183,20 +190,7 @@ impl UploadBodySender {
     pub fn transmission(
         &self,
     ) -> impl Future<Output = Result<(), UploadBodyError>> + Send + 'static + use<> {
-        let mut receiver = self.shared.transmission.subscribe();
-        async move {
-            loop {
-                match *receiver.borrow_and_update() {
-                    Transmission::Sent => return Ok(()),
-                    Transmission::Failed => return Err(UploadBodyError::Closed),
-                    Transmission::Pending => {}
-                }
-                receiver
-                    .changed()
-                    .await
-                    .map_err(|_| UploadBodyError::Closed)?;
-            }
-        }
+        transmission(&self.shared)
     }
 
     pub fn send(
@@ -231,6 +225,25 @@ impl UploadBodySender {
     pub fn finish(mut self) {
         drop(self.sender.take());
         self.shared.wake_reader();
+    }
+}
+
+fn transmission(
+    shared: &Shared,
+) -> impl Future<Output = Result<(), UploadBodyError>> + Send + 'static + use<> {
+    let mut receiver = shared.transmission.subscribe();
+    async move {
+        loop {
+            match *receiver.borrow_and_update() {
+                Transmission::Sent => return Ok(()),
+                Transmission::Failed => return Err(UploadBodyError::Closed),
+                Transmission::Pending => {}
+            }
+            receiver
+                .changed()
+                .await
+                .map_err(|_| UploadBodyError::Closed)?;
+        }
     }
 }
 

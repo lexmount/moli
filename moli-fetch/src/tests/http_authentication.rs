@@ -109,6 +109,29 @@ async fn url_basic_authentication_challenges_then_reuses_session_on_all_transpor
 }
 
 #[tokio::test]
+async fn basic_authentication_cannot_replay_a_stream_source_snapshot() -> Result<()> {
+    for transport in ["buffered", "html", "raw"] {
+        let server =
+            ScriptedHttpServer::spawn(vec![challenge(), ScriptedResponse::ok("must not replay")]);
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let mut request =
+            browser_request(&credentials(&server.url()))?.with_body_source_is_null(true);
+        request.method = "POST".into();
+        request.body = Some(bytes::Bytes::from_static(b"payload"));
+        let error = tokio::time::timeout(Duration::from_secs(5), body(&client, request, transport))
+            .await?
+            .expect_err("author source must not be replayed for authentication");
+        assert!(
+            format!("{error:#}").contains("streaming request body"),
+            "{error:#}"
+        );
+        assert_eq!(server.requests().len(), 1, "{transport}");
+        server.shutdown();
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn browser_url_credentials_respect_cors_and_credentials_mode() -> Result<()> {
     for (mode, credentials_mode, cross_origin) in [
         (RequestMode::Cors, RequestCredentialsMode::Include, true),

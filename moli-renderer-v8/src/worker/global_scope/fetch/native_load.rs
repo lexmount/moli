@@ -2,6 +2,8 @@ use super::*;
 
 pub(super) struct NativeWorkerFetchRequest<'s> {
     pub(super) request: Request,
+    pub(super) body_stream: Option<v8::Global<v8::Object>>,
+    pub(super) body_stream_locked: bool,
     pub(super) blob_url_entry: Option<CapturedBlobUrl>,
     pub(super) kind: WorkerFetchKind,
     pub(super) timing: WorkerResourceTiming,
@@ -17,7 +19,7 @@ pub(super) fn start<'s>(
     metadata: ServiceWorkerFetchRequestMetadata,
     policy_context: SubresourcePolicyContext,
 ) -> Option<v8::Local<'s, v8::Promise>> {
-    let NativeWorkerFetchRequest { request, blob_url_entry, kind, font_face, timing } = request;
+    let NativeWorkerFetchRequest { mut request, blob_url_entry, kind, font_face, timing, body_stream, body_stream_locked } = request;
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
     let cancel = FetchCancelHandle::new();
@@ -66,6 +68,7 @@ pub(super) fn start<'s>(
         state.pending_fetches.insert(
             fetch_id,
             PendingWorkerFetch {
+                upload: None,
                 kind,
                 font_face: font_face.map(|face| v8::Global::new(scope, face)),
                 resolver: v8::Global::new(scope, resolver),
@@ -86,6 +89,27 @@ pub(super) fn start<'s>(
     };
     let service_worker = state.borrow().service_worker_runtime.clone();
     let service_worker_client = state.borrow().service_worker_client_id;
+    let controlled = service_worker.as_ref().zip(service_worker_client).is_some_and(|(runtime, client)| {
+        runtime.matching_controller_for_client_fetch(client, &request.url).is_some()
+    });
+    if !controlled && metadata.body_source_is_null && matches!(request.url.scheme(), "http" | "https") && let Some(stream) = body_stream.as_ref() {
+        let stream = v8::Local::new(scope, stream);
+        let completion = completion.clone();
+        match crate::network_host::RequestUpload::new(scope, stream, resolver, body_stream_locked, load.task_runner(), cancel.clone(), move |result| {
+            let _ = completion.send(WorkerFetchEvent::RequestUploadReady { fetch_id, result });
+        }) {
+            Ok((upload, body)) => {
+                state.borrow_mut().pending_fetches.get_mut(&fetch_id).expect("new worker fetch").upload = Some(upload.clone());
+                upload.start(scope);
+                request = request.with_upload_body(body);
+            }
+            Err(reason) => {
+                state.borrow_mut().pending_fetches.remove(&fetch_id);
+                let _ = resolver.reject(scope, reason);
+                return Some(promise);
+            }
+        }
+    }
     let task_runner = load.task_runner();
     let redirect_owner = (kind == WorkerFetchKind::Fetch).then(|| {
         crate::network_host::RedirectOwner::Worker(WorkerRedirectOwner::fetch(completion.clone(), fetch_id, load.clone()))

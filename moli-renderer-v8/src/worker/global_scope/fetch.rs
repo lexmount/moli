@@ -660,6 +660,7 @@ pub(in crate::worker) struct ResolvedWorkerFetchInput<'s> {
     method: String,
     body: Option<bytes::Bytes>,
     body_stream: Option<v8::Global<v8::Object>>,
+    body_stream_locked: bool,
     headers: Vec<(String, String)>,
     request_mode: moli_fetch::RequestMode,
     credentials_mode: RequestCredentialsMode,
@@ -677,6 +678,7 @@ impl ResolvedWorkerFetchInput<'_> {
             method: "GET".to_owned(),
             body: None,
             body_stream: None,
+            body_stream_locked: false,
             headers: Vec::new(),
             request_mode: RequestMode::Cors,
             credentials_mode: RequestCredentialsMode::SameOrigin,
@@ -876,15 +878,18 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
     }
     let signal = signal.as_ref().map(|signal| v8::Local::new(scope, signal));
     let blob_url_entry = blob_url_entry.or_else(|| CapturedBlobUrl::capture(&resolved_url));
-    if consumes_request_body && let Some(request_like) = request_like {
-        crate::network_host::mark_request_input_body_used_for_fetch(scope, request_like);
-    }
+    let body_stream_locked = if consumes_request_body && let Some(request_like) = request_like {
+        crate::network_host::mark_request_input_body_used_for_fetch(scope, request_like)?
+    } else {
+        false
+    };
     Ok(ResolvedWorkerFetchInput {
         resolved_url,
         blob_url_entry,
         method,
         body,
         body_stream,
+        body_stream_locked,
         headers,
         request_mode,
         credentials_mode,
@@ -994,6 +999,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
         method,
         body,
         body_stream,
+        body_stream_locked,
         headers: request_headers,
         request_mode,
         credentials_mode,
@@ -1202,7 +1208,8 @@ pub(super) fn start_worker_resource_fetch<'s>(
         native_load::start(
             scope,
             &state,
-            native_load::NativeWorkerFetchRequest { request, blob_url_entry, kind, font_face, timing },
+            native_load::NativeWorkerFetchRequest { request, blob_url_entry, kind, font_face, timing, body_stream, body_stream_locked },
+
 
 
             document_url,
@@ -1212,6 +1219,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
         )
 
     }
+
 
 
 
@@ -1246,11 +1254,15 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
         pending.timing.abort(scope);
         pending.load.cancel();
         if let Some(body_source_id) = pending.streaming_body_source_id {
+
             crate::network_host::abort_pending_network_body_stream(scope, body_source_id, reason);
         } else {
             let resolver = v8::Local::new(scope, &pending.resolver);
             let _ = resolver.reject(scope, reason);
 
+        }
+        if let Some(upload) = pending.upload {
+            upload.stop(scope, reason);
         }
     }
 }
@@ -1262,6 +1274,16 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
     event: WorkerFetchEvent,
 ) {
     match event {
+        WorkerFetchEvent::RequestUploadReady { fetch_id, result } => {
+            let upload = state
+                .borrow()
+                .pending_fetches
+                .get(&fetch_id)
+                .and_then(|pending| pending.upload.clone());
+            if let Some(upload) = upload {
+                upload.ready(scope, result);
+            }
+        }
         WorkerFetchEvent::RedirectAdmission {
             fetch_id,
             admission,
@@ -1336,6 +1358,9 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         &started.metadata,
     );
     let resolver = v8::Local::new(scope, &resolver);
+    let upload = state.borrow().pending_fetches.get(&started.fetch_id)
+        .and_then(|pending| pending.upload.clone());
+    if let Some(upload) = upload { upload.finish(scope); }
     let _ = resolver.resolve(scope, response.into());
 }
 
@@ -1413,14 +1438,19 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     &response.metadata,
                 );
             let _ = resolver.resolve(scope, response_obj.into());
+            if let Some(upload) = pending.upload.as_ref() {
+                upload.finish(scope);
+            }
         }
         Err(message) => {
-            pending.timing.reject(scope);
+            pending.timing.publish(scope);
+            let reason = v8_string(scope, &message)
+                .map(|message| v8::Exception::type_error(scope, message))
+                .unwrap_or_else(|| v8::undefined(scope).into());
+            let _ = resolver.reject(scope, reason);
+            if let Some(upload) = pending.upload.as_ref() {
+                upload.stop(scope, reason);
 
-            if let Some(message) = v8_string(scope, &message) {
-                let _ = resolver.reject(scope, v8::Exception::type_error(scope, message));
-            } else {
-                let _ = resolver.reject(scope, v8::undefined(scope).into());
             }
         }
     }
