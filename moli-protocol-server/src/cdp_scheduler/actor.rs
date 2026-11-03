@@ -653,29 +653,13 @@ async fn handle_scheduler_input(
             .await
         }
         SchedulerInput::BackgroundNavigationCompletion(_) => {
-            if !flush_background_completion_input(
+            flush_background_completion_input(
                 frontend_router,
                 scheduler,
                 scheduler_input_rx,
                 pending_runtime_deferred_replies,
                 adapter_scheduler,
                 input,
-            )
-            .await
-            {
-                return false;
-            }
-            drain_blocked_commands_after_navigation_gate(
-                frontend_router,
-                scheduler,
-                scheduler_input_rx,
-                pending_runtime_deferred_replies,
-                deferred_runtime_response_tx,
-                adapter_scheduler,
-                pending_command_completion_tx,
-                in_flight_commands,
-                blocked_commands,
-                next_in_flight_command_token,
             )
             .await
         }
@@ -742,7 +726,26 @@ async fn handle_scheduler_input(
             elapsed_us = %started.elapsed().as_micros(),
         );
     }
-    ok
+    if !ok {
+        return false;
+    }
+    // Renderer-initiated navigations finish through owned protocol work, and
+    // nested renderer-output flushing can complete that work in other input
+    // turns too. Recheck the navigation gate after every scheduler input so
+    // queued commands do not depend on the legacy background completion path.
+    drain_blocked_commands_after_navigation_gate(
+        frontend_router,
+        scheduler,
+        scheduler_input_rx,
+        pending_runtime_deferred_replies,
+        deferred_runtime_response_tx,
+        adapter_scheduler,
+        pending_command_completion_tx,
+        in_flight_commands,
+        blocked_commands,
+        next_in_flight_command_token,
+    )
+    .await
 }
 
 async fn flush_owned_protocol_work(
