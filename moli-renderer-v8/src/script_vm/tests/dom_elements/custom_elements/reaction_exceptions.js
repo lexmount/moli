@@ -9,7 +9,8 @@
     beforeMixed: (text, parent) => text.before('', parent),
     beforeReversed: (text, parent) => text.before(parent, ''),
     afterMixed: (text, parent) => text.after('', parent),
-    replaceMixed: (text, parent) => text.replaceWith('', parent)
+    replaceMixed: (text, parent) => text.replaceWith('', parent),
+    beforeNode: (text, parent) => text.before(parent)
   };
   let sequence = 0;
   for (const [realmName, win] of [['main', globalThis], ['child', frame.contentWindow]]) {
@@ -53,7 +54,7 @@
         let threw = false;
         let error;
         try { mutate(text, parent); } catch (caught) { threw = true; error = caught; }
-        const reacts = callbackMode !== 'absent';
+        const reacts = operation !== 'beforeNode' && callbackMode !== 'absent';
         const expectedEvents = !reacts ? [] : callbackMode === 'reentrant' ? ['disconnected', 'nested-connected'] : ['disconnected'];
         check(threw, label + ':original exception propagated');
         check(error instanceof win.DOMException, label + ':original exception realm');
@@ -61,7 +62,7 @@
         check(error?.code === 3, label + ':original exception code');
         check(error !== marker, label + ':callback exception does not replace original');
         check(JSON.stringify(events) === JSON.stringify(expectedEvents), label + ':synchronous reaction order');
-        check(!parent.isConnected, label + ':conversion removal');
+        check(parent.isConnected === (operation === 'beforeNode'), label + ':conversion removal');
         check(text.parentNode === parent && custom.parentNode === parent, label + ':subtree retained');
         check(parent.ownerDocument === doc && custom.ownerDocument === doc, label + ':owner retained');
         recording = false;
