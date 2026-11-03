@@ -68,6 +68,25 @@ async fn markdown_content_visibility_retains_disclosure_and_source_exceptions() 
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn markdown_popup_controllers_do_not_recover_hidden_sections() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/").unwrap());
+        for (popup, recover) in [("true", false), ("menu", false), ("listbox", false), ("tree", false), ("grid", false), ("dialog", false), ("false", true), ("", true), ("invalid", true)] {
+            let source = format!("<button aria-expanded=false aria-haspopup='{popup}' aria-controls=panel>Open</button><section id=panel style='display:none'>Controlled content</section><p>Visible article</p>");
+            page.vm_mut().eval(&format!("document.body.innerHTML = {}", serde_json::to_string(&source).unwrap())).unwrap();
+            for strip_css in [false, true] {
+                let output = page.render_page_dump(options(strip_css));
+                assert_eq!(output.contains("Controlled content"), recover, "aria-haspopup={popup}; strip_css={strip_css}: {output}");
+                assert!(output.contains("Visible article"), "{output}");
+            }
+            page.vm_mut().eval("document.getElementById('panel').style.display = 'block'").unwrap();
+            assert!(page.render_page_dump(options(false)).contains("Controlled content"), "visible popup content should remain readable");
+        }
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");

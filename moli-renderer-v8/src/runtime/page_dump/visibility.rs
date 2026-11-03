@@ -76,6 +76,7 @@ impl<'a> MarkdownDom<'a> {
         for (node, _) in &styles {
             if (Dom::attribute(dom, *node, "aria-expanded").is_some()
                 || Dom::attribute(dom, *node, "role").is_some_and(|role| has_role(role, "tab")))
+                && !Dom::attribute(dom, *node, "aria-haspopup").is_some_and(has_popup)
                 && let Some(controlled) = Dom::attribute(dom, *node, "aria-controls")
             {
                 disclosures.extend(
@@ -402,6 +403,12 @@ fn target_is_disclosure(dom: &NativeDom, targets: &HashMap<&str, NativeNodeId>, 
                     .any(|value| has_role(role, value))
             }))
     })
+}
+
+fn has_popup(value: &str) -> bool {
+    ["true", "menu", "listbox", "tree", "grid", "dialog"]
+        .iter()
+        .any(|popup| value.eq_ignore_ascii_case(popup))
 }
 
 fn has_role(value: &str, expected: &str) -> bool {
