@@ -32,6 +32,7 @@ async fn version_metadata_matches_discovery_and_cdp() {
             json!({
                 "protocolVersion": version::PROTOCOL_VERSION,
                 "product": version::PRODUCT,
+                "moliVersion": version::MOLI_VERSION,
                 "revision": version::REVISION,
                 "userAgent": user_agent,
                 "jsVersion": version::js_version(),
@@ -46,7 +47,7 @@ async fn version_metadata_matches_discovery_and_cdp() {
                 "V8-Version": browser["jsVersion"],
                 "WebKit-Version": format!("537.36 ({})", browser["revision"].as_str().unwrap()),
                 "File-Path-Style": if std::path::MAIN_SEPARATOR == '\\' { "windows" } else { "posix" },
-                "Moli-Version": version::MOLI_VERSION,
+                "Moli-Version": browser["moliVersion"],
                 "webSocketDebuggerUrl": discovery["webSocketDebuggerUrl"],
             }),
         );
