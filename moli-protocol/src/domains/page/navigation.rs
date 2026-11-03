@@ -13,9 +13,7 @@ use crate::automation::{
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
     NavigateParams, NavigateToHistoryEntryParams, ReloadParams,
 };
-use moli_core::page::{
-    ChildFrameDocumentOpenedSnapshot, CompletedPageCommand, Page, PendingPageCommand,
-};
+use moli_core::page::{ChildFrameDocumentOpenedSnapshot, CompletedPageCommand, PendingPageCommand};
 use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 use moli_url_policy::{LocalFileNavigationAccess, route_navigation_url};
 use serde_json::{Value, json};
@@ -1229,15 +1227,17 @@ fn start_top_level_same_document_navigate(
     result_projection: NavigationResultProjection,
     replace_current: bool,
 ) -> NavigateCommandStart {
-    let Some(pending) = start_same_document_command(conn, owner, |page| {
-        page.start_top_level_same_document_navigation_with_history_replacement(url, replace_current)
-    }) else {
+    let Some(page) = conn.loaded_page_mut_for_owner(owner) else {
         return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
             -32000,
             crate::conn::NoDocumentLoaded,
         ));
     };
-    match pending {
+    // An ordinary fragment navigation leaves an ongoing cross-Document
+    // navigation intact. Submitting this command must not revoke its admission.
+    match page
+        .start_top_level_same_document_navigation_with_history_replacement(url, replace_current)
+    {
         Ok(pending) => NavigateCommandStart::PendingSameDocument(Box::new(
             PendingSameDocumentNavigateCommand {
                 pending,
@@ -1248,19 +1248,6 @@ fn start_top_level_same_document_navigate(
             NavigateCommandStart::CompletePlan(CommandOutputPlan::error(-32000, error.to_string()))
         }
     }
-}
-
-fn start_same_document_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    start: impl FnOnce(&Page) -> Result<PendingPageCommand>,
-) -> Option<Result<PendingPageCommand>> {
-    let slot = conn.runtime_session_owner_slot_mut_for_owner(owner)?;
-    let pending = start(slot.loaded_page()?);
-    if pending.is_ok() {
-        slot.supersede_buffered_navigation();
-    }
-    Some(pending)
 }
 
 fn child_frame_navigation_target_id<'a>(
@@ -1548,12 +1535,13 @@ fn start_same_document_history_traversal_command(
     delta: i64,
     fallback: HistoryTraversalUrlFallback,
 ) -> PageCommandTaskStep {
-    let Some(pending) = start_same_document_command(conn, &fallback.owner, |page| {
-        page.start_top_level_history_traversal_by_delta(delta)
-    }) else {
+    let Some(page) = conn.loaded_page_mut_for_owner(&fallback.owner) else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error(-31998, "TargetNotLoaded"));
     };
-    let pending = match pending {
+    // The native traversal can still be rejected or cancelled after queuing.
+    // Its committed SessionHistoryUpdate, rather than submission, supersedes
+    // an older buffered navigation.
+    let pending = match page.start_top_level_history_traversal_by_delta(delta) {
         Ok(pending) => pending,
         Err(error) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(
