@@ -1,4 +1,7 @@
 use super::*;
+use crate::context_bootstrap::stream_adapter::{
+    enqueue_byte_chunk, finish_readable_byte_stream_source_close,
+};
 use moli_streams::transfer::{
     ReceiverCancelPlan, ReceiverEnqueueOutcome, ReceiverEnqueuePlan, ReceiverMessageErrorPlan,
     ReceiverMessagePlan, ReceiverPullPlan,
@@ -10,11 +13,20 @@ pub(super) fn initialize<'s>(
     stream: v8::Local<'s, v8::Object>,
     payload: &ReadableStreamClonePayload,
 ) -> Option<()> {
+    initialize_mode(scope, stream, payload, false)
+}
+
+pub(super) fn initialize_mode<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    payload: &ReadableStreamClonePayload,
+    byte_stream: bool,
+) -> Option<()> {
     let Some(port) = ensure_message_port_wrapper_for_id(scope, payload.port_id) else {
         payload.discard_port(scope);
         return None;
     };
-    let initialized = initialize_with_port(scope, stream, port);
+    let initialized = initialize_with_port(scope, stream, port, byte_stream);
     if initialized.is_none() {
         payload.discard_port(scope);
     }
@@ -26,7 +38,7 @@ pub(super) fn new_from_port<'s>(
     port: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let stream = new_readable_stream_shell_object(scope);
-    initialize_with_port(scope, stream, port)?;
+    initialize_with_port(scope, stream, port, false)?;
     Some(stream)
 }
 
@@ -34,11 +46,16 @@ fn initialize_with_port<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
     port: v8::Local<'s, v8::Object>,
+    byte_stream: bool,
 ) -> Option<()> {
     // Keep construction free of local close side effects. The payload owner or
     // prepared-transfer owner must discard the complete private channel if any
     // required V8 machinery below cannot be published.
-    initialize_readable_stream_object(scope, stream, None, 0.0, None);
+    if byte_stream {
+        initialize_webidl_readable_stream_object(scope, stream, None, true, 0.0, None);
+    } else {
+        initialize_readable_stream_object(scope, stream, None, 0.0, None);
+    }
     let state = state::create(scope, stream, port);
     let (onmessage, onmessageerror) =
         build_transfer_port_handlers(scope, state, message_callback, messageerror_callback)?;
@@ -101,10 +118,33 @@ fn message_callback<'s>(
     match state::snapshot(scope, state).plan_receiver_message(Some(kind)) {
         ReceiverMessagePlan::IgnoreLateMessage => {}
         ReceiverMessagePlan::EnqueueChunk => {
-            let outcome = match enqueue_chunk(scope, stream, value) {
+            if readable_stream_is_byte_stream(scope, stream)
+                && v8::Local::<v8::Uint8Array>::try_from(value)
+                    .is_ok_and(|chunk| chunk.byte_length() == 0)
+            {
+                // Empty upload chunks are not EOF and cannot be enqueued by
+                // byte controllers. Retain the read and request another chunk.
+                let undefined = v8::undefined(scope).into();
+                if let Err(error) = post_handling_error(scope, state, MessageKind::Pull, undefined)
+                {
+                    error_stream(scope, stream, error);
+                    state::finish(scope, state);
+                }
+                rv.set_undefined();
+                return;
+            }
+            let result = if readable_stream_is_byte_stream(scope, stream) {
+                enqueue_byte_chunk(scope, stream, value)
+            } else {
+                enqueue_chunk(scope, stream, value)
+            };
+            let outcome = match result {
                 Ok(()) => ReceiverEnqueueOutcome::Enqueued,
                 Err(EnqueueChunkError::ClosedOrErrored) => ReceiverEnqueueOutcome::StreamTerminal,
-                Err(EnqueueChunkError::Strategy(_)) => ReceiverEnqueueOutcome::StrategyError,
+                Err(EnqueueChunkError::Strategy(error)) => {
+                    error_stream(scope, stream, error);
+                    ReceiverEnqueueOutcome::StrategyError
+                }
             };
             if matches!(outcome.plan(), ReceiverEnqueuePlan::Finish) {
                 state::finish(scope, state);
@@ -112,6 +152,9 @@ fn message_callback<'s>(
         }
         ReceiverMessagePlan::CloseStreamAndFinish => {
             let _ = close_stream(scope, stream);
+            if let Err(error) = finish_readable_byte_stream_source_close(scope, stream) {
+                error_stream(scope, stream, error);
+            }
             state::finish(scope, state);
         }
         ReceiverMessagePlan::ErrorStreamAndFinish => {

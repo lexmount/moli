@@ -1899,12 +1899,43 @@ impl JsContextHost {
         internal_id: u64,
         upload: crate::network_host::RequestUpload,
     ) {
-        let Some(pending) = self.pending_subresource_fetches.get_mut(&internal_id) else {
+        let pending = if self.pending_subresource_fetches.contains_key(&internal_id) {
+            self.pending_subresource_fetches.get_mut(&internal_id)
+        } else {
+            self.running_subresource_fetches
+                .get_mut(&internal_id)
+                .map(|state| &mut state.pending)
+        };
+        let Some(pending) = pending else {
             return;
         };
         if let PendingSubresourceContinuation::Fetch(fetch) = &mut pending.continuation {
             fetch.upload = Some(upload);
         }
+    }
+
+    pub(crate) fn window_request_body_producer_delivery(
+        &self,
+        internal_id: u64,
+    ) -> Option<(
+        v8::Global<v8::PromiseResolver>,
+        super::WindowExecutionContextBinding,
+        super::OwnerDispatchScope,
+        crate::network::RendererResourceTaskRunner,
+    )> {
+        let pending = self
+            .subresource_fetch_states()
+            .find(|pending| pending.info.internal_id == internal_id)?;
+        let binding = pending.execution_context.window_realm_binding()?;
+        if pending.load.is_cancelled() || !binding.is_current(self) {
+            return None;
+        }
+        Some((
+            pending.continuation.window_fetch()?.resolver()?.clone(),
+            binding.clone(),
+            pending.execution_context.dispatch_scope(),
+            pending.load.task_runner(),
+        ))
     }
 
     pub(crate) fn window_request_upload(

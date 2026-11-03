@@ -1038,6 +1038,10 @@ pub(crate) enum AsyncSubresourceFetchEventTarget {
 
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchEvent {
+    RequestBodyProducer {
+        internal_id: u64,
+        producer: crate::context_bootstrap::RequestBodyProducer,
+    },
     RequestUploadReady {
         internal_id: u64,
         result: Result<(), moli_fetch::UploadBodyError>,
@@ -1068,6 +1072,11 @@ pub(super) enum AsyncSubresourceFetchEvent {
 impl AsyncSubresourceFetchEvent {
     pub(crate) fn target(&self) -> AsyncSubresourceFetchEventTarget {
         match self {
+            Self::RequestBodyProducer { internal_id, .. } => {
+                AsyncSubresourceFetchEventTarget::RequestUpload {
+                    internal_id: *internal_id,
+                }
+            }
             Self::RequestUploadReady { internal_id, .. } => {
                 AsyncSubresourceFetchEventTarget::RequestUpload {
                     internal_id: *internal_id,

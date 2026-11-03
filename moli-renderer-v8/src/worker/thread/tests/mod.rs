@@ -417,6 +417,7 @@ async fn dispatch_service_worker_fetch_event_for_test(
 
 fn service_worker_fetch_request_for_test() -> ServiceWorkerFetchRequest {
     ServiceWorkerFetchRequest {
+        body_stream: None,
         client_id: crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(7),
         resulting_client_id: None,
         url: url::Url::parse("https://example.test/app/data.txt").unwrap(),

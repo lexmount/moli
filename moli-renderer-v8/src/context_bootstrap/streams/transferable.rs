@@ -40,10 +40,16 @@ use moli_streams::{
 
 mod protocol;
 mod receiver;
+mod request_body;
 mod sender;
 mod state;
 mod writable;
 mod writable_state;
+
+pub(crate) use request_body::{
+    RequestBodyOwner, RequestBodyProducer, initialize_request_body_stream,
+    install_request_body_abort, request_body_owner, transfer_request_body,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct ReadableStreamClonePayload {

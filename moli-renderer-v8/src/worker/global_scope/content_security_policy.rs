@@ -590,9 +590,11 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
     load.attach_cancel_handle(cancel_handle.clone());
     let request_metadata = service_worker_fetch_request_metadata(&request);
     let dispatch = ServiceWorkerFetchDispatch {
+        request_body_owner: None,
         redirect_check: None,
         internal_id,
         request: ServiceWorkerFetchRequest {
+            body_stream: None,
             client_id,
             resulting_client_id: None,
             url: request.url.clone(),
@@ -641,6 +643,29 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
     let task_runner = load.task_runner();
     task_runner.spawn(async move {
         match direct_completion_rx.await {
+            Ok(ServiceWorkerDirectFetchResult::Stream(_)) => {
+                load.finish();
+                send_worker_content_security_policy_report_failure(
+                    parent_tx,
+                    request_handle,
+                    continue_internal_id,
+                    document_url,
+                    request,
+                    request_body,
+                    "CSP report requests do not use a response stream route".to_owned(),
+                );
+            }
+            Ok(ServiceWorkerDirectFetchResult::FallbackStream(body)) => {
+                spawn_worker_content_security_policy_report_network(
+                    parent_tx,
+                    load,
+                    request_handle,
+                    continue_internal_id,
+                    document_url,
+                    request.with_upload_body(body),
+                    request_body,
+                );
+            }
             Ok(ServiceWorkerDirectFetchResult::Fallback) => {
                 spawn_worker_content_security_policy_report_network(
                     parent_tx,

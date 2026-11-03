@@ -370,6 +370,7 @@ fn dispatch_service_worker_content_security_policy_report(
     );
     let request_body_text = report_request_body_text(&request);
     let dispatch = ServiceWorkerFetchDispatch {
+        request_body_owner: None,
         redirect_check: None,
         internal_id,
         request: host.service_worker_fetch_request(

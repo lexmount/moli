@@ -129,6 +129,7 @@ pub(super) fn dispatch_service_worker_xhr(
         },
     );
     let dispatch = ServiceWorkerFetchDispatch {
+        request_body_owner: None,
         redirect_check: host.window_fetch_redirect_check(internal_id),
         internal_id,
         request,

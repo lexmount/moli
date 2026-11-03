@@ -263,6 +263,8 @@ pub(crate) struct WorkerGlobalState {
     /// and minimal `waitUntil()` promises to finish.
     pub(in crate::worker) pending_service_worker_fetch_events:
         HashMap<ServiceWorkerEventId, PendingServiceWorkerFetchEvent>,
+    pub(in crate::worker) pending_service_worker_request_uploads:
+        HashMap<ServiceWorkerEventId, crate::network_host::RequestUpload>,
     /// Navigation preload promises and response bodies stay alive until preload complete/error.
     pub(in crate::worker) pending_service_worker_navigation_preloads:
         HashMap<ServiceWorkerEventId, PendingServiceWorkerNavigationPreload>,

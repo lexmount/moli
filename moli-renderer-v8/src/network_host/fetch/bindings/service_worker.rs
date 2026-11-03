@@ -5,10 +5,10 @@ use crate::service_worker_runtime::{
 };
 use moli_fetch::FetchCancelHandle;
 
-pub(super) fn dispatch_service_worker_fetch(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn dispatch_service_worker_fetch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     host: &mut JsContextHost,
-    resolver: v8::Local<'_, v8::PromiseResolver>,
+    resolver: v8::Local<'s, v8::PromiseResolver>,
     prepared: &PreparedWindowFetchRequest,
 ) -> anyhow::Result<Option<u64>> {
     if !matches!(prepared.resolved_url.scheme(), "http" | "https") {
@@ -87,7 +87,7 @@ pub(super) fn dispatch_service_worker_fetch(
             requires_preflight,
         )
         .ok_or_else(|| anyhow::anyhow!("Failed to fetch"))?;
-    let request = host.service_worker_fetch_request(
+    let mut request = host.service_worker_fetch_request(
         client_id,
         prepared.resolved_url.clone(),
         prepared.method.clone(),
@@ -111,7 +111,31 @@ pub(super) fn dispatch_service_worker_fetch(
             link_preload: false,
         },
     );
+    if prepared.body_source_is_null
+        && let Some(stream) = prepared.body_stream.as_ref()
+    {
+        let stream = v8::Local::new(scope, stream);
+        let Some(body) = crate::context_bootstrap::transfer_request_body(
+            scope,
+            stream,
+            prepared.body_stream_locked,
+        ) else {
+            host.take_pending_subresource_fetch(internal_id);
+            return Err(anyhow::anyhow!("Failed to transfer request body"));
+        };
+        request.body_stream = Some(body);
+    }
+    let completion = host.resource_completion_sender();
+    let body_owner = crate::context_bootstrap::request_body_owner(scope, move |producer| {
+        let _ = completion.send_async_subresource_event(
+            AsyncSubresourceFetchEvent::RequestBodyProducer {
+                internal_id,
+                producer,
+            },
+        );
+    });
     let dispatch = ServiceWorkerFetchDispatch {
+        request_body_owner: Some(body_owner),
         redirect_check: host.window_fetch_redirect_check(internal_id),
         internal_id,
         request,

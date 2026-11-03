@@ -586,13 +586,15 @@ pub(crate) use self::stream_adapter::{
     require_internal_stream_value,
 };
 pub(crate) use self::streams::{
-    ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,
-    build_readable_stream_clone_shell, build_transform_stream_clone_shell,
-    build_writable_stream_clone_shell, initialize_readable_stream_clone_shell,
+    ReadableStreamClonePayload, RequestBodyOwner, RequestBodyProducer, TransformStreamClonePayload,
+    WritableStreamClonePayload, build_readable_stream_clone_shell,
+    build_transform_stream_clone_shell, build_writable_stream_clone_shell,
+    initialize_readable_stream_clone_shell, initialize_request_body_stream,
     initialize_transform_stream_clone_shell, initialize_writable_stream_clone_shell,
-    new_readable_stream_from_array_buffer, new_readable_stream_from_source,
-    prepare_readable_stream_transfer, prepare_transform_stream_transfer,
-    prepare_writable_stream_transfer, proxy_fetch_body_stream, tee_fetch_body_stream,
+    install_request_body_abort, new_readable_stream_from_array_buffer,
+    new_readable_stream_from_source, prepare_readable_stream_transfer,
+    prepare_transform_stream_transfer, prepare_writable_stream_transfer, proxy_fetch_body_stream,
+    request_body_owner, tee_fetch_body_stream, transfer_request_body,
 };
 pub(crate) use self::time_ranges::new_time_ranges_value;
 #[cfg(test)]

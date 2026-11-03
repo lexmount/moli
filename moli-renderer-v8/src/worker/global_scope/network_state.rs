@@ -35,6 +35,18 @@ pub(in crate::worker) struct PendingWorkerFetch {
 }
 
 pub(in crate::worker) enum WorkerFetchEvent {
+    RequestBodyProducer {
+        fetch_id: u32,
+        producer: crate::context_bootstrap::RequestBodyProducer,
+    },
+    ServiceWorkerUploadReady {
+        event_id: crate::runtime::ServiceWorkerEventId,
+        result: Result<(), moli_fetch::UploadBodyError>,
+    },
+    ServiceWorkerUploadFinished {
+        event_id: crate::runtime::ServiceWorkerEventId,
+        result: Result<(), moli_fetch::UploadBodyError>,
+    },
     RequestUploadReady {
         fetch_id: u32,
         result: Result<(), moli_fetch::UploadBodyError>,
@@ -65,6 +77,8 @@ pub(in crate::worker) struct WorkerFetchCompletion {
 }
 
 pub(in crate::worker) struct WorkerFetchStreamingStarted {
+    pub(super) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(super) skip_fetch_security_validation: bool,
     pub(super) fetch_id: u32,
     pub(super) body_source_id: NetworkBodySourceId,
     pub(super) head: ResponseHead,

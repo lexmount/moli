@@ -241,6 +241,9 @@ impl ServiceWorkerRuntimeService {
     pub(crate) fn dispatch_controlled_fetch(&self, dispatch: ServiceWorkerFetchDispatch) -> bool {
         let request = dispatch.request.clone();
         let fetch_job = ServiceWorkerFetchJob {
+            direct_streaming_tx: None,
+            request_body_owner: dispatch.request_body_owner,
+            body_stream: request.body_stream.clone(),
             request: {
                 let origin = dispatch.network_context.request_origin.clone();
                 let mut network_request = moli_fetch::Request::new_browser(

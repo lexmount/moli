@@ -370,6 +370,9 @@ fn pending_unregistration_waits_for_active_fetch_to_complete_before_delete() {
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                direct_streaming_tx: None,
+                request_body_owner: None,
+                body_stream: None,
                 request: {
                     let origin = moli_url::WebOrigin::from_url(&document_url);
                     let initiator = (document_url).clone();
@@ -678,9 +681,11 @@ fn resource_store_restores_no_fetch_handler_metadata_for_controlled_fetch() {
     let (direct_completion_tx, mut direct_completion_rx) = tokio::sync::oneshot::channel();
     assert!(
         second_service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+            request_body_owner: None,
             redirect_check: None,
             internal_id: 89,
             request: ServiceWorkerFetchRequest {
+                body_stream: None,
                 client_id,
                 resulting_client_id: None,
                 url: request_url,
@@ -838,6 +843,9 @@ fn restart_start_failure_rejects_pending_fetch_job() {
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                direct_streaming_tx: None,
+                request_body_owner: None,
+                body_stream: None,
                 request: {
                     let origin = moli_url::WebOrigin::from_url(&document_url);
                     let initiator = document_url.clone();
@@ -901,6 +909,7 @@ fn restart_start_failure_rejects_pending_fetch_job() {
                         event_id,
                         owner: test_run_owner(version_id, &run),
                         request: ServiceWorkerFetchRequest {
+                            body_stream: None,
                             client_id,
                             resulting_client_id: None,
                             url: request_url,
@@ -1624,9 +1633,11 @@ fn no_fetch_handler_controlled_fetch_falls_back_without_dispatching_event() {
     let (direct_completion_tx, mut direct_completion_rx) = tokio::sync::oneshot::channel();
     assert!(
         service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+            request_body_owner: None,
             redirect_check: None,
             internal_id: 88,
             request: ServiceWorkerFetchRequest {
+                body_stream: None,
                 client_id,
                 resulting_client_id: None,
                 url: request_url.clone(),
@@ -1716,9 +1727,11 @@ fn controlled_fetch_waits_for_activating_active_version() {
 
     assert!(
         service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+            request_body_owner: None,
             redirect_check: None,
             internal_id: 91,
             request: ServiceWorkerFetchRequest {
+                body_stream: None,
                 client_id,
                 resulting_client_id: None,
                 url: request_url,
@@ -1826,9 +1839,11 @@ fn empty_fetch_handler_controlled_fetch_falls_back_without_dispatching_event() {
     let (direct_completion_tx, mut direct_completion_rx) = tokio::sync::oneshot::channel();
     assert!(
         service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+            request_body_owner: None,
             redirect_check: None,
             internal_id: 89,
             request: ServiceWorkerFetchRequest {
+                body_stream: None,
                 client_id,
                 resulting_client_id: None,
                 url: request_url,
@@ -1906,6 +1921,7 @@ fn empty_fetch_handler_pending_start_fetch_falls_back_after_worker_start() {
     let client_id = client_id_for_document(&service, &document_url);
     let host = new_loading_test_host(version_id, &run);
     let request = ServiceWorkerFetchRequest {
+        body_stream: None,
         client_id,
         resulting_client_id: None,
         url: request_url.clone(),
@@ -1926,6 +1942,9 @@ fn empty_fetch_handler_pending_start_fetch_falls_back_after_worker_start() {
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                direct_streaming_tx: None,
+                request_body_owner: None,
+                body_stream: None,
                 request: {
                     let origin = moli_url::WebOrigin::from_url(&document_url);
                     let initiator = (document_url).clone();
@@ -2054,6 +2073,9 @@ fn fetch_completion_schedules_idle_timeout_for_running_active_worker() {
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                direct_streaming_tx: None,
+                request_body_owner: None,
+                body_stream: None,
                 request: {
                     let origin = moli_url::WebOrigin::from_url(&document_url);
                     let initiator = (document_url).clone();
@@ -2284,6 +2306,9 @@ fn active_fetch_completion_queues_waiting_activation_after_controllees_are_gone(
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                direct_streaming_tx: None,
+                request_body_owner: None,
+                body_stream: None,
                 request: {
                     let origin = moli_url::WebOrigin::from_url(&document_url);
                     let initiator = (document_url).clone();
@@ -2477,6 +2502,9 @@ fn activating_new_worker_fails_replaced_active_fetch_and_pending_start_events() 
             state.pending_fetch_jobs.insert(
                 event_id,
                 ServiceWorkerFetchJob {
+                    direct_streaming_tx: None,
+                    request_body_owner: None,
+                    body_stream: None,
                     request: {
                         let origin = moli_url::WebOrigin::from_url(&document_url);
                         let initiator = document_url.clone();
@@ -2541,6 +2569,7 @@ fn activating_new_worker_fails_replaced_active_fetch_and_pending_start_events() 
                         event_id: pending_event_id,
                         owner: test_run_owner(active_version_id, &active_run),
                         request: ServiceWorkerFetchRequest {
+                            body_stream: None,
                             client_id,
                             resulting_client_id: None,
                             url: request_url.clone(),
@@ -2562,6 +2591,7 @@ fn activating_new_worker_fails_replaced_active_fetch_and_pending_start_events() 
                     event_id: activation_wait_event_id,
                     owner: test_run_owner(active_version_id, &active_run),
                     request: ServiceWorkerFetchRequest {
+                        body_stream: None,
                         client_id,
                         resulting_client_id: None,
                         url: request_url,

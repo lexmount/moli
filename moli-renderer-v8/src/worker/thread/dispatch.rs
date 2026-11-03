@@ -1096,6 +1096,9 @@ fn dispatch_service_worker_fetch_event_in_context<'s>(
             event.request.destination,
         );
         pending.handled_resolver = Some(v8::Global::new(scope, handled_resolver));
+        if event.request.body_stream.is_some() {
+            pending.request_for_body = Some(v8::Global::new(scope, request));
+        }
         if event.navigation_preload_sent {
             state.pending_service_worker_navigation_preloads.insert(
                 event.event_id,
@@ -1119,6 +1122,7 @@ fn dispatch_service_worker_fetch_event_in_context<'s>(
     if default_prevented_without_response {
         mark_service_worker_fetch_default_prevented(state, event.event_id);
     }
+    reject_consumed_streaming_fallback(scope, state, event.event_id);
     mark_service_worker_fetch_dispatch_finished(state, event.event_id);
     settle_service_worker_fetch_handled_after_dispatch(scope, state, event.event_id);
     maybe_send_service_worker_fetch_completion(state, event.event_id, scope);
@@ -1763,7 +1767,12 @@ fn new_service_worker_fetch_request<'s>(
         set_object_string(scope, headers, name, value);
     }
     let _ = init.set(scope, v8str(scope, "headers").into(), headers.into());
-    if !matches!(event.request.method.as_str(), "GET" | "HEAD")
+    if let Some(payload) = event.request.body_stream.as_ref() {
+        let stream = crate::context_bootstrap::build_readable_stream_clone_shell(scope);
+        crate::context_bootstrap::initialize_request_body_stream(scope, stream, payload)?;
+        let _ = init.set(scope, v8str(scope, "body").into(), stream.into());
+        set_object_string(scope, init, "duplex", "half");
+    } else if !matches!(event.request.method.as_str(), "GET" | "HEAD")
         && let Some(body) = event.request.body.clone()
     {
         // The mutable JS buffer must not alias shared immutable upload bytes.
@@ -3409,7 +3418,9 @@ fn settle_service_worker_fetch_handled_for_pending(
     };
     let resolver = v8::Local::new(scope, resolver);
     match &pending.completion.result {
-        ServiceWorkerFetchResult::Response(_) | ServiceWorkerFetchResult::Fallback => {
+        ServiceWorkerFetchResult::Response(_)
+        | ServiceWorkerFetchResult::Fallback
+        | ServiceWorkerFetchResult::FallbackStream(_) => {
             let value = v8::undefined(scope);
             let _ = resolver.resolve(scope, value.into());
         }
@@ -3601,12 +3612,49 @@ fn maybe_send_service_worker_lifecycle_completion(
     ));
 }
 
+fn reject_consumed_streaming_fallback(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<super::WorkerGlobalState>>,
+    event_id: ServiceWorkerEventId,
+) {
+    let request = {
+        let state = state.borrow();
+        let Some(pending) = state.pending_service_worker_fetch_events.get(&event_id) else {
+            return;
+        };
+        if !matches!(
+            pending.completion.result,
+            ServiceWorkerFetchResult::Fallback
+        ) {
+            return;
+        }
+        pending.request_for_body.clone()
+    };
+    if let Some(request) = request {
+        let request = v8::Local::new(scope, request);
+        if let Some(body) = crate::network_host::body_stream_object(scope, request)
+            && (crate::context_bootstrap::readable_stream_locked(scope, body)
+                || crate::context_bootstrap::readable_stream_disturbed(scope, body))
+        {
+            state
+                .borrow_mut()
+                .pending_service_worker_fetch_events
+                .get_mut(&event_id)
+                .expect("current FetchEvent")
+                .completion
+                .result = ServiceWorkerFetchResult::Failure(
+                "Cannot use a consumed streaming body for network fallback".to_owned(),
+            );
+        }
+    }
+}
+
 fn maybe_send_service_worker_fetch_completion(
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event_id: ServiceWorkerEventId,
     scope: &mut v8::PinScope<'_, '_>,
 ) {
-    let (parent_tx, completion, handled_settled) = {
+    let (parent_tx, mut completion, handled_settled, request_body) = {
         let mut state = state.borrow_mut();
         let Some(pending) = state.pending_service_worker_fetch_events.get_mut(&event_id) else {
             return;
@@ -3619,9 +3667,73 @@ fn maybe_send_service_worker_fetch_completion(
         }
         let handled_settled = settle_service_worker_fetch_handled_for_pending(scope, pending);
         let completion = pending.completion.clone();
+        let request_body = pending.request_for_body.clone();
         state.pending_service_worker_fetch_events.remove(&event_id);
-        (state.parent_tx.clone(), completion, handled_settled)
+        (
+            state.parent_tx.clone(),
+            completion,
+            handled_settled,
+            request_body,
+        )
     };
+    if matches!(completion.result, ServiceWorkerFetchResult::Fallback)
+        && let Some(body) = request_body
+    {
+        let request = v8::Local::new(scope, body);
+        let body = crate::network_host::body_stream_object(scope, request)
+            .expect("streaming FetchEvent body");
+        completion.result = if crate::context_bootstrap::readable_stream_locked(scope, body)
+            || crate::context_bootstrap::readable_stream_disturbed(scope, body)
+        {
+            ServiceWorkerFetchResult::Failure(
+                "Cannot use a consumed streaming body for network fallback".to_owned(),
+            )
+        } else {
+            let (runner, events) = {
+                let state = state.borrow();
+                (
+                    state.loader.task_runner(),
+                    state.fetch_completion_tx.clone(),
+                )
+            };
+            let resolver = v8::PromiseResolver::new(scope).expect("fallback upload resolver");
+            resolver.get_promise(scope).mark_as_handled();
+            let ready = events.clone();
+            match crate::network_host::RequestUpload::new(
+                scope,
+                body,
+                resolver,
+                false,
+                runner.clone(),
+                moli_fetch::FetchCancelHandle::new(),
+                move |result| {
+                    let _ = ready.send(
+                        super::super::global_scope::WorkerFetchEvent::ServiceWorkerUploadReady {
+                            event_id,
+                            result,
+                        },
+                    );
+                },
+            ) {
+                Ok((upload, body)) => {
+                    state
+                        .borrow_mut()
+                        .pending_service_worker_request_uploads
+                        .insert(event_id, upload.clone());
+                    upload.start(scope);
+                    let transmission = body.transmission();
+                    runner.spawn(async move {
+                        let result = transmission.await;
+                        let _ = events.send(super::super::global_scope::WorkerFetchEvent::ServiceWorkerUploadFinished { event_id, result });
+                    });
+                    ServiceWorkerFetchResult::FallbackStream(body)
+                }
+                Err(_) => ServiceWorkerFetchResult::Failure(
+                    "Failed to acquire fallback request body".to_owned(),
+                ),
+            }
+        };
+    }
     if handled_settled {
         perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
     }

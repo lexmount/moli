@@ -51,6 +51,7 @@ fn service_worker_redirect_target(
 
 fn fetch_request_for_job(job: &ServiceWorkerFetchJob) -> ServiceWorkerFetchRequest {
     ServiceWorkerFetchRequest {
+        body_stream: job.body_stream.clone(),
         client_id: job.client_id,
         resulting_client_id: job.resulting_client_id,
         url: job.request.url.clone(),
@@ -78,7 +79,9 @@ pub(super) fn service_worker_network_fallback_request_for_job(
                 .policy_context
                 .network_credentials_mode(job.request.request_mode, job.request.credentials_mode),
         )
-        .with_use_cors_preflight(job.metadata.use_cors_preflight)
+        .with_use_cors_preflight(
+            job.metadata.use_cors_preflight || job.request.body_source_is_null(),
+        )
         .with_browser_request_metadata(service_worker_fetch_browser_metadata(
             job.network_context.resource_type,
         ))
@@ -143,22 +146,24 @@ fn service_worker_fetch_can_forward_stream(
         response_head.final_url.as_ref(),
         &response_head.headers,
     )?;
-    Ok(job.direct_completion_tx.is_none()
-        && job.metadata.integrity.is_empty()
-        && !matches!(
-            job.network_context.resource_type,
-            crate::types::SubresourceResourceType::Audio
-                | crate::types::SubresourceResourceType::Font
-                | crate::types::SubresourceResourceType::Image
-                | crate::types::SubresourceResourceType::Media
-                | crate::types::SubresourceResourceType::TextTrack
-                | crate::types::SubresourceResourceType::Video
-        )
-        && !is_redirect_status(response_head.status)
-        && matches!(
-            response_head.response_type.as_str(),
-            "default" | "basic" | "cors"
-        ))
+    Ok(
+        (job.direct_completion_tx.is_none() || job.request_body_owner.is_some())
+            && job.metadata.integrity.is_empty()
+            && !matches!(
+                job.network_context.resource_type,
+                crate::types::SubresourceResourceType::Audio
+                    | crate::types::SubresourceResourceType::Font
+                    | crate::types::SubresourceResourceType::Image
+                    | crate::types::SubresourceResourceType::Media
+                    | crate::types::SubresourceResourceType::TextTrack
+                    | crate::types::SubresourceResourceType::Video
+            )
+            && !is_redirect_status(response_head.status)
+            && matches!(
+                response_head.response_type.as_str(),
+                "default" | "basic" | "cors"
+            ),
+    )
 }
 
 fn apply_service_worker_synthetic_redirect(
@@ -166,6 +171,9 @@ fn apply_service_worker_synthetic_redirect(
     response: ServiceWorkerFetchResponse,
     next_url: Url,
 ) -> Result<(), String> {
+    if response.status != 303 && job.request.body_source_is_null() {
+        return Err("Cannot replay a streaming request body after a redirect".to_owned());
+    }
     let from_url = response
         .final_url
         .unwrap_or_else(|| job.request.url.clone());
@@ -186,6 +194,10 @@ fn apply_service_worker_synthetic_redirect(
             negotiated_http_version: None,
         })
         .map_err(|error| error.to_string())?;
+    if response.status == 303 {
+        job.body_stream = None;
+        job.metadata.body_source_is_null = job.request.body_source_is_null();
+    }
     job.cors_preflight_request_headers = job.request.request_headers.to_byte_strings();
     Ok(())
 }
@@ -214,9 +226,11 @@ impl ServiceWorkerRuntimeService {
             crate::page_task_queue::RendererResourceCompletionSender::direct_completion_only();
         let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
         let dispatch = ServiceWorkerFetchDispatch {
+            request_body_owner: None,
             redirect_check: None,
             internal_id: 0,
             request: ServiceWorkerFetchRequest {
+                body_stream: None,
                 client_id,
                 resulting_client_id: Some(client_id),
                 url: request.url.clone(),
@@ -255,6 +269,10 @@ impl ServiceWorkerRuntimeService {
         }
 
         match direct_completion_rx.await {
+            Ok(
+                ServiceWorkerDirectFetchResult::FallbackStream(_)
+                | ServiceWorkerDirectFetchResult::Stream(_),
+            ) => Err("worker script requests cannot contain an author stream".to_owned()),
             Ok(ServiceWorkerDirectFetchResult::Fallback) => Ok(None),
             Ok(ServiceWorkerDirectFetchResult::Response(response)) => Ok(Some(*response.response)),
             Ok(ServiceWorkerDirectFetchResult::Failure(message)) => Err(message),
@@ -266,12 +284,31 @@ impl ServiceWorkerRuntimeService {
 
     pub(super) fn dispatch_fetch_fallback(&self, mut job: ServiceWorkerFetchJob) {
         job.cancel_pending_navigation_preload();
+        if let Some(stream) = job.body_stream.take() {
+            // Startup failure can select network fallback before a FetchEvent
+            // ever acquires its receiver. Return that pipe to the exact client
+            // script owner; IO retains only the bounded native upload.
+            let Some(owner) = job.request_body_owner.as_ref() else {
+                self.complete_fetch_with_failure(
+                    job,
+                    "Missing request body owner for fallback".to_owned(),
+                );
+                return;
+            };
+            let (sender, body) = moli_fetch::UploadBody::channel();
+            owner(stream, sender, job.cancel_handle.clone());
+            job.request = job.request.with_upload_body(body);
+        }
         if let Some(completion_tx) = job.direct_completion_tx.take() {
             if job.request.redirect_count() != 0 {
                 self.dispatch_direct_fetch_network_fallback(job, completion_tx);
                 return;
             }
-            let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Fallback);
+            let result = job.request.upload_body().cloned().map_or(
+                ServiceWorkerDirectFetchResult::Fallback,
+                ServiceWorkerDirectFetchResult::FallbackStream,
+            );
+            let _ = completion_tx.send(result);
             return;
         }
         let request_client = job.request_client.clone();
@@ -381,7 +418,7 @@ impl ServiceWorkerRuntimeService {
             return;
         }
 
-        let Some((completion_tx, request_client, request, streaming_started)) = ({
+        let Some((completion_tx, request_client, request, streaming_started, direct)) = ({
             let mut state = self.inner.state.lock();
             let Some(job) = state.pending_fetch_jobs.get_mut(&started.event_id) else {
                 return;
@@ -399,6 +436,27 @@ impl ServiceWorkerRuntimeService {
                 }
             }
             job.streaming_body_source_id = Some(started.body_source_id);
+            let direct = job.direct_completion_tx.take().map(|completion| {
+                let (sender, events) = tokio::sync::mpsc::unbounded_channel();
+                job.direct_streaming_tx = Some(sender);
+                (
+                    completion,
+                    super::super::events::ServiceWorkerDirectFetchStream {
+                        body_source_id: started.body_source_id,
+                        head: service_worker_fetch_stream_response_head(
+                            job,
+                            &started.response_head,
+                        ),
+                        response_filter: service_worker_fetch_response_head_filter(
+                            &started.response_head.response_type,
+                            started.response_head.cors_exposed_header_names.as_deref(),
+                            started.response_head.status,
+                            job.request.redirect_mode(),
+                        ),
+                        events,
+                    },
+                )
+            });
             Some((
                 job.completion_tx.clone(),
                 job.request_client.clone(),
@@ -420,11 +478,16 @@ impl ServiceWorkerRuntimeService {
                     network_request_headers: None,
                     head: service_worker_fetch_stream_response_head(job, &started.response_head),
                 },
+                direct,
             ))
         }) else {
             return;
         };
         request_client.observe_service_worker_response_links(&request, &streaming_started.head);
+        if let Some((completion, stream)) = direct {
+            let _ = completion.send(ServiceWorkerDirectFetchResult::Stream(Box::new(stream)));
+            return;
+        }
         let _ = completion_tx.send_async_subresource_event(
             AsyncSubresourceFetchEvent::StreamingStarted(Box::new(streaming_started)),
         );
@@ -511,18 +574,24 @@ impl ServiceWorkerRuntimeService {
     }
 
     pub(super) fn finish_fetch_stream_chunk(&self, chunk: ServiceWorkerFetchStreamChunk) {
-        let Some(completion_tx) = ({
+        let Some((completion_tx, direct)) = ({
             let state = self.inner.state.lock();
             state
                 .pending_fetch_jobs
                 .get(&chunk.event_id)
                 .and_then(|job| {
                     (job.streaming_body_source_id == Some(chunk.body_source_id))
-                        .then(|| job.completion_tx.clone())
+                        .then(|| (job.completion_tx.clone(), job.direct_streaming_tx.clone()))
                 })
         }) else {
             return;
         };
+        if let Some(direct) = direct {
+            let _ = direct.send(
+                super::super::events::ServiceWorkerDirectFetchStreamEvent::Chunk(chunk.bytes),
+            );
+            return;
+        }
         let _ = completion_tx.send_async_subresource_event(
             AsyncSubresourceFetchEvent::StreamingChunk(AsyncSubresourceStreamingChunk {
                 body_source_id: chunk.body_source_id,
@@ -660,6 +729,11 @@ impl ServiceWorkerRuntimeService {
             job.request_client
                 .observe_service_worker_response_links(&job.request, &navigation_response.head());
         }
+        if let Some(direct) = job.direct_streaming_tx.take() {
+            let _ = direct
+                .send(super::super::events::ServiceWorkerDirectFetchStreamEvent::Finished(Ok(())));
+            return;
+        }
         if let Some(completion_tx) = job.direct_completion_tx.take() {
             let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Response(
                 ServiceWorkerDirectFetchResponse {
@@ -719,6 +793,12 @@ impl ServiceWorkerRuntimeService {
         job.cancel_pending_navigation_preload();
         if network_error_text.is_none() {
             network_error_text = service_worker_fetch_failure_network_error_text(&message);
+        }
+        if let Some(direct) = job.direct_streaming_tx.take() {
+            let _ = direct.send(
+                super::super::events::ServiceWorkerDirectFetchStreamEvent::Finished(Err(message)),
+            );
+            return;
         }
         if let Some(completion_tx) = job.direct_completion_tx.take() {
             let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Failure(message));
@@ -1167,6 +1247,9 @@ mod tests {
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                direct_streaming_tx: None,
+                request_body_owner: None,
+                body_stream: None,
                 request: {
                     let origin = moli_url::WebOrigin::from_url(&document_url);
                     let initiator = (document_url).clone();
@@ -2303,6 +2386,9 @@ mod tests {
         let completion_queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         let request_url = url("https://example.test/app/post");
         let mut job = ServiceWorkerFetchJob {
+            direct_streaming_tx: None,
+            request_body_owner: None,
+            body_stream: None,
             request: {
                 let origin = moli_url::WebOrigin::from_url(&request_url);
                 let initiator = request_url.clone();

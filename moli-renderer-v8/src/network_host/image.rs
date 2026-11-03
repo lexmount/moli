@@ -367,6 +367,7 @@ pub(crate) fn start_image_element_resource_fetch(
 
     if service_worker_controller.is_some() {
         let dispatch = ServiceWorkerFetchDispatch {
+            request_body_owner: None,
             redirect_check: None,
             internal_id,
             request: host.service_worker_fetch_request(

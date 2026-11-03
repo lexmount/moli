@@ -153,6 +153,7 @@ pub(crate) fn start_text_track_resource_fetch(
             .is_some()
     {
         let dispatch = ServiceWorkerFetchDispatch {
+            request_body_owner: None,
             redirect_check: None,
             internal_id,
             request: host.service_worker_fetch_request(

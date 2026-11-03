@@ -1877,6 +1877,7 @@ impl JsContextHost {
         metadata: ServiceWorkerFetchRequestMetadata,
     ) -> ServiceWorkerFetchRequest {
         ServiceWorkerFetchRequest {
+            body_stream: None,
             client_id,
             resulting_client_id: None,
             url,

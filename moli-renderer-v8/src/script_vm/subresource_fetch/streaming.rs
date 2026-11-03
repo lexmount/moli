@@ -424,6 +424,10 @@ impl ScriptVm {
         let trace_fields = async_subresource_trace_fields_for_event(&event);
         trace_async_subresource_stage("async_subresource_event_start", trace_fields, trace_started);
         let result = match event {
+            AsyncSubresourceFetchEvent::RequestBodyProducer {
+                internal_id,
+                producer,
+            } => self.apply_request_body_producer(internal_id, producer),
             AsyncSubresourceFetchEvent::RequestUploadReady {
                 internal_id,
                 result,
@@ -486,6 +490,64 @@ impl ScriptVm {
         trace_async_subresource_stage("async_subresource_event_done", trace_fields, trace_started);
         result
     }
+    fn apply_request_body_producer(
+        &mut self,
+        internal_id: u64,
+        mut producer: crate::context_bootstrap::RequestBodyProducer,
+    ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        let host = self._context_host.clone();
+        self.renderer_document_isolate
+            .with_entered_renderer_document_isolate(|isolate| {
+                let scope = pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let Some((resolver, binding, dispatch, runner)) = host
+                    .borrow()
+                    .window_request_body_producer_delivery(internal_id)
+                else {
+                    return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+                };
+                let context = v8::Local::new(scope, binding.context_global());
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let previous = enter_subresource_owner_async_scope(&host, scope, dispatch);
+                let stream = crate::context_bootstrap::build_readable_stream_clone_shell(scope);
+                let payload = producer.take_stream();
+                if crate::context_bootstrap::initialize_request_body_stream(scope, stream, &payload)
+                    .is_some()
+                {
+                    let resolver = v8::Local::new(scope, resolver);
+                    let completion = host.borrow().resource_completion_sender();
+                    match crate::network_host::RequestUpload::with_sender(
+                        scope,
+                        stream,
+                        resolver,
+                        false,
+                        runner,
+                        producer.cancel.clone(),
+                        move |result| {
+                            let _ = completion.send_async_subresource_event(
+                                AsyncSubresourceFetchEvent::RequestUploadReady {
+                                    internal_id,
+                                    result,
+                                },
+                            );
+                        },
+                        producer.take_sender(),
+                    ) {
+                        Ok(upload) => {
+                            host.borrow_mut()
+                                .set_window_request_upload(internal_id, upload.clone());
+                            upload.start(scope);
+                        }
+                        Err(reason) => {
+                            resolver.reject(scope, reason);
+                        }
+                    }
+                }
+                defer_subresource_owner_async_scope(&host, scope, dispatch, previous);
+                Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered)
+            })
+    }
+
     fn apply_request_upload_ready(
         &mut self,
         internal_id: u64,

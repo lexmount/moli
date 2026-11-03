@@ -159,7 +159,14 @@ impl ServiceWorkerRuntimeService {
                 return;
             };
             job.cancel_pending_navigation_preload();
-            if let Some(version) = state.versions.get_mut(&version_id) {
+            if matches!(
+                completion.result,
+                ServiceWorkerFetchResult::FallbackStream(_)
+            ) {
+                state
+                    .pending_fetch_body_uploads
+                    .insert(completion.event_id, job.owner().clone());
+            } else if let Some(version) = state.versions.get_mut(&version_id) {
                 version.in_flight_event_count = version.in_flight_event_count.saturating_sub(1);
             }
             let unregistration_progress =
@@ -186,12 +193,64 @@ impl ServiceWorkerRuntimeService {
             ServiceWorkerFetchResult::Fallback => {
                 self.dispatch_fetch_fallback(job);
             }
+            ServiceWorkerFetchResult::FallbackStream(body) => {
+                let runtime = self.clone();
+                let owner = job.owner().clone();
+                let transmitted = body.transmission();
+                job.resource_task_runner.spawn(async move {
+                    let _ = transmitted.await;
+                    runtime.finish_fetch_body_upload(completion.event_id, owner);
+                });
+                let mut job = job;
+                job.request = job.request.with_upload_body(body);
+                job.body_stream = None;
+                self.dispatch_fetch_fallback(job);
+            }
             ServiceWorkerFetchResult::Response(response) => {
                 self.complete_fetch_with_service_worker_response(job, response);
             }
             ServiceWorkerFetchResult::Failure(message) => {
                 self.complete_fetch_with_failure(job, message);
             }
+        }
+    }
+
+    fn finish_fetch_body_upload(
+        &self,
+        event_id: ServiceWorkerEventId,
+        owner: ServiceWorkerRunOwner,
+    ) {
+        let (idle_timeout, lifecycle_progress) = {
+            let mut state = self.inner.state.lock();
+            if state.pending_fetch_body_uploads.get(&event_id) != Some(&owner) {
+                return;
+            }
+            state.pending_fetch_body_uploads.remove(&event_id);
+            let Some(version) = state.versions.get_mut(&owner.version_id()) else {
+                return;
+            };
+            if &version.run != owner.run_identity() {
+                return;
+            }
+            version.in_flight_event_count = version.in_flight_event_count.saturating_sub(1);
+            let mut progress = self.unregistration_progress_for_version_if_ready_locked(
+                &mut state,
+                owner.version_id(),
+            );
+            if progress.is_empty() {
+                progress.extend(self.activation_progress_for_active_version_if_ready_locked(
+                    &mut state,
+                    owner.version_id(),
+                ));
+            }
+            let idle = self.maybe_schedule_idle_timeout_locked(&mut state, owner.version_id());
+            (idle, progress)
+        };
+        for progress in lifecycle_progress {
+            self.run_lifecycle_progress(progress);
+        }
+        if let Some(idle) = idle_timeout {
+            self.schedule_idle_timeout(idle);
         }
     }
 
@@ -501,7 +560,7 @@ pub(super) fn service_worker_fetch_diagnostic_from_job_result(
     result: &ServiceWorkerFetchResult,
 ) -> crate::runtime::RendererServiceWorkerFetchDiagnostic {
     let result = match result {
-        ServiceWorkerFetchResult::Fallback => {
+        ServiceWorkerFetchResult::Fallback | ServiceWorkerFetchResult::FallbackStream(_) => {
             crate::runtime::RendererServiceWorkerFetchDiagnosticResult::Fallback
         }
         ServiceWorkerFetchResult::Response(response) => {

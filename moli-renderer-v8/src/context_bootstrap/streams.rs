@@ -351,12 +351,14 @@ pub(super) use readable::{
     readable_stream_tee_callback,
 };
 pub(crate) use transferable::{
-    ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,
-    build_readable_stream_clone_shell, build_transform_stream_clone_shell,
-    build_writable_stream_clone_shell, initialize_readable_stream_clone_shell,
+    ReadableStreamClonePayload, RequestBodyOwner, RequestBodyProducer, TransformStreamClonePayload,
+    WritableStreamClonePayload, build_readable_stream_clone_shell,
+    build_transform_stream_clone_shell, build_writable_stream_clone_shell,
+    initialize_readable_stream_clone_shell, initialize_request_body_stream,
     initialize_transform_stream_clone_shell, initialize_writable_stream_clone_shell,
-    prepare_readable_stream_transfer, prepare_transform_stream_transfer,
-    prepare_writable_stream_transfer,
+    install_request_body_abort, prepare_readable_stream_transfer,
+    prepare_transform_stream_transfer, prepare_writable_stream_transfer, request_body_owner,
+    transfer_request_body,
 };
 pub(super) use writable::{
     writable_stream_abort_callback, writable_stream_close_callback,

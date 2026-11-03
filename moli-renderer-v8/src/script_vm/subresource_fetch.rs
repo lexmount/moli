@@ -774,6 +774,12 @@ fn async_subresource_trace_fields_for_event(
     event: &AsyncSubresourceFetchEvent,
 ) -> AsyncSubresourceTraceFields {
     match event {
+        AsyncSubresourceFetchEvent::RequestBodyProducer { internal_id, .. } => {
+            AsyncSubresourceTraceFields {
+                internal_id: Some(*internal_id),
+                ..Default::default()
+            }
+        }
         AsyncSubresourceFetchEvent::RequestUploadReady { internal_id, .. } => {
             AsyncSubresourceTraceFields {
                 internal_id: Some(*internal_id),

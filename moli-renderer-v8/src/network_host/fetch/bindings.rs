@@ -370,6 +370,10 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         Ok(Some(internal_id)) => {
             if let Some(signal) = signal {
                 install_window_fetch_abort_listener(scope, signal, internal_id);
+                if let Some(stream) = prepared.body_stream.as_ref() {
+                    let stream = v8::Local::new(scope, stream);
+                    crate::context_bootstrap::install_request_body_abort(scope, stream, signal);
+                }
             }
             rv.set(promise.into());
             return;

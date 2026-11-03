@@ -46,6 +46,30 @@ impl RequestUpload {
         cancel: FetchCancelHandle,
         ready: impl Fn(Result<(), UploadBodyError>) + Send + Sync + 'static,
     ) -> Result<(Self, UploadBody), v8::Local<'s, v8::Value>> {
+        let (sender, body) = UploadBody::channel();
+        Self::with_sender(
+            scope,
+            stream,
+            resolver,
+            already_locked,
+            runner,
+            cancel,
+            ready,
+            sender,
+        )
+        .map(|upload| (upload, body))
+    }
+
+    pub(crate) fn with_sender<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        stream: v8::Local<'s, v8::Object>,
+        resolver: v8::Local<'s, v8::PromiseResolver>,
+        already_locked: bool,
+        runner: RendererResourceTaskRunner,
+        cancel: FetchCancelHandle,
+        ready: impl Fn(Result<(), UploadBodyError>) + Send + Sync + 'static,
+        sender: UploadBodySender,
+    ) -> Result<Self, v8::Local<'s, v8::Value>> {
         if !already_locked && !begin_readable_stream_body_consumption(scope, stream) {
             return Err(v8::Exception::type_error(
                 scope,
@@ -71,7 +95,6 @@ impl RequestUpload {
         let steps = v8::Array::new_with_elements(scope, &steps);
         set_null_prototype(scope, steps.into());
         set_private_value(scope, consumer, STEPS, steps.into());
-        let (sender, body) = UploadBody::channel();
         let upload = Self(Rc::new(Upload {
             consumer: v8::Global::new(scope, consumer),
             sender: RefCell::new(Some(sender)),
@@ -87,7 +110,7 @@ impl RequestUpload {
         let external = v8::External::new(scope, (&mut *weak as *mut Weak<Upload>).cast());
         set_private_value(scope, consumer, NATIVE, external.into());
         crate::v8_finalizer::track_context_owned_v8_finalizer(scope, consumer, move || drop(weak));
-        Ok((upload, body))
+        Ok(upload)
     }
 
     /// Lock synchronously, but start reads after fetch has installed its abort

@@ -2329,9 +2329,11 @@ async fn controlled_fetch_from_worker_client_dispatches_to_active_worker() {
     let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
     assert!(
         service.dispatch_controlled_fetch(ServiceWorkerFetchDispatch {
+            request_body_owner: None,
             redirect_check: None,
             internal_id: 90,
             request: ServiceWorkerFetchRequest {
+                body_stream: None,
                 client_id,
                 resulting_client_id: None,
                 url: request_url.clone(),
