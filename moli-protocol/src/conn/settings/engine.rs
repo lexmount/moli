@@ -54,6 +54,10 @@ impl CdpConnection {
             .unwrap_or(self.base_tls_verify_host)
     }
 
+    pub(crate) fn browser_user_agent(&self) -> &str {
+        &self.browser_user_agent
+    }
+
     pub fn user_agent(&self) -> &str {
         self.browser_context
             .as_ref()

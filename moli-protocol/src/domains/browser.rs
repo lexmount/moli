@@ -183,7 +183,7 @@ fn get_version(conn: &CdpConnection) -> CommandOutputPlan {
         "protocolVersion": version::PROTOCOL_VERSION,
         "product": version::PRODUCT,
         "revision": version::REVISION,
-        "userAgent": conn.user_agent(),
+        "userAgent": conn.browser_user_agent(),
         "jsVersion": version::js_version(),
     }))
 }

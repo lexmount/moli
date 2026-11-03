@@ -1347,6 +1347,9 @@ pub struct CdpConnection {
     pub download_behavior: BrowserDownloadBehavior,
     pub permission_overrides: Vec<PermissionOverride>,
     next_global_io_stream_id: u64,
+    // Browser version reporting retains the launch UA independently of
+    // mutable default, Context and Page network identities.
+    browser_user_agent: String,
     base_browser_identity: moli_browser_profile::BrowserIdentityProfile,
     global_extra_headers: moli_fetch::RequestHeaders,
     global_browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
@@ -1649,6 +1652,7 @@ impl CdpConnection {
             navigation_runtime_config.with_document_start_scripts(Vec::new()),
         );
         let fetch_config = standalone_navigation_engine.fetch_config();
+        let browser_user_agent = fetch_config.user_agent().to_owned();
         let base_browser_identity = fetch_config.browser_identity().clone();
         let base_http_proxy = fetch_config.http_proxy().map(str::to_owned);
         let base_http_no_proxy = fetch_config.http_no_proxy().map(str::to_owned);
@@ -1686,6 +1690,7 @@ impl CdpConnection {
             network_request_id_allocator: ConnectionNetworkRequestIdAllocator::default(),
             pending_runtime_await_jobs: HashMap::new(),
             claimed_pending_inspector_await_owners: HashMap::new(),
+            browser_user_agent,
             base_browser_identity,
             global_extra_headers: Default::default(),
             global_browser_identity_override: None,
