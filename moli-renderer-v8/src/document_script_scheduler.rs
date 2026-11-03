@@ -1099,6 +1099,7 @@ mod tests {
         );
         let response = crate::types::NavigationResponse::from_head_and_text_body(
             moli_fetch::ResponseHead {
+                request_include_credentials: false,
                 status_text: None,
                 final_url: module_script.url.clone(),
                 status: 200,

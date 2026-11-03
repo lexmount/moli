@@ -262,6 +262,7 @@ impl PendingFetchAuthNavigation {
         Arc::new(NetworkFetchResult::without_request_observation(
             RawResponse::from_head_and_body(
                 ResponseHead {
+                    request_include_credentials: false,
                     status_text: None,
                     final_url: url,
                     status: 401,

@@ -156,6 +156,7 @@ impl CdpConnection {
     ) -> Result<PreparedCapturedNavigationResponse> {
         let load_inputs = self.navigation_load_inputs_for_navigation(token, navigation)?;
         let head = ResponseHead {
+            request_include_credentials: false,
             status_text: None,
             cookie_set_reports: load_inputs
                 .store_response_cookie_reports(&final_url, &response_headers)?,

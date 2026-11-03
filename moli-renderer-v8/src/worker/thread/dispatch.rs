@@ -3009,6 +3009,7 @@ fn start_service_worker_navigation_preload_response_in_context(
     };
 
     let head = moli_fetch::ResponseHead {
+        request_include_credentials: false,
         status_text: Some(started.response_head.status_text.clone()),
         final_url: started
             .response_head

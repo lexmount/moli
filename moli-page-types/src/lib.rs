@@ -395,6 +395,7 @@ impl NavigationResponse {
 
     pub fn head(&self) -> ResponseHead {
         ResponseHead {
+            request_include_credentials: false,
             final_url: self.final_url.clone(),
             status: self.status,
             status_text: self.status_text.clone(),
@@ -469,6 +470,7 @@ impl NavigationResponse {
     ) -> Self {
         Self::from_head_and_text_body(
             ResponseHead {
+                request_include_credentials: false,
                 status_text: None,
                 final_url,
                 status,
@@ -502,6 +504,7 @@ impl NavigationResponse {
 
     pub fn into_parts(self) -> (ResponseHead, String, Vec<u8>) {
         let head = ResponseHead {
+            request_include_credentials: false,
             final_url: self.final_url,
             status: self.status,
             status_text: self.status_text,
@@ -540,6 +543,7 @@ impl NavigationResponse {
 
     pub fn into_body(self) -> (ResponseHead, ResponseBody) {
         let head = ResponseHead {
+            request_include_credentials: false,
             final_url: self.final_url,
             status: self.status,
             status_text: self.status_text,
@@ -4037,6 +4041,7 @@ mod tests {
     fn subresource_response_body_stores_only_exact_response_bytes() {
         let response = Response::from_head_and_body(
             ResponseHead {
+                request_include_credentials: false,
                 status_text: None,
                 final_url: test_url("/utf8.txt"),
                 status: 200,
@@ -4065,6 +4070,7 @@ mod tests {
     fn subresource_response_body_preserves_non_utf8_response_bytes() {
         let response = Response::from_head_and_body(
             ResponseHead {
+                request_include_credentials: false,
                 status_text: None,
                 final_url: test_url("/legacy.txt"),
                 status: 200,
@@ -4104,6 +4110,7 @@ mod tests {
     fn navigation_response_body_can_move_into_an_external_backing_without_cloning() {
         let mut response = NavigationResponse::from_head_and_body(
             ResponseHead {
+                request_include_credentials: false,
                 final_url: test_url("/image.png"),
                 status: 200,
                 status_text: None,

@@ -1115,6 +1115,7 @@ impl ScriptVm {
         // Request-stage fulfillment has no followed redirects yet. Reuse this
         // complete head for validation and response materialization.
         let head = moli_fetch::ResponseHead {
+            request_include_credentials: false,
             status_text: None,
             final_url: info.url.clone(),
             status: response_code,
@@ -1861,6 +1862,7 @@ impl ScriptVm {
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
             let response = response_body.clone_as_navigation_response(moli_fetch::ResponseHead {
+                request_include_credentials: false,
                 status_text: None,
                 final_url: pending.response.final_url.clone(),
                 status: response_code,
@@ -1926,6 +1928,7 @@ impl ScriptVm {
         if let Some(target) = WorkerOwnedXhrTarget::from_continuation(&pending.pending.continuation)
         {
             let response = response_body.clone_as_navigation_response(moli_fetch::ResponseHead {
+                request_include_credentials: false,
                 status_text: None,
                 final_url: pending.response.final_url.clone(),
                 status: response_code,
@@ -2000,6 +2003,7 @@ impl ScriptVm {
             None,
             Ok(
                 response_body.into_navigation_response(moli_fetch::ResponseHead {
+                    request_include_credentials: false,
                     status_text: None,
                     final_url: pending.response.final_url,
                     status: response_code,

@@ -398,6 +398,7 @@ mod tests {
             request_headers: Vec::new().into(),
             response: RawResponse::from_head_and_body(
                 ResponseHead {
+                    request_include_credentials: false,
                     status_text: None,
                     final_url: url.clone(),
                     status: 200,

@@ -2485,6 +2485,7 @@ pub(in crate::worker) fn worker_response_from_body(
     body: RendererSyntheticResponseBody,
 ) -> Response {
     body.into_fetch_response(ResponseHead {
+        request_include_credentials: false,
         status_text: None,
         final_url,
         status,
