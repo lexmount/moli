@@ -281,6 +281,10 @@ class WptCrossCaseListsTests(WptCrossTestCase):
         explicit_http_case = "digital-credentials/non-secure-contexts.http.html"
         underscore_insecure_context_case = "web-nfc/nfc_insecure_context.html"
         pointer_event_negative_case = "pointerevents/pointerevent_constructor.html"
+        navigator_negative_case = (
+            "html/webappapis/system-state-and-capabilities/"
+            "the-navigator-object/secure_context.html"
+        )
         host_sensitive_case = "webmessaging/with-ports/020.html"
 
         self.assertTrue(_case_requires_trustworthy_origin(secure_case))
@@ -297,6 +301,16 @@ class WptCrossCaseListsTests(WptCrossTestCase):
             _case_requires_non_trustworthy_origin(underscore_insecure_context_case)
         )
         self.assertTrue(_case_requires_non_trustworthy_origin(pointer_event_negative_case))
+        for suffix in ("", "?variant=test", "#probe", "?variant=test#probe"):
+            with self.subTest(navigator_suffix=suffix):
+                case = navigator_negative_case + suffix
+                self.assertFalse(_case_requires_trustworthy_origin(case))
+                self.assertTrue(_case_requires_non_trustworthy_origin(case))
+                for external in (False, True):
+                    self.assertEqual(
+                        _url_for_case_origin(FakeServer(), case, external=external),
+                        f"http://[2001:db8::1]:9000/{case}",
+                    )
         self.assertFalse(_case_requires_non_trustworthy_origin(host_sensitive_case))
         self.assertEqual(
             _url_for_case_origin(FakeServer(), secure_case, external=False),
@@ -348,6 +362,10 @@ class WptCrossCaseListsTests(WptCrossTestCase):
         )
     def test_cli_mode_preserves_case_origin_classification(self) -> None:
         calls = []
+        navigator_negative_case = (
+            "html/webappapis/system-state-and-capabilities/"
+            "the-navigator-object/secure_context.html"
+        )
 
         class FakeServer:
             def __init__(self, wpt_root: Path, *, primary_hostname: str) -> None:
@@ -402,6 +420,7 @@ class WptCrossCaseListsTests(WptCrossTestCase):
                     return_value=[
                         WptCase("secure-contexts/basic-shared-worker.html"),
                         WptCase("digital-credentials/non-secure-contexts.http.html"),
+                        WptCase(navigator_negative_case),
                         WptCase("WebCryptoAPI/digest/digest.https.html"),
                     ],
                 ),
@@ -450,6 +469,12 @@ class WptCrossCaseListsTests(WptCrossTestCase):
                     (
                         "digital-credentials/non-secure-contexts.http.html",
                         "http://[2001:db8::1]:9000/digital-credentials/non-secure-contexts.http.html",
+                        WPT_CROSS_CASE_TIMEOUT_SECONDS,
+                        1.0,
+                    ),
+                    (
+                        navigator_negative_case,
+                        f"http://[2001:db8::1]:9000/{navigator_negative_case}",
                         WPT_CROSS_CASE_TIMEOUT_SECONDS,
                         1.0,
                     ),
