@@ -302,8 +302,6 @@ impl JsContextHost {
         let broadcast_channel_registry = browser_context_runtime.broadcast_channel_registry();
         let shared_worker_client_owner_id =
             browser_context_runtime.next_shared_worker_client_owner_id();
-        let javascript_dialog_handler_enabled =
-            browser_context_runtime.javascript_dialog_handler_enabled();
         let document_url = runtime.document_url().clone();
         let main_document_owner = frame_owner_store
             .current_main_document_task_owner()
@@ -569,7 +567,6 @@ impl JsContextHost {
             pending_javascript_dialogs: Vec::new(),
             javascript_dialog_runtime,
             next_javascript_dialog_id: 1,
-            javascript_dialog_handler_enabled,
             pending_network_output: Vec::new(),
             focus_change_epoch: 0,
             next_subresource_network_request_handle: 1,

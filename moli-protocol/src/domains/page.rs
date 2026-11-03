@@ -625,12 +625,6 @@ fn enable_page_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutput
     if !conn.set_page_domain_enabled_for_session_owner(cmd.session_id, true) {
         return CommandOutputPlan::error(-31998, "BrowserContextNotLoaded");
     }
-    if let Err(error) = start_set_javascript_dialog_handler_enabled(conn, cmd.session_id, true) {
-        return CommandOutputPlan::error(
-            -32000,
-            format!("failed to update JavaScript dialog handling: {error}"),
-        );
-    }
     if let Some(enabled) = params.enable_file_chooser_opened_event
         && !conn
             .set_page_file_chooser_opened_event_enabled_for_session_owner(cmd.session_id, enabled)
@@ -655,19 +649,6 @@ fn disable_page_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutpu
         plan.push_background_event(event);
     }
     plan.push_success();
-    let dialog_handler_enabled = conn
-        .navigation_load_inputs_for_session_owner(cmd.session_id)
-        .renderer_runtime
-        .runtime()
-        .javascript_dialog_handler_enabled();
-    if let Err(error) =
-        start_set_javascript_dialog_handler_enabled(conn, cmd.session_id, dialog_handler_enabled)
-    {
-        return CommandOutputPlan::error(
-            -32000,
-            format!("failed to update JavaScript dialog handling: {error}"),
-        );
-    }
     plan
 }
 
@@ -1523,12 +1504,6 @@ fn try_start_page_enable_command(
         return Some(PageCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
-        )));
-    }
-    if let Err(error) = start_set_javascript_dialog_handler_enabled(conn, cmd.session_id, true) {
-        return Some(PageCommandTaskStep::Complete(CommandOutputPlan::error(
-            -32000,
-            format!("failed to update JavaScript dialog handling: {error}"),
         )));
     }
     if let Some(enabled) = params.enable_file_chooser_opened_event

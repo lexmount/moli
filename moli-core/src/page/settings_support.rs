@@ -54,15 +54,6 @@ impl Page {
         )
     }
 
-    pub fn start_set_javascript_dialog_handler_enabled(
-        &self,
-        enabled: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetJavaScriptDialogHandlerEnabled(
-            enabled,
-        ))
-    }
-
     pub(crate) async fn replace_browser_resource_runtime_async(
         &mut self,
         resource_runtime: &BrowserResourceRuntime,

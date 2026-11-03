@@ -1059,7 +1059,6 @@ pub(crate) struct JsContextHost {
     pending_javascript_dialogs: Vec<dialogs::PendingJavaScriptDialogRecord>,
     javascript_dialog_runtime: crate::runtime::RendererJavaScriptDialogRuntime,
     next_javascript_dialog_id: u64,
-    javascript_dialog_handler_enabled: bool,
     pending_network_output: Vec<ScriptNetworkOutputItem>,
     focus_change_epoch: u64,
     next_subresource_network_request_handle: u64,
