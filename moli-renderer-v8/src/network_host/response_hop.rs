@@ -114,6 +114,11 @@ pub(super) fn advance_validated_subresource_response(
     {
         return Err("CORS redirect URL must not include credentials".to_owned());
     }
+    // A buffered snapshot does not make an author stream replayable. This
+    // check precedes POST-to-GET rewriting for 301/302; only 303 is exempt.
+    if head.status != 303 && request.body_source_is_null() {
+        return Err("Cannot replay a streaming request body after a redirect".to_owned());
+    }
     if !moli_url::same_origin(&head.final_url, &next_url) {
         request
             .request_headers
