@@ -68,6 +68,8 @@ struct FetchResponseHeadDeclaration {
     redirected: bool,
     #[webapi(slot = RESPONSE_TYPE_SLOT)]
     r#type: &'static str,
+    #[webapi(slot = RESPONSE_REQUEST_INCLUDE_CREDENTIALS_SLOT)]
+    request_include_credentials: bool,
 }
 
 #[derive(WebApiObject)]
@@ -375,6 +377,7 @@ fn build_fetch_response_object_head<'s>(
             .to_owned(),
         filtered_response_exposes_redirected(filter) && head.redirected,
         response_type,
+        head.request_include_credentials,
     )
     .bind(scope)
     .expect("Fetch Response head declaration should bind");
@@ -469,9 +472,10 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
     } else {
         String::new()
     };
-    let obj = FetchResponseHeadDeclaration::new(0.0, false, visible_url, false, response_type)
-        .bind(scope)
-        .ok()?;
+    let obj =
+        FetchResponseHeadDeclaration::new(0.0, false, visible_url, false, response_type, false)
+            .bind(scope)
+            .ok()?;
     if !internal_url.is_empty() {
         FetchResponseInternalUrlDeclaration::new(internal_url.to_owned())
             .initialize(scope, obj)
