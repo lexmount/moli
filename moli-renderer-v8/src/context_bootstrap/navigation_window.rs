@@ -56,6 +56,12 @@ pub(super) fn runtime_top_window_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
+    // Session-history pruning inspects Windows in other origins. Read the
+    // retained top slot in its owner's Realm, preserving its native fallback.
+    let context = window
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
     object_own_hidden_value(scope, window, WINDOW_TOP_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         .unwrap_or_else(|| runtime_window_owner(scope, window))
