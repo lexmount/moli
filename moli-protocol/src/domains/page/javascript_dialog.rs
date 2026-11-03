@@ -393,13 +393,7 @@ fn broadcast_javascript_dialog_closed(
             .map(|(session_id, _)| {
                 BackgroundProtocolEvent::page_javascript_dialog_closed(
                     session_id.as_deref(),
-                    UserPromptClosedEvent {
-                        target_id: closed_event.target_id.clone(),
-                        frame_id: closed_event.frame_id.clone(),
-                        prompt_type: closed_event.prompt_type.clone(),
-                        accepted: closed_event.accepted,
-                        user_text: closed_event.user_text.clone(),
-                    },
+                    closed_event.clone(),
                 )
             }),
     );
@@ -566,6 +560,33 @@ fn emit_to_attachment(
     let default_prompt = dialog.default_prompt().to_owned();
     let audience = page_dialog_subscriptions(conn, &event_owner);
     let has_handler = !audience.is_empty() || conn.has_automation_javascript_dialog_handler();
+    let opening_event = PageJavaScriptDialogOpeningEvent {
+        frame_id: Some(source_frame_id.clone().into()),
+        url: source_url,
+        message,
+        dialog_type: dialog_type.clone(),
+        // Moli has no native browser UI that can resolve the dialog.
+        has_browser_handler: false,
+        default_prompt,
+    };
+    if !has_handler {
+        // A late prefix without a handler settles only this dialog. Existing
+        // queued dialogs belong to their own subscription cleanup paths.
+        dialog.dismiss();
+        out.push(BackgroundProtocolEvent::automation_only(
+            AutomationEvent::PageJavaScriptDialogOpening(opening_event),
+        ));
+        out.push(BackgroundProtocolEvent::automation_only(
+            AutomationEvent::UserPromptClosed(UserPromptClosedEvent {
+                target_id: destination_page_owner.target_id().map(Into::into),
+                frame_id: source_frame_id.into(),
+                prompt_type: dialog_type,
+                accepted: false,
+                user_text: String::new(),
+            }),
+        ));
+        return;
+    }
     let subscriptions = audience.iter().map(|(_, generation)| *generation).collect();
     let mut installed_dialog =
         dialog.into_target_dialog(destination_page_owner, source_frame_id.clone());
@@ -587,15 +608,6 @@ fn emit_to_attachment(
         return;
     }
 
-    let opening_event = PageJavaScriptDialogOpeningEvent {
-        frame_id: Some(source_frame_id.into()),
-        url: source_url,
-        message,
-        dialog_type,
-        // Moli has no native browser UI that can resolve the dialog.
-        has_browser_handler: false,
-        default_prompt,
-    };
     out.push(BackgroundProtocolEvent::automation_only(
         AutomationEvent::PageJavaScriptDialogOpening(opening_event.clone()),
     ));
@@ -604,11 +616,6 @@ fn emit_to_attachment(
             event_session_id.as_deref(),
             opening_event.clone(),
         ));
-    }
-    // A pending renderer prefix can arrive after the last subscriber began
-    // detaching. It must not install an unhandleable modal dialog.
-    if !has_handler {
-        out.extend(dismiss_matching_dialogs(conn, &event_owner, |_| true));
     }
 }
 
