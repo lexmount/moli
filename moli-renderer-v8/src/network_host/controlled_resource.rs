@@ -589,6 +589,7 @@ impl ControlledResourceLoad {
                         Some(&preflight_observer),
                     )
                     .await?;
+                    super::async_fetch::wait_for_request_upload(&self.request, &hop_cancel).await?;
                     let (response, observations) = observed.into_parts_with_observation_journal();
                     (response, false, observations)
                 }

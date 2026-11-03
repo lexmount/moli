@@ -374,6 +374,7 @@ impl PendingSubresourceContinuation {
 }
 
 pub(super) struct PendingWindowFetchContinuation {
+    pub(crate) upload: Option<crate::network_host::RequestUpload>,
     pub(super) intercepted_request: Option<Box<moli_fetch::Request>>,
     pub(super) response_metadata: Option<moli_fetch_types::FetchResponseMetadata>,
     promise: PendingWindowFetchPromise,
@@ -408,6 +409,7 @@ impl PendingWindowFetchContinuation {
             response_metadata: None,
             promise: PendingWindowFetchPromise::Active(resolver),
             resource_timing,
+            upload: None,
             keepalive,
             cache_mode,
             redirect_csp_state: crate::network_host::FetchCspRedirectState::new(&connect_policy),
@@ -1136,6 +1138,9 @@ pub(super) struct AsyncSubresourceStreamingFinished {
 /// another kind of resident.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AsyncSubresourceFetchEventTarget {
+    RequestUpload {
+        internal_id: u64,
+    },
     RedirectAdmission {
         internal_id: u64,
     },
@@ -1173,6 +1178,10 @@ pub(crate) enum AsyncSubresourceFetchEventTarget {
 
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchEvent {
+    RequestUploadReady {
+        internal_id: u64,
+        result: Result<(), moli_fetch::UploadBodyError>,
+    },
     RedirectAdmission {
         internal_id: u64,
         admission: crate::network_host::RedirectAdmission,
@@ -1211,6 +1220,11 @@ pub(super) enum AsyncSubresourceFetchEvent {
 impl AsyncSubresourceFetchEvent {
     pub(crate) fn target(&self) -> AsyncSubresourceFetchEventTarget {
         match self {
+            Self::RequestUploadReady { internal_id, .. } => {
+                AsyncSubresourceFetchEventTarget::RequestUpload {
+                    internal_id: *internal_id,
+                }
+            }
             Self::RedirectAdmission { internal_id, .. } => {
                 AsyncSubresourceFetchEventTarget::RedirectAdmission {
                     internal_id: *internal_id,

@@ -278,15 +278,23 @@ impl RequestInputSnapshot {
 pub(crate) fn mark_request_input_body_used_for_fetch<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) {
+) -> Result<bool, FetchArgumentError> {
     if !is_branded_request_object(scope, object) {
-        return;
+        return Ok(false);
+    }
+    if request_body_unusable(scope, object) {
+        return Err(request_body_already_used_error().into());
     }
     let has_body = request_slot_value(scope, object, REQUEST_BODY_SLOT)
         .is_some_and(|body| !body.is_null_or_undefined());
     if has_body {
+        let locked = body_stream_object(scope, object).is_some_and(|stream| {
+            crate::context_bootstrap::begin_readable_stream_body_consumption(scope, stream)
+        });
         set_request_slot_bool(scope, object, REQUEST_BODY_USED_SLOT, true);
+        return Ok(locked);
     }
+    Ok(false)
 }
 
 pub(super) fn request_input_snapshot_for_constructor<'s>(

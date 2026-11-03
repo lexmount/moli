@@ -61,6 +61,11 @@ pub(super) fn advance_subresource_response(
     if source == moli_fetch::RedirectSource::Network && !web_security_disabled {
         request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
     }
+    if source == moli_fetch::RedirectSource::Network {
+        request
+            .validate_authentication_response(&head)
+            .map_err(super::async_fetch::format_network_error)?;
+    }
     advance_validated_subresource_response(
         request,
         head,
@@ -77,6 +82,7 @@ pub(super) fn advance_validated_subresource_response(
     source: RedirectSource,
     web_security_disabled: bool,
 ) -> Result<SubresourceResponseTransition, String> {
+
     if !is_redirect_status(head.status) {
         return Ok(SubresourceResponseTransition::FinalResponse);
     }
