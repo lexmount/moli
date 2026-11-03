@@ -1312,6 +1312,12 @@ impl JsContextHost {
         handle: DomHandle,
         window: v8::Local<'s, v8::Object>,
     ) {
+        // Realm materialization can call this from the parent context. Keep
+        // browser-owned slot reads and writes in the child Window's Realm.
+        let context = window
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context());
+        let scope = &mut v8::ContextScope::new(scope, context);
         let global = scope.get_current_context().global(scope);
         let existing_parent =
             Self::child_window_non_cross_origin_object_slot(scope, window, "__moliWindowParent");
