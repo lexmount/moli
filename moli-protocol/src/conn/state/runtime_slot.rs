@@ -193,8 +193,21 @@ impl TargetRuntimeSlot {
         self.page_slot.initial_document_page_build_waiter()
     }
 
+    pub(crate) fn reserve_initial_document_navigation(
+        &mut self,
+    ) -> Option<(
+        InitialDocumentPageBuildWaiter,
+        crate::conn::CommandWaitLifetime,
+    )> {
+        self.page_slot.reserve_initial_document_navigation()
+    }
+
     pub(crate) fn start_initial_document_page_build(&mut self) {
         self.page_slot.start_initial_document_page_build();
+    }
+
+    pub(crate) fn cancel_initial_document_page_build(&mut self) {
+        self.page_slot.cancel_initial_document_page_build();
     }
 
     pub(crate) fn bind_initial_document_page_build_renderer_page(

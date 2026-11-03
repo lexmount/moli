@@ -3132,68 +3132,387 @@ async fn stale_page_residence_same_document_navigation_cannot_mutate_replacement
     });
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn initial_document_navigation_waits_for_adoption_and_honors_cancellation() {
-    let mut ctx = TestContext::from_conn(CdpConnection::default());
+fn initial_document_navigation_context_for_test() -> (TestContext, CommandOwnerScope) {
+    let ctx = TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-initial-navigation".into());
     bc.set_active_target_id("TID-initial-navigation");
     bc.set_target_url("about:blank".to_owned());
     bc.attach_active_session("SID-initial-navigation");
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
-    let owner = CommandOwnerScope::for_session("SID-initial-navigation");
-    let page = ctx.with_fixture(|conn| {
-        let slot = conn
-            .runtime_session_owner_slot_mut_for_owner(&owner)
-            .unwrap();
-        slot.start_initial_document_page_build();
-        assert!(slot.bind_initial_document_page_build_renderer_page(
-            crate::conn::RendererPageResidenceIdentity::from_parts(
-                moli_core::RendererOwnerLocalHostId::new_for_testing(7),
-                moli_core::PageId::new_for_testing(1),
-            ),
-        ));
-        conn.pending_target_page_residence_identity_for_owner(&owner)
-            .unwrap()
-    });
+    (
+        ctx,
+        CommandOwnerScope::for_session("SID-initial-navigation"),
+    )
+}
+
+fn bind_pending_initial_navigation_page_for_test(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+) {
+    let slot = conn
+        .runtime_session_owner_slot_mut_for_owner(owner)
+        .unwrap();
+    slot.start_initial_document_page_build();
+    assert!(slot.bind_initial_document_page_build_renderer_page(
+        crate::conn::RendererPageResidenceIdentity::from_parts(
+            moli_core::RendererOwnerLocalHostId::new_for_testing(7),
+            moli_core::PageId::new_for_testing(1),
+        ),
+    ));
+}
+
+fn prepare_initial_document_navigation_for_test(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    url: &str,
+) -> super::PreparedRendererNavigation {
+    let page = conn
+        .pending_target_page_residence_identity_for_owner(owner)
+        .or_else(|| conn.target_page_residence_identity_for_owner(owner))
+        .unwrap();
     let action = crate::conn::TopLevelNavigationOwnerAction::from_prepared(
         owner.clone(),
         page,
         RendererDocumentSourcedTopLevelLocationNavigation::new(
             renderer_document_identity_for_test(1, 1),
-            "https://example.test/next".to_owned(),
+            url.to_owned(),
         ),
     );
-    let prepared = ctx
-        .with_fixture(|conn| super::PreparedRendererNavigation::prepare_owner_action(conn, action))
-        .expect("an exact initial Page's accepted navigation must survive pending adoption");
-    ctx.with_fixture(|conn| {
-        let slot = conn
-            .runtime_session_owner_slot_mut_for_owner(&owner)
-            .unwrap();
-        assert!(slot.has_initial_document_page_build_in_progress());
-        assert!(!slot.has_loaded_page());
-        assert!(!conn.has_pending_document_navigation_for_owner(&owner));
-        conn.runtime_session_owner_slot_mut_for_owner(&owner)
-            .unwrap()
-            .fail_initial_document_page_build("target closed before adoption".to_owned());
+    super::PreparedRendererNavigation::prepare_owner_action(conn, action)
+        .expect("an exact initial Page's accepted navigation must survive pending adoption")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initial_document_navigation_waits_for_adoption_and_honors_cancellation() {
+    let (mut ctx, owner) = initial_document_navigation_context_for_test();
+    let prepared = ctx.with_fixture(|conn| {
+        bind_pending_initial_navigation_page_for_test(conn, &owner);
+        prepare_initial_document_navigation_for_test(conn, &owner, "https://example.test/next")
     });
     let mut command = crate::conn::CommandDispatchContext::default();
-    tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        ctx.run_fixture_projection(&mut command, move |driver, context| {
-            Box::pin(prepared.run(driver, context))
-        }),
-    )
-    .await
-    .expect("cancelled adoption must release its navigation waiter")
-    .unwrap();
+    let (mut context, _scope) =
+        crate::conn::CommandWorkflowContext::take_from(&mut command, None, None);
+    let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+    {
+        let mut running = Box::pin(prepared.run(&mut driver, &mut context));
+        assert!(futures_util::poll!(&mut running).is_pending());
+        ctx.with_fixture(|conn| {
+            let slot = conn
+                .runtime_session_owner_slot_mut_for_owner(&owner)
+                .unwrap();
+            assert!(slot.has_initial_document_page_build_in_progress());
+            assert!(!slot.has_loaded_page());
+            slot.fail_initial_document_page_build("target closed before adoption".to_owned());
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            ctx.drive_owned_wait(running),
+        )
+        .await
+        .expect("cancelling adoption must wake the running navigation workflow")
+        .unwrap();
+    }
     ctx.with_fixture(|conn| {
+        context.finish_projection(conn, &mut command);
         assert_eq!(
             conn.browser_context.as_ref().unwrap().target_url(),
             "about:blank"
         );
         assert!(!conn.has_pending_document_navigation_for_owner(&owner));
     });
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initial_document_navigation_resumes_after_successful_adoption() {
+    let (mut ctx, owner) = initial_document_navigation_context_for_test();
+    let pending = ctx.with_fixture(|conn| {
+        conn.start_initial_document_page_ensure_for_owner(&owner)
+            .unwrap()
+            .unwrap()
+    });
+    let completed = ctx.drive_owned_wait(pending.wait()).await.unwrap();
+    let url = "data:text/html,<title>resumed-navigation</title>";
+    let prepared =
+        ctx.with_fixture(|conn| prepare_initial_document_navigation_for_test(conn, &owner, url));
+    let mut command = crate::conn::CommandDispatchContext::default();
+    let (mut context, _scope) =
+        crate::conn::CommandWorkflowContext::take_from(&mut command, None, None);
+    let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+    {
+        let mut running = Box::pin(prepared.run(&mut driver, &mut context));
+        assert!(futures_util::poll!(&mut running).is_pending());
+        ctx.with_fixture(|conn| assert!(!conn.has_pending_document_navigation_for_owner(&owner)));
+        let mut installer = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+        ctx.drive_owned_wait(completed.install_using(&mut installer))
+            .await
+            .unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            ctx.drive_owned_wait(running),
+        )
+        .await
+        .expect("adoption must resume the accepted navigation")
+        .unwrap();
+    }
+    ctx.with_fixture(|conn| {
+        context.finish_projection(conn, &mut command);
+        assert_eq!(conn.browser_context.as_ref().unwrap().target_url(), url);
+        assert_eq!(
+            conn.loaded_page_mut_for_owner(&owner)
+                .unwrap()
+                .final_url()
+                .as_str(),
+            url
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initial_document_navigation_exits_when_replacement_navigation_starts() {
+    let (mut ctx, owner) = initial_document_navigation_context_for_test();
+    let (prepared, joiner) = ctx.with_fixture(|conn| {
+        bind_pending_initial_navigation_page_for_test(conn, &owner);
+        let joiner = conn
+            .runtime_session_owner_slot_for_owner(&owner)
+            .unwrap()
+            .initial_document_page_build_waiter()
+            .unwrap();
+        (
+            prepare_initial_document_navigation_for_test(conn, &owner, "https://example.test/old"),
+            joiner,
+        )
+    });
+    let mut command = crate::conn::CommandDispatchContext::default();
+    let (mut context, _scope) =
+        crate::conn::CommandWorkflowContext::take_from(&mut command, None, None);
+    let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+    let token;
+    {
+        let mut running = Box::pin(prepared.run(&mut driver, &mut context));
+        let mut joining = Box::pin(joiner.wait());
+        assert!(futures_util::poll!(&mut running).is_pending());
+        assert!(futures_util::poll!(&mut joining).is_pending());
+        token = ctx.with_fixture(|conn| {
+            conn.start_document_navigation_for_owner(
+                &owner,
+                "LID-replacement-without-commit".into(),
+            )
+            .unwrap()
+        });
+        assert!(
+            matches!(
+                futures_util::poll!(&mut joining),
+                std::task::Poll::Ready(Err(_))
+            ),
+            "revoking the initial Page reservation must cancel its build waiters immediately"
+        );
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            ctx.drive_owned_wait(running),
+        )
+        .await
+        .expect("the old navigation must not wait for the replacement to commit")
+        .unwrap();
+    }
+    ctx.with_fixture(|conn| {
+        context.finish_projection(conn, &mut command);
+        assert!(conn.accepts_pending_document_navigation_for_owner(&owner, &token));
+        let slot = conn.runtime_session_owner_slot_for_owner(&owner).unwrap();
+        assert!(!slot.has_loaded_page());
+        assert!(!slot.has_initial_document_page_build_in_progress());
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            "about:blank"
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initial_document_navigation_new_request_releases_older_wait_before_adoption() {
+    let (ctx, owner) = initial_document_navigation_context_for_test();
+    let first = ctx.with_fixture(|conn| {
+        bind_pending_initial_navigation_page_for_test(conn, &owner);
+        prepare_initial_document_navigation_for_test(conn, &owner, "https://example.test/first")
+    });
+    let mut command = crate::conn::CommandDispatchContext::default();
+    let (mut context, _scope) =
+        crate::conn::CommandWorkflowContext::take_from(&mut command, None, None);
+    let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+    {
+        let mut running = Box::pin(first.run(&mut driver, &mut context));
+        assert!(futures_util::poll!(&mut running).is_pending());
+        let second = ctx.with_fixture(|conn| {
+            prepare_initial_document_navigation_for_test(
+                conn,
+                &owner,
+                "https://example.test/second",
+            )
+        });
+        assert!(matches!(
+            futures_util::poll!(&mut running),
+            std::task::Poll::Ready(Ok(()))
+        ));
+        ctx.with_fixture(|conn| {
+            let slot = conn.runtime_session_owner_slot_for_owner(&owner).unwrap();
+            assert!(slot.has_initial_document_page_build_in_progress());
+            assert!(!slot.has_loaded_page());
+            assert!(!conn.has_pending_document_navigation_for_owner(&owner));
+            conn.runtime_session_owner_slot_mut_for_owner(&owner)
+                .unwrap()
+                .fail_initial_document_page_build("test teardown".to_owned());
+        });
+        drop(second);
+    }
+    ctx.with_fixture(|conn| context.finish_projection(conn, &mut command));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initial_document_navigation_latest_request_wins_in_either_resume_order() {
+    for newer_first in [false, true] {
+        let (mut ctx, owner) = initial_document_navigation_context_for_test();
+        let pending = ctx.with_fixture(|conn| {
+            conn.start_initial_document_page_ensure_for_owner(&owner)
+                .unwrap()
+                .unwrap()
+        });
+        let completed = ctx.drive_owned_wait(pending.wait()).await.unwrap();
+        let first = ctx.with_fixture(|conn| {
+            prepare_initial_document_navigation_for_test(conn, &owner, "data:text/html,first")
+        });
+        let mut first_command = crate::conn::CommandDispatchContext::default();
+        let (mut first_context, _first_scope) =
+            crate::conn::CommandWorkflowContext::take_from(&mut first_command, None, None);
+        let mut first_driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+        let mut second_command = crate::conn::CommandDispatchContext::default();
+        let (mut second_context, _second_scope) =
+            crate::conn::CommandWorkflowContext::take_from(&mut second_command, None, None);
+        let mut second_driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+        {
+            let mut first_running = Box::pin(first.run(&mut first_driver, &mut first_context));
+            assert!(futures_util::poll!(&mut first_running).is_pending());
+            let second = ctx.with_fixture(|conn| {
+                prepare_initial_document_navigation_for_test(conn, &owner, "data:text/html,second")
+            });
+            let mut second_running = Box::pin(second.run(&mut second_driver, &mut second_context));
+            assert!(futures_util::poll!(&mut second_running).is_pending());
+            let mut installer = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+            ctx.drive_owned_wait(completed.install_using(&mut installer))
+                .await
+                .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                if newer_first {
+                    ctx.drive_owned_wait(second_running).await.unwrap();
+                    ctx.drive_owned_wait(first_running).await.unwrap();
+                } else {
+                    ctx.drive_owned_wait(first_running).await.unwrap();
+                    ctx.drive_owned_wait(second_running).await.unwrap();
+                }
+            })
+            .await
+            .expect("both navigation workflows must finish");
+        }
+        ctx.with_fixture(|conn| {
+            first_context.finish_projection(conn, &mut first_command);
+            second_context.finish_projection(conn, &mut second_command);
+            assert_eq!(
+                conn.browser_context.as_ref().unwrap().target_url(),
+                "data:text/html,second",
+                "the last accepted request must win even when the older waiter resumes first"
+            );
+            assert_eq!(
+                conn.loaded_page_mut_for_owner(&owner)
+                    .unwrap()
+                    .final_url()
+                    .as_str(),
+                "data:text/html,second"
+            );
+        });
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initial_document_navigation_cannot_override_newer_same_document_navigation() {
+    for via_protocol in [false, true] {
+        let (mut ctx, owner) = initial_document_navigation_context_for_test();
+        let pending = ctx.with_fixture(|conn| {
+            conn.start_initial_document_page_ensure_for_owner(&owner)
+                .unwrap()
+                .unwrap()
+        });
+        let completed = ctx.drive_owned_wait(pending.wait()).await.unwrap();
+        let prepared = ctx.with_fixture(|conn| {
+            prepare_initial_document_navigation_for_test(conn, &owner, "data:text/html,older")
+        });
+        let mut command = crate::conn::CommandDispatchContext::default();
+        let (mut context, _scope) =
+            crate::conn::CommandWorkflowContext::take_from(&mut command, None, None);
+        let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+        {
+            let mut running = Box::pin(prepared.run(&mut driver, &mut context));
+            assert!(futures_util::poll!(&mut running).is_pending());
+            let mut installer = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+            ctx.drive_owned_wait(completed.install_using(&mut installer))
+                .await
+                .unwrap();
+            if via_protocol {
+                let messages = ctx.dispatch_raw_command(r#"{"id":1,"sessionId":"SID-initial-navigation","method":"Page.navigate","params":{"url":"about:blank#newer"}}"#).await;
+                assert!(
+                    messages
+                        .iter()
+                        .any(|message| message["id"] == 1 && message.get("result").is_some())
+                );
+            } else {
+                let work = ctx.with_fixture(|conn| {
+                    let page = conn
+                        .target_page_residence_identity_for_owner(&owner)
+                        .unwrap();
+                    conn.publish_prepared_top_level_navigation_owner_action(
+                        &owner,
+                        page,
+                        RendererDocumentSourcedTopLevelLocationNavigation::new(
+                            renderer_document_identity_for_test(1, 1),
+                            "about:blank#newer".to_owned(),
+                        ),
+                    );
+                    take_top_level_location_navigation_work_for_test(conn)
+                });
+                let outcome = ctx.run_fixture_scheduler_work(work).await;
+                let (_, scheduler) = ctx
+                    .route_completed_command_outcome_for_test(
+                        outcome.with_renderer_output_predecessor(None),
+                    )
+                    .await;
+                ctx.route_direct_command_output_for_test(Vec::new(), scheduler)
+                    .await;
+            }
+            ctx.drive_owned_wait(running).await.unwrap();
+        }
+        assert_eq!(
+            ctx.evaluate_fixture_page_expression(
+                Some("SID-initial-navigation"),
+                "location.href",
+                false,
+            )
+            .await
+            .unwrap(),
+            json!({"type": "string", "value": "about:blank#newer"}),
+            "the newer same-Document navigation must remain visible in the renderer",
+        );
+        ctx.with_fixture(|conn| {
+            context.finish_projection(conn, &mut command);
+            assert_eq!(
+                conn.browser_context.as_ref().unwrap().target_url(),
+                "about:blank#newer"
+            );
+            assert_eq!(
+                conn.loaded_page_mut_for_owner(&owner)
+                    .unwrap()
+                    .final_url()
+                    .as_str(),
+                "about:blank#newer"
+            );
+        });
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

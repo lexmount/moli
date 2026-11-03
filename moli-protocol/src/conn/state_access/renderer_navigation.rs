@@ -7,10 +7,14 @@ use crate::domains::page::PreparedRendererNavigationResult;
 use anyhow::{Context as _, Result};
 
 impl ProtocolWorkflowState<'_> {
-    pub(crate) fn prepare_renderer_navigation_owner_action(
+    pub(crate) fn resume_initial_document_navigation(
         self,
         action: crate::conn::TopLevelNavigationOwnerAction,
+        admission: crate::conn::CommandWaitLifetime,
     ) -> Option<crate::domains::page::PreparedRendererNavigation> {
+        if !admission.is_active() {
+            return None;
+        }
         crate::domains::page::PreparedRendererNavigation::prepare_owner_action(
             self.connection,
             action,
