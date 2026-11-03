@@ -1,4 +1,8 @@
 use super::*;
+
+#[cfg(test)]
+#[path = "async_fetch/stream_redirect_tests.rs"]
+mod stream_redirect_tests;
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, NetworkFetchResult, RedirectInfo,
     RequestCredentialsMode, RequestMode, RequestRedirectMode, ResponseHead, StreamingRawResponse,
@@ -73,7 +77,7 @@ async fn fetch_browser_subresource_with_preflight_headers_and_observer(
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<NetworkFetchResult<Response>, String> {
-    if browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers) {
+    if browser_request_needs_manual_redirects(&request, &preflight_request_headers) {
         return fetch_browser_subresource_with_manual_preflight_redirects(
             loader,
             request,
@@ -99,7 +103,7 @@ async fn fetch_browser_subresource_with_preflight_headers_and_observer(
     Ok(observed)
 }
 
-pub(crate) fn browser_request_needs_manual_preflight_redirects(
+pub(crate) fn browser_request_needs_manual_redirects(
     request: &Request,
     preflight_request_headers: &[(String, String)],
 ) -> bool {
@@ -114,11 +118,13 @@ pub(crate) fn browser_request_needs_manual_preflight_redirects(
                 | BrowserRequestMetadata::StyleModule
                 | BrowserRequestMetadata::Xhr,
         )
-    ) && request.request_mode == RequestMode::Cors
-        && request.cookie_context.initiator_url.is_some()
-        && (request.use_cors_preflight()
-            || !is_cors_safelisted_method(&request.method)
-            || !moli_fetch::cors_unsafe_request_header_names(preflight_request_headers).is_empty())
+    ) && ((request.body_source_is_null() && request.request_origin().is_some())
+        || (request.request_mode == RequestMode::Cors
+            && request.cookie_context.initiator_url.is_some()
+            && (request.use_cors_preflight()
+                || !is_cors_safelisted_method(&request.method)
+                || !moli_fetch::cors_unsafe_request_header_names(preflight_request_headers)
+                    .is_empty())))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -176,6 +182,15 @@ impl ManualCorsRedirectState {
         head: ResponseHead,
         network_extra_info_available: bool,
     ) -> Result<ManualCorsRedirectTransition, String> {
+        // Author streams now enter this owner loop even without preflight.
+        // Their error/manual filtering applies to redirect status without
+        // requiring a Location header.
+        if self.request.body_source_is_null()
+            && matches!(head.status, 301 | 302 | 303 | 307 | 308)
+            && self.request.redirect_mode() == RequestRedirectMode::Error
+        {
+            return Err(redirect_mode_error_message(&head.final_url));
+        }
         // Keep redirect-mode error precedence aligned with Fetch: an error-mode
         // redirect is rejected before the redirect response is CORS-checked.
         if self.request.redirect_mode() == RequestRedirectMode::Error {
@@ -187,6 +202,14 @@ impl ManualCorsRedirectState {
         }
 
         validate_actual_cors_response_head(&self.request, &head)?;
+        if self.request.body_source_is_null()
+            && matches!(head.status, 301 | 302 | 303 | 307 | 308)
+            && self.request.redirect_mode() == RequestRedirectMode::Manual
+        {
+            return Ok(ManualCorsRedirectTransition::ManualResponse {
+                response_url: head.final_url,
+            });
+        }
         let Some(next_url) = next_redirect_url(
             &head.final_url,
             head.status,
@@ -208,6 +231,11 @@ impl ManualCorsRedirectState {
             RequestRedirectMode::Error | RequestRedirectMode::Manual => {
                 unreachable!("redirect modes were handled before the follow transition")
             }
+        }
+        // A byte snapshot does not make an author stream replayable. Check
+        // before POST-to-GET rewriting for 301/302; only 303 is exempt.
+        if head.status != 303 && self.request.body_source_is_null() {
+            return Err("Cannot replay a streaming request body after a redirect".to_owned());
         }
         let redirect_status = head.status;
         self.request.record_redirect(RedirectInfo {
@@ -394,6 +422,19 @@ pub(crate) async fn fetch_browser_subresource_raw_stream_with_preflight_headers_
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
 ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
+    if request.body_source_is_null()
+        && request.redirect_mode() == RequestRedirectMode::Follow
+        && browser_request_needs_manual_redirects(&request, &preflight_request_headers)
+    {
+        return fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
+            loader,
+            request,
+            cancel_handle,
+            preflight_request_headers,
+            None,
+        )
+        .await;
+    }
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
         loader,
         request,
@@ -552,8 +593,8 @@ pub(crate) fn spawn_async_subresource_fetch(
         let preflight_observer =
             CorsPreflightNetworkObserver::new(completion_tx.clone(), network_context);
         let auth_requires_buffered_transport = request.auth_requires_buffered_transport();
-        let requires_manual_preflight_redirects =
-            browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers);
+        let requires_manual_redirects =
+            browser_request_needs_manual_redirects(&request, &preflight_request_headers);
         let can_stream_subresource_body = matches!(
             request.browser_request_metadata(),
             Some(
@@ -578,7 +619,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                 request_mode = ?request.request_mode,
                 redirect_handling = ?request.redirect_handling(),
                 auth_requires_buffered_transport,
-                requires_manual_preflight_redirects,
+                requires_manual_redirects,
                 can_stream_subresource_body,
                 can_collect_image_body,
                 stage = "async_subresource_transport_selected",
@@ -689,9 +730,9 @@ async fn fetch_browser_image_into_parkable(
     ),
     String,
 > {
-    let requires_manual_preflight_redirects =
-        browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers);
-    let observed = if requires_manual_preflight_redirects {
+    let requires_manual_redirects =
+        browser_request_needs_manual_redirects(&request, &preflight_request_headers);
+    let observed = if requires_manual_redirects {
         fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
             loader,
             request,
@@ -756,9 +797,9 @@ async fn fetch_browser_subresource_streaming_with_preflight_headers(
     request_body: Option<String>,
 ) -> Result<(), String> {
     let body_source_id = new_network_body_source_id();
-    let requires_manual_preflight_redirects =
-        browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers);
-    let observed = if requires_manual_preflight_redirects {
+    let requires_manual_redirects =
+        browser_request_needs_manual_redirects(&request, &preflight_request_headers);
+    let observed = if requires_manual_redirects {
         fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
             &loader,
             request,
@@ -2159,7 +2200,7 @@ mod tests {
         .with_initiator_url(&document_url)
         .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
         .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
-        assert!(browser_request_needs_manual_preflight_redirects(
+        assert!(browser_request_needs_manual_redirects(
             &request,
             &request_headers,
         ));
