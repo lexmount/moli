@@ -384,6 +384,14 @@ impl PendingRendererPageBinding {
     }
 }
 
+/// The initial build's completion belongs to its Page reservation. Replacing
+/// or dropping this owner closes the channel and wakes cancelled waiters.
+#[derive(Debug, Default)]
+struct PendingRendererPageReservation {
+    binding: Option<PendingRendererPageBinding>,
+    initial_build_completion: Option<watch::Sender<Option<Result<(), String>>>>,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct TargetPageSlot {
     loaded_page: Option<Page>,
@@ -396,9 +404,8 @@ pub(crate) struct TargetPageSlot {
     next_renderer_document_lifecycle_waiter_id: RendererDocumentLifecycleWaiterId,
     renderer_document_lifecycle_waiters: Vec<RegisteredRendererDocumentLifecycleWaiter>,
     root_post_load_observation: Option<RootPostLoadObservation>,
-    initial_document_page_build_completion: Option<watch::Sender<Option<Result<(), String>>>>,
     initial_document_navigation: Option<crate::conn::CommandWaitLifetimeOwner>,
-    pending_renderer_page: Option<PendingRendererPageBinding>,
+    pending_renderer_page: PendingRendererPageReservation,
 }
 
 impl TargetPageSlot {
@@ -452,21 +459,20 @@ impl TargetPageSlot {
                 == TargetPageAbsenceReason::InitialDocumentPageBuildInProgress
                 && reason != TargetPageAbsenceReason::InitialDocumentPageBuildInProgress
             {
-                self.fail_initial_document_page_build("InitialDocumentPageBuildCancelled".into());
+                self.replace_pending_renderer_page(None);
             }
             self.loaded_page_absence_reason = reason;
         }
     }
 
     pub(crate) fn start_initial_document_page_build(&mut self) {
-        self.cancel_initial_document_page_build();
+        self.replace_pending_renderer_page(None);
         if self.loaded_page.is_none() {
             self.loaded_page_absence_reason =
                 TargetPageAbsenceReason::InitialDocumentPageBuildInProgress;
         }
-        self.pending_renderer_page = None;
         let (sender, _receiver) = watch::channel(None);
-        self.initial_document_page_build_completion = Some(sender);
+        self.pending_renderer_page.initial_build_completion = Some(sender);
     }
 
     pub(crate) fn bind_initial_document_page_build_renderer_page(
@@ -476,22 +482,27 @@ impl TargetPageSlot {
         if self.loaded_page.is_some()
             || self.loaded_page_absence_reason
                 != TargetPageAbsenceReason::InitialDocumentPageBuildInProgress
-            || self.initial_document_page_build_completion.is_none()
-            || self.pending_renderer_page.is_some()
+            || self
+                .pending_renderer_page
+                .initial_build_completion
+                .is_none()
+            || self.pending_renderer_page.binding.is_some()
         {
             return false;
         }
-        self.pending_renderer_page = Some(PendingRendererPageBinding::InitialDocumentBuild {
-            renderer_page,
-            page_attachment_id: TargetPageAttachmentId::allocate(),
-        });
+        self.pending_renderer_page.binding =
+            Some(PendingRendererPageBinding::InitialDocumentBuild {
+                renderer_page,
+                page_attachment_id: TargetPageAttachmentId::allocate(),
+            });
         true
     }
 
     pub(crate) fn initial_document_page_build_waiter(
         &self,
     ) -> Option<InitialDocumentPageBuildWaiter> {
-        self.initial_document_page_build_completion
+        self.pending_renderer_page
+            .initial_build_completion
             .as_ref()
             .map(|sender| InitialDocumentPageBuildWaiter {
                 receiver: sender.subscribe(),
@@ -514,38 +525,48 @@ impl TargetPageSlot {
         Some((waiter, lifetime))
     }
 
-    pub(crate) fn cancel_initial_document_page_build(&mut self) {
+    pub(crate) fn supersede_buffered_navigation(&mut self) {
         self.initial_document_navigation = None;
-        if self.initial_document_page_build_completion.is_some() {
-            self.fail_initial_document_page_build("InitialDocumentPageBuildCancelled".into());
-            if self.loaded_page.is_none() {
-                self.loaded_page_absence_reason =
-                    TargetPageAbsenceReason::InitialDocumentPageBuildPending;
-            }
+    }
+
+    fn replace_pending_renderer_page(&mut self, binding: Option<PendingRendererPageBinding>) {
+        self.supersede_buffered_navigation();
+        if self
+            .pending_renderer_page
+            .initial_build_completion
+            .is_some()
+            && self.loaded_page.is_none()
+        {
+            self.loaded_page_absence_reason =
+                TargetPageAbsenceReason::InitialDocumentPageBuildPending;
         }
+        self.pending_renderer_page = PendingRendererPageReservation {
+            binding,
+            ..Default::default()
+        };
     }
 
     pub(crate) fn complete_initial_document_page_build(&mut self) {
         if matches!(
-            self.pending_renderer_page.as_ref(),
+            self.pending_renderer_page.binding.as_ref(),
             Some(PendingRendererPageBinding::InitialDocumentBuild { .. })
         ) {
-            self.pending_renderer_page = None;
+            self.pending_renderer_page.binding = None;
         }
-        if let Some(sender) = self.initial_document_page_build_completion.take() {
+        if let Some(sender) = self.pending_renderer_page.initial_build_completion.take() {
             let _ = sender.send(Some(Ok(())));
         }
     }
 
     pub(crate) fn fail_initial_document_page_build(&mut self, message: String) {
-        self.initial_document_navigation = None;
+        self.supersede_buffered_navigation();
         if matches!(
-            self.pending_renderer_page.as_ref(),
+            self.pending_renderer_page.binding.as_ref(),
             Some(PendingRendererPageBinding::InitialDocumentBuild { .. })
         ) {
-            self.pending_renderer_page = None;
+            self.pending_renderer_page.binding = None;
         }
-        if let Some(sender) = self.initial_document_page_build_completion.take() {
+        if let Some(sender) = self.pending_renderer_page.initial_build_completion.take() {
             let _ = sender.send(Some(Err(message)));
         }
     }
@@ -557,7 +578,7 @@ impl TargetPageSlot {
     ) -> Option<Page> {
         let next_page_attachment_id = page.as_ref().map(|page| {
             let renderer_page = RendererPageResidenceIdentity::from_page(page);
-            match self.pending_renderer_page.as_ref() {
+            match self.pending_renderer_page.binding.as_ref() {
                 Some(binding) => {
                     assert_eq!(
                         binding.renderer_page(),
@@ -578,11 +599,12 @@ impl TargetPageSlot {
             self.complete_initial_document_page_build();
             self.loaded_page_absence_reason = TargetPageAbsenceReason::NoTarget;
         } else {
-            self.cancel_initial_document_page_build();
+            self.replace_pending_renderer_page(None);
             self.loaded_page_absence_reason = absence_reason;
         }
         self.page_attachment_id = next_page_attachment_id;
-        self.pending_renderer_page = None;
+        // Adoption completes the build while retaining its accepted navigation.
+        self.pending_renderer_page = PendingRendererPageReservation::default();
         let previous = std::mem::replace(&mut self.loaded_page, page);
         self.supersede_page_residence();
         previous
@@ -603,6 +625,7 @@ impl TargetPageSlot {
 
     pub(crate) fn pending_page_attachment_id(&self) -> Option<TargetPageAttachmentId> {
         self.pending_renderer_page
+            .binding
             .as_ref()
             .map(PendingRendererPageBinding::page_attachment_id)
             .or_else(|| {
@@ -617,35 +640,31 @@ impl TargetPageSlot {
         &mut self,
         renderer_page: RendererPageResidenceIdentity,
     ) -> TargetPageAttachmentId {
-        if let Some(binding) = self.pending_renderer_page.as_ref()
+        if let Some(binding) = self.pending_renderer_page.binding.as_ref()
             && binding.renderer_page() == renderer_page
         {
             return binding.page_attachment_id();
         }
-        // Revoke both routing and completion when a different Page replaces
-        // an uninstalled reservation. No waiter may depend on its successor.
-        self.cancel_initial_document_page_build();
-        self.pending_renderer_page = None;
-
         if let Some(request) = self
             .pending_navigation_request
             .as_ref()
             .filter(|request| !request.committed)
         {
             let page_attachment_id = request.page_attachment_id;
-            self.pending_renderer_page = Some(PendingRendererPageBinding::DocumentNavigation {
+            let binding = PendingRendererPageBinding::DocumentNavigation {
                 navigation: request.token.clone(),
                 renderer_page,
                 page_attachment_id,
-            });
+            };
+            self.replace_pending_renderer_page(Some(binding));
             return page_attachment_id;
         }
 
         let page_attachment_id = TargetPageAttachmentId::allocate();
-        self.pending_renderer_page = Some(PendingRendererPageBinding::PageBuild {
+        self.replace_pending_renderer_page(Some(PendingRendererPageBinding::PageBuild {
             renderer_page,
             page_attachment_id,
-        });
+        }));
         page_attachment_id
     }
 
@@ -700,7 +719,7 @@ impl TargetPageSlot {
         target_id: String,
         loader_id: String,
     ) -> DocumentNavigationToken {
-        self.cancel_initial_document_page_build();
+        self.replace_pending_renderer_page(None);
         self.finish_renderer_document_lifecycle_observers(
             RendererDocumentLifecycleObservation::Superseded,
         );
@@ -709,7 +728,6 @@ impl TargetPageSlot {
             loader_id,
             request_id: NavigationRequestId::allocate(),
         };
-        self.pending_renderer_page = None;
         self.cancel_pending_document_navigation();
         self.pending_navigation_request = Some(PendingNavigationRequest::new(token.clone()));
         token
@@ -964,6 +982,7 @@ impl TargetPageSlot {
         let request = self.prepared_document_navigation_handoff()?;
         let page = self
             .pending_renderer_page
+            .binding
             .as_ref()
             .map(|pending| (pending.renderer_page(), pending.page_attachment_id()))
             .or_else(|| {
@@ -1018,7 +1037,8 @@ impl TargetPageSlot {
     )> {
         let request = self.prepared_document_navigation_handoff()?;
         let document = request.renderer_commit.as_ref()?.native_document?;
-        let (renderer_page, page_attachment_id) = match self.pending_renderer_page.as_ref() {
+        let (renderer_page, page_attachment_id) = match self.pending_renderer_page.binding.as_ref()
+        {
             Some(pending) => (pending.renderer_page(), pending.page_attachment_id()),
             None => (
                 RendererPageResidenceIdentity::from_page(self.loaded_page.as_ref()?),
@@ -1070,7 +1090,7 @@ impl TargetPageSlot {
         {
             return false;
         }
-        if let Some(binding) = self.pending_renderer_page.as_ref() {
+        if let Some(binding) = self.pending_renderer_page.binding.as_ref() {
             return matches!(
                 binding,
                 PendingRendererPageBinding::DocumentNavigation {
@@ -1086,7 +1106,7 @@ impl TargetPageSlot {
                             .map(|request| request.page_attachment_id)
             );
         }
-        self.pending_renderer_page = Some(PendingRendererPageBinding::DocumentNavigation {
+        self.replace_pending_renderer_page(Some(PendingRendererPageBinding::DocumentNavigation {
             navigation: token.clone(),
             renderer_page,
             page_attachment_id: self
@@ -1094,7 +1114,7 @@ impl TargetPageSlot {
                 .as_ref()
                 .expect("validated pending navigation request must remain installed")
                 .page_attachment_id,
-        });
+        }));
         true
     }
 
@@ -1121,11 +1141,11 @@ impl TargetPageSlot {
             return false;
         };
         request.page_attachment_id = page_attachment_id;
-        self.pending_renderer_page = Some(PendingRendererPageBinding::DocumentNavigation {
+        self.replace_pending_renderer_page(Some(PendingRendererPageBinding::DocumentNavigation {
             navigation: token.clone(),
             renderer_page,
             page_attachment_id,
-        });
+        }));
         true
     }
 
@@ -1133,7 +1153,7 @@ impl TargetPageSlot {
         self.finish_renderer_document_lifecycle_observers(
             RendererDocumentLifecycleObservation::Superseded,
         );
-        self.pending_renderer_page = None;
+        self.replace_pending_renderer_page(None);
     }
 
     pub(crate) fn routes_renderer_page_owner(
@@ -1145,10 +1165,14 @@ impl TargetPageSlot {
             && self.loaded_page.as_ref().is_some_and(|page| {
                 RendererPageResidenceIdentity::from_page(page) == renderer_page
             }))
-            || self.pending_renderer_page.as_ref().is_some_and(|pending| {
-                pending.renderer_page() == renderer_page
-                    && pending.page_attachment_id() == page_attachment_id
-            })
+            || self
+                .pending_renderer_page
+                .binding
+                .as_ref()
+                .is_some_and(|pending| {
+                    pending.renderer_page() == renderer_page
+                        && pending.page_attachment_id() == page_attachment_id
+                })
     }
 
     #[cfg(test)]
@@ -1161,6 +1185,7 @@ impl TargetPageSlot {
             .is_some_and(|page| RendererPageResidenceIdentity::from_page(page) == renderer_page)
             || self
                 .pending_renderer_page
+                .binding
                 .as_ref()
                 .is_some_and(|binding| binding.renderer_page() == renderer_page)
     }
@@ -1270,13 +1295,13 @@ impl TargetPageSlot {
             .is_some_and(|pending| !pending.committed && pending.token.loader_id == loader_id)
         {
             if matches!(
-                self.pending_renderer_page.as_ref(),
+                self.pending_renderer_page.binding.as_ref(),
                 Some(PendingRendererPageBinding::DocumentNavigation {
                     navigation,
                     ..
                 }) if navigation.loader_id == loader_id
             ) {
-                self.pending_renderer_page = None;
+                self.replace_pending_renderer_page(None);
             }
             self.cancel_pending_document_navigation();
             return true;
@@ -1285,13 +1310,12 @@ impl TargetPageSlot {
     }
 
     pub(crate) fn clear_document_navigation_state(&mut self) {
-        self.cancel_initial_document_page_build();
+        self.replace_pending_renderer_page(None);
         self.finish_renderer_document_lifecycle_observers(
             RendererDocumentLifecycleObservation::Unavailable,
         );
         self.cancel_pending_document_navigation();
         self.committed_document_navigation = None;
-        self.pending_renderer_page = None;
         self.renderer_document_lifecycle = RendererDocumentLifecycleProtocolState::default();
         self.root_post_load_observation = None;
     }
@@ -2115,7 +2139,7 @@ mod pending_renderer_page_tests {
 
     #[tokio::test]
     async fn retiring_initial_page_reservations_cancels_all_waiters() {
-        let transitions: [fn(&mut TargetPageSlot); 3] = [
+        let transitions: [fn(&mut TargetPageSlot); 5] = [
             |slot| {
                 slot.start_document_navigation("TID-replacement".into(), "LID-next".into());
             },
@@ -2123,6 +2147,12 @@ mod pending_renderer_page_tests {
                 slot.reserve_renderer_page_attachment(renderer_page(7, 12));
             },
             TargetPageSlot::clear_document_navigation_state,
+            |slot| {
+                slot.replace_loaded_page_with_reason(None, TargetPageAbsenceReason::TargetClosed);
+            },
+            |slot| {
+                slot.mark_loaded_page_absent(TargetPageAbsenceReason::TargetCrashed);
+            },
         ];
         for retire in transitions {
             let mut slot = TargetPageSlot::empty_for_initial_document_page_build();
@@ -2143,6 +2173,93 @@ mod pending_renderer_page_tests {
                 std::task::Poll::Ready(Err(_))
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn restarting_initial_build_retires_waiters_before_page_binding() {
+        let mut slot = TargetPageSlot::empty_for_initial_document_page_build();
+        slot.start_initial_document_page_build();
+        let (waiter, admission) = slot.reserve_initial_document_navigation().unwrap();
+        let mut waiting = Box::pin(waiter.wait());
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+
+        slot.start_initial_document_page_build();
+
+        assert!(!admission.is_active());
+        assert!(matches!(
+            futures_util::poll!(&mut waiting),
+            std::task::Poll::Ready(Err(_))
+        ));
+        let mut replacement = Box::pin(slot.initial_document_page_build_waiter().unwrap().wait());
+        assert!(futures_util::poll!(&mut replacement).is_pending());
+        assert!(slot.bind_initial_document_page_build_renderer_page(renderer_page(7, 12)));
+        slot.complete_initial_document_page_build();
+        assert!(matches!(
+            futures_util::poll!(&mut replacement),
+            std::task::Poll::Ready(Ok(()))
+        ));
+    }
+
+    #[tokio::test]
+    async fn superseding_navigation_preserves_the_initial_page_build() {
+        for succeeds in [false, true] {
+            let mut slot = TargetPageSlot::empty_for_initial_document_page_build();
+            slot.start_initial_document_page_build();
+            let page = renderer_page(7, 11);
+            assert!(slot.bind_initial_document_page_build_renderer_page(page));
+            let attachment = slot.pending_page_attachment_id();
+            let (waiter, admission) = slot.reserve_initial_document_navigation().unwrap();
+            let mut waiting = Box::pin(waiter.wait());
+            assert!(futures_util::poll!(&mut waiting).is_pending());
+
+            slot.supersede_buffered_navigation();
+
+            assert!(!admission.is_active());
+            assert!(slot.routes_renderer_page(page));
+            assert_eq!(slot.pending_page_attachment_id(), attachment);
+            assert_eq!(
+                slot.loaded_page_absence_reason(),
+                Some(TargetPageAbsenceReason::InitialDocumentPageBuildInProgress)
+            );
+            assert!(futures_util::poll!(&mut waiting).is_pending());
+            let (second_waiter, second_admission) =
+                slot.reserve_initial_document_navigation().unwrap();
+            if succeeds {
+                slot.complete_initial_document_page_build();
+                assert!(matches!(
+                    futures_util::poll!(&mut waiting),
+                    std::task::Poll::Ready(Ok(()))
+                ));
+                assert_eq!(second_waiter.wait().await, Ok(()));
+                assert!(second_admission.is_active());
+            } else {
+                slot.fail_initial_document_page_build("build failed".into());
+                assert!(matches!(
+                    futures_util::poll!(&mut waiting),
+                    std::task::Poll::Ready(Err(message)) if message == "build failed"
+                ));
+                assert_eq!(second_waiter.wait().await, Err("build failed".into()));
+                assert!(!second_admission.is_active());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_an_unadopted_page_releases_its_waiters() {
+        let mut slot = TargetPageSlot::empty_for_initial_document_page_build();
+        slot.start_initial_document_page_build();
+        assert!(slot.bind_initial_document_page_build_renderer_page(renderer_page(7, 11)));
+        let (waiter, admission) = slot.reserve_initial_document_navigation().unwrap();
+        let mut waiting = Box::pin(waiter.wait());
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+
+        drop(slot);
+
+        assert!(!admission.is_active());
+        assert!(matches!(
+            futures_util::poll!(&mut waiting),
+            std::task::Poll::Ready(Err(message)) if message == "InitialDocumentPageBuildCancelled"
+        ));
     }
 
     #[tokio::test]

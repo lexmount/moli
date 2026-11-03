@@ -206,8 +206,8 @@ impl TargetRuntimeSlot {
         self.page_slot.start_initial_document_page_build();
     }
 
-    pub(crate) fn cancel_initial_document_page_build(&mut self) {
-        self.page_slot.cancel_initial_document_page_build();
+    pub(crate) fn supersede_buffered_navigation(&mut self) {
+        self.page_slot.supersede_buffered_navigation();
     }
 
     pub(crate) fn bind_initial_document_page_build_renderer_page(

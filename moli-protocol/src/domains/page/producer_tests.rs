@@ -3641,6 +3641,85 @@ async fn initial_document_navigation_cannot_override_newer_same_document_navigat
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn initial_document_navigation_survives_rejected_navigation_commands() {
+    let (mut ctx, owner) = initial_document_navigation_context_for_test();
+    let pending = ctx.with_fixture(|conn| {
+        conn.start_initial_document_page_ensure_for_owner(&owner)
+            .unwrap()
+            .unwrap()
+    });
+    let completed = ctx.drive_owned_wait(pending.wait()).await.unwrap();
+    let url = "data:text/html,accepted";
+    let prepared =
+        ctx.with_fixture(|conn| prepare_initial_document_navigation_for_test(conn, &owner, url));
+    let mut command = crate::conn::CommandDispatchContext::default();
+    let (mut context, _scope) =
+        crate::conn::CommandWorkflowContext::take_from(&mut command, None, None);
+    let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+    {
+        let mut running = Box::pin(prepared.run(&mut driver, &mut context));
+        assert!(futures_util::poll!(&mut running).is_pending());
+        let mut installer = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+        ctx.drive_owned_wait(completed.install_using(&mut installer))
+            .await
+            .unwrap();
+        for (method, params, code) in [
+            ("Page.navigate", json!({}), -32602),
+            (
+                "Page.navigateToHistoryEntry",
+                json!({"entryId": "invalid"}),
+                -32602,
+            ),
+            (
+                "Page.navigateToHistoryEntry",
+                json!({"entryId": -999}),
+                -32000,
+            ),
+        ] {
+            let messages = ctx
+                .dispatch_raw_command(
+                    &json!({
+                        "id": 1,
+                        "sessionId": "SID-initial-navigation",
+                        "method": method,
+                        "params": params,
+                    })
+                    .to_string(),
+                )
+                .await;
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| m["id"] == 1 && m["error"]["code"] == code),
+                "{messages:?}"
+            );
+        }
+        ctx.drive_owned_wait(running).await.unwrap();
+    }
+    assert_eq!(
+        ctx.evaluate_fixture_page_expression(
+            Some("SID-initial-navigation"),
+            "location.href",
+            false
+        )
+        .await
+        .unwrap(),
+        json!({"type": "string", "value": url}),
+    );
+    ctx.with_fixture(|conn| {
+        context.finish_projection(conn, &mut command);
+        assert_eq!(conn.browser_context.as_ref().unwrap().target_url(), url);
+        assert_eq!(
+            conn.loaded_page_mut_for_owner(&owner)
+                .unwrap()
+                .final_url()
+                .as_str(),
+            url
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn prepared_top_level_location_navigation_waits_for_its_scheduler_turn() {
     let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-location".into());
