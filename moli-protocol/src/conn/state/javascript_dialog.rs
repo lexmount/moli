@@ -354,6 +354,17 @@ impl TargetJavaScriptDialogState {
         Some(self.pending_dialogs.remove(0).into_prompt_text())
     }
 
+    pub(crate) fn take_matching(
+        &mut self,
+        matches: impl FnMut(&TargetJavaScriptDialog) -> bool,
+    ) -> Vec<TargetJavaScriptDialog> {
+        let (taken, remaining): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending_dialogs)
+            .into_iter()
+            .partition(matches);
+        self.pending_dialogs = remaining;
+        taken
+    }
+
     #[cfg(test)]
     pub(crate) fn pending_dialogs(&self) -> &[TargetJavaScriptDialog] {
         &self.pending_dialogs

@@ -78,11 +78,10 @@ pub use fetch::TargetFetchConfig;
 pub(crate) use fetch::{TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot};
 
 pub(crate) use inspector::InspectorCommandDispatch;
-#[cfg(test)]
-pub(crate) use javascript_dialog::TargetJavaScriptDialog;
 pub(crate) use javascript_dialog::{
-    TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver, TargetJavaScriptDialogState,
-    TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
+    TargetJavaScriptDialog, TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver,
+    TargetJavaScriptDialogState, TargetPreparedJavaScriptDialog,
+    TargetPreparedJavaScriptDialogRoute,
 };
 pub(crate) use pending_renderer_command::{
     DuplicatePendingRendererCommand, PendingRendererCommandKey, PreparedRendererCallDispatch,

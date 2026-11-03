@@ -244,3 +244,137 @@ async fn websocket_cdp_first_page_disable_cancels_dialog_across_connections() {
 async fn websocket_cdp_peer_page_disable_cancels_dialog_across_connections() {
     assert_disable_cancels_dialog_across_connections(false).await;
 }
+
+async fn assert_last_dialog_subscriber_leaving_resumes_late_peer(disconnect: bool) {
+    let mut sessions = DialogSessions::new().await;
+    let disabled = send_cdp_command(
+        &mut sessions.peer,
+        10,
+        "Page.disable",
+        Some(&sessions.peer_id),
+        json!({}),
+    )
+    .await;
+    assert!(
+        disabled
+            .iter()
+            .any(|message| message["id"] == 10 && message["result"] == json!({}))
+    );
+    send_cdp_command_without_wait(
+        &mut sessions.peer,
+        20,
+        "Runtime.evaluate",
+        Some(&sessions.peer_id),
+        json!({"expression": "confirm('last original subscriber')", "returnByValue": true}),
+    )
+    .await;
+    recv_until_match(&mut sessions.first, |message| {
+        message["method"] == "Page.javascriptDialogOpening"
+            && message["sessionId"] == sessions.first_id
+            && message["params"]["message"] == "last original subscriber"
+    })
+    .await;
+    let enabled = send_cdp_command(
+        &mut sessions.peer,
+        21,
+        "Page.enable",
+        Some(&sessions.peer_id),
+        json!({}),
+    )
+    .await;
+    assert!(
+        enabled
+            .iter()
+            .any(|message| message["id"] == 21 && message["result"] == json!({}))
+    );
+    let rejected = send_cdp_command(
+        &mut sessions.peer,
+        22,
+        "Page.handleJavaScriptDialog",
+        Some(&sessions.peer_id),
+        json!({"accept": true}),
+    )
+    .await;
+    assert!(rejected.iter().any(
+        |message| message["id"] == 22 && message["error"]["message"] == "No dialog is showing"
+    ));
+    if disconnect {
+        sessions
+            .first
+            .close(None)
+            .await
+            .expect("close original subscriber's connection");
+    } else {
+        let detached = send_cdp_command(
+            &mut sessions.first,
+            30,
+            "Target.detachFromTarget",
+            None,
+            json!({"sessionId": sessions.first_id}),
+        )
+        .await;
+        assert!(
+            detached
+                .iter()
+                .any(|message| message["id"] == 30 && message["result"] == json!({})),
+            "{detached:?}"
+        );
+    }
+    let mut resumed = timeout(
+        Duration::from_secs(5),
+        recv_until_id(&mut sessions.peer, 20),
+    )
+    .await
+    .expect(
+        "losing the last original Page subscriber must dismiss the dialog and resume JavaScript",
+    );
+    assert!(
+        resumed
+            .iter()
+            .any(|message| message["id"] == 20 && message["result"]["result"]["value"] == false),
+        "{resumed:?}"
+    );
+    if !resumed
+        .iter()
+        .any(|message| message["method"] == "Page.javascriptDialogClosed")
+    {
+        resumed.extend(
+            recv_until_match(&mut sessions.peer, |message| {
+                message["method"] == "Page.javascriptDialogClosed"
+                    && message["sessionId"] == sessions.peer_id
+            })
+            .await,
+        );
+    }
+    assert_eq!(
+        resumed
+            .iter()
+            .filter(|message| message["method"] == "Page.javascriptDialogClosed")
+            .count(),
+        1
+    );
+    let progress = send_cdp_command(
+        &mut sessions.peer,
+        31,
+        "Runtime.evaluate",
+        Some(&sessions.peer_id),
+        json!({"expression": "21 * 2", "returnByValue": true}),
+    )
+    .await;
+    assert!(
+        progress
+            .iter()
+            .any(|message| message["id"] == 31 && message["result"]["result"]["value"] == 42)
+    );
+    sessions.close().await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_last_original_dialog_subscriber_detach_resumes_late_peer() {
+    assert_last_dialog_subscriber_leaving_resumes_late_peer(false).await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_last_original_dialog_subscriber_disconnect_resumes_late_peer() {
+    assert_last_dialog_subscriber_leaving_resumes_late_peer(true).await;
+}

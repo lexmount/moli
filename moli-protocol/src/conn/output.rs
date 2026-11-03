@@ -804,9 +804,7 @@ pub struct BackgroundPageJavaScriptDialogOpeningEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackgroundPageJavaScriptDialogClosedEvent {
     session_id: Option<String>,
-    target_id: Option<String>,
     frame_id: String,
-    prompt_type: String,
     accepted: bool,
     user_text: String,
 }
@@ -1780,6 +1778,7 @@ impl ProtocolDeliveryEnvelope {
         ))
     }
 
+    /// One CDP projection; the producer emits the native dialog fact separately.
     pub(crate) fn page_javascript_dialog_opening(
         session_id: Option<&str>,
         event: PageJavaScriptDialogOpeningEvent,
@@ -1797,6 +1796,7 @@ impl ProtocolDeliveryEnvelope {
         ))
     }
 
+    /// One CDP projection; the producer emits the native dialog fact separately.
     pub(crate) fn page_javascript_dialog_closed(
         session_id: Option<&str>,
         event: UserPromptClosedEvent,
@@ -1804,9 +1804,7 @@ impl ProtocolDeliveryEnvelope {
         Self::wrap_page_javascript_dialog_closed_event(Box::new(
             BackgroundPageJavaScriptDialogClosedEvent {
                 session_id: session_id.map(str::to_owned),
-                target_id: event.target_id.as_ref().map(|id| id.as_str().to_owned()),
                 frame_id: event.frame_id.as_str().to_owned(),
-                prompt_type: event.prompt_type,
                 accepted: event.accepted,
                 user_text: event.user_text,
             },
@@ -3825,19 +3823,7 @@ impl BackgroundPageJavaScriptDialogOpeningEvent {
     }
 
     fn into_parts(self) -> (Value, Option<AutomationEvent>) {
-        let message = self.clone().into_protocol_message();
-        let event = PageJavaScriptDialogOpeningEvent {
-            frame_id: self.frame_id.as_deref().map(DevToolsFrameId::from),
-            url: self.url,
-            message: self.message,
-            dialog_type: self.dialog_type,
-            has_browser_handler: self.has_browser_handler,
-            default_prompt: self.default_prompt,
-        };
-        (
-            message,
-            Some(AutomationEvent::PageJavaScriptDialogOpening(event)),
-        )
+        (self.into_protocol_message(), None)
     }
 }
 
@@ -3855,15 +3841,7 @@ impl BackgroundPageJavaScriptDialogClosedEvent {
     }
 
     fn into_parts(self) -> (Value, Option<AutomationEvent>) {
-        let message = self.clone().into_protocol_message();
-        let event = UserPromptClosedEvent {
-            target_id: self.target_id.as_deref().map(Into::into),
-            frame_id: self.frame_id.as_str().into(),
-            prompt_type: self.prompt_type,
-            accepted: self.accepted,
-            user_text: self.user_text,
-        };
-        (message, Some(AutomationEvent::UserPromptClosed(event)))
+        (self.into_protocol_message(), None)
     }
 }
 
@@ -4942,14 +4920,8 @@ mod tests {
         assert_eq!(message["params"]["result"], json!(true));
         assert_eq!(message["params"]["userInput"], json!("typed response"));
         assert_eq!(
-            automation_event,
-            Some(AutomationEvent::UserPromptClosed(UserPromptClosedEvent {
-                target_id: Some(DevToolsTargetId::from("TID-dialog")),
-                frame_id: DevToolsFrameId::from("FRAME-dialog"),
-                prompt_type: "prompt".to_owned(),
-                accepted: true,
-                user_text: "typed response".to_owned(),
-            }))
+            automation_event, None,
+            "CDP projections must not recreate native dialog facts"
         );
     }
 
@@ -5699,10 +5671,10 @@ mod tests {
         ));
         assert_eq!(parts[1].1, None);
         assert_eq!(parts[2].1, None);
-        assert!(matches!(
-            parts[3].1.as_ref(),
-            Some(AutomationEvent::PageJavaScriptDialogOpening(_))
-        ));
+        assert_eq!(
+            parts[3].1, None,
+            "CDP projections must not recreate native dialog facts"
+        );
         assert_eq!(parts[0].0["sessionId"], json!("SID-page"));
         assert_eq!(parts[0].0["params"]["backendNodeId"], json!(17));
         assert_eq!(

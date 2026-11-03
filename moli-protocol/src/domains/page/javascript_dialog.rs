@@ -99,12 +99,96 @@ fn cdp_session_has_pending_dialog(conn: &CdpConnection, session_id: Option<&str>
         })
 }
 
-pub(super) fn prepare_cdp_dialog_dismissal(
+fn page_dialog_subscriptions(
     conn: &CdpConnection,
-    cmd: &Cmd<'_>,
-) -> Option<DevToolsHandleJavaScriptDialogCommand> {
-    cdp_session_has_pending_dialog(conn, cmd.session_id)
-        .then(|| cdp_handle_javascript_dialog_command(conn, cmd, false, String::new()))
+    owner: &CommandOwnerScope,
+) -> Vec<(Option<String>, u64)> {
+    conn.subscribed_page_event_session_ids_for_owner(owner)
+        .into_iter()
+        .filter_map(|session_id| {
+            let event_owner = session_id
+                .as_deref()
+                .map(CommandOwnerScope::for_session)
+                .unwrap_or_else(|| owner.clone());
+            let state = conn.target_devtools_session_state_for_owner(&event_owner)?;
+            if state.is_closing() {
+                return None;
+            }
+            Some((
+                session_id,
+                state
+                    .page_session_state
+                    .page_domain_subscription_generation()?,
+            ))
+        })
+        .collect()
+}
+
+fn native_dialog_handler_for_owner(conn: &CdpConnection, owner: &CommandOwnerScope) -> bool {
+    conn.target_owner_identity_for_owner(owner)
+        .and_then(|(context, _)| conn.browser_context_by_id(&context))
+        .is_some_and(|context| context.automation_javascript_dialog_handler_available)
+}
+
+pub(super) fn dismiss_dialogs_for_page_subscription(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    generation: u64,
+) -> Vec<BackgroundProtocolEvent> {
+    dismiss_matching_dialogs(conn, owner, |dialog| {
+        dialog.has_page_subscription(generation)
+    })
+}
+
+fn dismiss_matching_dialogs(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    matches: impl FnMut(&crate::conn::TargetJavaScriptDialog) -> bool,
+) -> Vec<BackgroundProtocolEvent> {
+    let current_page = conn
+        .pending_target_page_residence_identity_for_owner(owner)
+        .or_else(|| conn.target_page_residence_identity_for_owner(owner));
+    let dialogs = conn
+        .with_target_javascript_dialog_state_for_owner_mut(owner, |state| {
+            state.take_matching(matches)
+        })
+        .unwrap_or_default();
+    let mut events = Vec::new();
+    for dialog in dialogs {
+        let _ = dialog.finish(false, String::new());
+        if current_page.as_ref() == Some(dialog.page_owner()) {
+            events.extend(broadcast_javascript_dialog_closed(
+                conn,
+                owner,
+                UserPromptClosedEvent {
+                    target_id: dialog.page_owner().target_id().map(Into::into),
+                    frame_id: dialog.source_frame_id().into(),
+                    prompt_type: dialog.dialog_type().to_owned(),
+                    accepted: false,
+                    user_text: String::new(),
+                },
+            ));
+        }
+    }
+    events
+}
+
+pub(in crate::domains) fn prepare_page_session_disposal(
+    conn: &mut CdpConnection,
+    session_id: &str,
+) -> Vec<BackgroundProtocolEvent> {
+    let owner = CommandOwnerScope::capture(conn, Some(session_id));
+    conn.disable_page_domain_for_session_owner(Some(session_id));
+    if native_dialog_handler_for_owner(conn, &owner) {
+        Vec::new()
+    } else {
+        let subscriptions = page_dialog_subscriptions(conn, &owner);
+        dismiss_matching_dialogs(conn, &owner, |dialog| {
+            !subscriptions
+                .iter()
+                .any(|(_, generation)| dialog.has_page_subscription(*generation))
+        })
+    }
 }
 
 pub(super) fn complete_devtools_handle_javascript_dialog_command(
@@ -249,27 +333,26 @@ fn broadcast_javascript_dialog_closed(
     owner: &CommandOwnerScope,
     closed_event: UserPromptClosedEvent,
 ) -> Vec<BackgroundProtocolEvent> {
-    let session_ids = conn.subscribed_page_event_session_ids_for_owner(owner);
-    if session_ids.is_empty() {
-        return vec![BackgroundProtocolEvent::automation_only(
-            AutomationEvent::UserPromptClosed(closed_event),
-        )];
-    }
-    session_ids
-        .into_iter()
-        .map(|session_id| {
-            BackgroundProtocolEvent::page_javascript_dialog_closed(
-                session_id.as_deref(),
-                UserPromptClosedEvent {
-                    target_id: closed_event.target_id.clone(),
-                    frame_id: closed_event.frame_id.clone(),
-                    prompt_type: closed_event.prompt_type.clone(),
-                    accepted: closed_event.accepted,
-                    user_text: closed_event.user_text.clone(),
-                },
-            )
-        })
-        .collect()
+    let mut events = vec![BackgroundProtocolEvent::automation_only(
+        AutomationEvent::UserPromptClosed(closed_event.clone()),
+    )];
+    events.extend(
+        page_dialog_subscriptions(conn, owner)
+            .into_iter()
+            .map(|(session_id, _)| {
+                BackgroundProtocolEvent::page_javascript_dialog_closed(
+                    session_id.as_deref(),
+                    UserPromptClosedEvent {
+                        target_id: closed_event.target_id.clone(),
+                        frame_id: closed_event.frame_id.clone(),
+                        prompt_type: closed_event.prompt_type.clone(),
+                        accepted: closed_event.accepted,
+                        user_text: closed_event.user_text.clone(),
+                    },
+                )
+            }),
+    );
+    events
 }
 
 pub(in crate::domains) fn emit_javascript_dialog_activity_background_events(
@@ -430,18 +513,9 @@ fn emit_to_attachment(
     let message = dialog.message().to_owned();
     let dialog_type = dialog.dialog_type().to_owned();
     let default_prompt = dialog.default_prompt().to_owned();
-    let audience = conn.subscribed_page_event_session_ids_for_owner(&event_owner);
-    let subscriptions = audience
-        .iter()
-        .filter_map(|session_id| {
-            let owner = session_id
-                .as_deref()
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| event_owner.clone());
-            conn.target_page_session_state_for_owner(&owner)?
-                .page_domain_subscription_generation()
-        })
-        .collect();
+    let audience = page_dialog_subscriptions(conn, &event_owner);
+    let has_handler = !audience.is_empty() || native_dialog_handler_for_owner(conn, &event_owner);
+    let subscriptions = audience.iter().map(|(_, generation)| *generation).collect();
     let mut installed_dialog =
         dialog.into_target_dialog(destination_page_owner, source_frame_id.clone());
     installed_dialog.set_page_subscriptions(subscriptions);
@@ -471,18 +545,19 @@ fn emit_to_attachment(
         has_browser_handler: false,
         default_prompt,
     };
-    // Native automation still observes dialogs without a CDP Page subscriber.
-    if audience.is_empty() {
-        out.push(BackgroundProtocolEvent::automation_only(
-            AutomationEvent::PageJavaScriptDialogOpening(opening_event),
-        ));
-        return;
-    }
-    for event_session_id in audience {
+    out.push(BackgroundProtocolEvent::automation_only(
+        AutomationEvent::PageJavaScriptDialogOpening(opening_event.clone()),
+    ));
+    for (event_session_id, _) in audience {
         out.push(BackgroundProtocolEvent::page_javascript_dialog_opening(
             event_session_id.as_deref(),
             opening_event.clone(),
         ));
+    }
+    // A pending renderer prefix can arrive after the last subscriber began
+    // detaching. It must not install an unhandleable modal dialog.
+    if !has_handler {
+        out.extend(dismiss_matching_dialogs(conn, &event_owner, |_| true));
     }
 }
 

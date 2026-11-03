@@ -645,14 +645,18 @@ impl CdpConnection {
         handled
     }
 
-    fn sync_javascript_dialog_handler_enabled_for_browser_context(&self, browser_context_id: &str) {
+    pub(in crate::conn) fn sync_javascript_dialog_handler_enabled_for_browser_context(
+        &self,
+        browser_context_id: &str,
+    ) {
         let Some(browser_context) = self.browser_context_by_id(browser_context_id) else {
             return;
         };
         browser_context
             .renderer_runtime()
             .set_javascript_dialog_handler_enabled(
-                browser_context_has_page_domain_enabled_session(browser_context),
+                browser_context.automation_javascript_dialog_wait_enabled
+                    || browser_context_has_page_domain_enabled_session(browser_context),
             );
     }
 
