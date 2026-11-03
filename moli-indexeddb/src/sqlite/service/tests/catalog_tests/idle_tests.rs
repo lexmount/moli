@@ -404,12 +404,46 @@ fn shutdown_drains_a_queued_idle_check_before_releasing_the_runtime() {
 
 #[test]
 fn maintenance_progresses_later_rounds_while_another_database_is_blocked() {
+    assert_later_rounds_progress_with_blocked_database(false);
+}
+
+#[test]
+fn completed_maintenance_before_blocking_does_not_count_as_pending() {
+    assert_later_rounds_progress_with_blocked_database(true);
+}
+
+fn assert_later_rounds_progress_with_blocked_database(prior_check: bool) {
     let directory = Directory::new();
-    let service = Service::on_disk(directory.0.join("idb-lite"), config()).unwrap();
+    let mut service = Service::on_disk(directory.0.join("idb-lite"), config()).unwrap();
     let slow = resolve(&service, OWNER, "a-held");
+    if prior_check {
+        slow.owner
+            .maintain(Instant::now())
+            .unwrap()
+            .blocking_recv()
+            .unwrap()
+            .unwrap();
+    }
+    // Startup maintenance may already have completed before the hold. Stop
+    // that producer, then let the owner's FIFO drain its checks before taking
+    // a cumulative baseline and starting the timer for this observation.
+    service
+        .maintenance
+        .take()
+        .unwrap()
+        .stop(&service.client.runtime)
+        .unwrap();
     let held = hold_database(&slow);
+    let initial_submissions = slow.owner.maintenance_submitted();
+    service.maintenance = Some(
+        maintenance::Maintenance::start(
+            service.client.runtime.clone(),
+            Arc::downgrade(&service.registry),
+        )
+        .unwrap(),
+    );
     let deadline = Instant::now() + Duration::from_secs(5);
-    while slow.owner.maintenance_submitted() == 0 {
+    while slow.owner.maintenance_submitted() == initial_submissions {
         assert!(
             Instant::now() < deadline,
             "first maintenance round did not start"
@@ -429,7 +463,7 @@ fn maintenance_progresses_later_rounds_while_another_database_is_blocked() {
     }
     assert_eq!(
         slow.owner.maintenance_submitted(),
-        1,
+        initial_submissions + 1,
         "only one check may wait behind held SQL"
     );
     drop(held);
