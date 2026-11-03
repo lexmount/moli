@@ -651,7 +651,9 @@ impl ScriptVm {
                     if matches!(
                         pending.info.resource_type,
                         SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-                    ) && !response_filter.is_some_and(|filter| filter.is_readable()) {
+                    ) && pending.request_mode == moli_fetch::RequestMode::Cors
+                        && !response_filter.is_some_and(|filter| filter.is_readable())
+                    {
                         observable_response.headers =
                             crate::network_host::filter_cors_exposed_response_headers(
                                 &pending.request_origin,

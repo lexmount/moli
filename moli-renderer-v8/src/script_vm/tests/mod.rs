@@ -380,6 +380,7 @@ fn register_pending_window_fetch_for_test(
                         request_body: None,
                         body_source_id: 10_000 + internal_id,
                         head: moli_fetch::ResponseHead {
+                            request_include_credentials: false,
                             status_text: None,
                             final_url: url.clone(),
                             status: 200,
@@ -2170,6 +2171,7 @@ mod bitmap_rendering_context_interface_interfaces;
 mod blob_response_headers;
 mod browser_api;
 mod cache_interfaces;
+mod cache_response_credentials;
 
 mod dom_token_list_native_receivers;
 
@@ -2404,5 +2406,6 @@ mod xml_serializer_receivers;
 
 mod hyperlink_audit_owner;
 
+mod fetch_credentialless;
 mod fetch_referrer;
 mod sqlite_web_storage;

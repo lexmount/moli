@@ -488,6 +488,7 @@ fn about_blank_navigation_response(url: &Url) -> Option<moli_fetch::Response> {
                 b"text/html; charset=utf-8".to_vec(),
             )],
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: false,
             redirect_chain: Vec::new(),

@@ -95,7 +95,7 @@ pub(super) fn service_worker_network_fallback_request_for_job(
             .with_cache_mode(moli_fetch::RequestCacheMode::NoStore)
             .without_request_timeout();
     }
-    request
+    request.with_credentialless(job.network_context.policy_context.is_credentialless())
 }
 
 fn service_worker_fetch_stream_response_head(
@@ -103,6 +103,7 @@ fn service_worker_fetch_stream_response_head(
     response_head: &MaterializedServiceWorkerFetchResponseHead,
 ) -> moli_fetch::ResponseHead {
     moli_fetch::ResponseHead {
+        request_include_credentials: response_head.request_include_credentials,
         status_text: Some(response_head.status_text.clone()),
         final_url: response_head
             .final_url
@@ -129,6 +130,7 @@ fn service_worker_fetch_can_forward_stream(
         job,
         final_url,
         &response_head.headers,
+        response_head.request_include_credentials,
     )?;
     Ok(job.direct_completion_tx.is_none()
         && !matches!(
@@ -603,6 +605,7 @@ impl ServiceWorkerRuntimeService {
         let response_filter = service_worker_fetch_response_filter(&response);
         let navigation_response = crate::protocol_types::NavigationResponse::from_head_and_body(
             moli_fetch::ResponseHead {
+                request_include_credentials: response.request_include_credentials,
                 status_text: Some(response.status_text.clone()),
                 final_url,
                 status: response.status,
@@ -763,8 +766,13 @@ fn validate_service_worker_fetch_response_security_policy(
     response: &ServiceWorkerFetchResponse,
     final_url: &Url,
 ) -> Result<(), String> {
-    validate_service_worker_fetch_response_body_security_policy(job, response, final_url)?;
-    validate_service_worker_fetch_response_head_security_policy(job, final_url, &response.headers)
+    validate_service_worker_fetch_response_head_security_policy(
+        job,
+        final_url,
+        &response.headers,
+        response.request_include_credentials,
+    )?;
+    validate_service_worker_fetch_response_body_security_policy(job, response, final_url)
 }
 
 fn service_worker_fetch_response_requires_body_security_policy(
@@ -793,7 +801,6 @@ fn validate_service_worker_fetch_response_body_security_policy(
         return Ok(());
     }
 
-    validate_service_worker_fetch_response_head_security_policy(job, final_url, &response.headers)?;
     crate::network_host::validate_opaque_response_blocking_with_body(
         job.request
             .browser_origin()
@@ -808,6 +815,7 @@ fn validate_service_worker_fetch_response_head_security_policy(
     job: &ServiceWorkerFetchJob,
     final_url: &Url,
     headers: &[(String, Vec<u8>)],
+    request_include_credentials: bool,
 ) -> Result<(), String> {
     if job.request.request_mode != moli_fetch::RequestMode::NoCors
         || matches!(
@@ -822,13 +830,12 @@ fn validate_service_worker_fetch_response_head_security_policy(
         .request
         .browser_origin()
         .map_err(|error| error.to_string())?;
-    crate::network_host::validate_cross_origin_resource_policy(origin, final_url, headers)?;
     crate::network_host::validate_cross_origin_embedder_and_document_isolation_policy(
         origin,
         final_url,
         headers,
         job.request.request_mode,
-        job.request.credentials_mode,
+        request_include_credentials,
         job.network_context
             .policy_context
             .cross_origin_embedder_policy,
@@ -1261,6 +1268,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1361,6 +1369,7 @@ mod tests {
             ),
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                request_include_credentials: true,
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1399,6 +1408,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(final_url),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1446,6 +1456,7 @@ mod tests {
             ),
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                request_include_credentials: true,
                 final_url: Some(final_url),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1519,6 +1530,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: None,
                 response_type: "opaque".to_owned(),
                 redirected: false,
@@ -1564,6 +1576,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: None,
                 response_type: "opaqueredirect".to_owned(),
                 redirected: false,
@@ -1608,6 +1621,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
                 redirected: true,
@@ -1651,6 +1665,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(url("https://example.test/app/manual-final.txt")),
                 response_type: "default".to_owned(),
                 redirected: true,
@@ -1699,6 +1714,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: None,
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1822,6 +1838,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: None,
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1883,6 +1900,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: None,
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1990,6 +2008,7 @@ mod tests {
             .without_inferred_referrer()
             .with_fetch_priority_hint(Some(moli_fetch::FetchPriorityHint::High));
         let response = ServiceWorkerFetchResponse {
+            request_include_credentials: true,
             final_url: Some(request_url.clone()),
             response_type: "default".to_owned(),
             redirected: false,
@@ -2087,6 +2106,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: None,
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2134,6 +2154,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(response_url.clone()),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2201,6 +2222,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: None,
                 response_type: "error".to_owned(),
                 redirected: false,
@@ -2248,6 +2270,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(url("https://cross-origin.test/data.txt")),
                 response_type: "cors".to_owned(),
                 redirected: false,
@@ -2294,6 +2317,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: None,
                 response_type: "opaque".to_owned(),
                 redirected: false,
@@ -2356,6 +2380,7 @@ mod tests {
                     run.clone(),
                 ),
                 result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                    request_include_credentials: true,
                     final_url: None,
                     response_type: "opaque".to_owned(),
                     redirected: false,
@@ -2403,6 +2428,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/image.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2456,6 +2482,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/image.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2519,6 +2546,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2578,6 +2606,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2636,6 +2665,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2694,6 +2724,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2753,6 +2784,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2806,6 +2838,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2864,6 +2897,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2921,6 +2955,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: false,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2972,6 +3007,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3031,6 +3067,7 @@ mod tests {
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3099,6 +3136,7 @@ mod tests {
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3164,6 +3202,7 @@ mod tests {
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3215,6 +3254,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/data.json")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3261,6 +3301,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: Some(url("https://cdn.example.test/app/data.json")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3305,6 +3346,7 @@ mod tests {
             event_id,
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                request_include_credentials: true,
                 final_url: None,
                 response_type: "opaqueredirect".to_owned(),
                 redirected: false,

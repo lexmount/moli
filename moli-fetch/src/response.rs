@@ -51,6 +51,9 @@ impl NegotiatedHttpVersion {
 
 #[derive(Debug, Clone)]
 pub struct ResponseHead {
+    /// Fetch credentials flag for the final request, independent of Cookie headers.
+    /// Retained through response filtering and cache storage.
+    pub request_include_credentials: bool,
     pub final_url: Url,
     pub status: u16,
     /// The received HTTP status message. `Some("")` is an explicitly empty
@@ -330,6 +333,7 @@ impl ResponseBody {
 
 #[derive(Debug)]
 pub struct Response {
+    pub request_include_credentials: bool,
     pub final_url: Url,
     pub status: u16,
     pub status_text: Option<String>,
@@ -357,6 +361,7 @@ impl Clone for Response {
                 .clone_materialized()
                 .expect("Response body should remain materialized"),
             request_cookie_report: self.request_cookie_report.clone(),
+            request_include_credentials: self.request_include_credentials,
             cookie_set_reports: self.cookie_set_reports.clone(),
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
@@ -412,6 +417,7 @@ impl Response {
             status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             request_cookie_report: self.request_cookie_report.clone(),
+            request_include_credentials: self.request_include_credentials,
             cookie_set_reports: self.cookie_set_reports.clone(),
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
@@ -451,6 +457,7 @@ impl Response {
             headers: head.headers,
             body,
             request_cookie_report: head.request_cookie_report,
+            request_include_credentials: head.request_include_credentials,
             cookie_set_reports: head.cookie_set_reports,
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
@@ -470,6 +477,7 @@ impl Response {
             headers: head.headers,
             body,
             request_cookie_report: head.request_cookie_report,
+            request_include_credentials: head.request_include_credentials,
             cookie_set_reports: head.cookie_set_reports,
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
@@ -482,6 +490,7 @@ impl Response {
 
     pub fn into_parts(self) -> (ResponseHead, String, Vec<u8>) {
         let head = ResponseHead {
+            request_include_credentials: self.request_include_credentials,
             final_url: self.final_url,
             status: self.status,
             status_text: self.status_text,
@@ -520,6 +529,7 @@ impl Response {
 
     pub fn into_body(self) -> (ResponseHead, ResponseBody) {
         let head = ResponseHead {
+            request_include_credentials: self.request_include_credentials,
             final_url: self.final_url,
             status: self.status,
             status_text: self.status_text,
@@ -546,6 +556,7 @@ impl Response {
 
 #[derive(Debug)]
 pub struct RawResponse {
+    pub request_include_credentials: bool,
     pub final_url: Url,
     pub status: u16,
     pub status_text: Option<String>,
@@ -573,6 +584,7 @@ impl Clone for RawResponse {
                 .clone_materialized()
                 .expect("RawResponse body should remain materialized"),
             request_cookie_report: self.request_cookie_report.clone(),
+            request_include_credentials: self.request_include_credentials,
             cookie_set_reports: self.cookie_set_reports.clone(),
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
@@ -622,6 +634,7 @@ impl RawResponse {
             status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             request_cookie_report: self.request_cookie_report.clone(),
+            request_include_credentials: self.request_include_credentials,
             cookie_set_reports: self.cookie_set_reports.clone(),
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
@@ -647,6 +660,7 @@ impl RawResponse {
             headers: head.headers,
             body: ResponseBody::materialized_bytes(body),
             request_cookie_report: head.request_cookie_report,
+            request_include_credentials: head.request_include_credentials,
             cookie_set_reports: head.cookie_set_reports,
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
@@ -666,6 +680,7 @@ impl RawResponse {
             headers: head.headers,
             body: ResponseBody::materialized_bytes(body),
             request_cookie_report: head.request_cookie_report,
+            request_include_credentials: head.request_include_credentials,
             cookie_set_reports: head.cookie_set_reports,
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
@@ -678,6 +693,7 @@ impl RawResponse {
 
     pub fn into_parts(self) -> (ResponseHead, ResponseBody) {
         let head = ResponseHead {
+            request_include_credentials: self.request_include_credentials,
             final_url: self.final_url,
             status: self.status,
             status_text: self.status_text,

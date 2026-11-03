@@ -543,6 +543,7 @@ pub(crate) fn spawn_async_subresource_fetch(
     request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
 ) {
+    let request = request.with_credentialless(network_context.policy_context.is_credentialless());
     let parkable_image_manager = matches!(
         request.browser_request_metadata(),
         Some(BrowserRequestMetadata::Image)
@@ -998,6 +999,7 @@ mod tests {
                     status: 303,
                     headers: vec![("Location".to_owned(), b"https://target.test/final".to_vec())],
                     request_cookie_report: None,
+                    request_include_credentials: false,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
                     redirect_chain: Vec::new(),
@@ -1050,6 +1052,7 @@ mod tests {
                     status_text: Some("Temporary Redirect".to_owned()),
                     headers: vec![("location".to_owned(), b"/final".to_vec())],
                     request_cookie_report: None,
+                    request_include_credentials: false,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
                     redirect_chain: Vec::new(),

@@ -5,6 +5,10 @@ use crate::content_security_policy::ContentSecurityPolicy;
 use super::*;
 
 impl WorkerGlobalState {
+    pub(crate) fn subresource_policy_context(&self) -> crate::types::SubresourcePolicyContext {
+        self.policy_context
+    }
+
     pub(crate) fn callback_invocation_allowed(&self) -> bool {
         !self.termination_requested.load(Ordering::Acquire)
     }

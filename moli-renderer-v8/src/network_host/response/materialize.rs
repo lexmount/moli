@@ -68,6 +68,8 @@ struct FetchResponseHeadDeclaration {
     redirected: bool,
     #[webapi(slot = RESPONSE_TYPE_SLOT)]
     r#type: &'static str,
+    #[webapi(slot = RESPONSE_REQUEST_INCLUDE_CREDENTIALS_SLOT)]
+    request_include_credentials: bool,
 }
 
 #[derive(WebApiObject)]
@@ -375,6 +377,7 @@ fn build_fetch_response_object_head<'s>(
             .to_owned(),
         filtered_response_exposes_redirected(filter) && head.redirected,
         response_type,
+        head.request_include_credentials,
     )
     .bind(scope)
     .expect("Fetch Response head declaration should bind");
@@ -453,6 +456,35 @@ fn finish_fetch_response_object_with_body_stream<'s>(
     obj
 }
 
+pub(crate) fn set_filtered_response_internal_head(
+    scope: &mut v8::PinScope<'_, '_>,
+    response: v8::Local<'_, v8::Object>,
+    status: u16,
+    status_text: &str,
+    headers: &[(String, String)],
+) {
+    set_response_slot_value(
+        scope,
+        response,
+        RESPONSE_INTERNAL_STATUS_SLOT,
+        v8::Number::new(scope, f64::from(status)).into(),
+    );
+    set_response_slot_string(
+        scope,
+        response,
+        RESPONSE_INTERNAL_STATUS_TEXT_SLOT,
+        status_text,
+    );
+    let headers = filter_headers_for_guard(headers, HeadersGuard::Response);
+    let object = build_headers_object_with_state(scope, &headers, HeadersGuard::Response, true);
+    set_response_slot_value(
+        scope,
+        response,
+        RESPONSE_INTERNAL_HEADERS_SLOT,
+        object.into(),
+    );
+}
+
 pub(crate) fn build_filtered_cached_response_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response_type: &str,
@@ -469,9 +501,10 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
     } else {
         String::new()
     };
-    let obj = FetchResponseHeadDeclaration::new(0.0, false, visible_url, false, response_type)
-        .bind(scope)
-        .ok()?;
+    let obj =
+        FetchResponseHeadDeclaration::new(0.0, false, visible_url, false, response_type, true)
+            .bind(scope)
+            .ok()?;
     if !internal_url.is_empty() {
         FetchResponseInternalUrlDeclaration::new(internal_url.to_owned())
             .initialize(scope, obj)
@@ -492,6 +525,7 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
 
 #[derive(Debug, Clone)]
 pub(crate) struct MaterializedResponseObject {
+    pub(crate) request_include_credentials: bool,
     pub(crate) final_url: Option<url::Url>,
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
@@ -503,6 +537,7 @@ pub(crate) struct MaterializedResponseObject {
 
 #[derive(Debug, Clone)]
 pub(crate) struct MaterializedResponseHead {
+    pub(crate) request_include_credentials: bool,
     pub(crate) final_url: Option<url::Url>,
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
@@ -514,6 +549,7 @@ pub(crate) struct MaterializedResponseHead {
 impl MaterializedResponseHead {
     pub(crate) fn with_body(self, body: Vec<u8>) -> MaterializedResponseObject {
         MaterializedResponseObject {
+            request_include_credentials: self.request_include_credentials,
             final_url: self.final_url,
             response_type: self.response_type,
             redirected: self.redirected,
@@ -606,7 +642,12 @@ pub(crate) fn materialize_response_object_head<'s>(
     };
     let status_text =
         response_slot_string(scope, response, RESPONSE_STATUS_TEXT_SLOT).unwrap_or_default();
-    let headers = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT)
+    let headers_slot = if filtered_response_type {
+        RESPONSE_INTERNAL_HEADERS_SLOT
+    } else {
+        RESPONSE_HEADERS_SLOT
+    };
+    let headers = response_slot_object(scope, response, headers_slot)
         .map(|headers| {
             moli_fetch::headers_from_byte_strings(&headers_list(scope, headers))
                 .expect("Headers contain ByteStrings")
@@ -615,6 +656,12 @@ pub(crate) fn materialize_response_object_head<'s>(
 
     Ok((
         MaterializedResponseHead {
+            request_include_credentials: response_slot_value(
+                scope,
+                response,
+                RESPONSE_REQUEST_INCLUDE_CREDENTIALS_SLOT,
+            )
+            .is_none_or(|value| value.is_true()),
             final_url,
             response_type,
             redirected: response_slot_bool(scope, response, RESPONSE_REDIRECTED_SLOT),

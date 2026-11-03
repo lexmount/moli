@@ -61,6 +61,7 @@ pub struct Request {
     use_cors_preflight: bool,
     redirect_handling: RequestRedirectHandling,
     pub credentials_mode: RequestCredentialsMode,
+    credentialless: bool,
     pub(crate) redirect_chain: Vec<RedirectInfo>,
     network_partition_key: Option<String>,
     auth: Option<ScopedRequestAuth>,
@@ -533,6 +534,7 @@ impl Request {
             use_cors_preflight: false,
             redirect_handling: RequestRedirectHandling::Follow,
             credentials_mode: RequestCredentialsMode::Include,
+            credentialless: false,
             redirect_chain: Vec::new(),
             network_partition_key: None,
             auth: None,
@@ -568,6 +570,7 @@ impl Request {
             use_cors_preflight: false,
             redirect_handling: RequestRedirectHandling::Follow,
             credentials_mode: RequestCredentialsMode::Include,
+            credentialless: false,
             redirect_chain: Vec::new(),
             network_partition_key: None,
             auth: None,
@@ -636,6 +639,7 @@ impl Request {
             use_cors_preflight: false,
             redirect_handling: RequestRedirectHandling::Follow,
             credentials_mode: RequestCredentialsMode::Include,
+            credentialless: false,
             redirect_chain: Vec::new(),
             network_partition_key: None,
             auth: None,
@@ -1132,7 +1136,19 @@ impl Request {
         self.network_partition_key.as_deref()
     }
 
+    /// Apply the client's COEP/DIP credentialless policy per request hop.
+    pub fn with_credentialless(mut self, credentialless: bool) -> Self {
+        self.credentialless = credentialless;
+        self
+    }
+
     pub fn allows_credentials_for_url(&self, request_url: &Url) -> bool {
+        if self.credentialless
+            && self.request_mode == RequestMode::NoCors
+            && self.has_cross_origin_url(request_url)
+        {
+            return false;
+        }
         match self.credentials_mode {
             RequestCredentialsMode::Include => true,
             RequestCredentialsMode::Omit => false,

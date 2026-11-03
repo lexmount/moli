@@ -1157,6 +1157,7 @@ fn navigation_preload_completion_keeps_response_started_preload_alive() {
         event_id,
         owner: test_run_owner(version_id, &run),
         result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+            request_include_credentials: true,
             status: 200,
             status_text: "OK".to_owned(),
             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
@@ -1454,6 +1455,7 @@ fn abort_controlled_fetch_drops_direct_worker_completion_and_ignores_late_comple
         event_id,
         owner: test_run_owner(version_id, &run),
         result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+            request_include_credentials: true,
             status: 200,
             status_text: "OK".to_owned(),
             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],

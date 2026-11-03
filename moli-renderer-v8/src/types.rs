@@ -734,6 +734,13 @@ pub(crate) struct SubresourcePolicyContext {
 }
 
 impl SubresourcePolicyContext {
+    pub(crate) fn is_credentialless(self) -> bool {
+        self.cross_origin_embedder_policy
+            == crate::cross_origin_isolation::CrossOriginEmbedderPolicy::Credentialless
+            || self.document_isolation_policy
+                == crate::cross_origin_isolation::DocumentIsolationPolicy::IsolateAndCredentialless
+    }
+
     pub(super) fn from_document_policy(policy: &DocumentPolicyContainer) -> Self {
         Self {
             cross_origin_embedder_policy: policy.cross_origin_embedder_policy,

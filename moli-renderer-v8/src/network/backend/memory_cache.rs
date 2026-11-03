@@ -46,6 +46,7 @@ pub(in crate::network) struct ScriptTextCacheKey {
     page_cache_partition_id: u64,
     url: String,
     credentials_mode: String,
+    request_include_credentials: bool,
     request_origin: Option<String>,
     request_mode: String,
     site_context: String,
@@ -63,6 +64,7 @@ pub(in crate::network) struct RawSubresourceCacheKey {
     url: String,
     resource_type: &'static str,
     credentials_mode: String,
+    request_include_credentials: bool,
     request_origin: Option<String>,
     request_mode: String,
     network_partition_key: Option<String>,
@@ -595,6 +597,7 @@ pub(in crate::network) fn script_text_cache_key(request: &Request) -> ScriptText
         page_cache_partition_id: 0,
         url: request.url.as_str().to_owned(),
         credentials_mode: request.credentials_mode.as_ref().to_owned(),
+        request_include_credentials: request.allows_credentials_for_url(&request.url),
         request_origin: request
             .request_origin()
             .map(|origin| origin.ascii_serialization().to_owned()),
@@ -636,6 +639,7 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
         url: request.url.as_str().to_owned(),
         resource_type: raw_subresource_cache_resource_type_key(request.resource_type),
         credentials_mode: request.credentials_mode.as_ref().to_owned(),
+        request_include_credentials: request.allows_credentials_for_url(&request.url),
         request_origin: request
             .request_origin()
             .map(|origin| origin.ascii_serialization().to_owned()),
@@ -829,6 +833,7 @@ mod tests {
                 status: 200,
                 headers: vec![("cache-control".to_owned(), b"max-age=60".to_vec())],
                 request_cookie_report: None,
+                request_include_credentials: false,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
                 redirect_chain: Vec::new(),
@@ -848,6 +853,7 @@ mod tests {
                 status: 200,
                 headers: vec![("cache-control".to_owned(), b"max-age=60".to_vec())],
                 request_cookie_report: None,
+                request_include_credentials: false,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
                 redirect_chain: Vec::new(),
@@ -1012,6 +1018,7 @@ mod tests {
                 status: 200,
                 headers: vec![("cache-control".to_owned(), b"max-age=60".to_vec())],
                 request_cookie_report: None,
+                request_include_credentials: false,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
                 redirect_chain: Vec::new(),

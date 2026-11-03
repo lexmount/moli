@@ -17,8 +17,7 @@ pub(crate) use self::cors::{
     filter_cors_exposed_response_headers, is_cors_policy_failure_message,
     validate_cors_preflight_response, validate_cors_response_chain,
     validate_cross_origin_embedder_and_document_isolation_policy,
-    validate_cross_origin_resource_policy, validate_fetch_response_security_policy,
-    validate_fetch_response_security_policy_with_body,
+    validate_fetch_response_security_policy, validate_fetch_response_security_policy_with_body,
     validate_fetch_response_security_policy_with_body_classified,
     validate_opaque_response_blocking_with_body,
 };
@@ -38,4 +37,5 @@ pub(crate) use self::materialize::{
     materialize_response_object_head,
     materialize_response_object_head_for_service_worker_respond_with,
     materialized_body_bytes_from_value, network_response_filter,
+    set_filtered_response_internal_head,
 };

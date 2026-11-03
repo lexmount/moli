@@ -661,7 +661,7 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
             assert!(request.contains("Sec-Fetch-Mode: no-cors\r\n"));
             stream
                 .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: 15\r\nConnection: close\r\n\r\ncallback('OK');",
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nCross-Origin-Resource-Policy: cross-origin\r\nContent-Length: 15\r\nConnection: close\r\n\r\ncallback('OK');",
                 )
                 .await
                 .expect("write service worker opaque body response");
@@ -676,7 +676,8 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
                 function assertOpaqueResponse(response, label) {{
                   response.body;
                   if (response.type !== "opaque" || response.status !== 0 ||
-                      response.body !== null || response.bodyUsed) {{
+                      response.body !== null || response.bodyUsed ||
+                      Array.from(response.headers).length !== 0) {{
                     throw new Error(label + ":" + [
                       response.type,
                       response.status,
@@ -789,9 +790,25 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
             Some(fetch_url.as_str()),
             "clone/cache mode {clone_mode}/{cache_mode}"
         );
+        // The JS surface remains opaque, while native policy checks retain
+        // the original response's headers and credential admission.
         assert!(
-            response.headers.is_empty(),
+            response
+                .headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("content-type")
+                    && value.as_slice() == b"application/javascript"),
             "clone/cache mode {clone_mode}/{cache_mode}"
+        );
+        assert!(
+            response.headers.iter().any(|(name, value)| name
+                .eq_ignore_ascii_case("cross-origin-resource-policy")
+                && value.as_slice() == b"cross-origin"),
+            "clone/cache mode {clone_mode}/{cache_mode}"
+        );
+        assert!(
+            !response.request_include_credentials,
+            "the original same-origin-mode cross-origin fetch omitted credentials; client Request mode must not replace it"
         );
         assert_eq!(
             response.body,

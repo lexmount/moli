@@ -93,6 +93,7 @@ pub(crate) fn start_scanned_image_preload(
             .with_page_network_policy()
             .with_request_mode(RequestMode::NoCors)
             .with_credentials_mode(RequestCredentialsMode::Include)
+            .with_credentialless(policy_context.is_credentialless())
             .with_network_partition_key(active_subresource_network_partition_key(
                 host,
                 OwnerDispatchScope::Top,

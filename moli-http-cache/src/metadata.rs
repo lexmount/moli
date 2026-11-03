@@ -29,6 +29,8 @@ pub struct HttpCacheEntryMetadata {
     pub status: u16,
     pub status_text: Option<String>,
     pub headers: Vec<(String, Vec<u8>)>,
+    #[serde(default = "default_request_include_credentials")]
+    pub request_include_credentials: bool,
     pub stored_at_unix_ms: u64,
     pub last_used_at_unix_ms: u64,
     pub expires_at_unix_ms: Option<u64>,
@@ -53,6 +55,7 @@ impl HttpCacheEntryMetadata {
             final_url,
             status,
             status_text: None,
+            request_include_credentials: true,
             headers,
             stored_at_unix_ms,
             last_used_at_unix_ms: stored_at_unix_ms,
@@ -160,4 +163,8 @@ pub(crate) fn read_published_body_file(entry_dir: &Path) -> Option<String> {
     } else {
         None
     }
+}
+
+fn default_request_include_credentials() -> bool {
+    true
 }

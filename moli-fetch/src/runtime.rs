@@ -1463,6 +1463,7 @@ impl RuntimeOwner {
                 let response = proxy_connect_raw_response(
                     &job.current_url,
                     &job.request.redirect_chain,
+                    job.request.allows_credentials_for_url(&job.current_url),
                     request_cookie_report,
                     response,
                 );
@@ -1576,6 +1577,8 @@ impl RuntimeOwner {
         }
 
         response.request_cookie_report = request_cookie_report;
+        response.request_include_credentials =
+            job.request.allows_credentials_for_url(&response.final_url);
         response.cookie_set_reports = cookie_set_reports;
         response = response.with_network_request_extra_info(request_extra_info.clone());
 
@@ -2360,6 +2363,7 @@ impl RuntimeOwner {
             }
             if let Some(started_tx) = started_tx {
                 let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
+                    request_include_credentials: job.request.allows_credentials_for_url(&final_url),
                     status_text: status_text.clone(),
                     final_url,
                     status,
@@ -2975,6 +2979,7 @@ fn complete_streaming_html_job(job: StreamingRuntimeJob, response: Response) {
     let (head, body) = response.into_text_parts();
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
+            request_include_credentials: head.request_include_credentials,
             status_text: head.status_text,
             final_url: head.final_url,
             status: head.status,
@@ -3041,6 +3046,7 @@ fn complete_cached_streaming_html_job(
     let response_timing = job.response_progress.mark_cached_response_available();
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
+            request_include_credentials: metadata.request_include_credentials,
             status_text: metadata.status_text,
             final_url,
             status,
@@ -3168,6 +3174,7 @@ fn complete_cached_streaming_raw_job(
 
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
+            request_include_credentials: metadata.request_include_credentials,
             status_text: metadata.status_text,
             final_url,
             status,
@@ -3612,10 +3619,12 @@ fn take_failed_proxy_connect_response(
 fn proxy_connect_response_start(
     current_url: &Url,
     redirect_chain: &[RedirectInfo],
+    request_include_credentials: bool,
     request_cookie_report: Option<StoredCookieQueryReport>,
     response: ProxyConnectResponse,
 ) -> StreamingHtmlResponseStart {
     StreamingHtmlResponseStart {
+        request_include_credentials,
         final_url: current_url.clone(),
         status: response.status,
         status_text: Some(response.status_text),
@@ -3634,12 +3643,19 @@ fn proxy_connect_response_start(
 fn proxy_connect_raw_response(
     current_url: &Url,
     redirect_chain: &[RedirectInfo],
+    request_include_credentials: bool,
     request_cookie_report: Option<StoredCookieQueryReport>,
     response: ProxyConnectResponse,
 ) -> RawResponse {
     RawResponse::from_head_and_body(
-        proxy_connect_response_start(current_url, redirect_chain, request_cookie_report, response)
-            .into_head(),
+        proxy_connect_response_start(
+            current_url,
+            redirect_chain,
+            request_include_credentials,
+            request_cookie_report,
+            response,
+        )
+        .into_head(),
         Vec::new(),
     )
 }
@@ -3653,6 +3669,7 @@ fn complete_streaming_proxy_connect_response(
     let start = proxy_connect_response_start(
         &job.current_url,
         &job.request.redirect_chain,
+        job.request.allows_credentials_for_url(&job.current_url),
         request_cookie_report,
         response,
     );
@@ -3678,6 +3695,7 @@ fn complete_raw_streaming_proxy_connect_response(
     let start = proxy_connect_response_start(
         &job.current_url,
         &job.request.redirect_chain,
+        job.request.allows_credentials_for_url(&job.current_url),
         request_cookie_report,
         response,
     );
@@ -3720,6 +3738,7 @@ fn collect_buffered_response(
     Ok((
         RawResponse::from_head_and_body(
             ResponseHead {
+                request_include_credentials: false,
                 status_text,
                 final_url,
                 status,
@@ -4405,6 +4424,7 @@ mod tests {
             job,
             Response::from_head_and_text_body(
                 ResponseHead {
+                    request_include_credentials: false,
                     status_text: None,
                     final_url: final_url.clone(),
                     status: 200,

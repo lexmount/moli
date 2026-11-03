@@ -641,6 +641,7 @@ async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_s
             status: 204,
             headers: Vec::new(),
             request_cookie_report: None,
+            request_include_credentials: false,
             cookie_set_reports: Vec::new(),
             redirected: false,
             redirect_chain: Vec::new(),

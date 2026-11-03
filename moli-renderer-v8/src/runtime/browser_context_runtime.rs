@@ -300,6 +300,7 @@ impl DetachedParserScriptFetchContinuation {
                 status: response_code,
                 headers: response_headers,
                 request_cookie_report: None,
+                request_include_credentials: false,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
                 redirect_chain: Vec::new(),

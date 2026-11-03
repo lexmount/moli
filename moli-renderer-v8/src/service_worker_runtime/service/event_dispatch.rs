@@ -63,6 +63,7 @@ fn navigation_preload_response_head(
     head: moli_fetch::ResponseHead,
 ) -> MaterializedServiceWorkerFetchResponseHead {
     MaterializedServiceWorkerFetchResponseHead {
+        request_include_credentials: head.request_include_credentials,
         status_text: head.status_text().to_owned(),
         final_url: Some(head.final_url),
         response_type: "default".to_owned(),

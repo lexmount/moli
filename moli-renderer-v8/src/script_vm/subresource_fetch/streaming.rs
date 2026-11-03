@@ -113,6 +113,7 @@ impl ScriptVm {
                         request_body: challenged_body,
                         resource_type,
                         request_cookie_report: response.request_cookie_report.clone(),
+                        request_include_credentials: response.request_include_credentials,
                         network_request_headers: response
                             .network_request_headers()
                             .map(|headers| headers.to_vec()),
@@ -170,6 +171,7 @@ impl ScriptVm {
                         request_body: request_body.clone(),
                         resource_type,
                         request_cookie_report: response.request_cookie_report.clone(),
+                        request_include_credentials: response.request_include_credentials,
                         network_request_headers: response
                             .network_request_headers()
                             .map(|headers| headers.to_vec()),
@@ -814,7 +816,9 @@ impl ScriptVm {
             if matches!(
                 pending.info.resource_type,
                 SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-            ) && !started.response_filter.is_some_and(|filter| filter.is_readable()) {
+            ) && pending.request_mode == moli_fetch::RequestMode::Cors
+                && !started.response_filter.is_some_and(|filter| filter.is_readable())
+            {
                 observable_head.headers = crate::network_host::filter_cors_exposed_response_headers(
                     &pending.request_origin,
                     &observable_head,

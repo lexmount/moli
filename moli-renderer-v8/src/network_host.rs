@@ -101,8 +101,8 @@ pub(crate) use self::fetch_surface::{
 };
 pub(crate) use self::fetch_surface::{
     RESPONSE_BODY_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT, RESPONSE_OK_SLOT,
-    RESPONSE_REDIRECTED_SLOT, RESPONSE_STATUS_SLOT, RESPONSE_STATUS_TEXT_SLOT, RESPONSE_TYPE_SLOT,
-    RESPONSE_URL_SLOT, is_branded_response_object,
+    RESPONSE_REDIRECTED_SLOT, RESPONSE_REQUEST_INCLUDE_CREDENTIALS_SLOT, RESPONSE_STATUS_SLOT,
+    RESPONSE_STATUS_TEXT_SLOT, RESPONSE_TYPE_SLOT, RESPONSE_URL_SLOT, is_branded_response_object,
 };
 pub(crate) use self::fetch_surface::{
     consume_webassembly_streaming_response_value, initialize_fetch_realm_helpers,
@@ -147,7 +147,8 @@ pub(in crate::network_host) use self::request_scope::{
     observe_subresource_request_cookie_report,
 };
 pub(crate) use self::request_scope::{
-    effective_subresource_policy_context, subresource_api_base_url,
+    current_subresource_policy_environment, effective_subresource_policy_context,
+    subresource_api_base_url,
 };
 #[cfg(test)]
 pub(crate) use self::response::materialize_response_object;
@@ -166,10 +167,9 @@ pub(crate) use self::response::{
     materialize_response_object_body_with_chunk_callback, materialize_response_object_head,
     materialize_response_object_head_for_service_worker_respond_with,
     materialized_body_bytes_from_value, network_response_filter, response_constructor_callback,
-    validate_cors_preflight_response, validate_cors_response_chain,
-    validate_cross_origin_embedder_and_document_isolation_policy,
-    validate_cross_origin_resource_policy, validate_fetch_response_security_policy,
-    validate_fetch_response_security_policy_with_body,
+    set_filtered_response_internal_head, validate_cors_preflight_response,
+    validate_cors_response_chain, validate_cross_origin_embedder_and_document_isolation_policy,
+    validate_fetch_response_security_policy, validate_fetch_response_security_policy_with_body,
     validate_fetch_response_security_policy_with_body_classified,
     validate_opaque_response_blocking_with_body,
 };
