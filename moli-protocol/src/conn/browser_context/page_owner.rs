@@ -459,14 +459,14 @@ fn devtools_session_page_domain_enabled(state: &DevToolsSessionState) -> bool {
 }
 
 fn browser_context_has_page_domain_enabled_session(browser_context: &BrowserContext) -> bool {
-    browser_context
-        .active_page_target()
-        .devtools_sessions
-        .states()
-        .any(devtools_session_page_domain_enabled)
-        || browser_context
-            .background_targets()
-            .any(|target| target.has_page_domain_enabled_session())
+    browser_context.page_targets.active().is_some_and(|target| {
+        target
+            .devtools_sessions
+            .states()
+            .any(devtools_session_page_domain_enabled)
+    }) || browser_context
+        .background_targets()
+        .any(|target| target.has_page_domain_enabled_session())
 }
 
 impl CdpConnection {
@@ -1178,6 +1178,48 @@ mod tests {
 
         assert!(conn.disable_page_domain_for_session_owner(Some("SID-inactive-b")));
         assert!(!inactive_runtime.javascript_dialog_handler_enabled());
+    }
+
+    #[test]
+    fn page_domain_dialog_handler_tracks_background_sessions_without_active_target() {
+        let mut conn = CdpConnection::default();
+        let mut context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
+        for (target, session) in [("TID-a", "SID-a"), ("TID-b", "SID-b")] {
+            context.stage_background_target(
+                target.to_owned(),
+                Some(session.to_owned()),
+                "about:blank".to_owned(),
+                None,
+                None,
+            );
+        }
+        let runtime = context.renderer_runtime();
+        conn.install_browser_context_fixture_for_test(context);
+        conn.commit_declared_session_fixtures_for_test();
+        assert!(conn.set_page_domain_enabled_for_session_owner(Some("SID-a"), true));
+        assert!(conn.set_page_domain_enabled_for_session_owner(Some("SID-b"), true));
+        let context = conn.browser_context.as_mut().unwrap();
+        drop(context.take_page_target_for_close("TID-active").unwrap());
+        assert!(context.active_target_id().is_none());
+
+        assert!(conn.disable_page_domain_for_session_owner(Some("SID-a")));
+        assert!(
+            runtime.javascript_dialog_handler_enabled(),
+            "the remaining background Page subscriber still handles dialogs"
+        );
+        assert!(conn.disable_page_domain_for_session_owner(Some("SID-b")));
+        assert!(
+            !runtime.javascript_dialog_handler_enabled(),
+            "removing the final background subscriber must disable modal waits"
+        );
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .active_target_id()
+                .is_none(),
+            "session cleanup must not create or promote an active Page"
+        );
     }
 
     #[test]
