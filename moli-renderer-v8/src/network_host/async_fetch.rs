@@ -13,6 +13,10 @@ const MAX_MANUAL_CORS_REDIRECTS: usize = 20;
 mod redirect_tests;
 
 #[cfg(test)]
+#[path = "async_fetch/stream_redirect_tests.rs"]
+mod stream_redirect_tests;
+
+#[cfg(test)]
 #[path = "async_fetch/preflight_cache_tests.rs"]
 mod preflight_cache_tests;
 
@@ -135,7 +139,7 @@ async fn fetch_browser_subresource_with_preflight_headers_and_observer(
         let response = preload.response().await?.response.into();
         return Ok(NetworkFetchResult::without_request_observation(response));
     }
-    if browser_request_needs_cors_redirect_checks(&request) || redirect_owner.is_some() {
+    if browser_request_needs_redirect_checks(&request) || redirect_owner.is_some() {
         return fetch_browser_subresource_with_cors_redirect_checks(
             loader,
             request,
@@ -173,7 +177,7 @@ async fn fetch_browser_subresource_with_preflight_headers_and_observer(
     Ok(observed)
 }
 
-fn browser_request_needs_cors_redirect_checks(request: &Request) -> bool {
+fn browser_request_needs_redirect_checks(request: &Request) -> bool {
     matches!(
         request.browser_request_metadata(),
         Some(
@@ -187,7 +191,7 @@ fn browser_request_needs_cors_redirect_checks(request: &Request) -> bool {
                 | BrowserRequestMetadata::StyleModule
                 | BrowserRequestMetadata::Xhr,
         )
-    ) && request.request_mode == RequestMode::Cors
+    ) && (request.request_mode == RequestMode::Cors || request.body_source_is_null())
         && request.request_origin().is_some()
 }
 
@@ -301,6 +305,11 @@ impl ManualCorsRedirectState {
             })
         {
             return Err("CORS redirect URL must not include credentials".to_owned());
+        }
+        // A buffered snapshot does not make an author stream replayable. This
+        // check precedes POST-to-GET rewriting for 301/302; only 303 is exempt.
+        if head.status != 303 && self.request.body_source_is_null() {
+            return Err("Cannot replay a streaming request body after a redirect".to_owned());
         }
         self.request.check_redirect_target(&next_url)?;
         if !moli_url::same_origin(&head.final_url, &next_url) {
@@ -606,7 +615,7 @@ async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observe
         .map_err(format_network_error)?;
         return Ok(NetworkFetchResult::without_request_observation(response));
     }
-    if browser_request_needs_cors_redirect_checks(&request) || redirect_owner.is_some() {
+    if browser_request_needs_redirect_checks(&request) || redirect_owner.is_some() {
         return fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
             loader,
             request,
@@ -822,7 +831,7 @@ pub(crate) fn spawn_async_subresource_fetch(
         let preflight_observer =
             CorsPreflightNetworkObserver::new(completion_tx.clone(), network_context);
         let auth_requires_buffered_transport = request.auth_requires_buffered_transport();
-        let requires_cors_redirect_checks = browser_request_needs_cors_redirect_checks(&request);
+        let requires_cors_redirect_checks = browser_request_needs_redirect_checks(&request);
         let can_stream_subresource_body = matches!(
             request.browser_request_metadata(),
             Some(
@@ -2497,7 +2506,7 @@ mod tests {
         .with_initiator_url(&document_url)
         .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
         .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
-        assert!(browser_request_needs_cors_redirect_checks(&request));
+        assert!(browser_request_needs_redirect_checks(&request));
 
         spawn_async_subresource_fetch(
             crate::network::RendererResourceTaskRunner::from_current_tokio()?,

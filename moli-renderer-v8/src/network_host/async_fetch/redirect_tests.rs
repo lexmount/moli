@@ -6,7 +6,7 @@ use tokio::{
     net::TcpListener,
 };
 
-async fn request_head(socket: &mut tokio::net::TcpStream) -> Result<String> {
+pub(super) async fn request_head(socket: &mut tokio::net::TcpStream) -> Result<String> {
     let mut bytes = Vec::new();
     let mut byte = [0; 1];
     while !bytes.ends_with(b"\r\n\r\n") {
