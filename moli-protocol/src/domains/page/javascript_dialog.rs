@@ -135,6 +135,11 @@ pub(super) fn dismiss_dialogs_for_page_subscription(
     owner: &CommandOwnerScope,
     generation: u64,
 ) -> Vec<BackgroundProtocolEvent> {
+    // Disabling Page revokes its callback, while native automation can still
+    // handle the physical dialog, just as when the CDP session detaches.
+    if native_dialog_handler_for_owner(conn, owner) {
+        return Vec::new();
+    }
     dismiss_matching_dialogs(conn, owner, |dialog| {
         dialog.has_page_subscription(generation)
     })

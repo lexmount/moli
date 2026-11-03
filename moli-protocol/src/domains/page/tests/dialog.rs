@@ -352,6 +352,144 @@ async fn bidi_dialog_handler_survives_last_cdp_detach_without_enabling_modal_wai
     assert!(completion.wait().accepted);
 }
 
+async fn assert_page_disable_preserves_native_dialog_handler(
+    disabling: &str,
+    other: &str,
+    protocol: FrontendProtocol,
+) {
+    let mut ctx = shared_dialog_context();
+    let native_modal_wait = protocol == FrontendProtocol::WebDriverClassic;
+    ctx.with_fixture(|conn| {
+        assert!(conn.disable_page_domain_for_session_owner(Some(other)));
+        if native_modal_wait {
+            assert!(conn.set_automation_javascript_dialog_handler_enabled(true));
+        }
+    });
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some(disabling),
+        renderer_dialog_for_test(
+            Some("TID-1"),
+            "prompt",
+            "native handler survives Page.disable",
+            "",
+            Some(completion.clone()),
+        ),
+    );
+    let context = AutomationContext {
+        protocol,
+        session_id: None,
+        target_id: Some(DevToolsTargetId::from("TID-1")),
+        browser_context_id: None,
+    };
+    ctx.execute_automation_command_through_renderer_fence_for_test(
+        AutomationCommand::GetJavaScriptDialog(
+            crate::automation::DevToolsGetJavaScriptDialogCommand {
+                context: context.clone(),
+            },
+        ),
+    )
+    .await
+    .expect("native automation can observe the shared dialog");
+
+    ctx.process_async(json!({"id": 211, "method": "Page.disable", "sessionId": disabling}))
+        .await;
+    assert_eq!(take_response_by_id(&mut ctx, 211)["result"], json!({}));
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.has_pending_javascript_dialog(),
+            "Page.disable must preserve a dialog with an available native handler"
+        );
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .renderer_runtime()
+                .javascript_dialog_handler_enabled(),
+            native_modal_wait,
+            "Page.disable must preserve the native frontend's modal waiting mode"
+        );
+    });
+    assert!(
+        ctx.take_all()
+            .iter()
+            .all(|message| message["method"] != "Page.javascriptDialogClosed")
+    );
+    ctx.process_async(json!({"id": 212, "method": "Page.handleJavaScriptDialog", "sessionId": disabling, "params": {"accept": true}})).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 212)["error"]["message"],
+        "No dialog is showing",
+        "disabling Page must still revoke the CDP session's pending callback"
+    );
+    ctx.process_async(json!({"id": 213, "method": "Page.enable", "sessionId": disabling}))
+        .await;
+    assert_eq!(take_response_by_id(&mut ctx, 213)["result"], json!({}));
+    ctx.process_async(json!({"id": 214, "method": "Page.handleJavaScriptDialog", "sessionId": disabling, "params": {"accept": true}})).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 214)["error"]["message"],
+        "No dialog is showing",
+        "re-enabling Page must not restore the old pending callback"
+    );
+
+    ctx.execute_automation_command_through_renderer_fence_for_test(
+        AutomationCommand::HandleJavaScriptDialog(
+            crate::automation::DevToolsHandleJavaScriptDialogCommand {
+                context,
+                accept: true,
+                prompt_text: "native answer".to_owned(),
+            },
+        ),
+    )
+    .await
+    .expect("native automation retains the dialog after Page.disable");
+    assert!(!completion.finish(false, String::new()));
+    let result = completion.wait();
+    assert!(result.accepted);
+    assert_eq!(result.user_input, "native answer");
+    ctx.with_fixture(|conn| assert!(!conn.has_pending_javascript_dialog()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn primary_page_disable_preserves_native_classic_dialog_handler() {
+    assert_page_disable_preserves_native_dialog_handler(
+        "SID-primary",
+        "SID-attached",
+        FrontendProtocol::WebDriverClassic,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attached_page_disable_preserves_native_classic_dialog_handler() {
+    assert_page_disable_preserves_native_dialog_handler(
+        "SID-attached",
+        "SID-primary",
+        FrontendProtocol::WebDriverClassic,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn primary_page_disable_preserves_native_bidi_dialog_handler() {
+    assert_page_disable_preserves_native_dialog_handler(
+        "SID-primary",
+        "SID-attached",
+        FrontendProtocol::WebDriverBidi,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attached_page_disable_preserves_native_bidi_dialog_handler() {
+    assert_page_disable_preserves_native_dialog_handler(
+        "SID-attached",
+        "SID-primary",
+        FrontendProtocol::WebDriverBidi,
+    )
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn dialog_broadcast_emits_one_native_event_per_physical_dialog() {
     let mut ctx = shared_dialog_context();
