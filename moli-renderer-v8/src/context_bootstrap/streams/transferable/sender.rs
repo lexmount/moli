@@ -6,6 +6,10 @@ use moli_streams::transfer::{
 use protocol::{MessageKind, parts, post};
 
 pub(super) fn start_read<'s>(scope: &mut v8::PinScope<'s, '_>, state: v8::Local<'s, v8::Object>) {
+    if request_body::is_request_body(scope, state) {
+        request_body::start_read(scope, state);
+        return;
+    }
     if matches!(
         state::snapshot(scope, state).plan_sender_start_read(),
         SenderStartReadPlan::Ignore
@@ -81,7 +85,7 @@ fn read_fulfilled_callback<'s>(
     rv.set_undefined();
 }
 
-fn apply_read_fulfillment<'s>(
+pub(super) fn apply_read_fulfillment<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: v8::Local<'s, v8::Object>,
     plan: SenderReadFulfillmentPlan,
@@ -248,6 +252,7 @@ fn close_port_and_cancel_source<'s>(
     // Both terminal paths deactivate before reaching this helper. Release the
     // channel before cancellation can reenter or terminate the owning realm.
     state::close_port(scope, state);
+    request_body::remove_abort(scope, state);
     if let Some(stream) = state::stream(scope, state)
         && let Some(promise) = cancel_readable_stream(scope, stream, reason)
     {

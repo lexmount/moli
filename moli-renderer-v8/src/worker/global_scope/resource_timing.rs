@@ -182,6 +182,10 @@ impl WorkerResourceTiming {
         state.synthetic_response_start = state.completed_at;
     }
 
+    pub(crate) fn select_streaming_response(&self, head: &ResponseHead, filter: AsyncSubresourceFetchResponseFilter) {
+        self.0.state.lock().response = Some((head.clone(), filter));
+    }
+
     pub(crate) fn select_response(
         &self,
         head: &ResponseHead,

@@ -301,21 +301,11 @@ pub(crate) fn build_service_worker_request_object<'s>(
     )
     .bind(scope)
     .ok()?;
-    let destination = v8::String::new(scope, source.destination.as_str())?;
-    set_request_slot_value(scope, request, REQUEST_DESTINATION_SLOT, destination.into());
-    set_request_slot_bool(
-        scope,
-        request,
-        REQUEST_IS_RELOAD_NAVIGATION_SLOT,
-        source.is_reload,
-    );
-    set_request_slot_bool(
-        scope,
-        request,
-        REQUEST_IS_HISTORY_NAVIGATION_SLOT,
-        source.metadata.is_history_navigation,
-    );
-    if let Some(bytes) = &source.body {
+    if let Some(payload) = &source.body_stream {
+        let stream = crate::context_bootstrap::build_readable_stream_clone_shell(scope);
+        crate::context_bootstrap::initialize_request_body_stream(scope, stream, payload)?;
+        set_request_slot_value(scope, request, REQUEST_BODY_SLOT, stream.into());
+    } else if let Some(bytes) = &source.body {
         let body = PreparedBodySource::Bytes(bytes.clone()).into_body_stream(scope, request)?;
         set_request_slot_value(scope, request, REQUEST_BODY_SLOT, body.into());
     }

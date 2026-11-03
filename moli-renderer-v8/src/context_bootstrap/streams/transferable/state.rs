@@ -125,6 +125,7 @@ pub(super) fn finish<'s>(scope: &mut v8::PinScope<'s, '_>, state: v8::Local<'s, 
     ) {
         set_active(scope, state, false);
         close_port(scope, state);
+        request_body::remove_abort(scope, state);
     }
 }
 

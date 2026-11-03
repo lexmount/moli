@@ -19,9 +19,23 @@ pub(in crate::worker) struct PendingWorkerFetch {
 }
 
 pub(crate) enum WorkerFetchEvent {
+    RequestBodyProducer {
+        fetch_id: u32,
+        producer: crate::context_bootstrap::RequestBodyProducer,
+    },
+    ServiceWorkerUploadReady {
+        event_id: crate::runtime::ServiceWorkerEventId,
+        result: Result<(), moli_fetch::UploadBodyError>,
+    },
+    ServiceWorkerUploadFinished {
+        event_id: crate::runtime::ServiceWorkerEventId,
+        result: Result<(), moli_fetch::UploadBodyError>,
+    },
+
     RequestUploadReady { fetch_id: u32, result: Result<(), moli_fetch::UploadBodyError> },
     RedirectAdmission { fetch_id: u32, admission: crate::network_host::RedirectAdmission },
     PolicyViolations(Vec<crate::content_security_policy::ContentSecurityPolicyUrlViolation>),
+
 
 
     Completion(Box<WorkerFetchCompletion>),
@@ -41,6 +55,8 @@ pub(crate) struct WorkerFetchCompletion {
 }
 
 pub(crate) struct WorkerFetchStreamingStarted {
+    pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(crate) skip_fetch_security_validation: bool,
     pub(crate) fetch_id: u32,
     pub(crate) body_source_id: NetworkBodySourceId,
     pub(crate) head: ResponseHead,

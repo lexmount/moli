@@ -198,9 +198,11 @@ impl RendererBrowserContextRuntime {
         let redirect_mode =
             main_resource_fetch_event_redirect_mode(destination, request.redirect_mode());
         let dispatch = ServiceWorkerFetchDispatch {
+            request_body_owner: None,
             redirect_check: None,
             internal_id: 0,
             request: ServiceWorkerFetchRequest {
+                body_stream: None,
                 client_id,
                 resulting_client_id: Some(client_id),
                 url: request.url.clone(),
@@ -240,6 +242,12 @@ impl RendererBrowserContextRuntime {
         }
 
         match main_resource_completion_rx.await {
+            Ok(
+                ServiceWorkerDirectFetchResult::FallbackStream(_)
+                | ServiceWorkerDirectFetchResult::Stream(_),
+            ) => Err(anyhow!(
+                "navigation requests cannot contain an author stream"
+            )),
             Ok(ServiceWorkerDirectFetchResult::Fallback) => Ok(None),
             Ok(ServiceWorkerDirectFetchResult::Response(response)) => Ok(Some(*response.response)),
             Ok(ServiceWorkerDirectFetchResult::Failure(message)) => Err(anyhow!(message)),
@@ -314,11 +322,13 @@ impl RendererBrowserContextRuntime {
         let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
         let redirect_request = request.clone();
         let dispatch = ServiceWorkerFetchDispatch {
+            request_body_owner: None,
             redirect_check: Some(moli_fetch::RequestRedirectCheck::new(move |next_url| {
                 redirect_request.check_redirect_target(next_url)
             })),
             internal_id: 0,
             request: ServiceWorkerFetchRequest {
+                body_stream: None,
                 client_id,
                 resulting_client_id: None,
                 url: request.url.clone(),
@@ -354,6 +364,12 @@ impl RendererBrowserContextRuntime {
         }
 
         match direct_completion_rx.await {
+            Ok(
+                ServiceWorkerDirectFetchResult::FallbackStream(_)
+                | ServiceWorkerDirectFetchResult::Stream(_),
+            ) => Err(anyhow!(
+                "native subresource requests cannot contain an author stream"
+            )),
             Ok(ServiceWorkerDirectFetchResult::Fallback) => Ok(None),
             Ok(ServiceWorkerDirectFetchResult::Response(response)) => Ok(Some(response)),
             Ok(ServiceWorkerDirectFetchResult::Failure(message)) => Err(anyhow!(message)),

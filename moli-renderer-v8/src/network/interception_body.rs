@@ -27,6 +27,7 @@ impl Eq for ResourceInterceptionBody {}
 #[derive(Debug)]
 enum BodyState {
     Receiving(Box<StreamingRawResponse>),
+    ServiceWorker(tokio::sync::mpsc::UnboundedReceiver<crate::service_worker_runtime::ServiceWorkerDirectFetchStreamEvent>),
     Complete,
     Failed(String),
 }
@@ -79,6 +80,17 @@ impl ResourceInterceptionBody {
         }
     }
 
+    pub(crate) fn from_service_worker_stream(
+        events: tokio::sync::mpsc::UnboundedReceiver<crate::service_worker_runtime::ServiceWorkerDirectFetchStreamEvent>,
+        disk_pool: Option<moli_disk_pool::DiskPool>,
+    ) -> Self {
+        Self {
+            cancel: FetchCancelHandle::new(),
+            state: Arc::new(Mutex::new(BodyState::ServiceWorker(events))),
+            captured: Arc::new(parking_lot::Mutex::new(BodyCapture::Receiving(SubresourceResponseBodyWriter::with_disk_pool(disk_pool)))),
+        }
+    }
+
     pub(crate) fn from_complete(body: SubresourceResponseBody) -> Self {
         Self {
             cancel: FetchCancelHandle::new(),
@@ -112,7 +124,7 @@ impl ResourceInterceptionBody {
     pub fn cancel(&self) {
         self.cancel.cancel();
         if let Ok(mut state) = self.state.try_lock()
-            && matches!(*state, BodyState::Receiving(_))
+            && matches!(*state, BodyState::Receiving(_) | BodyState::ServiceWorker(_))
         {
             // Retained protocol handles must not keep a retired transport or
             // its runtime lease alive. An active reader takes this same path
@@ -146,7 +158,7 @@ impl ResourceInterceptionBody {
                     return Ok(body);
                 }
                 BodyState::Failed(error) => return Err(anyhow!(error.clone())),
-                BodyState::Receiving(_) => {
+                BodyState::Receiving(_) | BodyState::ServiceWorker(_) => {
                     ensure!(
                         self.captured.lock().len() <= limit,
                         "response body exceeds materialization limit"
@@ -174,7 +186,7 @@ impl ResourceInterceptionBody {
                     return Ok((bytes, eof));
                 }
                 BodyState::Failed(error) => return Err(anyhow!(error.clone())),
-                BodyState::Receiving(_) => {
+                BodyState::Receiving(_) | BodyState::ServiceWorker(_) => {
                     let available = {
                         let captured = self.captured.lock();
                         (offset < captured.len() || size == 0)
@@ -198,18 +210,29 @@ impl ResourceInterceptionBody {
     }
 
     async fn receive(&self, state: &mut BodyState) -> Result<Option<Vec<u8>>> {
-        let BodyState::Receiving(response) = state else {
-            return Ok(None);
-        };
         let next = tokio::select! {
             biased;
             () = self.cancel.cancelled() => Err(anyhow!("net::ERR_ABORTED")),
             next = async {
-                if let Some(bytes) = response.next_chunk().await {
-                    return Ok(Some(bytes));
+                match state {
+                    BodyState::Receiving(response) => {
+                        if let Some(bytes) = response.next_chunk().await {
+                            return Ok(Some(bytes));
+                        }
+                        response.finish().await?;
+                        Ok(None)
+                    }
+                    BodyState::ServiceWorker(events) => {
+                        use crate::service_worker_runtime::ServiceWorkerDirectFetchStreamEvent as Event;
+                        match events.recv().await {
+                            Some(Event::Chunk(bytes)) => Ok(Some(bytes)),
+                            Some(Event::Finished(Ok(()))) => Ok(None),
+                            Some(Event::Finished(Err(error))) => Err(anyhow!(error)),
+                            None => Err(anyhow!("service worker response body channel closed")),
+                        }
+                    }
+                    BodyState::Complete | BodyState::Failed(_) => Ok(None),
                 }
-                response.finish().await?;
-                Ok(None)
             } => next,
         };
         match next {

@@ -441,6 +441,7 @@ pub(crate) struct ServiceWorkerFetchRequest {
     /// Isomorphically decoded wire bytes, ready for the worker's Fetch Headers.
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) body: Option<bytes::Bytes>,
+    pub(crate) body_stream: Option<crate::context_bootstrap::ReadableStreamClonePayload>,
     pub(crate) destination: ServiceWorkerRequestDestination,
     pub(crate) request_mode: moli_fetch::RequestMode,
     pub(crate) credentials_mode: moli_fetch::RequestCredentialsMode,
@@ -647,6 +648,7 @@ pub(crate) struct ServiceWorkerFetchResponse {
 #[derive(Clone, Debug)]
 pub(crate) enum ServiceWorkerFetchResult {
     Fallback,
+    FallbackStream(moli_fetch::UploadBody),
     Response(ServiceWorkerFetchResponse),
     Failure(String),
 }
@@ -703,8 +705,24 @@ pub(crate) use moli_fetch_types::FetchResponseHead as MaterializedServiceWorkerF
 #[derive(Debug)]
 pub(crate) enum ServiceWorkerDirectFetchResult {
     Fallback,
+    FallbackStream(moli_fetch::UploadBody),
     Response(ServiceWorkerDirectFetchResponse),
+    Stream(Box<ServiceWorkerDirectFetchStream>),
     Failure(String),
+}
+
+#[derive(Debug)]
+pub(crate) struct ServiceWorkerDirectFetchStream {
+    pub(crate) body_source_id: crate::types::NetworkBodySourceId,
+    pub(crate) head: moli_fetch::ResponseHead,
+    pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(crate) events: tokio::sync::mpsc::UnboundedReceiver<ServiceWorkerDirectFetchStreamEvent>,
+}
+
+#[derive(Debug)]
+pub(crate) enum ServiceWorkerDirectFetchStreamEvent {
+    Chunk(Vec<u8>),
+    Finished(Result<(), String>),
 }
 
 #[derive(Debug)]
@@ -724,6 +742,7 @@ pub(crate) struct ServiceWorkerFetchCompletion {
 }
 
 pub(crate) struct ServiceWorkerFetchDispatch {
+    pub(crate) request_body_owner: Option<crate::context_bootstrap::RequestBodyOwner>,
     pub(crate) internal_id: u64,
     pub(crate) request: ServiceWorkerFetchRequest,
     pub(crate) redirect_check: Option<moli_fetch::RequestRedirectCheck>,

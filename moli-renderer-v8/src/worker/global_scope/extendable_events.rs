@@ -77,6 +77,7 @@ pub(in crate::worker) struct PendingServiceWorkerPeriodicSyncEvent {
 }
 
 pub(in crate::worker) struct PendingServiceWorkerFetchEvent {
+    pub(in crate::worker) request_for_body: Option<v8::Global<v8::Object>>,
     pub(in crate::worker) completion: ServiceWorkerFetchCompletion,
     pub(in crate::worker) handled_resolver: Option<v8::Global<v8::PromiseResolver>>,
     pub(in crate::worker) request_signal_id: Option<u32>,
@@ -99,6 +100,7 @@ impl PendingServiceWorkerFetchEvent {
         request_destination: ServiceWorkerRequestDestination,
     ) -> Self {
         Self {
+            request_for_body: None,
             completion: ServiceWorkerFetchCompletion {
                 result: ServiceWorkerFetchResult::Fallback,
                 ..completion

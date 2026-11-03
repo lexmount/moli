@@ -10,6 +10,8 @@ pub(crate) struct WorkerServiceWorkerFetch {
     pub(crate) runtime: ServiceWorkerRuntimeService,
     pub(crate) client_id: ServiceWorkerClientId,
     pub(crate) metadata: ServiceWorkerFetchRequestMetadata,
+    body_stream: Option<crate::context_bootstrap::ReadableStreamClonePayload>,
+    request_body_owner: Option<crate::context_bootstrap::RequestBodyOwner>,
 }
 impl ControlledResourceLoad {
     pub(crate) fn with_service_worker(
@@ -23,14 +25,23 @@ impl ControlledResourceLoad {
                 runtime,
                 client_id,
                 metadata,
+                body_stream: None,
+                request_body_owner: None,
             });
+        }
+        self
+    }
+    pub(crate) fn with_service_worker_request_body(mut self, body_stream: Option<crate::context_bootstrap::ReadableStreamClonePayload>, request_body_owner: Option<crate::context_bootstrap::RequestBodyOwner>) -> Self {
+        if let Some(source) = &mut self.service_worker {
+            source.body_stream = body_stream;
+            source.request_body_owner = request_body_owner;
         }
         self
     }
     pub(super) async fn fetch_service_worker_hop(
         &mut self,
         source: WorkerServiceWorkerFetch,
-    ) -> Result<Option<Response>, String> {
+    ) -> Result<Option<LoadedResponse>, String> {
         if self.load.request_client().bypass_service_worker()
             || source
                 .runtime
@@ -45,8 +56,10 @@ impl ControlledResourceLoad {
         };
         let dispatch = ServiceWorkerFetchDispatch {
             redirect_check: None,
+            request_body_owner: source.request_body_owner,
             internal_id: self.info.internal_id,
             request: ServiceWorkerFetchRequest {
+                body_stream: self.service_worker.as_mut().and_then(|source| source.body_stream.take()),
                 client_id: source.client_id,
                 resulting_client_id: None,
                 url: self.request.url.clone(),
@@ -97,10 +110,18 @@ impl ControlledResourceLoad {
         };
         match result {
             ServiceWorkerDirectFetchResult::Fallback => Ok(None),
+            ServiceWorkerDirectFetchResult::FallbackStream(body) => {
+                self.request = self.request.clone().with_upload_body(body);
+                Ok(None)
+            }
+            ServiceWorkerDirectFetchResult::Stream(stream) => {
+                self.response_filter = stream.response_filter;
+                Ok(Some(LoadedResponse { head: stream.head, body: crate::network::ResourceInterceptionBody::from_service_worker_stream(stream.events, self.load.request_client().disk_pool()) }))
+            }
             ServiceWorkerDirectFetchResult::Failure(error) => Err(error),
             ServiceWorkerDirectFetchResult::Response(response) => {
                 self.response_filter = response.response_filter;
-                Ok(Some((*response.response).into()))
+                Ok(Some(LoadedResponse::from_response((*response.response).into())))
             }
         }
     }

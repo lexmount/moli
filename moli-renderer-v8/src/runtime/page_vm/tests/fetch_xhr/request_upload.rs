@@ -7,6 +7,8 @@ use tokio_rustls::rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
 };
 
+mod controlled;
+
 #[derive(Default)]
 struct Wire {
     bytes: Vec<u8>,
@@ -111,6 +113,14 @@ impl UploadServer {
                                 .header("access-control-allow-headers", "authorization");
                             if request.method() == http::Method::OPTIONS {
                                 response.send_response(head.status(204).body(())?, true)?;
+                            } else if path == "/sw.js" {
+                                let head = head.status(200)
+                                    .header("content-type", "text/javascript")
+                                    .header("service-worker-allowed", "/").body(())?;
+                                let mut send = response.send_response(head, false)?;
+                                send.send_data(bytes::Bytes::from_static(include_bytes!(
+                                    "../../../../../tests/fixtures/controlled-request-upload-worker.js"
+                                )), true)?;
                             } else if path == "/upload" {
                                 wire.lock().headers = request.headers().clone();
                                 events.headers.send_replace(true);
