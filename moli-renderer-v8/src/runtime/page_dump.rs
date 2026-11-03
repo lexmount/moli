@@ -46,8 +46,8 @@ impl PageVm {
             nodes
                 .into_iter()
                 .zip(values)
-                .map(|(node, (values, own_visibility, original_display))| {
-                    let mut values = values.into_iter();
+                .map(|(node, style)| {
+                    let mut values = style.values.into_iter();
                     (
                         node,
                         visibility::ExportStyle {
@@ -57,8 +57,9 @@ impl PageVm {
                             position: values.next().unwrap_or_default(),
                             float: values.next().unwrap_or_default(),
                             flex_direction: values.next().unwrap_or_default(),
-                            original_display,
-                            own_visibility,
+                            original_display: style.original_display,
+                            own_visibility: style.own_visibility,
+                            hides_contents: style.hides_contents,
                         },
                     )
                 })

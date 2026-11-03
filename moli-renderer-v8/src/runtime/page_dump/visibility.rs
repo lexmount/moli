@@ -18,6 +18,7 @@ pub(super) struct ExportStyle {
     pub visibility: String,
     pub baseline_shift: String,
     pub own_visibility: bool,
+    pub hides_contents: bool,
 }
 
 /// Read the current page's computed visibility without mutating the live DOM.
@@ -97,7 +98,9 @@ impl<'a> MarkdownDom<'a> {
         }));
         let hidden_nodes: HashSet<_> = styles
             .iter()
-            .filter_map(|(node, values)| (values.display == "none").then_some(*node))
+            .filter_map(|(node, values)| {
+                (values.display == "none" || values.hides_contents).then_some(*node)
+            })
             .collect();
         let mut disclosure_paths = HashSet::new();
         for &target in &disclosure_roots {
@@ -121,6 +124,7 @@ impl<'a> MarkdownDom<'a> {
         let mut unchecked_controls = HashSet::new();
         let mut visibility_modes = HashMap::new();
         let mut source_regions = HashSet::new();
+        let mut hidden_contents = HashSet::new();
         // Flex/grid item flow is determined by the parent, while absolute and
         // floating descendants do not introduce document paragraphs.
         let item_blocks: HashMap<_, _> = styles
@@ -179,6 +183,14 @@ impl<'a> MarkdownDom<'a> {
             }
             let disclosure_root = disclosure_roots.contains(&node);
             let disclosure_path = disclosure_paths.contains(&node);
+            let hides_contents =
+                values.hides_contents && !in_source && !disclosure_root && !disclosure_path;
+            if hides_contents {
+                // A content-visibility lock hides descendants, not the element's
+                // own box. Keep structural cells so their columns remain intact.
+                hidden_contents.insert(node);
+                invisible.insert(node);
+            }
             let parent_is_disclosure_path = dom
                 .parent_node(node)
                 .is_some_and(|parent| disclosure_paths.contains(&parent));
@@ -222,15 +234,15 @@ impl<'a> MarkdownDom<'a> {
             if collapsed_table_part
                 || (values.display == "none" && !in_source && !disclosure_root && !disclosure_path)
                 || (parent_is_disclosure_path && !disclosure_root && !disclosure_path)
-                || dom
-                    .parent_node(node)
-                    .is_some_and(|parent| suppressed.contains(&parent))
-                    && !disclosure_root
+                || dom.parent_node(node).is_some_and(|parent| {
+                    suppressed.contains(&parent) || hidden_contents.contains(&parent)
+                }) && !disclosure_root
                     && !disclosure_path
             {
                 suppressed.insert(node);
             }
             if !suppressed.contains(&node)
+                && !hides_contents
                 && visibility_mode != VisibilityMode::Hidden
                 && (in_source || matches!(Dom::node_kind(dom, node), NodeKind::Element("pre")))
             {
