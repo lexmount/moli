@@ -257,6 +257,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
     redirect_headers: Option<moli_fetch::RequestHeaders>,
     redirect_chain: Vec<moli_fetch::RedirectInfo>,
     redirect_check: Option<moli_fetch::RequestRedirectCheck>,
+    upload_body: Option<moli_fetch::UploadBody>,
 ) {
     timing.begin_transport(cancel_handle.clone());
     // Resolve local URLs before scheduling: fetch(url) already parsed and
@@ -324,6 +325,9 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                         .with_fetch_priority_hint(priority)
                         .with_network_partition_key(network_partition_key.clone())
                         .with_browser_request_metadata(kind.browser_metadata());
+                    if let Some(body) = upload_body {
+                        request = request.with_upload_body(body);
+                    }
                     if kind == WorkerFetchKind::Font {
                         request = request.with_resource_type(moli_fetch::RequestResourceType::Font);
                     }
@@ -622,6 +626,7 @@ fn spawn_worker_fetch_service_worker(
                     None,
                     Vec::new(),
                     redirect_check,
+                    None,
                 );
                 return;
             }
@@ -961,6 +966,7 @@ pub(in crate::worker) fn continue_pending_worker_fetch(
         redirect_headers,
         redirect_chain,
         worker_fetch_redirect_check(&state.borrow(), fetch_id),
+        None,
     );
 }
 
@@ -2111,6 +2117,7 @@ pub(in crate::worker) struct ResolvedWorkerFetchInput<'s> {
     method: String,
     body: Option<bytes::Bytes>,
     body_stream: Option<v8::Global<v8::Object>>,
+    body_stream_locked: bool,
     headers: Vec<(String, String)>,
     request_mode: moli_fetch::RequestMode,
     credentials_mode: RequestCredentialsMode,
@@ -2128,6 +2135,7 @@ impl ResolvedWorkerFetchInput<'_> {
             method: "GET".to_owned(),
             body: None,
             body_stream: None,
+            body_stream_locked: false,
             headers: Vec::new(),
             request_mode: RequestMode::Cors,
             credentials_mode: RequestCredentialsMode::SameOrigin,
@@ -2326,15 +2334,18 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
     }
     let signal = signal.as_ref().map(|signal| v8::Local::new(scope, signal));
     let blob_url_entry = blob_url_entry.or_else(|| CapturedBlobUrl::capture(&resolved_url));
-    if consumes_request_body && let Some(request_like) = request_like {
-        crate::network_host::mark_request_input_body_used_for_fetch(scope, request_like);
-    }
+    let body_stream_locked = if consumes_request_body && let Some(request_like) = request_like {
+        crate::network_host::mark_request_input_body_used_for_fetch(scope, request_like)?
+    } else {
+        false
+    };
     Ok(ResolvedWorkerFetchInput {
         resolved_url,
         blob_url_entry,
         method,
         body,
         body_stream,
+        body_stream_locked,
         headers,
         request_mode,
         credentials_mode,
@@ -2448,6 +2459,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
         method,
         body,
         body_stream,
+        body_stream_locked,
         headers: request_headers,
         request_mode,
         credentials_mode,
@@ -2651,6 +2663,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
             state.pending_fetches.insert(
                 fetch_id,
                 PendingWorkerFetch {
+                    upload: None,
                     timing: timing.clone(),
                     kind,
                     font_face: font_face.map(|face| v8::Global::new(scope, face)),
@@ -2757,6 +2770,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
             state.pending_fetches.insert(
                 fetch_id,
                 PendingWorkerFetch {
+                    upload: None,
                     timing: timing.clone(),
                     kind,
                     font_face: font_face.map(|face| v8::Global::new(scope, face)),
@@ -2799,6 +2813,47 @@ pub(super) fn start_worker_resource_fetch<'s>(
         };
 
         let redirect_check = worker_fetch_redirect_check(&state.borrow(), fetch_id);
+        let upload_body = if service_worker_controller.is_none()
+            && request_metadata.body_source_is_null
+            && matches!(resolved_url.scheme(), "http" | "https")
+        {
+            if let Some(stream) = body_stream.as_ref() {
+                let stream = v8::Local::new(scope, stream);
+                let completion = completion_tx.clone();
+                match crate::network_host::RequestUpload::new(
+                    scope,
+                    stream,
+                    resolver,
+                    body_stream_locked,
+                    load.task_runner(),
+                    cancel_handle.clone(),
+                    move |result| {
+                        let _ = completion
+                            .send(WorkerFetchEvent::RequestUploadReady { fetch_id, result });
+                    },
+                ) {
+                    Ok((upload, body)) => {
+                        state
+                            .borrow_mut()
+                            .pending_fetches
+                            .get_mut(&fetch_id)
+                            .expect("new worker fetch")
+                            .upload = Some(upload.clone());
+                        upload.start(scope);
+                        Some(body)
+                    }
+                    Err(reason) => {
+                        state.borrow_mut().pending_fetches.remove(&fetch_id);
+                        resolver.reject(scope, reason);
+                        return Some(promise);
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         if let Some((service_worker_runtime, service_worker_client_id)) = service_worker_controller
         {
             spawn_worker_fetch_service_worker(
@@ -2851,6 +2906,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
                 None,
                 Vec::new(),
                 redirect_check,
+                upload_body,
             );
         }
 
@@ -2888,6 +2944,7 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
                     pending.network_record,
                     pending.network_request_handle,
                     pending.streaming_body_source_id,
+                    pending.upload,
                 ));
             }
         }
@@ -2902,6 +2959,7 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
         network_record,
         network_request_handle,
         body_source_id,
+        upload,
     ) in rejected
     {
         timing.abort(scope);
@@ -2943,6 +3001,9 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
             let resolver = v8::Local::new(scope, &resolver);
             let _ = resolver.reject(scope, reason);
         }
+        if let Some(upload) = upload {
+            upload.stop(scope, reason);
+        }
     }
 }
 
@@ -2975,6 +3036,16 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
     event: WorkerFetchEvent,
 ) {
     match event {
+        WorkerFetchEvent::RequestUploadReady { fetch_id, result } => {
+            let upload = state
+                .borrow()
+                .pending_fetches
+                .get(&fetch_id)
+                .and_then(|pending| pending.upload.clone());
+            if let Some(upload) = upload {
+                upload.ready(scope, result);
+            }
+        }
         WorkerFetchEvent::RedirectAdmission {
             fetch_id,
             admission,
@@ -3190,6 +3261,14 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
             Some(response_filter),
         );
         let resolver = v8::Local::new(scope, &resolver);
+        let upload = state
+            .borrow()
+            .pending_fetches
+            .get(&started.fetch_id)
+            .and_then(|pending| pending.upload.clone());
+        if let Some(upload) = upload {
+            upload.finish(scope);
+        }
         let _ = resolver.resolve(scope, response_obj.into());
     }
 }
@@ -3666,14 +3745,19 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 }
             };
             let _ = resolver.resolve(scope, response_obj.into());
+            if let Some(upload) = pending.upload.as_ref() {
+                upload.finish(scope);
+            }
         }
         Err(message) => {
             pending.timing.publish(scope);
             record_worker_fetch_failure(&state.borrow(), &pending, message.clone());
-            if let Some(message) = v8_string(scope, &message) {
-                let _ = resolver.reject(scope, v8::Exception::type_error(scope, message));
-            } else {
-                let _ = resolver.reject(scope, v8::undefined(scope).into());
+            let reason = v8_string(scope, &message)
+                .map(|message| v8::Exception::type_error(scope, message))
+                .unwrap_or_else(|| v8::undefined(scope).into());
+            let _ = resolver.reject(scope, reason);
+            if let Some(upload) = pending.upload.as_ref() {
+                upload.stop(scope, reason);
             }
         }
     }

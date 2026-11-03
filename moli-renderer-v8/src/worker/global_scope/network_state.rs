@@ -3,6 +3,7 @@
 use super::*;
 
 pub(in crate::worker) struct PendingWorkerFetch {
+    pub(in crate::worker) upload: Option<crate::network_host::RequestUpload>,
     pub(super) timing: WorkerResourceTiming,
     pub(in crate::worker) kind: fetch::WorkerFetchKind,
     pub(in crate::worker) font_face: Option<v8::Global<v8::Object>>,
@@ -34,6 +35,10 @@ pub(in crate::worker) struct PendingWorkerFetch {
 }
 
 pub(in crate::worker) enum WorkerFetchEvent {
+    RequestUploadReady {
+        fetch_id: u32,
+        result: Result<(), moli_fetch::UploadBodyError>,
+    },
     RedirectAdmission {
         fetch_id: u32,
         admission: crate::network_host::RedirectAdmission,

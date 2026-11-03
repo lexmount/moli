@@ -378,6 +378,7 @@ impl PendingSubresourceContinuation {
 
 pub(super) struct PendingWindowFetchContinuation {
     pub(super) timing: crate::context_bootstrap::FetchResourceTiming,
+    pub(crate) upload: Option<crate::network_host::RequestUpload>,
     promise: PendingWindowFetchPromise,
     keepalive: bool,
     connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
@@ -403,6 +404,7 @@ impl PendingWindowFetchContinuation {
     ) -> Box<Self> {
         Box::new(Self {
             promise: PendingWindowFetchPromise::Active(resolver),
+            upload: None,
             timing: crate::context_bootstrap::FetchResourceTiming::new(),
             keepalive,
             redirect_csp_state: crate::network_host::FetchCspRedirectState::new(&connect_policy),
@@ -996,6 +998,9 @@ pub(super) struct AsyncSubresourceStreamingFinished {
 /// another kind of resident.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AsyncSubresourceFetchEventTarget {
+    RequestUpload {
+        internal_id: u64,
+    },
     RedirectAdmission {
         internal_id: u64,
     },
@@ -1033,6 +1038,10 @@ pub(crate) enum AsyncSubresourceFetchEventTarget {
 
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchEvent {
+    RequestUploadReady {
+        internal_id: u64,
+        result: Result<(), moli_fetch::UploadBodyError>,
+    },
     RedirectAdmission {
         internal_id: u64,
         admission: crate::network_host::RedirectAdmission,
@@ -1059,6 +1068,11 @@ pub(super) enum AsyncSubresourceFetchEvent {
 impl AsyncSubresourceFetchEvent {
     pub(crate) fn target(&self) -> AsyncSubresourceFetchEventTarget {
         match self {
+            Self::RequestUploadReady { internal_id, .. } => {
+                AsyncSubresourceFetchEventTarget::RequestUpload {
+                    internal_id: *internal_id,
+                }
+            }
             Self::RedirectAdmission { internal_id, .. } => {
                 AsyncSubresourceFetchEventTarget::RedirectAdmission {
                     internal_id: *internal_id,

@@ -55,7 +55,11 @@ fn window_fetch_abort_signal_callback<'s>(
         .and_then(|signal| host.abort_signal_reason(scope, signal))
         .unwrap_or_else(|| abort_error_value(scope));
     let reason_payload = structured_serialize_fetch_abort_reason(scope, reason);
+    let upload = host.window_request_upload(internal_id);
     let timing = host.abort_fetch_promise(scope, internal_id, reason, reason_payload);
+    if let Some(upload) = upload {
+        upload.stop(scope, reason);
+    }
     // The signal can belong to another realm. Report in the fetch's client
     // realm, after releasing the mutable request-host borrow.
     if let Some((context, entry)) = timing {
@@ -195,7 +199,7 @@ pub(crate) fn window_fetch_callback<'s>(
             &blob_environment,
         )
     };
-    let prepared = match prepared {
+    let mut prepared = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
             // Request construction uses the receiver's settings, but Blink's
@@ -207,7 +211,13 @@ pub(crate) fn window_fetch_callback<'s>(
     let scope = &mut v8::ContextScope::new(scope, relevant_context);
     if let Some(request_body_owner) = request_body_owner {
         let request_body_owner = v8::Local::new(scope, request_body_owner);
-        mark_request_input_body_used_for_fetch(scope, request_body_owner);
+        match mark_request_input_body_used_for_fetch(scope, request_body_owner) {
+            Ok(locked) => prepared.body_stream_locked = locked,
+            Err(error) => {
+                rv.set(make_rejected_promise(scope, &error.to_string()).into());
+                return;
+            }
+        }
     }
     window_fetch_callback_in_relevant_realm(scope, prepared, signal, rv);
 }

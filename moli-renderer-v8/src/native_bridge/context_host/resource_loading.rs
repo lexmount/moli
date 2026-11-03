@@ -1868,7 +1868,8 @@ impl JsContextHost {
             AsyncSubresourceFetchEventTarget::Upload { internal_id } => {
                 self.pending_window_xhr(internal_id).is_some()
             }
-            AsyncSubresourceFetchEventTarget::Completion { internal_id }
+            AsyncSubresourceFetchEventTarget::RequestUpload { internal_id }
+            | AsyncSubresourceFetchEventTarget::Completion { internal_id }
             | AsyncSubresourceFetchEventTarget::RedirectAdmission { internal_id } => {
                 self.pending_subresource_fetches.contains_key(&internal_id)
                     || self.running_subresource_fetches.contains_key(&internal_id)
@@ -1891,6 +1892,53 @@ impl JsContextHost {
             AsyncSubresourceFetchEventTarget::ObservedNetworkRecord
             | AsyncSubresourceFetchEventTarget::ContentSecurityPolicyViolation => true,
         }
+    }
+
+    pub(crate) fn set_window_request_upload(
+        &mut self,
+        internal_id: u64,
+        upload: crate::network_host::RequestUpload,
+    ) {
+        let Some(pending) = self.pending_subresource_fetches.get_mut(&internal_id) else {
+            return;
+        };
+        if let PendingSubresourceContinuation::Fetch(fetch) = &mut pending.continuation {
+            fetch.upload = Some(upload);
+        }
+    }
+
+    pub(crate) fn window_request_upload(
+        &self,
+        internal_id: u64,
+    ) -> Option<crate::network_host::RequestUpload> {
+        self.subresource_fetch_states()
+            .find(|pending| pending.info.internal_id == internal_id)?
+            .continuation
+            .window_fetch()?
+            .upload
+            .clone()
+    }
+
+    pub(crate) fn window_request_upload_delivery(
+        &self,
+        internal_id: u64,
+    ) -> Option<(
+        crate::network_host::RequestUpload,
+        super::WindowExecutionContextBinding,
+        super::OwnerDispatchScope,
+    )> {
+        let pending = self
+            .subresource_fetch_states()
+            .find(|pending| pending.info.internal_id == internal_id)?;
+        let binding = pending.execution_context.window_realm_binding()?;
+        if pending.load.is_cancelled() || !binding.is_current(self) {
+            return None;
+        }
+        Some((
+            pending.continuation.window_fetch()?.upload.clone()?,
+            binding.clone(),
+            pending.execution_context.dispatch_scope(),
+        ))
     }
 
     pub(crate) fn window_redirect_owner(

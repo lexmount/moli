@@ -151,6 +151,9 @@ v8 = { version = "152.2.0", features = ["v8_enable_pointer_compression"] }
 v8 = "152.2.0"
 
 [dev-dependencies]
+h2 = "0.4"
+rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12"] }
 tempfile = "3.23.0"
 lopdf = { version = "0.45.0", default-features = false }
 fastrand = "2.3.0"

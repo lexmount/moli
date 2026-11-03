@@ -1071,6 +1071,11 @@ impl Request {
         self.body_source_is_null || self.upload_body.is_some()
     }
 
+    /// The single-use transport body, when this request streams its upload.
+    pub fn upload_body(&self) -> Option<&crate::UploadBody> {
+        self.upload_body.as_ref()
+    }
+
     /// Attach a single-use streaming body. Cloning a Request does not make
     /// this source replayable; redirects and retries must retain that fact.
     pub fn with_upload_body(mut self, body: crate::UploadBody) -> Self {
@@ -1327,6 +1332,20 @@ impl Request {
             RequestCredentialsMode::Omit => false,
             RequestCredentialsMode::SameOrigin => !self.has_cross_origin_url(request_url),
         }
+    }
+
+    /// A supported authentication challenge cannot restart an author stream.
+    /// Ordinary 401 responses and challenges outside the credentials mode
+    /// remain visible to the caller.
+    pub fn validate_authentication_response(&self, response: &crate::ResponseHead) -> Result<()> {
+        if self.body_source_is_null()
+            && response.status == 401
+            && self.allows_credentials_for_url(&response.final_url)
+            && crate::http_authentication::basic_realm(&response.headers).is_some()
+        {
+            anyhow::bail!(crate::http_authentication::NON_REPLAYABLE_AUTHENTICATION_ERROR);
+        }
+        Ok(())
     }
 
     /// Cookie policy uses the environment origin, independently of the URL used

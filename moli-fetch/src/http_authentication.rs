@@ -15,6 +15,9 @@ use crate::{FetchConfig, Request, RequestAuth, RequestAuthScheme, RequestAuthTar
 const MAX_ENTRIES: usize = 256;
 const MAX_PATHS: usize = 10;
 
+pub(crate) const NON_REPLAYABLE_AUTHENTICATION_ERROR: &str =
+    "Cannot replay a streaming request body for HTTP authentication";
+
 pub(crate) type SharedHttpAuthenticationCache = Arc<Mutex<HttpAuthenticationCache>>;
 
 #[derive(Default)]
@@ -400,7 +403,7 @@ impl HttpAuthenticationResponse {
 /// A comma can separate challenges or auth-params. Tokenize params using the
 /// shared HTTP field parser, preserving quoted commas/escapes and rejecting
 /// malformed Basic challenges. Chromium accepts a missing realm as empty.
-fn basic_realm(headers: &[(String, Vec<u8>)]) -> Option<String> {
+pub(crate) fn basic_realm(headers: &[(String, Vec<u8>)]) -> Option<String> {
     for (_, value) in headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("www-authenticate"))

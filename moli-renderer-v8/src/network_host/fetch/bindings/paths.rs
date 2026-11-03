@@ -245,10 +245,10 @@ pub(super) fn resolve_local_fetch(
     Ok(Some(response))
 }
 
-pub(super) fn spawn_network_fetch(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn spawn_network_fetch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     host: &mut JsContextHost,
-    resolver: v8::Local<'_, v8::PromiseResolver>,
+    resolver: v8::Local<'s, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
 ) -> anyhow::Result<u64> {
     let loader = prepared.resource_loader.request_client().clone();
@@ -307,7 +307,7 @@ pub(super) fn spawn_network_fetch(
             &prepared.resolved_url,
             &prepared.method,
             &prepared.cors_preflight_request_headers,
-            false,
+            prepared.body_source_is_null,
         )
         .is_some();
     let internal_id = host
@@ -342,6 +342,32 @@ pub(super) fn spawn_network_fetch(
             requires_preflight,
         )
         .ok_or_else(|| anyhow::anyhow!("Failed to fetch"))?;
+    if prepared.body_source_is_null
+        && let Some(stream) = prepared.body_stream.as_ref()
+    {
+        let stream = v8::Local::new(scope, stream);
+        let completion = host.resource_completion_sender();
+        let (upload, body) = crate::network_host::RequestUpload::new(
+            scope,
+            stream,
+            resolver,
+            prepared.body_stream_locked,
+            prepared.resource_loader.task_runner(),
+            cancel_handle.clone(),
+            move |result| {
+                let _ = completion.send_async_subresource_event(
+                    AsyncSubresourceFetchEvent::RequestUploadReady {
+                        internal_id,
+                        result,
+                    },
+                );
+            },
+        )
+        .map_err(|_| anyhow::anyhow!("Body stream is locked"))?;
+        request = request.with_upload_body(body);
+        host.set_window_request_upload(internal_id, upload.clone());
+        upload.start(scope);
+    }
     if let Some(check) = host.window_fetch_redirect_check(internal_id) {
         request = request.with_redirect_check(check);
     }

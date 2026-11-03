@@ -1,6 +1,7 @@
 use super::*;
 use crate::page_task_queue::ContentSecurityPolicyViolationEventTask;
 use crate::script_vm::security_policy::ContentSecurityPolicyViolationBodyExecution;
+use crate::types::AsyncSubresourceFetchEventTarget;
 
 // Header policy checks have accepted this response. A later body error
 // retains its HTTP status and body information for both Fetch and XHR timing.
@@ -423,6 +424,10 @@ impl ScriptVm {
         let trace_fields = async_subresource_trace_fields_for_event(&event);
         trace_async_subresource_stage("async_subresource_event_start", trace_fields, trace_started);
         let result = match event {
+            AsyncSubresourceFetchEvent::RequestUploadReady {
+                internal_id,
+                result,
+            } => self.apply_request_upload_ready(internal_id, result),
             AsyncSubresourceFetchEvent::RedirectAdmission {
                 internal_id,
                 admission,
@@ -481,6 +486,31 @@ impl ScriptVm {
         trace_async_subresource_stage("async_subresource_event_done", trace_fields, trace_started);
         result
     }
+    fn apply_request_upload_ready(
+        &mut self,
+        internal_id: u64,
+        result: Result<(), moli_fetch::UploadBodyError>,
+    ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        let context_host = self._context_host.clone();
+        self.renderer_document_isolate
+            .with_entered_renderer_document_isolate(|isolate| {
+                let scope = pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let Some((upload, binding, dispatch)) = context_host
+                    .borrow()
+                    .window_request_upload_delivery(internal_id)
+                else {
+                    return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+                };
+                let context = v8::Local::new(scope, binding.context_global());
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let previous = enter_subresource_owner_async_scope(&context_host, scope, dispatch);
+                upload.ready(scope, result);
+                defer_subresource_owner_async_scope(&context_host, scope, dispatch, previous);
+                Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered)
+            })
+    }
+
     fn complete_window_request_document_abort(
         &mut self,
         internal_id: u64,
@@ -960,6 +990,7 @@ impl ScriptVm {
                             .map(|message| v8::Exception::type_error(scope, message))
                             .unwrap_or_else(|| v8::undefined(scope).into());
                         resolver.reject(scope, exception);
+                        if let Some(upload) = fetch.upload.as_ref() { upload.stop(scope, exception); }
                     }
                     PendingSubresourceContinuation::Xhr { xhr, .. } => {
                         let xhr = v8::Local::new(scope, xhr);
@@ -1207,6 +1238,7 @@ impl ScriptVm {
 
             let mut event_source_parser = None;
             let mut event_source_to_open = None;
+            let mut fetch_to_resolve = None;
             match &pending.continuation {
                 PendingSubresourceContinuation::Fetch(fetch) => {
                     let resolver = fetch
@@ -1231,7 +1263,7 @@ impl ScriptVm {
                         started.body_source_id,
                         response_filter,
                     );
-                    resolver.resolve(scope, response_obj.into());
+                    fetch_to_resolve = Some((resolver, response_obj, fetch.upload.clone()));
                 }
                 PendingSubresourceContinuation::Image {
                     image_handle,
@@ -1352,6 +1384,19 @@ impl ScriptVm {
                     xhr_response: None,
                 },
             );
+            if let Some((resolver, response, upload)) = fetch_to_resolve {
+                if let Some(upload) = upload {
+                    upload.finish(scope);
+                }
+                if self._context_host.borrow().async_subresource_fetch_event_target_is_current(
+                    AsyncSubresourceFetchEventTarget::StreamingFinish {
+                        internal_id: started.internal_id,
+                        body_source_id: started.body_source_id,
+                    }
+                ) {
+                    resolver.resolve(scope, response.into());
+                }
+            }
             if let Some(event_source) = event_source_to_open {
                 crate::network_host::open_event_source_connection(
                     scope,

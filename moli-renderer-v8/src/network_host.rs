@@ -22,6 +22,7 @@ mod preload;
 mod redirect_owner;
 mod request;
 mod request_scope;
+mod request_upload;
 mod response;
 mod stylesheet_subresource;
 mod subresource;
@@ -36,6 +37,7 @@ pub(crate) use headers::normalized_header_entry_or_throw;
 use moli_fetch::{Request, Response, observe_cookie_access_report_for_request};
 
 pub(crate) use self::redirect_owner::{RedirectAdmission, RedirectOwner};
+pub(crate) use self::request_upload::RequestUpload;
 use crate::network::ResourceRequestClient;
 
 pub use self::blob_resource::CapturedBlobResource;

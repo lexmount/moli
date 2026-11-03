@@ -736,6 +736,7 @@ impl ScriptVm {
                             if let Some(status_text) = response_status_text {
                                 head.status_text = Some(status_text);
                             }
+                            let upload = fetch.upload.clone();
                             let resolver = fetch
                                 .into_resolver()
                                 .expect("detached keepalive completion is handled before V8 entry");
@@ -759,6 +760,7 @@ impl ScriptVm {
                                     response_filter,
                                 );
                             resolver.resolve(scope, response_obj.into());
+                            if let Some(upload) = upload { upload.finish(scope); }
                         }
                         PendingSubresourceContinuation::Xhr { xhr, timing, .. } => {
                             let body_size = observable_response.body_bytes().len();
@@ -975,6 +977,7 @@ impl ScriptVm {
                     }
                     match pending.continuation {
                         PendingSubresourceContinuation::Fetch(fetch) => {
+                            let upload = fetch.upload.clone();
                             let resolver = fetch
                                 .into_resolver()
                                 .expect("detached keepalive failure is handled before V8 entry");
@@ -983,6 +986,7 @@ impl ScriptVm {
                                 .map(|message| v8::Exception::type_error(scope, message))
                                 .unwrap_or_else(|| v8::undefined(scope).into());
                             resolver.reject(scope, exception);
+                            if let Some(upload) = upload { upload.stop(scope, exception); }
                         }
                         PendingSubresourceContinuation::Xhr { xhr, .. } => {
                             let xhr = v8::Local::new(scope, &xhr);

@@ -1509,6 +1509,7 @@ impl RuntimeOwner {
             job.response_progress.clone(),
             job.request.redirect_handling(),
         );
+        collector.set_streaming_upload(job.request.upload_body.is_some());
         collector.set_corp_origin(job.request.cross_origin_resource_policy_origin());
         collector.set_client_hint_response_policy(prepared_request.response_policy);
 
@@ -1636,12 +1637,19 @@ impl RuntimeOwner {
         };
         if let Some(retry) = authentication_retry {
             let (request, url, cookie_context) = completion.context.request_context();
-            let cookies = if request.allows_credentials_for_url(url) {
+            let restart = if request.allows_credentials_for_url(url) {
                 store_response_cookies(&self.cookie_store, url, &retry.headers, cookie_context)
             } else {
                 Ok(Vec::new())
-            };
-            match cookies {
+            }
+            .and_then(|cookies| {
+                anyhow::ensure!(
+                    !request.body_source_is_null(),
+                    crate::http_authentication::NON_REPLAYABLE_AUTHENTICATION_ERROR
+                );
+                Ok(cookies)
+            });
+            match restart {
                 Ok(_) => {
                     state.active_transfers = state.active_transfers.saturating_sub(1);
                     // No collector received this private 401. Keep the same

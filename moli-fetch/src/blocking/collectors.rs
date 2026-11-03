@@ -269,6 +269,7 @@ pub struct RawStreamingResponseCollector {
     started: bool,
     headers_finalized: bool,
     header_terminated: bool,
+    streaming_upload: bool,
     start_tx: Option<oneshot::Sender<Result<StreamingHtmlResponseStart>>>,
     body_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
     request_cookie_report: Option<StoredCookieQueryReport>,
@@ -747,6 +748,7 @@ impl RawStreamingResponseCollector {
             cancel_handle,
             response_progress,
             redirect_handling: RequestRedirectHandling::Follow,
+            streaming_upload: false,
             negotiated_http_version: None,
             network_request_extra_info: None,
         }
@@ -774,6 +776,7 @@ impl RawStreamingResponseCollector {
         self.declared_identity_body_length = None;
         self.response_progress = response_progress;
         self.redirect_handling = RequestRedirectHandling::Follow;
+        self.streaming_upload = false;
         self.cache_body_writer = None;
         self.cache_plan = None;
         self.started = false;
@@ -818,6 +821,10 @@ impl RawStreamingResponseCollector {
         self.cache_plan = cache_plan;
         self.defer_not_modified_start = defer_not_modified_start;
         self.redirect_handling = redirect_handling;
+    }
+
+    pub(crate) fn set_streaming_upload(&mut self, streaming_upload: bool) {
+        self.streaming_upload = streaming_upload;
     }
 
     pub(crate) fn status_text(&self) -> Option<&str> {
@@ -965,10 +972,9 @@ impl RawStreamingResponseCollector {
         self.maybe_emit_start(is_redirect_response);
         if self.started && (response_body_ends_at_headers(self.status) || is_redirect_response) {
             self.finish_streaming_body();
-            // Preserve naturally complete connections. Only abort redirects
-            // with an unfinished body, or a protocol switch, instead of
-            // waiting for bytes that the head-only API discards.
-            if !body_complete_at_headers || self.status == 101 {
+            // Keep a single-use upload alive after early redirect headers.
+            // Its owner retires the unused response after transmission ends.
+            if (!body_complete_at_headers && !self.streaming_upload) || self.status == 101 {
                 self.header_terminated = true;
                 return false;
             }
