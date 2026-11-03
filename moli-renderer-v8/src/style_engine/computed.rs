@@ -185,10 +185,13 @@ impl StyloComputedStyleSnapshot {
         (self.primary, self.before, self.after)
     }
 
+    pub(crate) fn hides_contents(&self) -> bool {
+        content_visibility_applies(self.primary.clone_display())
+            && self.primary.clone_content_visibility() == ContentVisibility::Hidden
+    }
+
     pub(crate) fn rendered_style_facts(&self) -> ComputedRenderedStyleFacts {
         let display = self.primary.clone_display();
-        let hides_contents = content_visibility_applies(display)
-            && self.primary.clone_content_visibility() == ContentVisibility::Hidden;
         let display = if display.is_none() {
             ComputedDisplayKind::None
         } else if display.is_contents() {
@@ -254,7 +257,7 @@ impl StyloComputedStyleSnapshot {
         };
         ComputedRenderedStyleFacts {
             display,
-            hides_contents,
+            hides_contents: self.hides_contents(),
             visibility_visible: self.primary.clone_visibility() == ComputedVisibility::Visible,
             opacity_zero: self.primary.clone_opacity() == 0.0,
             text_transform,
@@ -268,8 +271,7 @@ impl StyloComputedStyleSnapshot {
         moli_dom::accessibility::AccessibilityStyle {
             display_none: display.is_none(),
             visibility_visible: self.primary.clone_visibility() == ComputedVisibility::Visible,
-            hides_contents: content_visibility_applies(display)
-                && self.primary.clone_content_visibility() == ContentVisibility::Hidden,
+            hides_contents: self.hides_contents(),
             block_level: matches!(
                 display.outside(),
                 DisplayOutside::Block | DisplayOutside::TableCaption

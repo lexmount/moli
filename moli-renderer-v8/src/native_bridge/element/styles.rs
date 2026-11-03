@@ -547,34 +547,46 @@ pub(crate) fn computed_style_property_values_for_document_snapshot(
 ) -> Vec<Vec<String>> {
     computed_style_export_values_for_document_snapshot(host, handles, properties)
         .into_iter()
-        .map(|(values, _, _)| values)
+        .map(|style| style.values)
         .collect()
+}
+
+#[derive(Default)]
+pub(crate) struct ComputedStyleExportValues {
+    pub(crate) values: Vec<String>,
+    pub(crate) own_visibility: bool,
+    pub(crate) original_display: String,
+    pub(crate) hides_contents: bool,
 }
 
 pub(crate) fn computed_style_export_values_for_document_snapshot(
     host: &JsContextHost,
     handles: impl IntoIterator<Item = DomHandle>,
     properties: &[String],
-) -> Vec<(Vec<String>, bool, String)> {
+) -> Vec<ComputedStyleExportValues> {
     let mut observation = StyleObservation::new(host);
     handles
         .into_iter()
         .map(
             |handle| match style_computation_context_for_document_snapshot(host, handle) {
-                None => (Vec::new(), false, String::new()),
+                None => ComputedStyleExportValues::default(),
                 Some(DocumentSnapshotStyleComputation::HiddenChildFrame) => {
-                    (vec![String::new(); properties.len()], false, String::new())
+                    ComputedStyleExportValues {
+                        values: vec![String::new(); properties.len()],
+                        ..Default::default()
+                    }
                 }
                 Some(DocumentSnapshotStyleComputation::Available(_)) => {
                     let style = observation.read(handle);
-                    (
-                        properties
+                    ComputedStyleExportValues {
+                        values: properties
                             .iter()
                             .map(|property| style.property(property))
                             .collect(),
-                        style.computed_style_has_own_visibility_value(),
-                        style.computed_style_original_display(),
-                    )
+                        own_visibility: style.computed_style_has_own_visibility_value(),
+                        original_display: style.computed_style_original_display(),
+                        hides_contents: style.computed_style_hides_contents(),
+                    }
                 }
             },
         )

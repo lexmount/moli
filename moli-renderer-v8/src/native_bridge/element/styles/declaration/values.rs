@@ -219,6 +219,12 @@ impl<'a> ComputedStyleRead<'a> {
         Some(self.stylo_style.as_ref()?.rendered_style_facts())
     }
 
+    pub(in crate::native_bridge::element) fn computed_style_hides_contents(&self) -> bool {
+        self.stylo_style
+            .as_ref()
+            .is_some_and(StyloComputedStyleSnapshot::hides_contents)
+    }
+
     pub(in crate::native_bridge::element) fn computed_style_original_display(&self) -> String {
         self.stylo_style
             .as_ref()

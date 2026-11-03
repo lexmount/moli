@@ -16,6 +16,58 @@ fn options(strip_css: bool) -> RendererPageDumpOptions {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn markdown_content_visibility_excludes_locked_contents() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/").unwrap());
+        page.vm_mut().eval("document.head.innerHTML = '<style>.locked{content-visibility:hidden}</style>'").unwrap();
+        for (source, expected) in [
+            ("<div class=locked>Hidden text<p>Hidden child</p></div><p>Visible article</p>", "Visible article"),
+            ("<div class=locked><p style='content-visibility:visible'>Still locked</p></div><p>Visible article</p>", "Visible article"),
+            ("<span class=locked>Inline content</span>", "Inline content"),
+            ("<div class=locked style='display:contents'>Contents content</div>", "Contents content"),
+            ("<div style='content-visibility:auto'>Auto content</div>", "Auto content"),
+            ("<div class=locked style='display:inline-block'><span>Hidden atomic content</span></div><p>Visible article</p>", "Visible article"),
+            ("<pre class=locked><code>Hidden source</code></pre><p>Visible article</p>", "Visible article"),
+            ("<table><tr><th>A</th><th>B</th><th>C</th></tr><tr><td>Left</td><td class=locked>Hidden cell</td><td>Right</td></tr></table>", "| A | B | C |\n| --- | --- | --- |\n| Left |  | Right |"),
+        ] {
+            page.vm_mut().eval(&format!("document.body.innerHTML = {}", serde_json::to_string(source).unwrap())).unwrap();
+            for strip_css in [false, true] {
+                assert_eq!(page.render_page_dump(options(strip_css)), expected, "{source}; strip_css={strip_css}");
+            }
+        }
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_content_visibility_retains_disclosure_and_source_exceptions() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/").unwrap());
+        page.vm_mut().eval(r#"
+            document.head.innerHTML = '<style>.locked{content-visibility:hidden}</style>';
+            document.body.innerHTML = `
+                <section role=tabpanel class=locked>Tab content</section>
+                <div hidden=until-found>Searchable content</div>
+                <details><summary>Summary</summary>Native disclosure</details>
+                <button aria-expanded=false aria-controls=more>More</button>
+                <section id=more class=locked>Controlled disclosure</section>
+                <div class=locked>Hidden ancestor text<div><section role=tabpanel>Nested panel</section></div><p>Hidden sibling</p></div>
+                <pre><code>Source before<span class=locked style='display:block'>Collapsed source</span>Source after</code></pre>`;
+        "#).unwrap();
+        for strip_css in [false, true] {
+            let output = page.render_page_dump(options(strip_css));
+            for kept in ["Tab content", "Searchable content", "Native disclosure", "Controlled disclosure", "Nested panel", "Source before", "Collapsed source", "Source after"] {
+                assert!(output.contains(kept), "missing {kept}; strip_css={strip_css}: {output}");
+            }
+            for omitted in ["Hidden ancestor text", "Hidden sibling"] {
+                assert!(!output.contains(omitted), "leaked {omitted}; strip_css={strip_css}: {output}");
+            }
+        }
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
