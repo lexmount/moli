@@ -1,31 +1,6 @@
 use super::*;
 use crate::automation::AutomationEvent;
 
-pub(super) fn start_set_javascript_dialog_handler_enabled(
-    conn: &mut CdpConnection,
-    session_id: Option<&str>,
-    enabled: bool,
-) -> Result<(), String> {
-    if let Some(page) = conn.loaded_page_mut_for_session_owner(session_id) {
-        return page
-            .start_set_javascript_dialog_handler_enabled(enabled)
-            .map(|_| ())
-            .map_err(|error| error.to_string());
-    }
-    if let Some(page) = conn.browser_context.as_mut().and_then(|browser_context| {
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-    }) {
-        return page
-            .start_set_javascript_dialog_handler_enabled(enabled)
-            .map(|_| ())
-            .map_err(|error| error.to_string());
-    }
-    Ok(())
-}
-
 pub(super) fn handle_javascript_dialog_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,

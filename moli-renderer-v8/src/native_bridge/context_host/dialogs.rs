@@ -17,15 +17,9 @@ impl PendingJavaScriptDialogRecord {
 }
 
 impl JsContextHost {
-    pub(crate) fn set_javascript_dialog_handler_enabled(&mut self, enabled: bool) {
-        self.javascript_dialog_handler_enabled = enabled;
-    }
-
     pub(crate) fn javascript_dialog_handler_enabled(&self) -> bool {
-        self.javascript_dialog_handler_enabled
-            || self
-                .browser_context_runtime
-                .javascript_dialog_handler_enabled()
+        self.browser_context_runtime
+            .javascript_dialog_handler_enabled()
     }
 
     pub(crate) fn record_pending_javascript_dialog(

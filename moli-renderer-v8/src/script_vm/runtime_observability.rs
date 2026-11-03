@@ -634,12 +634,6 @@ impl ScriptVm {
             .take_pending_javascript_dialogs()
     }
 
-    pub(crate) fn set_javascript_dialog_handler_enabled(&mut self, enabled: bool) {
-        self._context_host
-            .borrow_mut()
-            .set_javascript_dialog_handler_enabled(enabled);
-    }
-
     #[cfg(test)]
     pub(crate) fn take_pending_popup_activations(
         &mut self,
