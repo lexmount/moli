@@ -4,7 +4,8 @@ pub const MOLI_VERSION: &str = env!("MOLI_VERSION");
 pub const PROTOCOL_VERSION: &str = "1.3";
 pub const PRODUCT: &str = moli_browser_profile::DEFAULT_CDP_PRODUCT;
 pub const REVISION: &str = concat!("@", env!("VERGEN_GIT_SHA"));
-pub const WEBKIT_VERSION: &str = "537.36";
+pub const WEBKIT_VERSION: &str = concat!("537.36 (@", env!("VERGEN_GIT_SHA"), ")");
+pub const NATIVE_FILE_PATH_STYLE: &str = if cfg!(windows) { "windows" } else { "posix" };
 
 pub fn js_version() -> &'static str {
     v8::V8::get_version()

@@ -1346,4 +1346,5 @@ mod page_endpoint;
 mod request_guard;
 mod screenshot;
 mod startup_scripts;
+mod version_metadata;
 mod websocket;

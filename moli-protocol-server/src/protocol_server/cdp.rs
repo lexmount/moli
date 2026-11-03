@@ -25,6 +25,7 @@ pub(super) async fn json_version(State(state): State<AppState>) -> impl IntoResp
         "User-Agent": state.navigation_runtime_config.fetch_config().user_agent(),
         "V8-Version": version::js_version(),
         "WebKit-Version": version::WEBKIT_VERSION,
+        "File-Path-Style": version::NATIVE_FILE_PATH_STYLE,
         "webSocketDebuggerUrl": state.browser_ws_url,
     }))
 }
