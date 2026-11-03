@@ -13,7 +13,9 @@ use crate::automation::{
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
     NavigateParams, NavigateToHistoryEntryParams, ReloadParams,
 };
-use moli_core::page::{ChildFrameDocumentOpenedSnapshot, CompletedPageCommand, PendingPageCommand};
+use moli_core::page::{
+    ChildFrameDocumentOpenedSnapshot, CompletedPageCommand, Page, PendingPageCommand,
+};
 use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 use moli_url_policy::{LocalFileNavigationAccess, route_navigation_url};
 use serde_json::{Value, json};
@@ -1227,30 +1229,38 @@ fn start_top_level_same_document_navigate(
     result_projection: NavigationResultProjection,
     replace_current: bool,
 ) -> NavigateCommandStart {
-    let Some(page) = conn.loaded_page_mut_for_owner(owner) else {
+    let Some(pending) = start_same_document_command(conn, owner, |page| {
+        page.start_top_level_same_document_navigation_with_history_replacement(url, replace_current)
+    }) else {
         return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
             -32000,
             crate::conn::NoDocumentLoaded,
         ));
     };
-    match page
-        .start_top_level_same_document_navigation_with_history_replacement(url, replace_current)
-    {
-        Ok(pending) => {
-            if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
-                slot.cancel_initial_document_page_build();
-            }
-            NavigateCommandStart::PendingSameDocument(Box::new(
-                PendingSameDocumentNavigateCommand {
-                    pending,
-                    result_projection,
-                },
-            ))
-        }
+    match pending {
+        Ok(pending) => NavigateCommandStart::PendingSameDocument(Box::new(
+            PendingSameDocumentNavigateCommand {
+                pending,
+                result_projection,
+            },
+        )),
         Err(error) => {
             NavigateCommandStart::CompletePlan(CommandOutputPlan::error(-32000, error.to_string()))
         }
     }
+}
+
+fn start_same_document_command(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    start: impl FnOnce(&Page) -> Result<PendingPageCommand>,
+) -> Option<Result<PendingPageCommand>> {
+    let slot = conn.runtime_session_owner_slot_mut_for_owner(owner)?;
+    let pending = start(slot.loaded_page()?);
+    if pending.is_ok() {
+        slot.supersede_buffered_navigation();
+    }
+    Some(pending)
 }
 
 fn child_frame_navigation_target_id<'a>(
@@ -1538,20 +1548,12 @@ fn start_same_document_history_traversal_command(
     delta: i64,
     fallback: HistoryTraversalUrlFallback,
 ) -> PageCommandTaskStep {
-    let page = conn
-        .runtime_session_owner_slot_mut_for_owner(&fallback.owner)
-        .and_then(|slot| slot.loaded_page())
-        .ok_or_else(|| anyhow::anyhow!("TargetNotLoaded"));
-    let page = match page {
-        Ok(page) => page,
-        Err(error) => {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                -31998,
-                error.to_string(),
-            ));
-        }
+    let Some(pending) = start_same_document_command(conn, &fallback.owner, |page| {
+        page.start_top_level_history_traversal_by_delta(delta)
+    }) else {
+        return PageCommandTaskStep::Complete(CommandOutputPlan::error(-31998, "TargetNotLoaded"));
     };
-    let pending = match page.start_top_level_history_traversal_by_delta(delta) {
+    let pending = match pending {
         Ok(pending) => pending,
         Err(error) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -1560,9 +1562,6 @@ fn start_same_document_history_traversal_command(
             ));
         }
     };
-    if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(&fallback.owner) {
-        slot.cancel_initial_document_page_build();
-    }
     PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
         command_id,
         owner_scope: fallback.owner.clone(),
