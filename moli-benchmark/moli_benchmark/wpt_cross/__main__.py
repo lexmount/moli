@@ -95,6 +95,10 @@ NON_TRUSTWORTHY_ORIGIN_CASES = frozenset(
     {
         "audio-output/secure-context.html",
         "credential-management/require_securecontext.html",
+        (
+            "html/webappapis/system-state-and-capabilities/"
+            "the-navigator-object/secure_context.html"
+        ),
         "pointerevents/pointerevent_constructor.html",
     }
 )
