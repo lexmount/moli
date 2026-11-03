@@ -182,6 +182,7 @@ fn get_version(conn: &CdpConnection) -> CommandOutputPlan {
     CommandOutputPlan::result(json!({
         "protocolVersion": version::PROTOCOL_VERSION,
         "product": version::PRODUCT,
+        "moliVersion": version::MOLI_VERSION,
         "revision": version::REVISION,
         "userAgent": conn.browser_user_agent(),
         "jsVersion": version::js_version(),
