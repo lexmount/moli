@@ -304,7 +304,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn dispatch_controlled_fetch_job(
         &self,
         mut fetch_job: ServiceWorkerFetchJob,
-        request: ServiceWorkerFetchRequest,
+        mut request: ServiceWorkerFetchRequest,
     ) -> Result<(), Box<ServiceWorkerFetchJob>> {
         if let Err(error) = fetch_job.request.browser_origin().and_then(|_| {
             fetch_job
@@ -313,6 +313,27 @@ impl ServiceWorkerRuntimeService {
         }) {
             self.complete_fetch_with_failure(fetch_job, error.to_string());
             return Ok(());
+        }
+        if !request
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("accept"))
+        {
+            let destination = if fetch_job.network_context.resource_type
+                == crate::types::SubresourceResourceType::EventSource
+            {
+                "eventsource"
+            } else {
+                request.destination.as_str()
+            };
+            let accept = moli_fetch::default_accept_header(destination);
+            request
+                .headers
+                .push(("Accept".to_owned(), accept.to_owned()));
+            fetch_job
+                .request
+                .request_headers
+                .push(("Accept".to_owned(), accept.as_bytes().to_vec()));
         }
         let (dispatch_event, start_launch, fallback_job) = {
             let mut state = self.inner.state.lock();

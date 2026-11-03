@@ -577,7 +577,7 @@ async fn service_worker_navigation_requests_preserve_native_flags_until_init_ove
     let mut handle = spawn_service_worker_for_test(
         r#"
         self.addEventListener('fetch', event => {
-            const state = request => [request.mode, request.isReloadNavigation, request.isHistoryNavigation];
+            const state = request => [request.mode, request.isReloadNavigation, request.isHistoryNavigation, request.cache];
             const copy = new Request(event.request);
             const clone = event.request.clone();
             const reset = new Request(event.request, {cache: 'no-store'});
@@ -612,8 +612,9 @@ async fn service_worker_navigation_requests_preserve_native_flags_until_init_ove
         ),
     ] {
         let url = url::Url::parse("https://example.test/app/document.html").unwrap();
-        let native =
-            moli_fetch::Request::get_with_url(url.clone()).with_browser_navigation_kind(kind);
+        let native = moli_fetch::Request::get_with_url(url.clone())
+            .with_request_mode(moli_fetch::RequestMode::Navigate)
+            .with_browser_navigation_kind(kind);
         let request = ServiceWorkerFetchRequest {
             body_stream: None,
             client_id: crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(7),
@@ -642,10 +643,10 @@ async fn service_worker_navigation_requests_preserve_native_flags_until_init_ove
             observed,
             serde_json::json!({
                 "eventIsReload": reload,
-                "original": ["navigate", reload, history],
-                "copy": ["navigate", reload, history],
-                "clone": ["navigate", reload, history],
-                "reset": ["same-origin", false, false],
+                "original": ["navigate", reload, history, if reload {"no-cache"} else {"default"}],
+                "copy": ["navigate", reload, history, if reload {"no-cache"} else {"default"}],
+                "clone": ["navigate", reload, history, if reload {"no-cache"} else {"default"}],
+                "reset": ["same-origin", false, false, "no-store"],
             }),
             "{kind:?}"
         );

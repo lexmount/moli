@@ -1,6 +1,121 @@
 use super::*;
 
 #[test]
+fn controlled_fetch_inserts_accept_before_queuing_and_preserves_author_values() {
+    use crate::types::SubresourceResourceType as Resource;
+    use ServiceWorkerRequestDestination as Destination;
+
+    let navigation_accept = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
+    for (destination, resource, expected) in [
+        (Destination::Document, Resource::Fetch, navigation_accept),
+        (Destination::Iframe, Resource::Fetch, navigation_accept),
+        (Destination::Empty, Resource::Fetch, "*/*"),
+        (Destination::Script, Resource::Script, "*/*"),
+        (Destination::Worker, Resource::Script, "*/*"),
+        (Destination::SharedWorker, Resource::Script, "*/*"),
+        (
+            Destination::Image,
+            Resource::Image,
+            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        ),
+        (
+            Destination::Track,
+            Resource::TextTrack,
+            "text/vtt,*/*;q=0.1",
+        ),
+        (
+            Destination::Empty,
+            Resource::EventSource,
+            "text/event-stream",
+        ),
+    ] {
+        for author in [None, Some(""), Some("application/custom")] {
+            let service = new_service_worker_runtime_service();
+            let registration_id = ServiceWorkerRegistrationId(1);
+            let version_id = ServiceWorkerVersionId(1);
+            let document_url = url("https://example.test/app/page.html");
+            let request_url = url("https://example.test/app/resource");
+            insert_registered_version(
+                &service,
+                registration_id,
+                version_id,
+                url("https://example.test/app/worker.js"),
+                url("https://example.test/app/"),
+                [document_url.clone()],
+            );
+            let client_id = client_id_for_document(&service, &document_url);
+            let run = exact_version_run(&service, version_id);
+            service
+                .inner
+                .state
+                .lock()
+                .versions
+                .get_mut(&version_id)
+                .unwrap()
+                .running_state = ServiceWorkerVersionRunningState::Starting {
+                host: new_loading_test_host(version_id, &run),
+            };
+            let mut request = test_fetch_request(client_id, request_url.clone());
+            request.destination = destination;
+            if let Some(value) = author {
+                request
+                    .headers
+                    .push(("aCcEpT".to_owned(), value.to_owned()));
+            }
+            let completion_queue = async_subresource_completion_queue();
+            let mut job = test_fetch_job(
+                &service,
+                9,
+                version_id,
+                &run,
+                client_id,
+                document_url,
+                request_url,
+                completion_queue.sender(),
+                moli_fetch::FetchCancelHandle::new(),
+            );
+            job.destination = destination;
+            job.network_context.resource_type = resource;
+            job.request.request_headers =
+                moli_fetch::RequestHeaders::from_byte_strings(&request.headers).unwrap();
+            assert!(service.dispatch_controlled_fetch_job(job, request).is_ok());
+
+            let state = service.inner.state.lock();
+            let version = state.versions.get(&version_id).unwrap();
+            let ServiceWorkerPendingStartEvent::Fetch(event) =
+                version.pending_start_events.front().expect("queued fetch")
+            else {
+                panic!("expected queued fetch")
+            };
+            let event_accept: Vec<_> = event
+                .request
+                .headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("accept"))
+                .map(|(_, value)| value.as_str())
+                .collect();
+            assert_eq!(
+                event_accept,
+                [author.unwrap_or(expected)],
+                "{destination:?}"
+            );
+            let native = &state
+                .pending_fetch_jobs
+                .get(&event.event_id)
+                .unwrap()
+                .request;
+            let native_accept: Vec<_> = native
+                .request_headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("accept"))
+                .map(|(_, value)| value.as_slice())
+                .collect();
+            assert_eq!(native_accept, [author.unwrap_or(expected).as_bytes()]);
+        }
+    }
+}
+
+#[test]
 fn context_shutdown_aborts_pending_and_queued_register_jobs() {
     let service = new_service_worker_runtime_service();
     let registration_id = ServiceWorkerRegistrationId(1);
