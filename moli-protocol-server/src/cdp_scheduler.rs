@@ -17,7 +17,10 @@ use moli_protocol::{
     PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
     PageScreencastSubscriptionStatus, ParsedCdpCommand, PendingCdpCommandDispatch,
     PendingPageScreencastCapture, ProtocolSchedulerWorkKind,
-    automation::{AutomationCommand, AutomationResult, DevToolsError, DevToolsNavigationWait},
+    automation::{
+        AutomationCommand, AutomationResult, DevToolsError, DevToolsNavigationWait,
+        FrontendProtocol,
+    },
     conn::{RuntimeInspectorResponseReady, RuntimeInspectorResponseReadySender},
 };
 use serde_json::Value;
@@ -502,12 +505,33 @@ impl CdpScheduler {
             .expect("live protocol actor state")
     }
 
-    pub(crate) fn set_automation_javascript_dialog_handler_enabled(
+    pub(crate) fn register_automation_javascript_dialog_handler(
         &mut self,
-        enabled: bool,
+        protocol: FrontendProtocol,
+        wait_enabled: bool,
     ) -> bool {
         self.state
-            .with_state(|state| state.set_automation_javascript_dialog_handler_enabled(enabled))
+            .with_state(|state| {
+                state.register_automation_javascript_dialog_handler(protocol, wait_enabled)
+            })
+            .expect("live protocol actor state")
+    }
+
+    pub(crate) fn unregister_automation_javascript_dialog_handler(
+        &mut self,
+        protocol: FrontendProtocol,
+    ) -> ProtocolOutputSequence {
+        let events = self
+            .state
+            .with_state(|state| state.unregister_automation_javascript_dialog_handler(protocol))
+            .expect("live protocol actor state");
+        ProtocolOutputSequence::from_background_events(events)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_automation_javascript_dialog_handler(&self) -> bool {
+        self.state
+            .with_state(|state| state.has_automation_javascript_dialog_handler())
             .expect("live protocol actor state")
     }
 
@@ -758,7 +782,7 @@ impl CdpScheduler {
     }
 
     #[cfg(test)]
-    fn new(
+    pub(crate) fn new(
         conn: CdpConnection,
     ) -> (
         Self,

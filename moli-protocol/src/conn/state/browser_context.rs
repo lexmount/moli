@@ -60,9 +60,6 @@ pub struct BrowserContext {
     pub(crate) target_can_access_opener: HashSet<String>,
     pub target_popup_ids: HashMap<String, u64>,
     pending_popup_javascript_dialogs: HashMap<u64, Vec<TargetPreparedJavaScriptDialog>>,
-    /// Native frontends can handle prompts independently of renderer modal waits.
-    pub(crate) automation_javascript_dialog_handler_available: bool,
-    pub(crate) automation_javascript_dialog_wait_enabled: bool,
     pub(crate) shared_worker_targets: BTreeMap<SharedWorkerInstanceId, SharedWorkerTargetState>,
     pub(crate) dedicated_worker_targets: BTreeMap<u64, DedicatedWorkerTargetState>,
     pub(crate) service_worker_targets: BTreeMap<u64, ServiceWorkerTargetState>,
@@ -533,8 +530,6 @@ impl BrowserContext {
             target_can_access_opener: HashSet::new(),
             target_popup_ids: HashMap::new(),
             pending_popup_javascript_dialogs: HashMap::new(),
-            automation_javascript_dialog_wait_enabled: false,
-            automation_javascript_dialog_handler_available: false,
             shared_worker_targets: BTreeMap::new(),
             dedicated_worker_targets: BTreeMap::new(),
             service_worker_targets: BTreeMap::new(),

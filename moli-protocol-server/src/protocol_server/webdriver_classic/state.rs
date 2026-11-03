@@ -824,18 +824,10 @@ impl ClassicSessionRuntimeHandle {
         })?
     }
 
-    pub(super) async fn set_javascript_dialog_handler_enabled(
-        &self,
-        enabled: bool,
-    ) -> Result<(), DevToolsError> {
+    pub(super) async fn register_javascript_dialog_handler(&self) -> Result<(), DevToolsError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.tx
-            .send(
-                ClassicSessionRuntimeRequest::SetJavaScriptDialogHandlerEnabled {
-                    enabled,
-                    response_tx,
-                },
-            )
+            .send(ClassicSessionRuntimeRequest::RegisterJavaScriptDialogHandler { response_tx })
             .map_err(|_| {
                 DevToolsError::new(
                     DevToolsErrorKind::NoSuchSession,
@@ -966,8 +958,7 @@ enum ClassicSessionRuntimeRequest {
         frame_id: Option<String>,
         response_tx: oneshot::Sender<Result<bool, DevToolsError>>,
     },
-    SetJavaScriptDialogHandlerEnabled {
-        enabled: bool,
+    RegisterJavaScriptDialogHandler {
         response_tx: oneshot::Sender<Result<(), DevToolsError>>,
     },
     Shutdown {
@@ -1143,6 +1134,10 @@ async fn handle_classic_session_runtime_request(
                 let _ = response_tx.send(false);
                 return ClassicSessionRuntimeRequestOutcome::Continue;
             }
+            scheduler.register_automation_javascript_dialog_handler(
+                FrontendProtocol::WebDriverBidi,
+                false,
+            );
             actor.install_runtime_response_ready_sender(scheduler);
             actor.set_file_prompt_handler_for_script_commands(file_prompt_handler.as_deref());
             let _ = response_tx.send(true);
@@ -1225,20 +1220,12 @@ async fn handle_classic_session_runtime_request(
             let _ = response_tx.send(result);
             ClassicSessionRuntimeRequestOutcome::Continue
         }
-        ClassicSessionRuntimeRequest::SetJavaScriptDialogHandlerEnabled {
-            enabled,
-            response_tx,
-        } => {
-            let result = scheduler
-                .set_automation_javascript_dialog_handler_enabled(enabled)
-                .then_some(())
-                .ok_or_else(|| {
-                    DevToolsError::new(
-                        DevToolsErrorKind::NoSuchTarget,
-                        "Classic session has no browser context",
-                    )
-                });
-            let _ = response_tx.send(result);
+        ClassicSessionRuntimeRequest::RegisterJavaScriptDialogHandler { response_tx } => {
+            scheduler.register_automation_javascript_dialog_handler(
+                FrontendProtocol::WebDriverClassic,
+                true,
+            );
+            let _ = response_tx.send(Ok(()));
             ClassicSessionRuntimeRequestOutcome::Continue
         }
         ClassicSessionRuntimeRequest::Shutdown { response_tx } => {
@@ -1533,9 +1520,6 @@ async fn classic_session_runtime_loop(
                                 detach_bidi = true;
                             }
                             ClassicSessionRuntimeRequestOutcome::Shutdown => {
-                                attached
-                                    .release_session(&mut scheduler, &mut receivers)
-                                    .await;
                                 shutdown_requested = true;
                             }
                         }
@@ -1543,7 +1527,7 @@ async fn classic_session_runtime_loop(
                 }
             }
             if shutdown_requested {
-                return;
+                break;
             }
             if detach_bidi && let Some(mut attached) = attached_bidi.take() {
                 attached
@@ -1615,7 +1599,7 @@ async fn classic_session_runtime_loop(
                             attached_bidi = Some(*attached);
                         }
                         ClassicSessionRuntimeRequestOutcome::DetachBidi => {}
-                        ClassicSessionRuntimeRequestOutcome::Shutdown => return,
+                        ClassicSessionRuntimeRequestOutcome::Shutdown => break,
                     }
                     if attached_bidi.is_none() {
                         classic_session_ingest_ready_renderer_publications(
@@ -1628,6 +1612,13 @@ async fn classic_session_runtime_loop(
                 }
             }
         }
+    }
+    let _ = scheduler
+        .unregister_automation_javascript_dialog_handler(FrontendProtocol::WebDriverClassic);
+    if let Some(mut attached) = attached_bidi {
+        attached
+            .release_session(&mut scheduler, &mut receivers)
+            .await;
     }
 }
 

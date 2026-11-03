@@ -325,9 +325,25 @@ impl ProtocolWorkflowState<'_> {
         self.connection.session_is_closing(session_id)
     }
 
-    pub fn set_automation_javascript_dialog_handler_enabled(self, enabled: bool) -> bool {
+    pub fn register_automation_javascript_dialog_handler(
+        self,
+        protocol: crate::automation::FrontendProtocol,
+        wait_enabled: bool,
+    ) -> bool {
         self.connection
-            .set_automation_javascript_dialog_handler_enabled(enabled)
+            .register_automation_javascript_dialog_handler(protocol, wait_enabled)
+    }
+
+    pub fn unregister_automation_javascript_dialog_handler(
+        self,
+        protocol: crate::automation::FrontendProtocol,
+    ) -> Vec<BackgroundProtocolEvent> {
+        self.connection
+            .unregister_automation_javascript_dialog_handler(protocol)
+    }
+
+    pub fn has_automation_javascript_dialog_handler(&self) -> bool {
+        self.connection.has_automation_javascript_dialog_handler()
     }
 
     pub fn set_runtime_inspector_response_ready_sender(

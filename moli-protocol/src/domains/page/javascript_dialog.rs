@@ -124,24 +124,37 @@ fn page_dialog_subscriptions(
         .collect()
 }
 
-fn native_dialog_handler_for_owner(conn: &CdpConnection, owner: &CommandOwnerScope) -> bool {
-    conn.target_owner_identity_for_owner(owner)
-        .and_then(|(context, _)| conn.browser_context_by_id(&context))
-        .is_some_and(|context| context.automation_javascript_dialog_handler_available)
+pub(super) enum PageDialogSubscriptionEnd {
+    Disable,
+    Detach,
 }
 
-pub(super) fn dismiss_dialogs_for_page_subscription(
+pub(super) fn end_page_dialog_subscription(
     conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    generation: u64,
-) -> Vec<BackgroundProtocolEvent> {
-    // Disabling Page revokes its callback, while native automation can still
-    // handle the physical dialog, just as when the CDP session detaches.
-    if native_dialog_handler_for_owner(conn, owner) {
-        return Vec::new();
+    session_id: Option<&str>,
+    reason: PageDialogSubscriptionEnd,
+) -> Option<Vec<BackgroundProtocolEvent>> {
+    let owner = CommandOwnerScope::capture(conn, session_id);
+    let generation = conn.page_domain_subscription_generation_for_session_owner(session_id);
+    if !conn.disable_page_domain_for_session_owner(session_id) {
+        return None;
     }
-    dismiss_matching_dialogs(conn, owner, |dialog| {
-        dialog.has_page_subscription(generation)
+    if conn.has_automation_javascript_dialog_handler() {
+        return Some(Vec::new());
+    }
+    Some(match reason {
+        // Chromium's explicit Page.disable cancels this observer's callbacks.
+        PageDialogSubscriptionEnd::Disable => generation
+            .map(|generation| {
+                dismiss_matching_dialogs(conn, &owner, |dialog| {
+                    dialog.has_page_subscription(generation)
+                })
+            })
+            .unwrap_or_default(),
+        // Detach only abandons dialogs with no remaining original observer.
+        PageDialogSubscriptionEnd::Detach => {
+            dismiss_orphaned_javascript_dialogs_for_owner(conn, &owner)
+        }
     })
 }
 
@@ -182,18 +195,51 @@ pub(in crate::domains) fn prepare_page_session_disposal(
     conn: &mut CdpConnection,
     session_id: &str,
 ) -> Vec<BackgroundProtocolEvent> {
-    let owner = CommandOwnerScope::capture(conn, Some(session_id));
-    conn.disable_page_domain_for_session_owner(Some(session_id));
-    if native_dialog_handler_for_owner(conn, &owner) {
-        Vec::new()
-    } else {
-        let subscriptions = page_dialog_subscriptions(conn, &owner);
-        dismiss_matching_dialogs(conn, &owner, |dialog| {
-            !subscriptions
-                .iter()
-                .any(|(_, generation)| dialog.has_page_subscription(*generation))
-        })
+    end_page_dialog_subscription(conn, Some(session_id), PageDialogSubscriptionEnd::Detach)
+        .unwrap_or_default()
+}
+
+fn dismiss_orphaned_javascript_dialogs_for_owner(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Vec<BackgroundProtocolEvent> {
+    let subscriptions = page_dialog_subscriptions(conn, owner);
+    dismiss_matching_dialogs(conn, owner, |dialog| {
+        !subscriptions
+            .iter()
+            .any(|(_, generation)| dialog.has_page_subscription(*generation))
+    })
+}
+
+pub(crate) fn dismiss_unhandled_javascript_dialogs(
+    conn: &mut CdpConnection,
+) -> Vec<BackgroundProtocolEvent> {
+    if conn.has_automation_javascript_dialog_handler() {
+        return Vec::new();
     }
+    let owners = conn
+        .browser_context
+        .iter()
+        .chain(conn.inactive_browser_contexts.iter())
+        .flat_map(|context| {
+            context
+                .page_targets
+                .active()
+                .into_iter()
+                .chain(context.background_targets())
+                .map(move |target| {
+                    CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+                        browser_context_id: context.id.clone(),
+                        target_id: target.target_id().to_owned(),
+                        session_key: moli_page_types::DevToolsSessionKey::Primary,
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+    owners
+        .iter()
+        .flat_map(|owner| dismiss_orphaned_javascript_dialogs_for_owner(conn, owner))
+        .collect()
 }
 
 pub(super) fn complete_devtools_handle_javascript_dialog_command(
@@ -519,7 +565,7 @@ fn emit_to_attachment(
     let dialog_type = dialog.dialog_type().to_owned();
     let default_prompt = dialog.default_prompt().to_owned();
     let audience = page_dialog_subscriptions(conn, &event_owner);
-    let has_handler = !audience.is_empty() || native_dialog_handler_for_owner(conn, &event_owner);
+    let has_handler = !audience.is_empty() || conn.has_automation_javascript_dialog_handler();
     let subscriptions = audience.iter().map(|(_, generation)| *generation).collect();
     let mut installed_dialog =
         dialog.into_target_dialog(destination_page_owner, source_frame_id.clone());

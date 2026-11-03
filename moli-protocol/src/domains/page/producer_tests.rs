@@ -659,7 +659,12 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
     browser_context.set_active_target_id("TID-opener");
     browser_context.attach_active_session("SID-opener");
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
-    ctx.with_fixture(|conn| assert!(conn.set_automation_javascript_dialog_handler_enabled(true)));
+    ctx.with_fixture(|conn| {
+        assert!(conn.register_automation_javascript_dialog_handler(
+            crate::automation::FrontendProtocol::WebDriverClassic,
+            true,
+        ))
+    });
     ctx.with_fixture(|conn| {
         conn.set_auto_attach_owner(
             None,
