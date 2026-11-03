@@ -808,6 +808,87 @@ async fn prepared_dialog_arriving_after_last_page_disable_is_dismissed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn unhandled_prepared_dialog_does_not_consume_an_existing_queued_dialog() {
+    let mut ctx = shared_dialog_context();
+    let queued = RendererJavaScriptDialogCompletion::pending();
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-primary"),
+        renderer_dialog_for_test(None, "confirm", "queued prompt", "", Some(queued.clone())),
+    );
+    let incoming = RendererJavaScriptDialogCompletion::pending();
+    let dialog = ctx.with_fixture(|conn| {
+        for session in ["SID-primary", "SID-attached"] {
+            assert!(conn.disable_page_domain_for_session_owner(Some(session)));
+        }
+        crate::conn::TargetPreparedJavaScriptDialog::capture(
+            conn.target_page_protocol_attachment_identity_for_session(Some("SID-primary"))
+                .unwrap(),
+            conn.runtime_session_owner_slot(Some("SID-primary"))
+                .unwrap()
+                .javascript_dialog_scope_observer(),
+            "TID-1",
+            renderer_dialog_for_test(
+                None,
+                "confirm",
+                "unhandled incoming prompt",
+                "",
+                Some(incoming.clone()),
+            ),
+        )
+    });
+    let mut events = Vec::new();
+    ctx.with_fixture(|conn| {
+        crate::domains::page::javascript_dialog::emit_prepared(conn, &mut events, vec![dialog]);
+        let owner = crate::conn::CommandOwnerScope::capture(conn, Some("SID-primary"));
+        assert_eq!(
+            conn.target_javascript_dialog_state_for_owner(&owner)
+                .unwrap()
+                .pending_dialogs()
+                .len(),
+            1
+        );
+        assert!(
+            conn.register_automation_javascript_dialog_handler(
+                FrontendProtocol::WebDriverBidi,
+                false
+            )
+        );
+    });
+    assert!(!incoming.finish(true, String::new()));
+    assert!(!incoming.wait().accepted);
+    let native = events
+        .into_iter()
+        .map(|event| {
+            assert!(!event.has_protocol_wire_message());
+            event.into_parts().1.expect("native dialog fact")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(native.as_slice(), [AutomationEvent::PageJavaScriptDialogOpening(opening), AutomationEvent::UserPromptClosed(closed)] if opening.message == "unhandled incoming prompt" && !closed.accepted)
+    );
+    ctx.execute_automation_command_through_renderer_fence_for_test(
+        AutomationCommand::HandleJavaScriptDialog(
+            crate::automation::DevToolsHandleJavaScriptDialogCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
+                    session_id: None,
+                    target_id: Some("TID-1".into()),
+                    browser_context_id: None,
+                },
+                accept: true,
+                prompt_text: String::new(),
+            },
+        ),
+    )
+    .await
+    .expect("the old queued prompt is still available");
+    assert!(!queued.finish(false, String::new()));
+    assert!(queued.wait().accepted);
+    ctx.with_fixture(|conn| assert!(!conn.has_pending_javascript_dialog()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn primary_detach_preserves_shared_javascript_dialog_and_completion() {
     let mut ctx = shared_dialog_context();
     let completion = RendererJavaScriptDialogCompletion::pending();
