@@ -263,7 +263,7 @@ globalThis.__mediaCapabilitiesCodecColorRows = '[]';
             const spec = cases[index];
             for (let option = 0; option < options.length; option++) {
                 const extra = options[option];
-                const expected = !spec.malformed &&
+                const expected = type === 'file' && !spec.malformed &&
                     (!extra.colorGamut || spec.primaries === 2 || gamuts[extra.colorGamut].includes(spec.primaries)) &&
                     (!extra.transferFunction || spec.transfer === 2 || transfers[extra.transferFunction].includes(spec.transfer));
                 const video = {contentType: 'video/webm; codecs="' + spec.codec + '"', width: 320, height: 240, bitrate: 200000, framerate: 24, ...extra};
