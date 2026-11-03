@@ -2400,4 +2400,73 @@ mod tests {
         server.await?;
         Ok(())
     }
+    #[tokio::test]
+    async fn cors_redirect_location_bytes_preserve_escapes_and_invalid_octets() -> Result<()> {
+        for (mode, manual) in [
+            (RequestMode::Cors, false),
+            (RequestMode::NoCors, false),
+            (RequestMode::Cors, true),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let url = Url::parse(&format!("http://{}/start", listener.local_addr()?))?;
+            let server = tokio::spawn(async move {
+                let mut requests = Vec::new();
+                for response in [
+                    b"HTTP/1.1 302 Found\r\nContent-Length: 0\r\nConnection: close\r\nLocation: /final?utf8=\xe2\x98\x83&bad=\xff&escaped=%e2%98%83\r\n\r\n".as_slice(),
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".as_slice(),
+                ] {
+                    let (mut socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept()).await??;
+                    requests.push(read_http_request_text(&mut socket).await?);
+                    socket.write_all(response).await?;
+                }
+                anyhow::Ok(requests)
+            });
+            let owner = ResourceRequestClient::new(&FetchConfig::default())?;
+            let loader = owner.handle();
+            let request = Request::new_browser(
+                "GET",
+                url.clone(),
+                None,
+                Vec::new(),
+                moli_url::WebOrigin::from_url(&url),
+            )
+            .with_initiator_url(&url)
+            .with_request_mode(mode)
+            .with_use_cors_preflight(manual)
+            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            let expected_query = Some("utf8=%E2%98%83&bad=%FF&escaped=%e2%98%83");
+            if manual {
+                let response =
+                    fetch_browser_subresource_with_preflight(loader.clone(), request, None)
+                        .await
+                        .map_err(anyhow::Error::msg)?;
+                assert_eq!(response.status, 200);
+                assert_eq!(response.final_url.query(), expected_query);
+                assert_eq!(response.body_text(), "ok");
+            } else {
+                let mut response = fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
+                    &loader, request, None, Vec::new(),
+                )
+                .await.map_err(anyhow::Error::msg)?.into_response();
+                assert_eq!(response.status, 200);
+                assert_eq!(response.final_url.query(), expected_query);
+                let mut body = Vec::new();
+                while let Some(chunk) = response.next_chunk().await {
+                    body.extend_from_slice(&chunk);
+                }
+                response.finish().await?;
+                assert_eq!(body, b"ok");
+            }
+            let requests = server.await??;
+            assert_eq!(requests.len(), 2);
+            assert!(
+                requests[1].starts_with(
+                    "GET /final?utf8=%E2%98%83&bad=%FF&escaped=%e2%98%83 HTTP/1.1\r\n"
+                ),
+                "mode={mode:?}, manual={manual}: {}",
+                requests[1]
+            );
+        }
+        Ok(())
+    }
 }
