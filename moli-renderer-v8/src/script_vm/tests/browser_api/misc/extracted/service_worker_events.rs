@@ -2254,6 +2254,13 @@ async fn navigator_service_worker_respond_with_fetch_body_methods_abort_headers_
                   bodyPromise,
                   Promise.resolve().then(() => log.push("next-microtask"))
                 ]);
+                const repeated = await response[method]().then(
+                  () => false,
+                  reason => reason === controller.signal.reason
+                );
+                if (!repeated || response.bodyUsed || response.body.locked) {{
+                  throw new Error(method + ": aborted body was consumed");
+                }}
                 globalThis.__serviceWorkerRespondWithFetchHeadersFirstBodyMethodProbe = [
                   response.status,
                   log.join(">")

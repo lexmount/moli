@@ -2465,12 +2465,7 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
             );
         }
         if let Some(body_source_id) = body_source_id {
-            error_pending_network_body_stream_with_reason(
-                scope,
-                body_source_id,
-                ABORTED_ERROR_TEXT.to_owned(),
-                reason,
-            );
+            crate::network_host::abort_pending_network_body_stream(scope, body_source_id, reason);
         } else {
             let resolver = v8::Local::new(scope, &resolver);
             let _ = resolver.reject(scope, reason);

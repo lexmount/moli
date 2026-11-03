@@ -1302,6 +1302,13 @@ async fn navigator_service_worker_response_body_methods_reject_after_abort() {
                     bodyPromise,
                     Promise.resolve().then(() => log.push("next-microtask"))
                   ]);
+                  const repeated = await response[method]().then(
+                    () => false,
+                    reason => reason === controller.signal.reason
+                  );
+                  if (!repeated || response.bodyUsed || response.body.locked) {
+                    throw new Error(method + ": aborted body was consumed");
+                  }
                   results.push(log.join(">"));
                 }
                 globalThis.__serviceWorkerBodyMethodsAbortProbe = results.join("|");

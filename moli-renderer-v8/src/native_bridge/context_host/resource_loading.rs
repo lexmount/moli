@@ -2816,10 +2816,9 @@ impl JsContextHost {
             // Headers-first fetch may already have resolved the Response. In
             // that state aborting must error the body stream/materialization
             // promise, not only the original fetch continuation.
-            crate::network_host::error_pending_network_body_stream_with_reason(
+            crate::network_host::abort_pending_network_body_stream(
                 scope,
                 streaming.body_source_id,
-                "The operation was aborted.".to_owned(),
                 reason,
             );
             self.record_streaming_subresource_fetch_failure(
