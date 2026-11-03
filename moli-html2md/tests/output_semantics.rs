@@ -34,6 +34,46 @@ fn text(tree: &Tree, root: usize) -> String {
         .collect()
 }
 
+fn assert_hidden_json_source(prefix: &str, suffix: &str) {
+    for payload in [
+        format!(r#"{{"value":"{}"}}"#, "a".repeat(600)),
+        format!(r#"["{}"]"#, "a".repeat(600)),
+    ] {
+        for hidden in ["hidden", "style='display:none'"] {
+            let source = format!(
+                "{prefix}<pre><code>before<span {hidden}>{payload}</span>after</code></pre><div hidden>{payload}</div>{suffix}"
+            );
+            let input = Tree::parse(&source);
+            let markdown = convert(&input, input.root);
+            let output = Tree::parse(&rendered_html(&markdown));
+            let pre: Vec<_> = descendants(&output, output.root)
+                .into_iter()
+                .filter(|&node| output.nodes[node].tag.as_deref() == Some("pre"))
+                .collect();
+            assert_eq!(pre.len(), 1, "{markdown}");
+            assert!(
+                text(&output, pre[0]).contains(&format!("before{payload}after")),
+                "source was changed: {markdown}"
+            );
+            assert_eq!(
+                text(&output, output.root).matches(&payload).count(),
+                1,
+                "ordinary hidden state must remain omitted: {markdown}"
+            );
+        }
+    }
+}
+
+#[test]
+fn hidden_json_in_fenced_source_is_preserved() {
+    assert_hidden_json_source("<div>", "</div>");
+}
+
+#[test]
+fn hidden_json_in_html_source_is_preserved() {
+    assert_hidden_json_source("<table><tr><td colspan=2>", "</td></tr></table>");
+}
+
 fn with_attribute(tree: &Tree, name: &str, value: &str) -> Vec<usize> {
     descendants(tree, tree.root)
         .into_iter()

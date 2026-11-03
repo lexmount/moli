@@ -664,7 +664,9 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
         if depth >= self.options.max_depth {
             return;
         }
-        if nonrendered_serialized_state(self.dom, node) {
+        // Hidden line wrappers inside a preformatted block still carry source
+        // text, even when that source happens to look like serialized state.
+        if inline && nonrendered_serialized_state(self.dom, node) {
             return;
         }
         if crate::content::is_code_control(self.dom, node) {

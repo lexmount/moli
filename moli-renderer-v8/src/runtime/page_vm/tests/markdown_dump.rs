@@ -87,6 +87,24 @@ async fn markdown_popup_controllers_do_not_recover_hidden_sections() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn markdown_preserves_large_json_in_visible_source() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/").unwrap());
+        let payload = format!(r#"{{"value":"{}"}}"#, "a".repeat(600));
+        for hidden in ["hidden", "style='display:none'"] {
+            let source = format!("<pre><code>before\n<span {hidden}>{payload}</span>\nafter</code></pre><div hidden>{payload}</div>");
+            page.vm_mut().eval(&format!("document.body.innerHTML = {}", serde_json::to_string(&source).unwrap())).unwrap();
+            for strip_css in [false, true] {
+                let output = page.render_page_dump(options(strip_css));
+                assert!(output.contains(&format!("before\n{payload}\nafter")), "source was changed; {hidden}; strip_css={strip_css}: {output}");
+                assert_eq!(output.matches(&payload).count(), 1, "ordinary hidden state must remain omitted: {output}");
+            }
+        }
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
