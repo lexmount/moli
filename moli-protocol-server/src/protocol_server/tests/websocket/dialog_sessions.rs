@@ -14,7 +14,9 @@ struct DialogSessions {
 impl DialogSessions {
     async fn new() -> Self {
         let (addr, server) = spawn_test_protocol_server().await;
-        let endpoint = format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}");
+        let endpoint = discover_browser_websocket_url(addr)
+            .await
+            .expect("discover browser endpoint");
         let (mut first, _) = connect_async(&endpoint).await.expect("first connection");
         let (mut peer, _) = connect_async(&endpoint)
             .await

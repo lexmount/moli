@@ -17,6 +17,7 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
                         "export { default } from './module.js';",
                     ),
                     "/module.json" => (StatusCode::OK, "application/json", "{\"answer\":42}"),
+                    "/module.css" => (StatusCode::OK, "text/css", "body { color: green; }"),
                     "/missing.js" => (StatusCode::NOT_FOUND, "text/javascript", "not found"),
                     "/parser.js" => (StatusCode::OK, "text/javascript", "globalThis.parserModuleAnswer = 42;"),
                     "/runtime.js" => (StatusCode::OK, "text/javascript", "globalThis.runtimeModuleAnswer = 42;"),
@@ -45,10 +46,13 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -83,6 +87,7 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
                             "javascript",
                             "graph",
                             "json",
+                            "css",
                             "fetch-error"
                         ]),
                         "{mode}: {result}"
@@ -100,6 +105,7 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
         "/module.js",
         "/graph.js",
         "/module.json",
+        "/module.css",
         "/missing.js",
         "/runtime.js",
     ] {

@@ -7,6 +7,7 @@ use std::{
 };
 
 use futures_util::{SinkExt, StreamExt};
+use moli_test_support::discover_browser_websocket_url;
 use tokio::time::{sleep, timeout};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
@@ -73,12 +74,11 @@ fn spawn_serving_child() -> ServingChild {
 #[tokio::test]
 async fn cli_serve_exits_zero_after_browser_level_close() {
     let mut serving = spawn_serving_child();
-    let (mut socket, _) = connect_async(format!(
-        "ws://127.0.0.1:{}/devtools/browser/moli-browser",
-        serving.port
-    ))
-    .await
-    .expect("connect to browser CDP WebSocket");
+    let addr = (std::net::Ipv4Addr::LOCALHOST, serving.port).into();
+    let endpoint = discover_browser_websocket_url(addr).await.unwrap();
+    let (mut socket, _) = connect_async(endpoint)
+        .await
+        .expect("connect to browser CDP WebSocket");
     socket
         .send(WsMessage::Text(
             serde_json::json!({"id": 1, "method": "Browser.close"})

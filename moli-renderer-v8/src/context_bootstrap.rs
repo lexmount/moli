@@ -376,6 +376,7 @@ pub(crate) use self::indexed_db::{
 pub(crate) use self::indexed_db::{
     indexed_db_manager_context_slot_present_for_test,
     indexed_db_manager_isolate_slot_present_for_test, indexed_db_request_state_entries_for_test,
+    indexed_db_transaction_state_entries_for_test,
 };
 pub(in crate::context_bootstrap) use self::indexed_db::{
     indexed_db_usage_bytes_for_storage_key, scoped_storage_bucket_indexed_db_factory,
@@ -396,8 +397,7 @@ pub(crate) use self::media_queries::{
     SimpleObjectEventListenerInspectorSnapshot, dispatch_media_query_list_change_events,
     dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
     dispatch_simple_event_target_event_with_ancestors,
-    dispatch_simple_event_target_event_with_checkpoint,
-    evaluate_match_media_query_list_with_viewport, initialize_simple_event_target,
+    dispatch_simple_event_target_event_with_checkpoint, initialize_simple_event_target,
     install_simple_event_target_handlers, is_simple_event_target,
     simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
     simple_event_target_handler_getter_callback, simple_event_target_handler_setter_callback,

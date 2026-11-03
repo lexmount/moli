@@ -32,9 +32,11 @@ async fn websocket_cdp_navigation_keeps_network_child_frame_visible_at_load_boun
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -322,9 +324,11 @@ async fn websocket_cdp_websocket_frame_events_are_emitted_without_followup_comma
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -503,9 +507,11 @@ async fn websocket_cdp_pending_runtime_await_completes_after_websocket_dom_updat
         spawn_dedicated_fixture_server(fixture_app, "runtime-await-websocket-dom");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let page_url = format!("http://{fixture_addr}/page");
@@ -627,9 +633,11 @@ window.addEventListener('load', () => {{
         spawn_dedicated_fixture_server(fixture_app, "runtime-await-page-websocket-dom");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let page_url = format!("http://{fixture_addr}/page");
@@ -752,9 +760,11 @@ async fn websocket_cdp_network_and_websocket_outputs_are_session_isolated_withou
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -967,9 +977,11 @@ async fn websocket_cdp_parser_script_network_events_capture_response_body() {
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -1261,9 +1273,11 @@ async fn websocket_cdp_parser_script_network_backlog_flushes_before_domcontentlo
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -1395,9 +1409,11 @@ globalThis.__lmInlineXhrDone = new Promise(resolve => {
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -1585,9 +1601,11 @@ async fn websocket_cdp_event_source_emits_incremental_network_events() {
         spawn_dedicated_fixture_server(fixture_app, "cdp-event-source");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let browser_context_id = cdp_create_browser_context(&mut socket, 10).await;
@@ -1807,9 +1825,11 @@ async fn websocket_cdp_runtime_awaitpromise_external_script_node_keeps_node_subt
         spawn_dedicated_fixture_server(fixture_app, "runtime-await-script-node");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let page_url = format!("http://{fixture_addr}/plain");
@@ -1884,9 +1904,11 @@ async fn websocket_cdp_runtime_awaitpromise_same_owner_turn_style_node_keeps_nod
         spawn_dedicated_fixture_server(fixture_app, "runtime-await-inline-style-node");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let page_url = format!("http://{fixture_addr}/plain");
@@ -1961,9 +1983,11 @@ async fn websocket_cdp_remote_objects_classify_cross_frame_nodes_at_v8_boundary(
         spawn_dedicated_fixture_server(fixture_app, "runtime-cross-frame-node-subtype");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let page_url = format!("http://{fixture_addr}/parent");
@@ -2067,9 +2091,11 @@ async fn websocket_cdp_playwright_auto_attach_child_frame_events_precede_main_lo
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 

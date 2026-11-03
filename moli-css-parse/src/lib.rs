@@ -9,6 +9,7 @@ mod font_face;
 mod font_palette;
 mod font_selection;
 mod math;
+mod media;
 mod root_margin;
 mod stylo_stylesheet;
 mod transform;
@@ -36,6 +37,11 @@ pub use math::{
     css_numeric_value_is_supported, css_time_value_is_supported, number_len, parse_angle_degrees,
     parse_number, parse_px_length, resolve_css_number, resolve_css_numeric,
     resolve_length_percentage, resolve_time_seconds, starts_with_supported_math_function,
+};
+pub use media::{
+    append_media_query_list_medium, create_media_query_device, delete_media_query_list_medium,
+    evaluate_media_query_list, media_query_list_items, normalize_media_query_list,
+    parse_media_query_list_with_context, screen_media_query_matches,
 };
 pub use root_margin::{normalize_root_margin, root_margin_components};
 pub use style::moli_declaration_block::{

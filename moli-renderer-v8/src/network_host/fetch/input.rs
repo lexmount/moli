@@ -66,6 +66,8 @@ pub(super) fn parse_window_fetch_input<'s>(
         crate::network_host::validate_request_method_body(&method, body.as_ref())?;
         if request_mode == moli_fetch::RequestMode::NoCors {
             headers = filter_headers_for_guard(&headers, HeadersGuard::RequestNoCors);
+        } else {
+            headers = filter_headers_for_guard(&headers, HeadersGuard::Request);
         }
         let credentials_mode = init
             .credentials_mode
@@ -115,7 +117,7 @@ pub(super) fn parse_window_fetch_input<'s>(
         let headers = if request_mode == moli_fetch::RequestMode::NoCors {
             filter_headers_for_guard(&init.headers, HeadersGuard::RequestNoCors)
         } else {
-            init.headers
+            filter_headers_for_guard(&init.headers, HeadersGuard::Request)
         };
         let credentials_mode = init
             .credentials_mode

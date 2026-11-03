@@ -177,7 +177,9 @@ async fn verify(continuation: Continuation, finish: Finish, intercept_script: bo
     );
     let url = format!("http://{fixture_addr}/page");
     let (addr, server) = spawn_test_protocol_server().await;
-    let endpoint = format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}");
+    let endpoint = discover_browser_websocket_url(addr)
+        .await
+        .expect("discover browser endpoint");
     let (mut socket, _) = connect_async(&endpoint).await.unwrap();
     let (mut peer, _) = connect_async(&endpoint).await.unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;

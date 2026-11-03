@@ -42,9 +42,11 @@ async fn pause_in_timer(
 
 async fn assert_navigation_exits_debugger_pause(body: &str, second_frontend: bool) {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let session_id = cdp_create_default_session_and_navigate(
@@ -222,9 +224,11 @@ async fn assert_delayed_navigation_while_paused(supersede: bool) {
     );
     let fixture = tokio::spawn(async move { axum::serve(fixture_listener, app).await.unwrap() });
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .unwrap();
     let session_id =
@@ -420,9 +424,11 @@ async fn assert_intercepted_navigation_while_paused(
         "paused-navigation-cancellation",
     );
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .unwrap();
     let session_id =

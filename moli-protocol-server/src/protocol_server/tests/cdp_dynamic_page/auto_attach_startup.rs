@@ -66,7 +66,9 @@ async fn browser_created_page_loads_with_two_waiting_auto_attach_observers() {
         "direct-auto-attach-startup",
     );
     let (addr, server) = spawn_test_protocol_server().await;
-    let endpoint = format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}");
+    let endpoint = discover_browser_websocket_url(addr)
+        .await
+        .expect("discover browser endpoint");
     let (mut first, _) = connect_async(&endpoint).await.unwrap();
     let (mut second, _) = connect_async(&endpoint).await.unwrap();
     auto_attach(&mut first).await;
@@ -107,7 +109,9 @@ async fn popup_startup_pause_is_shared_but_detaching_one_observer_does_not_resum
         "popup-auto-attach-startup",
     );
     let (addr, server) = spawn_test_protocol_server().await;
-    let endpoint = format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}");
+    let endpoint = discover_browser_websocket_url(addr)
+        .await
+        .expect("discover browser endpoint");
     let (mut first, _) = connect_async(&endpoint).await.unwrap();
     let (mut second, _) = connect_async(&endpoint).await.unwrap();
     let parent_id = create_dynamic_target(&mut first, 1).await;

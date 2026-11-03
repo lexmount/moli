@@ -9,6 +9,7 @@ from ..assertions import SmokeError, assert_equal, record, wait_until
 from ..navigation import navigate as navigate_document
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
 from ..serve import BrowserProcess
+from .browser_endpoint import browser_endpoint_lifecycle
 
 
 def process_descriptors(pid: int) -> dict[int, str]:
@@ -156,6 +157,8 @@ class LifecycleProbe:
 async def run_target_lifecycle_group(
     endpoint: str, fixture: str, results: list[dict[str, Any]], serve: BrowserProcess | None,
 ) -> None:
+    if serve is not None:
+        await browser_endpoint_lifecycle(endpoint, results)
     pid = serve.process.pid if serve is not None else None
     profile_dir = serve.data_dir if serve is not None and serve.engine == "chromium" else None
     client = await connect_raw_cdp(endpoint)

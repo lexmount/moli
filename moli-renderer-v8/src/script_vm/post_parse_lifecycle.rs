@@ -1029,7 +1029,7 @@ impl ScriptVm {
                     );
                     return Ok(NonScriptPageTaskExecutionOutcome::None);
                 };
-                self.accept_main_document_blocking_stylesheet_inputs(owner, &inputs);
+                self.accept_main_document_stylesheet_inputs(owner, &inputs);
                 Ok(NonScriptPageTaskExecutionOutcome::None)
             }
             PostParseLifecycleWork::AdvanceMainParserDeferredScripts { .. } => {

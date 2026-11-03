@@ -7,13 +7,14 @@ use moli_cookie_jar::{
     StoredCookieSetReport,
 };
 use moli_http_cache::HttpCacheBodyWriter;
+use moli_url::WebOrigin;
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 use url::Url;
 
 use crate::{
-    FetchCancelHandle, FetchConfig, NegotiatedHttpVersion, NetworkRequestExtraInfo, Request,
-    RequestRedirectHandling,
+    CrossOriginResourcePolicy, FetchCancelHandle, FetchConfig, NegotiatedHttpVersion,
+    NetworkRequestExtraInfo, Request, RequestRedirectHandling,
     cancellation::ResponseProgress,
     client_hints::{ClientHintResponseAction, ClientHintResponsePolicy},
     headers::{decode_http_header_bytes, parse_http_response_header_line},
@@ -178,6 +179,7 @@ impl ResponseCollector {
 #[derive(Debug)]
 pub struct StreamingResponseCollector {
     cookie_store: SharedBrowserCookieStore,
+    corp_origin: Option<WebOrigin>,
     headers: Vec<(String, Vec<u8>)>,
     status_text: Option<String>,
     current_url: Option<Url>,
@@ -250,6 +252,7 @@ impl StreamingCachePlan {
 #[derive(Debug)]
 pub struct RawStreamingResponseCollector {
     cookie_store: SharedBrowserCookieStore,
+    corp_origin: Option<WebOrigin>,
     headers: Vec<(String, Vec<u8>)>,
     status_text: Option<String>,
     current_url: Option<Url>,
@@ -282,6 +285,10 @@ pub struct RawStreamingResponseCollector {
 }
 
 impl StreamingResponseCollector {
+    pub(crate) fn set_corp_origin(&mut self, origin: Option<&WebOrigin>) {
+        self.corp_origin = origin.cloned();
+    }
+
     pub(crate) fn response_progress(&self) -> &ResponseProgress {
         &self.response_progress
     }
@@ -294,6 +301,7 @@ impl StreamingResponseCollector {
     ) -> Self {
         Self {
             cookie_store,
+            corp_origin: None,
             headers: Vec::new(),
             current_url: None,
             current_cookie_context: None,
@@ -339,6 +347,7 @@ impl StreamingResponseCollector {
         self.headers.clear();
         self.status_text = None;
         self.current_url = Some(current_url);
+        self.corp_origin = None;
         self.current_cookie_context = Some(current_cookie_context);
         self.status = 0;
         self.max_response_size = max_response_size;
@@ -504,6 +513,13 @@ impl StreamingResponseCollector {
             })
         {
             self.client_hint_restart_requested = true;
+            return false;
+        }
+        if let Some(origin) = &self.corp_origin
+            && let Some(policy) = CrossOriginResourcePolicy::from_headers(&self.headers)
+            && let Err(error) = policy.check(origin, &current_url)
+        {
+            self.callback_error = Some(error);
             return false;
         }
         let declared_body_length = identity_encoded_content_length(&self.headers);
@@ -681,6 +697,10 @@ impl StreamingResponseCollector {
 }
 
 impl RawStreamingResponseCollector {
+    pub(crate) fn set_corp_origin(&mut self, origin: Option<&WebOrigin>) {
+        self.corp_origin = origin.cloned();
+    }
+
     pub(crate) fn response_progress(&self) -> &ResponseProgress {
         &self.response_progress
     }
@@ -694,6 +714,7 @@ impl RawStreamingResponseCollector {
         let response_progress = cancel_handle.response_progress();
         Self {
             cookie_store,
+            corp_origin: None,
             headers: Vec::new(),
             current_url: None,
             current_cookie_context: None,
@@ -739,6 +760,7 @@ impl RawStreamingResponseCollector {
         self.headers.clear();
         self.status_text = None;
         self.current_url = Some(current_url);
+        self.corp_origin = None;
         self.current_cookie_context = Some(current_cookie_context);
         self.status = 0;
         self.max_response_size = max_response_size;
@@ -908,6 +930,15 @@ impl RawStreamingResponseCollector {
             })
         {
             self.client_hint_restart_requested = true;
+            return false;
+        }
+        // A 304 is checked against the merged cached response before delivery.
+        if !(self.status == 304 && self.defer_not_modified_start)
+            && let Some(origin) = &self.corp_origin
+            && let Some(policy) = CrossOriginResourcePolicy::from_headers(&self.headers)
+            && let Err(error) = policy.check(origin, &current_url)
+        {
+            self.callback_error = Some(error);
             return false;
         }
         let declared_body_length = identity_encoded_content_length(&self.headers);

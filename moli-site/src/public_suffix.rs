@@ -144,6 +144,17 @@ pub fn registrable_site_host(host: &str) -> &str {
         .unwrap_or(host)
 }
 
+/// Returns an eTLD+1, including private registries, without the cookie-site
+/// fallback to IP literals, single-label hosts, or public suffixes.
+pub fn registrable_domain_for_host(host: &str) -> Option<&str> {
+    if is_ip_host(host) {
+        return None;
+    }
+    StaticPublicSuffixList
+        .domain(host.as_bytes())
+        .and_then(|domain| std::str::from_utf8(domain.as_bytes()).ok())
+}
+
 /// Compares two hosts using registrable-domain site semantics.
 pub fn same_site_hosts(host_a: &str, host_b: &str) -> bool {
     if is_ip_host(host_a) || is_ip_host(host_b) {

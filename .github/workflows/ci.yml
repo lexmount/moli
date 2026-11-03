@@ -613,7 +613,23 @@ jobs:
           cache-dependency-glob: moli-webdriver-smoke/uv.lock
       - name: Install dependencies
         run: uv sync --project moli-webdriver-smoke --locked
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.15.0
+          cache: npm
+          cache-dependency-path: moli-webdriver-smoke/package-lock.json
+      - name: Install WebdriverIO smoke dependencies
+        run: npm ci --prefix moli-webdriver-smoke
+      - name: Run WebdriverIO Classic and BiDi workflows
+        shell: bash
+        run: |
+          export MOLI_BIN="$PWD/target/ci-bin/moli-release-head/moli"
+          mkdir -p target/smoke/webdriver-ci
+          set -o pipefail
+          npm run smoke:webdriverio --prefix moli-webdriver-smoke \
+            2>&1 | tee target/smoke/webdriver-ci/webdriverio.log
       - name: Run full WebDriver smoke
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           export MOLI_BIN="$PWD/target/ci-bin/moli-release-head/moli"

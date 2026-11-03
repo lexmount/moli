@@ -109,6 +109,7 @@ pub(crate) fn browser_request_needs_manual_preflight_redirects(
             BrowserRequestMetadata::Fetch
                 | BrowserRequestMetadata::EventSource
                 | BrowserRequestMetadata::JsonModule
+                | BrowserRequestMetadata::TextModule
                 | BrowserRequestMetadata::Manifest
                 | BrowserRequestMetadata::StyleModule
                 | BrowserRequestMetadata::Xhr,
@@ -559,6 +560,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                 BrowserRequestMetadata::Fetch
                     | BrowserRequestMetadata::EventSource
                     | BrowserRequestMetadata::JsonModule
+                    | BrowserRequestMetadata::TextModule
                     | BrowserRequestMetadata::Manifest
                     | BrowserRequestMetadata::StyleModule
                     | BrowserRequestMetadata::Xhr,

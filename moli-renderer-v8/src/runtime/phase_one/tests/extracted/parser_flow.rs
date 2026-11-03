@@ -128,7 +128,7 @@ fn parser_clients_claim_pre_meta_pending_descriptors_before_gate_drain() {
             options: crate::stylesheet_blocking::StylesheetFetchOptions::default(),
         };
     cache.claim_pending_stylesheet_preloads_for_parser(&[
-        DocumentOwnedBlockingStylesheetDiscoveryInput::from(&stylesheet_candidate),
+        DocumentOwnedStylesheetDiscoveryInput::from(&stylesheet_candidate),
     ]);
     assert_eq!(cache.pending_preload_counts_for_test(), (1, 1));
 
@@ -178,7 +178,7 @@ fn parser_step_without_script_handoff_consumes_live_backend_dom() {
         result,
         discovered_async_prefetch_scripts: _,
         discovered_modulepreload_link_candidates: _,
-        discovered_blocking_stylesheet_inputs: _,
+        discovered_stylesheet_inputs: _,
     } = driver
         .parser_session
         .stream_handle()
@@ -230,7 +230,7 @@ fn parser_step_with_inline_svg_script_surfaces_shared_script_handoff() {
             result,
             discovered_async_prefetch_scripts: _,
             discovered_modulepreload_link_candidates: _,
-            discovered_blocking_stylesheet_inputs: _,
+            discovered_stylesheet_inputs: _,
         } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
             "<!doctype html><html><body><svg><script>window.svgAnswer = 42;</script></svg><div>late</div></body></html>",
         );
@@ -334,7 +334,7 @@ fn parser_defined_autonomous_custom_element_reaches_parser_handoff() {
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 r#"<!doctype html><script>customElements.define("x-sync", class extends HTMLElement {});</script>"#,
             );
@@ -638,7 +638,7 @@ fn quirks_stylesheet_parser_client_claims_mode_neutral_scanner_descriptor() {
                 .with_quirks_mode_mime_compatibility(true),
         };
     cache.claim_pending_stylesheet_preloads_for_parser(&[
-        DocumentOwnedBlockingStylesheetDiscoveryInput::from(&stylesheet_candidate),
+        DocumentOwnedStylesheetDiscoveryInput::from(&stylesheet_candidate),
     ]);
 
     assert_eq!(cache.pending_preload_counts_for_test(), (0, 0));

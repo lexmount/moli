@@ -450,6 +450,12 @@ pub struct ServeArgs {
     #[arg(short, long, default_value_t = 10)]
     pub timeout: u32,
 
+    /// Allow browser requests from these origins (comma-separated, repeatable).
+    /// Requests without Origin and same-origin requests are allowed by default;
+    /// other origins are rejected. '*' allows all origins.
+    #[arg(long, value_name = "ORIGINS", value_delimiter = ',')]
+    pub remote_allow_origins: Vec<String>,
+
     /// Set the screencast interval in milliseconds (default: 1000). Requires --layout.
     #[arg(
         long = "screencast-interval-ms",

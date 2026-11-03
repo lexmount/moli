@@ -194,7 +194,7 @@ async def browser_identity(endpoint: str, expected: str | None) -> dict[str, Any
         with urllib.request.urlopen(endpoint.rstrip("/") + "/json/version", timeout=2) as response:
             return json.load(response)
     version = await asyncio.to_thread(read_version)
-    engine = "moli" if version.get("webSocketDebuggerUrl", "").endswith("/moli-browser") else "chromium"
+    engine = "moli" if isinstance(version.get("Moli-Version"), str) else "chromium"
     if engine == "chromium" and not str(version.get("Browser", "")).startswith(("Chrome/", "HeadlessChrome/", "Chromium/")):
         raise RuntimeError(f"endpoint is not a Chromium browser: {version}")
     if expected is not None and engine != expected:

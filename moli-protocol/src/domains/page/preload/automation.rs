@@ -23,15 +23,15 @@ pub(crate) struct PreloadScriptProjection {
 }
 
 impl PreloadScriptProjection {
-    fn project(self, identifier: String) -> AutomationResult {
+    fn project(self, identifier: DevToolsPreloadScriptId) -> AutomationResult {
         let identifier = match (self.protocol, self.target) {
             (FrontendProtocol::WebDriverBidi, Some(target)) => {
-                format!("{}:{identifier}", target.as_str())
+                DevToolsPreloadScriptId::from(format!("{}:{identifier}", target.as_str()))
             }
             _ => identifier,
         };
         AutomationResult::AddPreloadScript(DevToolsAddPreloadScriptResult {
-            script_id: identifier.into(),
+            script_id: identifier,
         })
     }
 }
@@ -204,15 +204,13 @@ impl PreparedAutomationPreload {
         let identifier = conn
             .browser_context_by_id_mut(first)
             .ok_or_else(preload_no_target_error)?
-            .reserve_default_document_start_script_id();
+            .reserve_context_preload_script_id();
         for id in &contexts {
             conn.browser_context_by_id_mut(id)
                 .ok_or_else(preload_no_target_error)?
-                .record_default_document_start_script_with_identifier(identifier.clone(), &script);
+                .record_context_preload_script_with_identifier(identifier.clone(), &script);
         }
-        let script = script.with_registry_key(
-            BrowserContext::default_document_start_script_registry_key(&identifier),
-        );
+        let script = BrowserContext::context_preload_script_descriptor(&identifier, &script);
         let mut operations = Vec::new();
         for id in contexts {
             if let Some(owner) = active_context_owner(conn, &id)
@@ -228,7 +226,7 @@ impl PreparedAutomationPreload {
         }
         Ok(Self::Registry {
             result: AutomationResult::AddPreloadScript(DevToolsAddPreloadScriptResult {
-                script_id: identifier.into(),
+                script_id: identifier,
             }),
             operations,
         })
@@ -252,10 +250,8 @@ impl PreparedAutomationPreload {
         let identifier = conn
             .browser_context_by_id_mut(&context_id)
             .ok_or_else(preload_no_target_error)?
-            .record_default_document_start_script(&script);
-        let script = script.with_registry_key(
-            BrowserContext::default_document_start_script_registry_key(&identifier),
-        );
+            .record_context_preload_script(&script);
+        let script = BrowserContext::context_preload_script_descriptor(&identifier, &script);
         let operations =
             PreparedPreloadRegistryOperation::capture(conn, owner, PreloadMutation::Append(script))
                 .transpose()
@@ -273,24 +269,32 @@ impl PreparedAutomationPreload {
         command: DevToolsRemovePreloadScriptCommand,
     ) -> Result<Self, DevToolsError> {
         let protocol = command.context.protocol;
-        let script_id = command.script_id.into_string();
+        let script_id = command.script_id;
         let identity = conn.target_owner_identity_for_owner(&owner);
         let fallback = identity.as_ref().map(|(_, target)| {
-            BrowserContext::target_document_start_script_registry_key(target.as_deref(), &script_id)
+            BrowserContext::target_document_start_script_registry_key(
+                target.as_deref(),
+                script_id.as_str(),
+            )
         });
         let (mut removed, mut key) = conn
             .with_target_owner_state_for_owner_mut(&owner, |state| {
-                remove_stored_document_start_script_registry_key(state, None, &script_id, fallback)
+                remove_stored_document_start_script_registry_key(
+                    state,
+                    None,
+                    script_id.as_str(),
+                    fallback,
+                )
             })
             .ok_or_else(|| preload_missing_owner_error(conn))?;
         if !removed
             && protocol == FrontendProtocol::WebDriverBidi
             && let Some((id, _)) = identity
             && let Some(context) = conn.browser_context_by_id_mut(&id)
-            && let Some(default) = context.remove_default_document_start_script(&script_id)
+            && let Some(context_key) = context.remove_context_preload_script(&script_id)
         {
             removed = true;
-            key = Some(default);
+            key = Some(context_key);
         }
         if !removed && protocol == FrontendProtocol::WebDriverBidi {
             return Err(DevToolsError::new(
@@ -317,10 +321,10 @@ impl PreparedAutomationPreload {
         conn: &mut CdpConnection,
         command: DevToolsRemovePreloadScriptCommand,
     ) -> Result<Self, DevToolsError> {
-        let script_id = command.script_id.as_str();
+        let script_id = &command.script_id;
         let contexts = conn
             .browser_contexts()
-            .filter(|context| context.has_default_document_start_script(script_id))
+            .filter(|context| context.has_context_preload_script(script_id))
             .map(|context| context.id.clone())
             .collect::<Vec<_>>();
         if contexts.is_empty() {
@@ -334,7 +338,7 @@ impl PreparedAutomationPreload {
             .filter_map(|id| {
                 let key = conn
                     .browser_context_by_id_mut(&id)?
-                    .remove_default_document_start_script(script_id)?;
+                    .remove_context_preload_script(script_id)?;
                 Some((id, key))
             })
             .collect::<Vec<_>>();
@@ -373,7 +377,7 @@ impl PreparedAutomationPreload {
                     .await
                     .map_err(preload_internal_error)?;
                 context.retain_output(plan.into_composite_command_prefix());
-                Ok(projection.project(identifier))
+                Ok(projection.project(identifier.into()))
             }
             Self::Registry { result, operations } => {
                 for operation in operations {

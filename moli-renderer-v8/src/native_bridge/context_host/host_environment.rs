@@ -30,7 +30,6 @@ use crate::{
     },
 };
 use dom::ElementState as StyloElementState;
-use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 
 fn push_unique_handle(handles: &mut Vec<DomHandle>, handle: DomHandle) {
     if !handles.contains(&handle) {
@@ -76,6 +75,22 @@ fn hover_chain_for_input_hit(runtime: &JsContextHost, hit: Option<DomHandle>) ->
 }
 
 impl JsContextHost {
+    pub(crate) fn media_query_matches_for_document(
+        &self,
+        document: DomHandle,
+        media: &str,
+    ) -> bool {
+        let Some(document_node) = self.dom_host().node(document).and_then(Node::as_document) else {
+            return false;
+        };
+        crate::style_engine::media_list::evaluate_media_query_list_with_context(
+            media,
+            Some(self.emulated_media()),
+            crate::native_bridge::element::style_viewport_for_document(self, document),
+            document_node.base_url(),
+            document_node.quirks_mode(),
+        )
+    }
     pub(crate) fn documents_with_adopted_style_sheets(&self) -> Vec<DomHandle> {
         self.style_engine.documents_with_adopted_style_sheets()
     }
@@ -318,7 +333,10 @@ impl JsContextHost {
         refreshed
     }
 
-    fn install_owner_live_stylesheet(&mut self, owner: DomHandle) {
+    pub(in crate::native_bridge::context_host) fn install_owner_live_stylesheet(
+        &mut self,
+        owner: DomHandle,
+    ) {
         let dom_host: *const crate::dom::native::DomHost = self.dom_host();
         if self
             .style_engine
@@ -828,45 +846,34 @@ impl JsContextHost {
         &mut self,
         overrides: &crate::protocol_types::EmulatedMediaOverrides,
     ) {
-        if self.emulated_media != *overrides {
+        if self.emulated_media() != overrides {
             self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
         }
-        self.emulated_media = overrides.clone();
+        unsafe { &mut *self.runtime }.set_emulated_media(overrides);
     }
 
     pub(crate) fn emulated_media(&self) -> &crate::protocol_types::EmulatedMediaOverrides {
-        &self.emulated_media
+        unsafe { &*self.runtime }.emulated_media()
     }
 
     pub(crate) fn set_viewport_surface(
         &mut self,
         viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     ) -> bool {
-        let changed = self.viewport_surface != viewport_surface;
+        let changed = self.viewport_surface() != viewport_surface;
         if changed {
             self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
         }
-        self.viewport_surface = viewport_surface;
+        unsafe { &mut *self.runtime }.set_viewport_surface(viewport_surface);
         changed
     }
 
     pub(crate) fn style_viewport(&self) -> StyleViewport {
-        self.viewport_surface
-            .map(StyleViewport::from_viewport_surface)
-            .unwrap_or_else(|| {
-                StyleViewport::new(
-                    Some(DEFAULT_WINDOW_SURFACE_PROFILE.inner_width),
-                    Some(DEFAULT_WINDOW_SURFACE_PROFILE.inner_height),
-                )
-                .with_screen_size(
-                    Some(DEFAULT_WINDOW_SURFACE_PROFILE.screen_width),
-                    Some(DEFAULT_WINDOW_SURFACE_PROFILE.screen_height),
-                )
-            })
+        unsafe { &*self.runtime }.style_viewport()
     }
 
     pub(crate) fn viewport_surface(&self) -> Option<crate::protocol_types::ViewportSurface> {
-        self.viewport_surface
+        unsafe { &*self.runtime }.viewport_surface()
     }
 
     pub(crate) fn document_base_url_for_handle(&self, document: DomHandle) -> url::Url {
@@ -957,6 +964,24 @@ impl JsContextHost {
     }
 
     pub(crate) fn apply_stylesheet_owner_changes(&mut self, changes: &[DomStylesheetOwnerChange]) {
+        for change in changes {
+            let reprocesses = match change.kind() {
+                DomStylesheetOwnerChangeKind::Attribute {
+                    namespace,
+                    local_name,
+                } => {
+                    namespace.is_none()
+                        && crate::document_runtime::attribute_reprocesses_connected_stylesheet(
+                            local_name,
+                        )
+                }
+                _ => true,
+            };
+            if reprocesses {
+                self.frame_document_stylesheets
+                    .invalidate_owner(crate::dom::NodeId::new(change.owner().index()));
+            }
+        }
         let dom_host = self.dom_host() as *const _;
         self.style_engine
             .apply_stylesheet_owner_changes_with_host(unsafe { &*dom_host }, changes);
@@ -1229,6 +1254,16 @@ impl JsContextHost {
         owner: DomHandle,
         request_url: &url::Url,
     ) -> bool {
+        // A URL-only parsed source has no proof for this link's integrity.
+        // Admission through the stylesheet fetch cache can reuse only a terminal
+        // validated with the same request options, including integrity metadata.
+        if self
+            .dom_host()
+            .get_attribute(owner, "integrity")
+            .is_some_and(|metadata| !metadata.is_empty())
+        {
+            return false;
+        }
         let dom_host = self.dom_host() as *const _;
         let Some(source) = self.style_engine.cached_linked_stylesheet_source_with_host(
             unsafe { &*dom_host },

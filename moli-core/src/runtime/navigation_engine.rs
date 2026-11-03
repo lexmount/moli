@@ -455,6 +455,10 @@ pub struct NavigationRuntimeConfig {
     subframe_loading_enabled: bool,
     layout_configuration: LayoutConfiguration,
     debugger_enabled: bool,
+    /// Startup sources transported from BrowserConfig to protocol connections.
+    /// The connection owns them before any engine is materialized; they are
+    /// BrowserContext initialization policy, not NavigationEngine state.
+    document_start_scripts: Vec<String>,
 }
 
 impl NavigationRuntimeConfig {
@@ -487,6 +491,7 @@ impl NavigationRuntimeConfig {
             subframe_loading_enabled,
             layout_configuration,
             debugger_enabled: false,
+            document_start_scripts: Vec::new(),
         }
     }
 
@@ -531,6 +536,15 @@ impl NavigationRuntimeConfig {
         self.debugger_enabled = enabled;
         self
     }
+
+    pub fn document_start_scripts(&self) -> &[String] {
+        &self.document_start_scripts
+    }
+
+    pub fn with_document_start_scripts(mut self, scripts: Vec<String>) -> Self {
+        self.document_start_scripts = scripts;
+        self
+    }
 }
 
 impl Default for NavigationRuntimeConfig {
@@ -553,6 +567,7 @@ impl From<&crate::config::BrowserConfig> for NavigationRuntimeConfig {
             config.layout_configuration(),
         )
         .with_debugger_enabled(config.debugger_enabled())
+        .with_document_start_scripts(config.document_start_scripts().to_vec())
     }
 }
 
@@ -730,6 +745,8 @@ impl NavigationEngine {
             subframe_loading_enabled,
             layout_configuration,
             debugger_enabled,
+            // Protocol connections capture startup scripts before creating engines.
+            document_start_scripts: _,
         } = config;
         let resource_runtime = browser_context_access
             .current_browser_resource_runtime()
@@ -803,6 +820,8 @@ impl NavigationEngine {
             subframe_loading_enabled,
             layout_configuration,
             debugger_enabled,
+            // Protocol connections capture startup scripts before creating engines.
+            document_start_scripts: _,
         } = config;
         renderer_owner_source
             .js_runtime
@@ -2144,6 +2163,25 @@ impl NavigationEngine {
 #[cfg(test)]
 mod tests {
     use super::{CommittedDocumentResourceSource, NavigationEngine, NavigationRuntimeConfig};
+
+    #[test]
+    fn runtime_config_carries_configured_document_start_scripts() {
+        // `moli serve` builds its pages from NavigationRuntimeConfig only; dropping the
+        // scripts here made `serve --document-start-script` a silent no-op.
+        let mut browser = crate::config::BrowserConfig::default();
+        browser.add_document_start_script("window.__k3 = 1");
+        browser.add_document_start_script("window.__k3b = 2");
+        let runtime = NavigationRuntimeConfig::from(&browser);
+        assert_eq!(
+            runtime.document_start_scripts(),
+            ["window.__k3 = 1".to_owned(), "window.__k3b = 2".to_owned()]
+        );
+        assert!(
+            NavigationRuntimeConfig::default()
+                .document_start_scripts()
+                .is_empty()
+        );
+    }
     use crate::{
         LayoutPolicy, OptionalResourceFetchMask,
         network::ResourceRequestClient,

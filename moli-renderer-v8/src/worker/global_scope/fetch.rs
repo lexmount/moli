@@ -1882,7 +1882,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         let headers = if request_mode == moli_fetch::RequestMode::NoCors {
             filter_headers_for_guard(&headers, HeadersGuard::RequestNoCors)
         } else {
-            headers
+            filter_headers_for_guard(&headers, HeadersGuard::Request)
         };
         let credentials_mode = init
             .credentials_mode
@@ -1933,7 +1933,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         let headers = if request_mode == moli_fetch::RequestMode::NoCors {
             filter_headers_for_guard(&init.headers, HeadersGuard::RequestNoCors)
         } else {
-            init.headers
+            filter_headers_for_guard(&init.headers, HeadersGuard::Request)
         };
         let credentials_mode = init
             .credentials_mode

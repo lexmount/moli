@@ -6,7 +6,7 @@ from . import SmokeState
 from ..helpers import capture_layout
 from ..assertions import SmokeError, assert_equal
 from ..png_image import decode_png
-from ..raw_cdp import discover_websocket_url
+from ..raw_cdp import discover_browser_version
 
 
 def _checkpoint(label: str) -> None:
@@ -24,8 +24,8 @@ async def run_classic_scrollbar_group(state: SmokeState) -> None:
     page = state.page
     cdp = state.cdp
     _checkpoint("initial/discover-browser")
-    websocket_url = await discover_websocket_url(state.endpoint)
-    is_moli = websocket_url.endswith("/devtools/browser/moli-browser")
+    version = await discover_browser_version(state.endpoint)
+    is_moli = isinstance(version.get("Moli-Version"), str)
     _checkpoint("initial/set-viewport")
     await page.set_viewport_size({"width": 800, "height": 700})
     _checkpoint("initial/set-content")

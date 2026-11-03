@@ -48,6 +48,7 @@ mod navigation_commit;
 mod navigation_error;
 mod resource_runtime;
 mod site_data;
+mod startup_scripts;
 
 #[test]
 fn protocol_page_access_reports_a_typed_missing_document() {
@@ -145,7 +146,7 @@ fn deferred_default_connection() -> CdpConnection {
 #[tokio::test]
 async fn activating_the_only_default_placeholder_does_not_start_the_runtime() {
     let mut ctx = crate::testing::TestContext::from_conn(deferred_default_connection());
-    let target_id = ctx.with_fixture(|conn| conn.default_target_id());
+    let target_id = ctx.with_fixture(|conn| conn.default_target_id().to_owned());
     let raw = json!({
         "id": 1,
         "method": "Target.activateTarget",
@@ -157,7 +158,7 @@ async fn activating_the_only_default_placeholder_does_not_start_the_runtime() {
 
     assert_eq!(messages, vec![json!({ "id": 1, "result": {} })]);
     ctx.with_fixture(|conn| assert!(!conn.standalone_navigation_engine.is_materialized()));
-    ctx.with_fixture(|conn| assert!(conn.devtools_target_info(target_id).is_some()));
+    ctx.with_fixture(|conn| assert!(conn.devtools_target_info(&target_id).is_some()));
 }
 
 #[tokio::test]
@@ -166,7 +167,7 @@ async fn closing_the_default_placeholder_does_not_start_the_runtime() {
     let raw = json!({
         "id": 2,
         "method": "Target.closeTarget",
-        "params": { "targetId": ctx.with_fixture(|conn| conn.default_tab_target_id()) },
+        "params": { "targetId": ctx.with_fixture(|conn| conn.default_tab_target_id().to_owned()) },
     })
     .to_string();
 
@@ -243,7 +244,7 @@ async fn creating_a_target_preserves_the_published_default_as_a_placeholder() {
     let attach_raw = json!({
         "id": 4,
         "method": "Target.attachToTarget",
-        "params": { "targetId": ctx.with_fixture(|conn| conn.default_target_id()), "flatten": true },
+        "params": { "targetId": ctx.with_fixture(|conn| conn.default_target_id().to_owned()), "flatten": true },
     })
     .to_string();
     let attach_messages = ctx.dispatch_raw_command(&attach_raw).await;

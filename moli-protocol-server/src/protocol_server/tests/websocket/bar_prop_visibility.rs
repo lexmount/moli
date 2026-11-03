@@ -4,9 +4,11 @@ use super::*;
 async fn bar_props_follow_shared_popup_state_across_independent_pages() {
     let (fixture_addr, fixture_server) = spawn_local_storage_fixture_server().await;
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to browser websocket");
     let session_id = cdp_create_default_session_and_navigate(

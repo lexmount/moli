@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, atomic::AtomicU64},
     time::{Duration, Instant},
 };
 
@@ -54,28 +53,28 @@ use protocol_residence::{ProtocolSchedulerResidence, ProtocolSchedulerStep, Sche
 use runtime_command_barrier::CommandOutputReleasePermit;
 
 pub(crate) struct CdpTargetHostIntegration {
-    target_id_allocator: Arc<AtomicU64>,
-    tab_target_id_allocator: Arc<AtomicU64>,
     lifecycle_observer: CdpTargetHostLifecycleObserver,
 }
 
 impl CdpTargetHostIntegration {
-    pub(crate) fn new(
-        target_id_allocator: Arc<AtomicU64>,
-        tab_target_id_allocator: Arc<AtomicU64>,
-        lifecycle_observer: CdpTargetHostLifecycleObserver,
-    ) -> Self {
-        Self {
-            target_id_allocator,
-            tab_target_id_allocator,
-            lifecycle_observer,
-        }
+    pub(crate) fn new(lifecycle_observer: CdpTargetHostLifecycleObserver) -> Self {
+        Self { lifecycle_observer }
     }
 
     fn install(self, conn: &mut CdpConnection) {
-        conn.set_shared_target_id_allocator(self.target_id_allocator);
-        conn.set_shared_tab_target_id_allocator(self.tab_target_id_allocator);
+        conn.set_target_id_generator(random_devtools_target_id);
         conn.set_target_host_lifecycle_observer(self.lifecycle_observer);
+    }
+}
+
+fn random_devtools_target_id() -> String {
+    // Chromium's page and tab agent hosts use UnguessableToken identities:
+    // independent random 128-bit values, rendered as 32 uppercase hex digits.
+    loop {
+        let token = rand::random::<u128>();
+        if token != 0 {
+            return format!("{token:032X}");
+        }
     }
 }
 

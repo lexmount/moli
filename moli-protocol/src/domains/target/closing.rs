@@ -240,10 +240,7 @@ impl PreparedPageTargetCloseCommand {
             termination: Rc::new(RefCell::new(termination)),
             fetch,
             output: Rc::new(RefCell::new(Some(PageTargetCloseCommandOutput {
-                closes_default_target: matches!(
-                    command.target_id.as_str(),
-                    crate::DEFAULT_CDP_PAGE_TARGET_ID | crate::DEFAULT_CDP_TAB_TARGET_ID
-                ),
+                closes_default_target: conn.is_default_target_id(command.target_id.as_str()),
                 protocol_events,
                 background_events,
             }))),
@@ -336,7 +333,7 @@ impl PreparedPageTargetCloseCommand {
         if output.closes_default_target
             && (deferred_close
                 || conn
-                    .target_session_route_for_target_id(crate::DEFAULT_CDP_PAGE_TARGET_ID)
+                    .target_session_route_for_target_id(conn.default_target_id())
                     .is_none())
         {
             conn.mark_default_browser_target_closed();

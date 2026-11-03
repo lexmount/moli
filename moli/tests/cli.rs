@@ -669,6 +669,7 @@ fn infers_serve_mode_when_called_without_args() {
             host: "127.0.0.1".to_owned(),
             port: 9222,
             timeout: 10,
+            remote_allow_origins: Vec::new(),
             screencast_interval: None,
             common: CommonArgs::default(),
         }))
@@ -696,10 +697,75 @@ fn parses_serve_flags_with_explicit_command() {
             host: "0.0.0.0".to_owned(),
             port: 9333,
             timeout: 42,
+            remote_allow_origins: Vec::new(),
             screencast_interval: None,
             common: CommonArgs::default(),
         }))
     );
+}
+
+#[test]
+fn serve_remote_allow_origins_defaults_to_empty_and_reaches_server_config() {
+    let cli = Cli::try_parse_from(["moli", "serve"]).unwrap();
+    let Commands::Serve(args) = &cli.command else {
+        panic!("expected serve command");
+    };
+    assert!(args.remote_allow_origins.is_empty());
+    assert!(
+        AppConfig::from_cli(&cli)
+            .unwrap()
+            .server
+            .remote_allow_origins
+            .is_empty()
+    );
+
+    let cli = Cli::try_parse_from([
+        "moli",
+        "serve",
+        "--remote-allow-origins=https://first.example,http://localhost:3000",
+        "--remote-allow-origins",
+        "https://second.example",
+    ])
+    .unwrap();
+    let expected = [
+        "https://first.example",
+        "http://localhost:3000",
+        "https://second.example",
+    ];
+    let Commands::Serve(args) = &cli.command else {
+        panic!("expected serve command");
+    };
+    assert_eq!(args.remote_allow_origins, expected);
+    assert_eq!(
+        AppConfig::from_cli(&cli)
+            .unwrap()
+            .server
+            .remote_allow_origins,
+        expected
+    );
+}
+
+#[test]
+fn serve_remote_allow_origins_accepts_wildcard_and_is_serve_only() {
+    let cli = Cli::try_parse_from(["moli", "serve", "--remote-allow-origins", "*"]).unwrap();
+    assert_eq!(
+        AppConfig::from_cli(&cli)
+            .unwrap()
+            .server
+            .remote_allow_origins,
+        ["*"]
+    );
+    assert!(
+        Cli::try_parse_from([
+            "moli",
+            "fetch",
+            "--remote-allow-origins",
+            "*",
+            "https://example.com",
+        ])
+        .is_err()
+    );
+    assert!(Cli::try_parse_from(["moli", "serve", "--remote-allow-origins"]).is_err());
 }
 
 #[test]

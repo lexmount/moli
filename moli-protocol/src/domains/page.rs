@@ -6,9 +6,10 @@ use crate::automation::{
     DevToolsErrorKind, DevToolsGetFrameTreeCommand, DevToolsGetFrameTreeResult,
     DevToolsGetFrameTreesResult, DevToolsGetJavaScriptDialogCommand,
     DevToolsHandleJavaScriptDialogCommand, DevToolsJavaScriptDialogResult,
-    DevToolsLayoutMetricsResult, DevToolsPrintToPdfCommand, DevToolsPrintToPdfTransferMode,
-    DevToolsScreenshotClip, DevToolsSetJavaScriptDialogPromptTextCommand, DevToolsTargetInfo,
-    DevToolsTargetKind, FrontendProtocol, UserPromptClosedEvent,
+    DevToolsLayoutMetricsResult, DevToolsPreloadScriptId, DevToolsPrintToPdfCommand,
+    DevToolsPrintToPdfTransferMode, DevToolsScreenshotClip,
+    DevToolsSetJavaScriptDialogPromptTextCommand, DevToolsTargetInfo, DevToolsTargetKind,
+    FrontendProtocol, UserPromptClosedEvent,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
@@ -174,8 +175,8 @@ enum PendingPageCommandKind {
     BringToFront {
         route: CdpSessionRoute,
     },
-    AppendDefaultDocumentStartScript {
-        identifier: String,
+    AppendContextPreloadScript {
+        identifier: DevToolsPreloadScriptId,
         pending: PendingPageCommand,
     },
     RemoveDocumentStartScript {
@@ -240,8 +241,8 @@ enum CompletedPageCommandKind {
     BringToFront {
         route: CdpSessionRoute,
     },
-    AppendDefaultDocumentStartScript {
-        identifier: String,
+    AppendContextPreloadScript {
+        identifier: DevToolsPreloadScriptId,
         completed: Box<Result<CompletedPageCommand>>,
     },
     RemoveDocumentStartScript {
@@ -308,7 +309,7 @@ impl CompletedPageCommandKind {
         }
 
         match self {
-            Self::AppendDefaultDocumentStartScript { completed, .. }
+            Self::AppendContextPreloadScript { completed, .. }
             | Self::RemoveDocumentStartScript { completed }
             | Self::GetFrameTree { completed, .. }
             | Self::ResetNavigationHistory { completed }
@@ -360,10 +361,10 @@ impl PendingPageCommandDispatch {
             PendingPageCommandKind::BringToFront { route } => {
                 CompletedPageCommandKind::BringToFront { route }
             }
-            PendingPageCommandKind::AppendDefaultDocumentStartScript {
+            PendingPageCommandKind::AppendContextPreloadScript {
                 identifier,
                 pending,
-            } => CompletedPageCommandKind::AppendDefaultDocumentStartScript {
+            } => CompletedPageCommandKind::AppendContextPreloadScript {
                 identifier,
                 completed: Box::new(pending.wait().await),
             },

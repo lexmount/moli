@@ -8,6 +8,7 @@ async fn webdriver_classic_response_headers_are_scoped_to_classic_http_routes() 
         .clone()
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .method(Method::GET)
                 .uri("/json/version")
                 .body(Body::empty())
@@ -23,6 +24,7 @@ async fn webdriver_classic_response_headers_are_scoped_to_classic_http_routes() 
     let websocket_upgrade_response = app
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .method(Method::GET)
                 .uri("/session")
                 .header(header::UPGRADE, "websocket")

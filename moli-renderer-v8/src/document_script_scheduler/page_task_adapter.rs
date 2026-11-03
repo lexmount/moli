@@ -12,7 +12,7 @@ use crate::page_task_queue::{
 };
 use crate::planning::PreparedScriptSourceLoadOutcome;
 use crate::stylesheet_blocking::{
-    DocumentOwnedBlockingStylesheetDiscoveryInput, StylesheetBlockingReadView,
+    DocumentOwnedStylesheetDiscoveryInput, StylesheetBlockingReadView,
     collect_document_owned_blocking_stylesheets,
 };
 
@@ -52,7 +52,7 @@ impl<Target, ParserModuleEvaluation, ParserModuleGraphFailure>
 
     pub(crate) async fn finalize_parser_prepared_post_parse_handoff(
         self,
-        stylesheet_seed_inputs: Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>,
+        stylesheet_seed_inputs: Vec<DocumentOwnedStylesheetDiscoveryInput>,
     ) -> ParserPreparedPostParseHandoff {
         let plan = self.finalize_owned_script_work().await;
         post_parse_plan_into_owner_handoff(plan, stylesheet_seed_inputs)
@@ -174,7 +174,7 @@ fn post_parse_async_script_task_into_page_owned_work(
 
 pub(super) fn post_parse_plan_into_owner_handoff(
     plan: DocumentScriptRunnerPostParsePlan,
-    stylesheet_seed_inputs: Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>,
+    stylesheet_seed_inputs: Vec<DocumentOwnedStylesheetDiscoveryInput>,
 ) -> ParserPreparedPostParseHandoff {
     let async_tasks = plan.into_async_tasks();
     let mut work = Vec::with_capacity(runtime_ready_post_parse_page_task_capacity(&async_tasks));
@@ -195,10 +195,10 @@ pub(super) fn post_parse_plan_into_owner_handoff(
 
 fn collect_post_parse_stylesheet_seed_inputs_from_read_view(
     read_view: &impl StylesheetBlockingReadView,
-) -> Vec<DocumentOwnedBlockingStylesheetDiscoveryInput> {
+) -> Vec<DocumentOwnedStylesheetDiscoveryInput> {
     collect_document_owned_blocking_stylesheets(read_view)
         .iter()
-        .map(DocumentOwnedBlockingStylesheetDiscoveryInput::from)
+        .map(DocumentOwnedStylesheetDiscoveryInput::from)
         .collect()
 }
 

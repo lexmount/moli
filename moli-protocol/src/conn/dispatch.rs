@@ -1100,7 +1100,7 @@ impl CdpConnection {
                 Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
             }
             "SystemInfo" => {
-                let plan = crate::domains::system_info::command_output_plan(&cmd);
+                let plan = crate::domains::system_info::command_output_plan(self, &cmd);
                 Some(self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id))
             }
             "WebAuthn" => {

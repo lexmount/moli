@@ -42,10 +42,13 @@ async fn websocket_cdp_prepared_document_error_commit_follows_network_failure() 
             }
         });
         let (addr, server) = spawn_test_protocol_server().await;
-        let (mut socket, _) =
-            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        let (mut socket, _) = connect_async(
+            discover_browser_websocket_url(addr)
                 .await
-                .unwrap();
+                .expect("discover browser endpoint"),
+        )
+        .await
+        .unwrap();
         let context = cdp_create_browser_context(&mut socket, 1).await;
         let session = cdp_create_attached_target(&mut socket, 2, &context).await;
         configure(&mut socket, &session.session_id, crashed, false).await;
@@ -306,10 +309,13 @@ async fn verify_fetch(crashed: bool, response: bool, action: Action) {
     eprintln!("prepared Fetch {crashed}/{response}/{action:?}");
     let fixture = Fixture::new();
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
     let session = cdp_create_attached_target(&mut socket, 2, &context).await;
     configure(&mut socket, &session.session_id, crashed, response).await;
@@ -415,10 +421,13 @@ async fn websocket_cdp_prepared_document_worker_is_retired_when_navigation_is_re
 async fn verify_worker(replace_before_adoption: bool) {
     let fixture = Fixture::new();
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
     let session = cdp_create_attached_target(&mut socket, 2, &context).await;
     configure(&mut socket, &session.session_id, false, false).await;
@@ -575,10 +584,13 @@ async fn verify_worker(replace_before_adoption: bool) {
 async fn websocket_cdp_prepared_document_dialog_can_be_answered_before_adoption() {
     let fixture = Fixture::new();
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
     let session = cdp_create_attached_target(&mut socket, 2, &context).await;
     configure(&mut socket, &session.session_id, true, false).await;
@@ -639,10 +651,13 @@ async fn websocket_cdp_prepared_document_dialog_can_be_answered_before_adoption(
 async fn websocket_cdp_prepared_document_popup_keeps_accepted_target_creation() {
     let fixture = Fixture::new();
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
     let session = cdp_create_attached_target(&mut socket, 2, &context).await;
     configure(&mut socket, &session.session_id, true, false).await;
@@ -698,10 +713,13 @@ async fn websocket_cdp_prepared_document_fetch_is_revoked_by_replacement_disable
         for cancellation in ["replace", "disable", "detach"] {
             let fixture = Fixture::new();
             let (addr, server) = spawn_test_protocol_server().await;
-            let (mut socket, _) =
-                connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            let (mut socket, _) = connect_async(
+                discover_browser_websocket_url(addr)
                     .await
-                    .unwrap();
+                    .expect("discover browser endpoint"),
+            )
+            .await
+            .unwrap();
             let context = cdp_create_browser_context(&mut socket, 1).await;
             let session = cdp_create_attached_target(&mut socket, 2, &context).await;
             configure(&mut socket, &session.session_id, crashed, false).await;
@@ -853,10 +871,13 @@ async fn websocket_cdp_prepared_document_history_updates_survive_adoption_withou
         for action in ["replaceState", "pushState"] {
             let fixture = Fixture::new();
             let (addr, server) = spawn_test_protocol_server().await;
-            let (mut socket, _) =
-                connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            let (mut socket, _) = connect_async(
+                discover_browser_websocket_url(addr)
                     .await
-                    .unwrap();
+                    .expect("discover browser endpoint"),
+            )
+            .await
+            .unwrap();
             let context = cdp_create_browser_context(&mut socket, 1).await;
             let session = cdp_create_attached_target(&mut socket, 2, &context).await;
             configure(&mut socket, &session.session_id, false, false).await;
@@ -990,10 +1011,13 @@ async fn websocket_cdp_prepared_document_script_navigation_replaces_pending_adop
         for action in ["assign", "replace"] {
             let fixture = Fixture::new();
             let (addr, server) = spawn_test_protocol_server().await;
-            let (mut socket, _) =
-                connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            let (mut socket, _) = connect_async(
+                discover_browser_websocket_url(addr)
                     .await
-                    .unwrap();
+                    .expect("discover browser endpoint"),
+            )
+            .await
+            .unwrap();
             let context = cdp_create_browser_context(&mut socket, 1).await;
             let session = cdp_create_attached_target(&mut socket, 2, &context).await;
             configure(&mut socket, &session.session_id, crashed, false).await;
@@ -1082,10 +1106,13 @@ async fn websocket_cdp_prepared_document_file_chooser_preserves_source_node() {
     for crashed in [false, true] {
         let fixture = Fixture::new();
         let (addr, server) = spawn_test_protocol_server().await;
-        let (mut socket, _) =
-            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        let (mut socket, _) = connect_async(
+            discover_browser_websocket_url(addr)
                 .await
-                .unwrap();
+                .expect("discover browser endpoint"),
+        )
+        .await
+        .unwrap();
         let context = cdp_create_browser_context(&mut socket, 1).await;
         let session = cdp_create_attached_target(&mut socket, 2, &context).await;
         configure(&mut socket, &session.session_id, false, false).await;
@@ -1154,10 +1181,13 @@ async fn websocket_cdp_prepared_document_popup_navigation_and_close_keep_their_s
     for close in [false, true] {
         let fixture = Fixture::new();
         let (addr, server) = spawn_test_protocol_server().await;
-        let (mut socket, _) =
-            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        let (mut socket, _) = connect_async(
+            discover_browser_websocket_url(addr)
                 .await
-                .unwrap();
+                .expect("discover browser endpoint"),
+        )
+        .await
+        .unwrap();
         let context = cdp_create_browser_context(&mut socket, 1).await;
         let session = cdp_create_attached_target(&mut socket, 2, &context).await;
         configure(&mut socket, &session.session_id, true, false).await;
@@ -1278,10 +1308,13 @@ async fn websocket_cdp_prepared_document_late_blocked_urls_apply_before_its_ack(
 async fn verify_late_network_policy(crashed: bool, fetch: bool) {
     let fixture = Fixture::new();
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
     let session = cdp_create_attached_target(&mut socket, 2, &context).await;
     configure(&mut socket, &session.session_id, crashed, false).await;
@@ -1396,10 +1429,13 @@ async fn websocket_cdp_prepared_document_open_does_not_append_history_on_adoptio
     for crashed in [false, true] {
         let fixture = Fixture::new();
         let (addr, server) = spawn_test_protocol_server().await;
-        let (mut socket, _) =
-            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        let (mut socket, _) = connect_async(
+            discover_browser_websocket_url(addr)
                 .await
-                .unwrap();
+                .expect("discover browser endpoint"),
+        )
+        .await
+        .unwrap();
         let context = cdp_create_browser_context(&mut socket, 1).await;
         let session = cdp_create_attached_target(&mut socket, 2, &context).await;
         configure(&mut socket, &session.session_id, crashed, false).await;
@@ -1522,10 +1558,13 @@ async fn websocket_cdp_prepared_document_failed_debugger_worker_retires_when_sou
     for crashed in [false, true] {
         let fixture = Fixture::new();
         let (addr, server) = spawn_test_protocol_server().await;
-        let (mut socket, _) =
-            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        let (mut socket, _) = connect_async(
+            discover_browser_websocket_url(addr)
                 .await
-                .unwrap();
+                .expect("discover browser endpoint"),
+        )
+        .await
+        .unwrap();
         let context = cdp_create_browser_context(&mut socket, 1).await;
         let session = cdp_create_attached_target(&mut socket, 2, &context).await;
         configure(&mut socket, &session.session_id, crashed, false).await;
@@ -1667,10 +1706,13 @@ async fn websocket_cdp_prepared_document_title_precedes_later_history_push_and_a
     for crashed in [false, true] {
         let fixture = Fixture::new();
         let (addr, server) = spawn_test_protocol_server().await;
-        let (mut socket, _) =
-            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        let (mut socket, _) = connect_async(
+            discover_browser_websocket_url(addr)
                 .await
-                .unwrap();
+                .expect("discover browser endpoint"),
+        )
+        .await
+        .unwrap();
         let context = cdp_create_browser_context(&mut socket, 1).await;
         let session = cdp_create_attached_target(&mut socket, 2, &context).await;
         configure(&mut socket, &session.session_id, crashed, false).await;
@@ -1772,10 +1814,13 @@ async fn websocket_cdp_page_enable_preserves_prepared_document_before_adoption()
     for crashed in [false, true] {
         let fixture = Fixture::new();
         let (addr, server) = spawn_test_protocol_server().await;
-        let (mut socket, _) =
-            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        let (mut socket, _) = connect_async(
+            discover_browser_websocket_url(addr)
                 .await
-                .unwrap();
+                .expect("discover browser endpoint"),
+        )
+        .await
+        .unwrap();
         let context = cdp_create_browser_context(&mut socket, 1).await;
         let session = cdp_create_attached_target(&mut socket, 2, &context).await;
         configure(&mut socket, &session.session_id, crashed, false).await;

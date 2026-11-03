@@ -135,3 +135,18 @@ async fn child_synthetic_module_values_are_cached_per_realm_not_per_url() -> Res
     assert_eq!(result["value"], ["true"; 16].join(":"), "{result:?}");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_synthetic_text_module_shares_static_and_dynamic_records() -> Result<()> {
+    let result = child_synthetic_probe(
+        r#"import * as text from 'data:application/octet-stream,%EF%BB%BFhello%00world' with { type: 'text' };
+        window.result = import('data:application/octet-stream,%EF%BB%BFhello%00world', {with: {type:'text'}})
+          .then(again => JSON.stringify([text.default, text === again, Object.keys(text)]));"#,
+    )
+    .await?;
+    assert_eq!(
+        result["value"], r#"["hello\u0000world",true,["default"]]"#,
+        "{result:?}"
+    );
+    Ok(())
+}

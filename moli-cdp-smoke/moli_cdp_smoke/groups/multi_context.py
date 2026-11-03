@@ -149,22 +149,23 @@ async def _close_startup_target_if_present(browser: Any) -> bool:
         startup_targets = [
             target
             for target in targets.get("targetInfos", [])
-            if target.get("type") == "page" and target.get("targetId") == "moli-default"
+            if target.get("type") == "page" and target.get("url") == "about:blank"
         ]
         if len(startup_targets) > 1:
             raise SmokeError(f"multiple startup targets were published: {startup_targets!r}")
         if startup_targets:
+            startup_target_id = startup_targets[0]["targetId"]
             close_result = await _send_cdp(
                 browser_cdp,
                 "Target.closeTarget",
-                {"targetId": "moli-default"},
+                {"targetId": startup_target_id},
             )
             assert_equal(close_result.get("success"), True, "close startup Page target")
 
             async def startup_target_is_absent() -> bool:
                 current = await _send_cdp(browser_cdp, "Target.getTargets")
                 return all(
-                    target.get("targetId") != "moli-default"
+                    target.get("targetId") != startup_target_id
                     for target in current.get("targetInfos", [])
                 )
 

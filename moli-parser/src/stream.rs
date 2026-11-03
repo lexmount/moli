@@ -537,7 +537,7 @@ impl HtmlTreeSinkStream {
                 result: ParserPumpStep::InputDrained,
                 discovered_async_prefetch_scripts: Vec::new(),
                 discovered_modulepreload_link_candidates: Vec::new(),
-                discovered_blocking_stylesheet_inputs: Vec::new(),
+                discovered_stylesheet_inputs: Vec::new(),
             };
         }
         self.pump_parser_step_with_source(chunk, true)
@@ -604,8 +604,7 @@ impl HtmlTreeSinkStream {
             self.drain_discovered_async_prefetch_candidates();
         let discovered_modulepreload_link_candidate_node_ids =
             self.drain_discovered_modulepreload_link_candidates();
-        let discovered_blocking_stylesheet_inputs =
-            self.drain_discovered_blocking_stylesheet_inputs();
+        let discovered_stylesheet_inputs = self.drain_discovered_stylesheet_inputs();
         let captured_blocking_stylesheet_signatures =
             self.captured_blocking_stylesheet_signatures();
         let discovered_async_prefetch_script_positions =
@@ -626,7 +625,7 @@ impl HtmlTreeSinkStream {
             result,
             discovered_async_prefetch_scripts,
             discovered_modulepreload_link_candidates,
-            discovered_blocking_stylesheet_inputs,
+            discovered_stylesheet_inputs,
         ) = {
             let target = self.parser.sink().borrow_target();
             let handoff_preparation = match result {
@@ -713,7 +712,7 @@ impl HtmlTreeSinkStream {
                 result,
                 discovered_async_prefetch_scripts,
                 discovered_modulepreload_link_candidate_node_ids,
-                discovered_blocking_stylesheet_inputs,
+                discovered_stylesheet_inputs,
             )
         };
 
@@ -721,7 +720,7 @@ impl HtmlTreeSinkStream {
             result,
             discovered_async_prefetch_scripts,
             discovered_modulepreload_link_candidates,
-            discovered_blocking_stylesheet_inputs,
+            discovered_stylesheet_inputs,
         }
     }
 
@@ -837,12 +836,10 @@ impl HtmlTreeSinkStream {
         self.parser.sink().pop_pending_blocking_stylesheet_pause()
     }
 
-    fn drain_discovered_blocking_stylesheet_inputs(
+    fn drain_discovered_stylesheet_inputs(
         &self,
-    ) -> Vec<moli_stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput> {
-        self.parser
-            .sink()
-            .drain_discovered_blocking_stylesheet_inputs()
+    ) -> Vec<moli_stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput> {
+        self.parser.sink().drain_discovered_stylesheet_inputs()
     }
 
     fn captured_blocking_stylesheet_signatures(
@@ -892,8 +889,7 @@ impl HtmlTreeSinkStream {
                 .drain_discovered_modulepreload_link_candidates(),
             discovered_parser_meta_csp_candidates: target
                 .drain_discovered_parser_meta_csp_candidates(),
-            discovered_blocking_stylesheet_inputs: target
-                .drain_discovered_blocking_stylesheet_inputs(),
+            discovered_stylesheet_inputs: target.drain_discovered_stylesheet_inputs(),
         };
         (target.finish_dom_host(), signals)
     }
@@ -918,6 +914,14 @@ mod tests {
     }
 
     impl crate::ParserDomReadConsumer for TestMutationEffectCollector<'_> {
+        fn stylesheet_media_matches(&mut self, media: &str) -> bool {
+            // SAFETY: this test owns the live DomHost throughout the parser pump.
+            moli_stylesheet_blocking::StylesheetBlockingReadView::media_query_matches(
+                unsafe { &*self.host },
+                media,
+            )
+        }
+
         fn node_exists(&mut self, node_id: NativeNodeId) -> bool {
             // SAFETY: the test keeps the DomHost alive for this parser pump step.
             unsafe { &*self.host }.node(node_id).is_some()
@@ -2369,7 +2373,7 @@ mod tests {
                 ),
                 "encoding notification must not bypass the stylesheet pause: {attributes}"
             );
-            assert_eq!(first.discovered_blocking_stylesheet_inputs.len(), 1);
+            assert_eq!(first.discovered_stylesheet_inputs.len(), 1);
             assert_eq!(stream.snapshot_pending_input(), tail);
 
             let second = stream.pump_parser_step("");
@@ -2518,7 +2522,7 @@ mod tests {
         };
 
         let expected_url = Url::parse("https://example.test/style.css").unwrap();
-        assert_eq!(outcome.discovered_blocking_stylesheet_inputs.len(), 1);
+        assert_eq!(outcome.discovered_stylesheet_inputs.len(), 1);
         assert!(
             blocking_signatures_before
                 .iter()
@@ -2693,7 +2697,7 @@ mod tests {
             effects.did_change(),
             "runtime DOM sink pump should report runtime-visible mutation effects through an explicit sink"
         );
-        assert_eq!(outcome.discovered_blocking_stylesheet_inputs.len(), 1);
+        assert_eq!(outcome.discovered_stylesheet_inputs.len(), 1);
         assert!(
             blocking_signatures_before
                 .iter()

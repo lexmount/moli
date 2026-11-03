@@ -10,6 +10,7 @@ from ..assertions import SmokeError, assert_equal, record
 from ..config import is_moli_browser
 from ..navigation import navigate as navigate_document
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
+from .browser_endpoint import browser_endpoint_discovery
 
 
 @dataclass
@@ -19,6 +20,7 @@ class RawPageSession:
 
 
 async def run_raw_protocol_group(endpoint: str, fixture: str, results: list[dict[str, Any]]) -> None:
+    await browser_endpoint_discovery(endpoint, results)
     client = await connect_raw_cdp(endpoint)
     page_session: RawPageSession | None = None
     try:

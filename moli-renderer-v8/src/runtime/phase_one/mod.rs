@@ -120,7 +120,7 @@ pub(in crate::runtime) fn main_document_parser_scripting_enabled(env: &PageVmEnv
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DocumentOwnedBlockingStylesheetDiscoveryInput;
+    use crate::DocumentOwnedStylesheetDiscoveryInput;
     use crate::document_runtime::{DocumentRuntime, DomHandle, ParserPostStepRuntimeWorkForTest};
     use crate::parser::ParserDomMutation;
     use moli_dom::native::{Element, Node};
@@ -1104,12 +1104,11 @@ mod tests {
 
     fn blocking_classic_is_stylesheet_gated_for_testing(
         live_runtime: &mut DocumentRuntime,
-        discovered_blocking_stylesheet_inputs: &[DocumentOwnedBlockingStylesheetDiscoveryInput],
+        discovered_stylesheet_inputs: &[DocumentOwnedStylesheetDiscoveryInput],
         blocking_signatures_before: &HashSet<DocumentBlockingStylesheetSignature>,
     ) -> bool {
-        live_runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
-            discovered_blocking_stylesheet_inputs.iter(),
-        );
+        live_runtime
+            .note_discovered_document_owned_stylesheet_inputs(discovered_stylesheet_inputs.iter());
         live_runtime.has_pending_parser_script_blocking_stylesheet_signatures(
             blocking_signatures_before.iter(),
         )

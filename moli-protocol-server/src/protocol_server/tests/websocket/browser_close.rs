@@ -30,10 +30,13 @@ async fn websocket_cdp_browser_close_releases_lock_and_persists_profile() {
         BrowserProfileLock::acquire(&paths).is_err(),
         "profile is locked while serving"
     );
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect to profiled browser");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect to profiled browser");
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
     let write = cdp_runtime_evaluate_string(
         &mut socket,
@@ -67,10 +70,13 @@ async fn websocket_cdp_browser_close_releases_lock_and_persists_profile() {
     }
 
     let (addr, server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("reopen the same profile immediately");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("reopen the same profile immediately");
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
     let read = cdp_runtime_evaluate_string(
         &mut socket,
@@ -93,10 +99,13 @@ async fn websocket_cdp_secure_cookie_with_nonsecure_source_survives_restart() {
     let mut expected = Vec::new();
     for round in 0..2 {
         let (addr, server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
-        let (mut socket, _) =
-            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        let (mut socket, _) = connect_async(
+            discover_browser_websocket_url(addr)
                 .await
-                .expect("connect to profiled browser");
+                .expect("discover browser endpoint"),
+        )
+        .await
+        .expect("connect to profiled browser");
         let target = cdp_create_attached_target(&mut socket, 1, "BID-default").await;
         if round == 0 {
             for (id, params) in [

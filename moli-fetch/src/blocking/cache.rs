@@ -150,6 +150,9 @@ pub(crate) fn next_followed_redirect_url_from_parts(
 ) -> Result<Option<Url>> {
     // HTTP fetch checks the network response before HTTP-redirect fetch. This
     // also applies to cached redirects and manual/error redirect modes.
+    request
+        .validate_cross_origin_resource_policy_for_url(final_url, headers)
+        .map_err(anyhow::Error::msg)?;
     if matches!(status, 301 | 302 | 303 | 307 | 308) {
         request
             .validate_cors_response_for_url(final_url, headers)

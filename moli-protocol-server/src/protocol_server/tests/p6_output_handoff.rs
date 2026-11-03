@@ -21,9 +21,11 @@ async fn background_navigation_load_is_published_without_followup_command() {
         .await;
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect websocket");
     let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;

@@ -515,7 +515,7 @@ fn chromium_module_key(key: &ModuleMapKey) -> moli_module_script_tree::ModuleMap
             ModuleKind::JavaScript => moli_module_script_tree::ModuleKind::JavaScript,
             ModuleKind::Json => moli_module_script_tree::ModuleKind::Json,
             ModuleKind::Css => moli_module_script_tree::ModuleKind::Css,
-            ModuleKind::ModulePreloadText => moli_module_script_tree::ModuleKind::JavaScript,
+            ModuleKind::Text => moli_module_script_tree::ModuleKind::Text,
             ModuleKind::WebAssembly => moli_module_script_tree::ModuleKind::WebAssembly,
         },
         moli_module_script_tree::ModuleAttributesKey::from_pairs(key.attributes().pairs().to_vec()),
@@ -867,6 +867,10 @@ fn synthetic_text_module_evaluation_steps<'s>(
     let source = record.source();
     match record.key().kind() {
         ModuleKind::Json => evaluate_json_synthetic_module(scope, module, source),
+        ModuleKind::Text => {
+            let value = v8_string(scope, source)?;
+            set_synthetic_default_export(scope, module, value.into())
+        }
         ModuleKind::Css => {
             evaluate_css_synthetic_module(scope, module, record.key().url().as_str(), source)
         }

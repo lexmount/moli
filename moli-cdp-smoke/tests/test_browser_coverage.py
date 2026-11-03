@@ -150,12 +150,22 @@ class BrowserCoverageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_endpoint_identity_rejects_wrong_engine_and_non_chromium(self) -> None:
         for version, expected, message in [
-            ({"Browser": "Chrome/145", "webSocketDebuggerUrl": "ws://localhost/devtools/browser/moli-browser"}, "chromium", "belongs to moli"),
+            ({"Browser": "Chrome/145", "Moli-Version": "1.1.20", "webSocketDebuggerUrl": "ws://localhost/devtools/browser/27496263-9e9b-44d4-a241-3410c13f2d39"}, "chromium", "belongs to moli"),
             ({"Browser": "Firefox/145", "webSocketDebuggerUrl": "ws://localhost/devtools/browser/123"}, "chromium", "not a Chromium"),
         ]:
             with self.subTest(version=version), patch("urllib.request.urlopen", return_value=io.BytesIO(json.dumps(version).encode())):
                 with self.assertRaisesRegex(RuntimeError, message):
                     await browser_identity("http://localhost", expected)
+
+    async def test_endpoint_identity_uses_metadata_instead_of_browser_path(self) -> None:
+        endpoint = "ws://localhost/devtools/browser/27496263-9e9b-44d4-a241-3410c13f2d39"
+        for engine in ["moli", "chromium"]:
+            version = {"Browser": "Chrome/145", "webSocketDebuggerUrl": endpoint}
+            if engine == "moli":
+                version["Moli-Version"] = "1.1.20"
+            with self.subTest(engine=engine), patch("urllib.request.urlopen", return_value=io.BytesIO(json.dumps(version).encode())):
+                identity = await browser_identity("http://localhost", engine)
+                self.assertEqual(identity["engine"], engine)
 
     def test_no_assertions_no_skip_and_no_mixed_engine_can_pass(self) -> None:
         job = WorkerJob(GROUPS_BY_NAME["network"], 1, 1, browser="chromium")

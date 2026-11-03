@@ -30,10 +30,14 @@ async fn instance(
 }
 
 async fn browser(addr: SocketAddr) -> TestCdpSocket {
-    connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
-        .await
-        .expect("connect owned browser")
-        .0
+    connect_async(
+        discover_browser_websocket_url(addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect owned browser")
+    .0
 }
 
 async fn joined(task: tokio::task::JoinHandle<anyhow::Result<()>>) {
@@ -119,6 +123,7 @@ async fn assert_instance_shutdown(native: bool) {
     let classic = build_router(state.clone())
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .method(Method::POST)
                 .uri("/session")
                 .header(header::CONTENT_TYPE, "application/json")

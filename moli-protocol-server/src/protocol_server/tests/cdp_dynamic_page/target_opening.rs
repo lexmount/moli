@@ -40,10 +40,13 @@ async fn websocket_auto_attach_wait_allows_peer_and_policy_disable_before_render
         );
         let release = ReleaseOnDrop(release);
         let (addr, server) = spawn_test_protocol_server().await;
-        let (mut browser, _) =
-            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        let (mut browser, _) = connect_async(
+            discover_browser_websocket_url(addr)
                 .await
-                .unwrap();
+                .expect("discover browser endpoint"),
+        )
+        .await
+        .unwrap();
         let target_id = create_dynamic_target(&mut browser, 1).await;
         let owner = send_cdp_command(
             &mut browser,
@@ -189,10 +192,13 @@ async fn websocket_attachment_wait_allows_peer_metadata_before_renderer_release(
     );
     let release = ReleaseOnDrop(release);
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let target_id = create_dynamic_target(&mut browser, 1).await;
     let mut page = connect_dynamic_page(addr, &target_id).await;
     send_cdp_command(&mut page, 1, "Page.enable", None, json!({})).await;

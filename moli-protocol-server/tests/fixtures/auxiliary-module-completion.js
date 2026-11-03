@@ -28,6 +28,8 @@ function startAuxiliaryModuleProbe(base, mode) {
             check('javascript', (await import(base + '/module.js')).default === 42);
             check('graph', (await import(base + '/graph.js')).default === 42);
             check('json', (await import(base + '/module.json', {with: {type: 'json'}})).default.answer === 42);
+            const sheet = (await import(base + '/module.css', {with: {type: 'css'}})).default;
+            check('css', sheet instanceof CSSStyleSheet && sheet.cssRules[0].style.color === 'green');
             let failure;
             try { await import(base + '/missing.js'); } catch (error) { failure = error; }
             check('fetch-error', failure instanceof TypeError);

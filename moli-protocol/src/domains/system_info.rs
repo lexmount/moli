@@ -1,19 +1,25 @@
 use serde_json::json;
 
-use crate::conn::Cmd;
+use crate::conn::{CdpConnection, Cmd};
 use crate::domains::actions::SystemInfoAction;
 use crate::domains::command_output::CommandOutputPlan;
 
-pub(crate) fn command_output_plan(cmd: &Cmd<'_>) -> CommandOutputPlan {
+pub(crate) fn command_output_plan(conn: &CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
+    // The frontend router dispatches every command with a session: the client's,
+    // or the frontend's own browser session when the client sent none. Only page /
+    // frame target sessions are "not the browser target" (same rule Target's
+    // browser-only operations use); checking `session_id.is_some()` rejected every
+    // real browser-endpoint call.
+    let on_browser_target = cmd.session_id.is_none() || conn.is_browser_session_id(cmd.session_id);
     match cmd.parse_action::<SystemInfoAction>() {
-        Some(SystemInfoAction::GetInfo) => get_info(cmd),
-        Some(SystemInfoAction::GetProcessInfo) => get_process_info(cmd),
+        Some(SystemInfoAction::GetInfo) => get_info(on_browser_target),
+        Some(SystemInfoAction::GetProcessInfo) => get_process_info(on_browser_target),
         None => CommandOutputPlan::error(-32601, "UnknownMethod"),
     }
 }
 
-fn get_info(cmd: &Cmd<'_>) -> CommandOutputPlan {
-    if cmd.session_id.is_some() {
+fn get_info(on_browser_target: bool) -> CommandOutputPlan {
+    if !on_browser_target {
         return CommandOutputPlan::error(
             -32000,
             "SystemInfo.getInfo is only supported on the browser target",
@@ -35,8 +41,8 @@ fn get_info(cmd: &Cmd<'_>) -> CommandOutputPlan {
     }))
 }
 
-fn get_process_info(cmd: &Cmd<'_>) -> CommandOutputPlan {
-    if cmd.session_id.is_some() {
+fn get_process_info(on_browser_target: bool) -> CommandOutputPlan {
+    if !on_browser_target {
         return CommandOutputPlan::error(
             -32000,
             "SystemInfo.getProcessInfo is only supported on the browser target",
@@ -109,6 +115,20 @@ mod tests {
                 "sessionId": "SID-frame",
             })
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn system_info_accepts_the_frontend_browser_session() {
+        // Real browser-endpoint connections always carry the frontend's browser
+        // session (the router fills it in); that is still the browser target.
+        let mut ctx = TestContext::new();
+        ctx.with_fixture(|conn| conn.register_browser_session("SID-browser".to_owned()));
+        for method in ["SystemInfo.getInfo", "SystemInfo.getProcessInfo"] {
+            ctx.process_async(json!({"id": 3, "method": method, "sessionId": "SID-browser"}))
+                .await;
+            let response = ctx.take_response_by_id(3);
+            assert!(response.get("error").is_none(), "{method}: {response}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

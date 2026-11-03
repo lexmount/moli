@@ -127,6 +127,7 @@ pub enum BrowserRequestMetadata {
     Font,
     Image,
     JsonModule,
+    TextModule,
     Manifest,
     Ping,
     Script,
@@ -1075,6 +1076,25 @@ impl Request {
             response_headers,
             self.credentials_mode,
         )
+    }
+
+    pub(crate) fn cross_origin_resource_policy_origin(&self) -> Option<&WebOrigin> {
+        (self.request_mode == RequestMode::NoCors)
+            .then(|| self.request_origin())
+            .flatten()
+    }
+
+    pub(crate) fn validate_cross_origin_resource_policy_for_url(
+        &self,
+        response_url: &Url,
+        headers: &[(String, Vec<u8>)],
+    ) -> Result<(), String> {
+        if let Some(origin) = self.cross_origin_resource_policy_origin()
+            && let Some(policy) = crate::CrossOriginResourcePolicy::from_headers(headers)
+        {
+            policy.check(origin, response_url)?;
+        }
+        Ok(())
     }
 
     /// Whether the URL list has left the initiating origin. For subresource

@@ -1147,6 +1147,7 @@ impl RuntimeOwner {
             cache_plan,
             job.response_progress.clone(),
         );
+        collector.set_corp_origin(job.request.cross_origin_resource_policy_origin());
         collector.set_client_hint_response_policy(prepared_request.response_policy);
 
         let label = job.current_url.to_string();
@@ -1359,6 +1360,7 @@ impl RuntimeOwner {
             job.response_progress.clone(),
             job.request.redirect_handling(),
         );
+        collector.set_corp_origin(job.request.cross_origin_resource_policy_origin());
         collector.set_client_hint_response_policy(prepared_request.response_policy);
 
         let label = job.current_url.to_string();
@@ -3225,6 +3227,7 @@ fn request_fetch_load_priority(request: &Request) -> crate::ResourceLoadPriority
                 | crate::BrowserRequestMetadata::EventSource
                 | crate::BrowserRequestMetadata::Fetch
                 | crate::BrowserRequestMetadata::JsonModule
+                | crate::BrowserRequestMetadata::TextModule
                 | crate::BrowserRequestMetadata::Manifest
                 | crate::BrowserRequestMetadata::StyleModule
                 | crate::BrowserRequestMetadata::Xhr,

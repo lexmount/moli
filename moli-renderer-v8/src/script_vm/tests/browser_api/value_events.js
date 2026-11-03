@@ -15,9 +15,9 @@
       const blob = new realm.Blob(['value']);
       for (const [name, member, init, expected, order] of [
         ['AnimationEvent', 'animationName', {animationName:'name\uD800', elapsedTime:-0, pseudoElement:'::\uDC00'}, 'name\uD800',
-          ['bubbles','cancelable','composed','animationName','elapsedTime','pseudoElement']],
+          ['bubbles','cancelable','composed','animation','animationName','elapsedTime','pseudoElement']],
         ['TransitionEvent', 'propertyName', {propertyName:'name\uD800', elapsedTime:2.5, pseudoElement:'::\uDC00'}, 'name\uD800',
-          ['bubbles','cancelable','composed','elapsedTime','propertyName','pseudoElement']],
+          ['bubbles','cancelable','composed','animation','elapsedTime','propertyName','pseudoElement']],
         ['BlobEvent', 'data', {data:blob, timecode:123}, blob,
           ['bubbles','cancelable','composed','data','timecode']]
       ]) {

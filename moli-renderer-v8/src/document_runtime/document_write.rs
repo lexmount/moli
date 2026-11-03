@@ -81,6 +81,10 @@ impl ParserMutationEffectConsumer for DocumentWriteParserMutationOwner<'_, '_, '
 }
 
 impl ParserDomReadConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
+    fn stylesheet_media_matches(&mut self, media: &str) -> bool {
+        self.runtime.stylesheet_media_matches(media)
+    }
+
     fn node_exists(&mut self, node_id: DomHandle) -> bool {
         self.runtime.parser_runtime_dom_node_exists(node_id)
     }
@@ -459,13 +463,9 @@ impl DocumentRuntime {
                 .discovery_signals
                 .modulepreload_link_candidates,
         );
-        let completed_stylesheet_clients = self
-            .note_discovered_document_owned_blocking_stylesheet_inputs(
-                finish_signals
-                    .discovery_signals
-                    .blocking_stylesheet_inputs
-                    .iter(),
-            );
+        let completed_stylesheet_clients = self.note_discovered_document_owned_stylesheet_inputs(
+            finish_signals.discovery_signals.stylesheet_inputs.iter(),
+        );
         self.settle_stylesheet_link_clients_in_current_scope(
             scope,
             host_ptr,
@@ -711,14 +711,24 @@ impl DocumentRuntime {
     }
 
     fn is_template_contents_fragment(&self, handle: DomHandle) -> bool {
-        self.dom_host()
+        let Some(fragment) = self
+            .dom_host()
             .node(handle)
-            .is_some_and(Node::is_document_fragment)
-            && self.dom_host().nodes().iter().any(|node| {
-                node.as_element()
-                    .and_then(|element| element.template_contents())
-                    == Some(handle)
-            })
+            .and_then(Node::as_document_fragment)
+        else {
+            return false;
+        };
+        let Some(host) = fragment.host() else {
+            return false;
+        };
+        // Parser-only template nodes can alias a declarative ShadowRoot.
+        // The fragment's actual host distinguishes it from template contents
+        // without scanning every node in the arena.
+        self.dom_host()
+            .node(host)
+            .and_then(Node::as_element)
+            .and_then(|element| element.template_contents())
+            == Some(handle)
     }
 
     fn upgrade_inserted_html_fragment_custom_elements(
@@ -2319,7 +2329,7 @@ impl DocumentRuntime {
                         result,
                         discovered_async_prefetch_scripts: _,
                         discovered_modulepreload_link_candidates,
-                        discovered_blocking_stylesheet_inputs,
+                        discovered_stylesheet_inputs,
                     },
             } = parser_step;
             let discovered_parser_meta_csp_candidates = insertion_controller
@@ -2339,8 +2349,8 @@ impl DocumentRuntime {
             begin_insertion = false;
 
             let completed_stylesheet_clients = self
-                .note_discovered_document_owned_blocking_stylesheet_inputs(
-                    discovered_blocking_stylesheet_inputs.iter(),
+                .note_discovered_document_owned_stylesheet_inputs(
+                    discovered_stylesheet_inputs.iter(),
                 );
             self.settle_stylesheet_link_clients_in_current_scope(
                 scope,
@@ -2363,7 +2373,7 @@ impl DocumentRuntime {
                     if self.current_document_resource_loader().is_none() {
                         continue;
                     }
-                    let blocking_signatures = discovered_blocking_stylesheet_inputs
+                    let blocking_signatures = discovered_stylesheet_inputs
                         .iter()
                         .map(|input| input.signature().clone())
                         .collect::<HashSet<_>>();

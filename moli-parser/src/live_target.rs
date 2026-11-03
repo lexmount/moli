@@ -16,7 +16,7 @@ use moli_dom::{
 };
 use moli_stylesheet_blocking::{
     StylesheetBlockingReadView, StylesheetElementRead,
-    document_owned_blocking_stylesheet_candidate_for_node, link_rel_includes_token,
+    document_owned_stylesheet_discovery_input_for_node, link_rel_includes_token,
 };
 
 use super::{HtmlTreeSinkState, stream::HtmlTreeSinkStream};
@@ -164,6 +164,9 @@ pub trait ParserDomReadConsumer {
 
     fn parser_script_read(&mut self, node_id: NativeNodeId) -> Option<ParserScriptRead>;
 
+    /// Uses the live Document media environment without invoking page script.
+    fn stylesheet_media_matches(&mut self, media: &str) -> bool;
+
     fn stylesheet_element(&mut self, node_id: NativeNodeId) -> Option<StylesheetElementRead>;
 
     fn text_content(&mut self, node_id: NativeNodeId) -> Option<String>;
@@ -190,11 +193,16 @@ struct ParserDomReadSink {
     is_html_element_named: unsafe fn(NonNull<()>, NativeNodeId, &str) -> bool,
     is_external_async_classic_candidate: unsafe fn(NonNull<()>, NativeNodeId) -> bool,
     parser_script_read: unsafe fn(NonNull<()>, NativeNodeId) -> Option<ParserScriptRead>,
+    stylesheet_media_matches: unsafe fn(NonNull<()>, &str) -> bool,
     stylesheet_element: unsafe fn(NonNull<()>, NativeNodeId) -> Option<StylesheetElementRead>,
     text_content: unsafe fn(NonNull<()>, NativeNodeId) -> Option<String>,
 }
 
 impl ParserDomReadSink {
+    fn stylesheet_media_matches(self, media: &str) -> bool {
+        // SAFETY: this callback is bound to the live consumer for this pump step.
+        unsafe { (self.stylesheet_media_matches)(self.data, media) }
+    }
     unsafe fn from_consumer_unchecked<T: ParserDomReadConsumer>(consumer: &mut T) -> Self {
         unsafe fn snapshot_parser_document_impl<T: ParserDomReadConsumer>(
             data: NonNull<()>,
@@ -337,6 +345,13 @@ impl ParserDomReadSink {
             // consumer to remain live and exclusive for the pump step.
             unsafe { data.cast::<T>().as_mut() }.parser_script_read(node_id)
         }
+        unsafe fn stylesheet_media_matches_impl<T: ParserDomReadConsumer>(
+            data: NonNull<()>,
+            media: &str,
+        ) -> bool {
+            // SAFETY: this consumer is exclusive and live for the parser pump step.
+            unsafe { data.cast::<T>().as_mut() }.stylesheet_media_matches(media)
+        }
         unsafe fn stylesheet_element_impl<T: ParserDomReadConsumer>(
             data: NonNull<()>,
             node_id: NativeNodeId,
@@ -374,6 +389,7 @@ impl ParserDomReadSink {
             is_html_element_named: is_html_element_named_impl::<T>,
             is_external_async_classic_candidate: is_external_async_classic_candidate_impl::<T>,
             parser_script_read: parser_script_read_impl::<T>,
+            stylesheet_media_matches: stylesheet_media_matches_impl::<T>,
             stylesheet_element: stylesheet_element_impl::<T>,
             text_content: text_content_impl::<T>,
         }
@@ -1327,6 +1343,11 @@ struct TestMutationEffectCollector<'a> {
 
 #[cfg(test)]
 impl ParserDomReadConsumer for TestMutationEffectCollector<'_> {
+    fn stylesheet_media_matches(&mut self, media: &str) -> bool {
+        // SAFETY: the fixture keeps its DomHost alive throughout this parser step.
+        unsafe { &*self.host }.media_query_matches(media)
+    }
+
     fn node_exists(&mut self, node_id: NativeNodeId) -> bool {
         // SAFETY: tests keep the borrowed DomHost pointer alive and route the
         // parser pump through this collector for the duration of the step.
@@ -1664,6 +1685,11 @@ impl TestReadTrackingCollector<'_> {
 
 #[cfg(test)]
 impl ParserDomReadConsumer for TestReadTrackingCollector<'_> {
+    fn stylesheet_media_matches(&mut self, media: &str) -> bool {
+        // SAFETY: the fixture keeps its DomHost alive throughout this parser step.
+        unsafe { &*self.host }.media_query_matches(media)
+    }
+
     fn node_exists(&mut self, node_id: NativeNodeId) -> bool {
         self.record_read();
         // SAFETY: tests keep the borrowed DomHost pointer alive and route the
@@ -2570,7 +2596,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             );
             return;
         }
-        if !self.capture_parser_blocking_stylesheet(node_id) {
+        if !self.capture_parser_stylesheet(node_id) {
             return;
         }
         if self.state.finishing_tree_builder {
@@ -2596,7 +2622,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         self.state.pending_blocking_stylesheet_pause = Some(node_id);
     }
 
-    fn capture_parser_blocking_stylesheet(&mut self, node_id: NativeNodeId) -> bool {
+    fn capture_parser_stylesheet(&mut self, node_id: NativeNodeId) -> bool {
         // Parser-created stylesheets only block the parser when they belong to
         // its connected Document tree.  Nodes in HTMLTemplateElement.content
         // are owned by an inert template Document and must never start the
@@ -2606,29 +2632,21 @@ impl ParserStreamHtmlTreeSinkTarget {
         {
             return false;
         }
-        let Some(candidate) = document_owned_blocking_stylesheet_candidate_for_node(
-            self,
-            NodeId::new(node_id.index()),
-        ) else {
+        let Some(input) =
+            document_owned_stylesheet_discovery_input_for_node(self, NodeId::new(node_id.index()))
+        else {
             return false;
         };
-        if self
-            .state
-            .captured_blocking_stylesheet_nodes
-            .insert(node_id)
-        {
-            let input =
-                moli_stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput::from(
-                    &candidate,
-                );
-            self.state
-                .captured_blocking_stylesheet_signatures
-                .insert(input.signature().clone());
-            self.state
-                .discovered_blocking_stylesheet_inputs
-                .push_back(input);
+        let blocks_scripts = input.blocks_scripts();
+        if self.state.captured_stylesheet_nodes.insert(node_id) {
+            if blocks_scripts {
+                self.state
+                    .captured_blocking_stylesheet_signatures
+                    .insert(input.signature().clone());
+            }
+            self.state.discovered_stylesheet_inputs.push_back(input);
         }
-        true
+        blocks_scripts
     }
 
     fn note_parser_element_popped(&mut self, node_id: NativeNodeId) {
@@ -2642,7 +2660,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         }
         if self.read_is_html_element_named(node_id, "link") {
             // Capture parser-inserted blocking state before completion consumes it.
-            let _ = self.capture_parser_blocking_stylesheet(node_id);
+            let _ = self.capture_parser_stylesheet(node_id);
         }
         self.finish_parsing_children(node_id);
         if element.is_some_and(|element| {
@@ -3012,13 +3030,10 @@ impl ParserStreamHtmlTreeSinkTarget {
         self.state.finishing_tree_builder = true;
     }
 
-    pub(super) fn drain_discovered_blocking_stylesheet_inputs(
+    pub(super) fn drain_discovered_stylesheet_inputs(
         &mut self,
-    ) -> Vec<moli_stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput> {
-        self.state
-            .discovered_blocking_stylesheet_inputs
-            .drain(..)
-            .collect()
+    ) -> Vec<moli_stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput> {
+        self.state.discovered_stylesheet_inputs.drain(..).collect()
     }
 
     pub(super) fn captured_blocking_stylesheet_signatures(
@@ -3716,6 +3731,13 @@ impl ParserPlanningReadView for ParserStreamHtmlTreeSinkTarget {
 }
 
 impl StylesheetBlockingReadView for ParserStreamHtmlTreeSinkTarget {
+    fn media_query_matches(&self, media: &str) -> bool {
+        if let Some(owner) = &self.runtime_dom_sinks {
+            owner.dom_read_sink().stylesheet_media_matches(media)
+        } else {
+            self.dom_host().media_query_matches(media)
+        }
+    }
     fn stylesheet_element(&self, node_id: NativeNodeId) -> Option<StylesheetElementRead> {
         self.read_stylesheet_element(node_id)
     }

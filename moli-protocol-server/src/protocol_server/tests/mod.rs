@@ -15,6 +15,7 @@ use moli_protocol_webdriver_classic::{
     CLASSIC_ELEMENT_REFERENCE_KEY, CLASSIC_FRAME_REFERENCE_KEY, CLASSIC_SHADOW_ROOT_REFERENCE_KEY,
     CLASSIC_WINDOW_REFERENCE_KEY,
 };
+use moli_test_support::discover_browser_websocket_url;
 use serde_json::json;
 use std::{
     fs,
@@ -282,14 +283,19 @@ fn protocol_server_test_state(
     .expect("test app state should initialize")
 }
 
-async fn request_json(path: &str) -> serde_json::Value {
-    request_json_with_method(Method::GET, path).await
+async fn request_json_with_method(method: Method, path: &str) -> serde_json::Value {
+    request_json_with_router(build_router(test_state()), method, path).await
 }
 
-async fn request_json_with_method(method: Method, path: &str) -> serde_json::Value {
-    let response = build_router(test_state())
+async fn request_json_with_router(
+    router: ProtocolRouter,
+    method: Method,
+    path: &str,
+) -> serde_json::Value {
+    let response = router
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .method(method)
                 .uri(path)
                 .body(Body::empty())
@@ -313,9 +319,18 @@ async fn request_status_with_method(method: Method, path: &str) -> StatusCode {
 }
 
 async fn request_status_and_text_with_method(method: Method, path: &str) -> (StatusCode, String) {
-    let response = build_router(test_state())
+    request_status_and_text_with_router(build_router(test_state()), method, path).await
+}
+
+async fn request_status_and_text_with_router(
+    router: ProtocolRouter,
+    method: Method,
+    path: &str,
+) -> (StatusCode, String) {
+    let response = router
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .method(method)
                 .uri(path)
                 .body(Body::empty())
@@ -331,6 +346,69 @@ async fn request_status_and_text_with_method(method: Method, path: &str) -> (Sta
         status,
         String::from_utf8(body.to_vec()).expect("utf-8 body"),
     )
+}
+
+fn assert_chromium_target_id(target_id: &str) {
+    assert_eq!(target_id.len(), 32, "{target_id}");
+    assert!(
+        target_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(&byte)),
+        "{target_id}"
+    );
+    assert_ne!(target_id, "00000000000000000000000000000000");
+}
+
+async fn fetch_server_response(
+    addr: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+) -> (u16, Vec<u8>) {
+    let mut stream = tokio::net::TcpStream::connect(addr)
+        .await
+        .expect("connect protocol server HTTP route");
+    stream
+        .write_all(
+            format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .await
+        .expect("write protocol server HTTP request");
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .await
+        .expect("read protocol server HTTP response");
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("HTTP response header terminator");
+    let headers = std::str::from_utf8(&response[..header_end]).expect("HTTP response headers");
+    let status = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|status| status.parse::<u16>().ok())
+        .expect("HTTP response status");
+    (status, response[header_end + 4..].to_vec())
+}
+
+async fn discovered_startup_target_ids(addr: std::net::SocketAddr) -> (String, String) {
+    let (status, body) = fetch_server_response(addr, "GET", "/json/list?for_tab").await;
+    assert_eq!(status, 200);
+    let targets: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let id = |kind: &str| {
+        let target_id = targets
+            .iter()
+            .find(|target| target["type"] == kind)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_chromium_target_id(&target_id);
+        target_id
+    };
+    (id("page"), id("tab"))
 }
 
 async fn spawn_test_protocol_server() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
@@ -1264,5 +1342,8 @@ mod classic;
 mod download;
 mod misc;
 mod p6_output_handoff;
+mod page_endpoint;
+mod request_guard;
 mod screenshot;
+mod startup_scripts;
 mod websocket;

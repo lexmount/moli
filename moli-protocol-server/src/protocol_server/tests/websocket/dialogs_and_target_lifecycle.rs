@@ -3,9 +3,11 @@ use super::*;
 #[tokio::test]
 async fn websocket_cdp_handle_javascript_dialog_accept_resumes_confirm_with_true() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
@@ -360,9 +362,11 @@ async fn websocket_cdp_handle_javascript_dialog_accept_resumes_confirm_with_true
 #[tokio::test]
 async fn websocket_cdp_handle_javascript_dialog_prompt_text_resumes_prompt() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
@@ -532,9 +536,11 @@ async fn websocket_cdp_lifecycle_events_include_load_marker() {
         spawn_dedicated_fixture_server(fixture_app, "lifecycle-load-marker");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let blank_url = format!("http://{fixture_addr}/blank");
@@ -648,9 +654,11 @@ async fn websocket_cdp_same_document_navigation_after_dcl_does_not_cancel_pendin
     let fixture_url = format!("http://{fixture_addr}/");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -843,9 +851,11 @@ async fn websocket_cdp_raw_client_second_navigate_does_not_cancel_subsequent_awa
         tokio::spawn(async move { axum::serve(fixture_listener, fixture_app).await });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -989,9 +999,11 @@ async fn websocket_cdp_runtime_self_navigation_gate_is_not_applied_to_next_comma
         tokio::spawn(async move { axum::serve(fixture_listener, fixture_app).await });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect websocket");
 
@@ -1112,9 +1124,11 @@ async fn websocket_cdp_window_open_self_navigation_reaches_attached_page_session
         tokio::spawn(async move { axum::serve(fixture_listener, fixture_app).await });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect websocket");
 
@@ -1453,9 +1467,11 @@ document.querySelector('main').textContent = globalThis.__realmMarker;
         spawn_dedicated_fixture_server(fixture_app, "multi-target-sync-awaitpromise");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to the single browser CDP websocket");
     let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
@@ -1755,9 +1771,11 @@ document.querySelector('main').textContent = globalThis.__realmMarker;
 #[tokio::test]
 async fn websocket_cdp_javascript_dialog_is_reported_to_and_resolvable_by_every_attached_session() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;

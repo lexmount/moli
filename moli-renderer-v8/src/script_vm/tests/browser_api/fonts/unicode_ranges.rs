@@ -19,20 +19,20 @@ fn font_face_unicode_range_limits_layout_and_updates_after_loading() {
         "<!doctype html><html><head></head><body></body></html>",
     );
     vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
-    let font = base64::engine::general_purpose::STANDARD.encode(include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../moli-layout/tests/fixtures/moli-ahem.woff2"
-    )));
+    // Use fixed advances for both faces: platform monospace can match the test font.
+    let (fallback_font, font) = selection_order::order_font_data();
     vm.eval(&format!(
         r#"
         const bytes=Uint8Array.from(atob('{font}'),c=>c.charCodeAt(0));
         globalThis.face=new FontFace('RangeFace',bytes,{{unicodeRange:'U+0041'}});
         const all=new FontFace('AllFace',bytes);
         document.fonts.add(face);document.fonts.add(all);
+        const fallbackBytes=Uint8Array.from(atob('{fallback_font}'),c=>c.charCodeAt(0));
+        document.fonts.add(new FontFace('FallbackFace',fallbackBytes));
         for(const [id,family,text] of [
-          ['rangeA','RangeFace,monospace','AAAA'],['rangeB','RangeFace,monospace','BBBB'],
-          ['allA','AllFace,monospace','AAAA'],['allB','AllFace,monospace','BBBB'],
-          ['fallbackA','monospace','AAAA'],['fallbackB','monospace','BBBB']
+          ['rangeA','RangeFace,FallbackFace','AAAA'],['rangeB','RangeFace,FallbackFace','BBBB'],
+          ['allA','AllFace,FallbackFace','AAAA'],['allB','AllFace,FallbackFace','BBBB'],
+          ['fallbackA','FallbackFace','AAAA'],['fallbackB','FallbackFace','BBBB']
         ]) {{
           const span=document.createElement('span');span.id=id;span.textContent=text;
           span.style.cssText=`display:inline-block;font-size:40px;font-family:${{family}}`;

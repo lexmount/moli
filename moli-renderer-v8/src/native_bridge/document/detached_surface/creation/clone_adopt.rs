@@ -85,6 +85,15 @@ fn clone_detached_document_shell<'s>(
     {
         return None;
     }
+    // Browser Document clones fall back to their copied URL/about base URL
+    // when a copied <base> is removed. The native clone helper also serves
+    // callers that need a frozen computed base; do not expose that override.
+    unsafe { &mut *clone_runtime }
+        .dom_host_mut()
+        .node_mut(clone_handle)?
+        .data_mut()
+        .as_document_mut()?
+        .set_base_url_override(None);
     if !deep {
         return Some(cloned);
     }

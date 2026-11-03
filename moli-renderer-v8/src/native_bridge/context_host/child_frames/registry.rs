@@ -117,7 +117,7 @@ impl JsContextHost {
         self.cancel_pending_media_loads_for_document(document_handle);
         self.cancel_pending_text_track_loads_for_document(document_handle);
         self.drop_child_browsing_context_subtree(document_handle);
-        self.frame_document_blocking_stylesheets
+        self.frame_document_stylesheets
             .remove_document(retired_owner.document_owner());
         self.cancel_child_document_script_work_for_owner(handle, retired_owner);
         self.retire_child_frame_realm_materialization_request(handle, retired_owner);
