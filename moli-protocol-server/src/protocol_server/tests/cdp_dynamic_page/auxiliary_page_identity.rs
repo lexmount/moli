@@ -140,6 +140,75 @@ async fn auxiliary_page_borrowed_close_uses_the_window_receiver() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_initial_location_survives_invalid_history_traversal() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async {
+            axum::response::Html("<title>navigation destination</title>")
+        })),
+        "auxiliary-invalid-history",
+    );
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
+        .await
+        .unwrap();
+    let parent_id = create_dynamic_target(&mut browser, 1).await;
+    let mut parent = connect_dynamic_page(addr, &parent_id).await;
+    send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut parent, 2, &format!("{base}/parent")).await;
+    for (own_realm, delta) in [
+        (false, None),
+        (false, Some(-999)),
+        (false, Some(999)),
+        (true, Some(-999)),
+        (true, Some(999)),
+    ] {
+        let url = format!("{base}/first?ownRealm={own_realm}&delta={delta:?}");
+        let navigation = if own_realm {
+            format!(
+                "p.Function({})()",
+                json!(format!(
+                    "location.href={}; history.go({})",
+                    json!(url),
+                    delta.unwrap()
+                ))
+            )
+        } else {
+            let history = delta.map_or(String::new(), |delta| format!("; p.history.go({delta})"));
+            format!("p.location.href={} {history}", json!(url))
+        };
+        let (popup_id, mut popup) = open_auxiliary(addr, &mut parent, &navigation).await;
+        wait_for_value(
+            &mut popup,
+            "[document.URL, document.readyState, document.title]",
+            json!([url, "complete", "navigation destination"]),
+        )
+        .await;
+        let messages = send_cdp_command(
+            &mut popup,
+            100,
+            "Page.getNavigationHistory",
+            None,
+            json!({}),
+        )
+        .await;
+        let history = &response_by_id(&messages, 100)["result"];
+        let current = history["currentIndex"].as_u64().unwrap() as usize;
+        assert_eq!(history["entries"][current]["url"], url, "{history}");
+        send_cdp_command(
+            &mut browser,
+            200,
+            "Target.closeTarget",
+            None,
+            json!({"targetId":popup_id}),
+        )
+        .await;
+        let _ = popup.close(None).await;
+    }
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auxiliary_initial_document_adoption_keeps_completed_lifecycle() {
     let (addr, server) = spawn_test_protocol_server().await;
     let (mut browser, _) = connect_async(

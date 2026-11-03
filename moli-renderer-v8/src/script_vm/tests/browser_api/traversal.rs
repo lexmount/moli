@@ -1,27 +1,61 @@
 use super::*;
 
+fn browser_owned_history_seed(url: &str) -> moli_page_types::NavigationHistoryEntrySeed {
+    use moli_session_history::{
+        JointSessionHistory, SessionHistoryContextId, SessionHistoryEntry, SessionHistoryPosition,
+    };
+
+    let mut seed = moli_page_types::initial_navigation_history_seed(false, url);
+    let mut history = JointSessionHistory::new(SessionHistoryPosition::new(1, 3).unwrap());
+    history.attach(
+        SessionHistoryContextId::ROOT,
+        None,
+        SessionHistoryEntry {
+            key: seed.entries[0].key.clone(),
+            document: seed.entries[0].document_id.clone(),
+        },
+    );
+    seed.session_history.traversable = Some(Box::new(history));
+    seed
+}
+
+#[test]
+fn noop_history_traversal_preserves_pending_location_navigation() {
+    let url = "https://browser-owned-history.test/current";
+    for delta in [-999, -1, 1, 999] {
+        let mut vm = new_storage_test_vm(url);
+        vm.install_navigation_bootstrap_entry(Some(
+            moli_page_types::initial_navigation_history_seed(false, url),
+        ));
+        vm.eval(&format!(
+            "location.assign('/location-wins'); history.go({delta}); 'queued'"
+        ))
+        .unwrap();
+        assert!(
+            vm.take_pending_top_level_history_traversal().is_none(),
+            "out-of-range delta {delta} must not produce a History action"
+        );
+        assert_eq!(
+            vm.take_pending_location_navigation_with_seed()
+                .expect("a Noop must preserve the pending Location navigation")
+                .url
+                .as_str(),
+            "https://browser-owned-history.test/location-wins"
+        );
+    }
+}
+
 #[test]
 fn top_level_history_back_delegates_to_the_browser_history_controller() {
     let url = "https://browser-owned-history.test/current";
     let mut vm = new_storage_test_vm(url);
-
-    vm.eval("history.back(); 'queued'")
-        .expect("hidden renderer bookkeeping entry should delegate to the browser");
-    assert!(!vm.has_pending_location_navigation());
-    assert_eq!(
-        vm.take_pending_top_level_history_traversal()
-            .expect("browser-owned back traversal request")
-            .delta,
-        -1
-    );
-
-    vm.install_navigation_bootstrap_entry(Some(moli_page_types::initial_navigation_history_seed(
-        false, url,
-    )));
+    // Previous and next entries exist in joint history but have no local
+    // Document projection. They still require the browser's history controller.
+    vm.install_navigation_bootstrap_entry(Some(browser_owned_history_seed(url)));
     assert_eq!(
         vm.eval("String(history.length)")
-            .expect("single renderer-visible history entry"),
-        "1"
+            .expect("browser-owned joint history length"),
+        "3"
     );
     vm.eval("history.back(); 'queued'")
         .expect("unknown browser-side back entry should queue");
@@ -48,9 +82,7 @@ fn top_level_history_back_delegates_to_the_browser_history_controller() {
 fn top_level_navigation_intents_keep_one_last_writer_state() {
     let url = "https://browser-owned-history.test/current";
     let mut vm = new_storage_test_vm(url);
-    vm.install_navigation_bootstrap_entry(Some(moli_page_types::initial_navigation_history_seed(
-        false, url,
-    )));
+    vm.install_navigation_bootstrap_entry(Some(browser_owned_history_seed(url)));
 
     vm.eval("history.back(); location.assign('/location-wins'); 'queued'")
         .expect("location navigation should replace the history traversal intent");

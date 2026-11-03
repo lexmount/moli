@@ -173,20 +173,34 @@ impl PreparedRendererNavigation {
             .pending_target_page_residence_identity_for_owner(action.owner_scope())
             .as_ref()
             == Some(action.page_owner())
-            && let Some((waiter, admission)) = conn
+        {
+            // The renderer delegates History deltas whose browser-owned
+            // destination it cannot resolve. A Noop must not replace the
+            // admission of an already accepted Location navigation.
+            if let Some(delta) = action.history_delta()
+                && !super::navigation::renderer_history_traversal_has_destination(
+                    conn,
+                    action.owner_scope(),
+                    delta,
+                )
+            {
+                return None;
+            }
+            if let Some((waiter, admission)) = conn
                 .runtime_session_owner_slot_mut_for_owner(action.owner_scope())
                 .and_then(|slot| slot.reserve_initial_document_navigation())
-        {
-            return Some(Self {
-                owner: action.owner_scope().clone(),
-                work: RendererNavigationWork::InitialDocument {
-                    waiter,
-                    admission,
-                    action: Box::new(action),
-                },
-                source: None,
-                prefix: CommandOutputPlan::default(),
-            });
+            {
+                return Some(Self {
+                    owner: action.owner_scope().clone(),
+                    work: RendererNavigationWork::InitialDocument {
+                        waiter,
+                        admission,
+                        action: Box::new(action),
+                    },
+                    source: None,
+                    prefix: CommandOutputPlan::default(),
+                });
+            }
         }
         let (owner, page, request) = action.into_parts();
         if !conn.target_page_output_residence_is_current(&page) {

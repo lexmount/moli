@@ -75,6 +75,13 @@ impl TopLevelNavigationOwnerAction {
         &self.page_owner
     }
 
+    pub(crate) fn history_delta(&self) -> Option<i64> {
+        match &self.navigation {
+            TopLevelNavigationRequest::History(traversal) => Some(traversal.delta),
+            TopLevelNavigationRequest::Location(_) => None,
+        }
+    }
+
     pub(crate) fn target_id(&self) -> Option<&str> {
         self.page_owner.target_id()
     }
