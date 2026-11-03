@@ -1633,6 +1633,21 @@ fn start_history_traversal_url_fallback(
     )
 }
 
+pub(super) fn renderer_history_traversal_has_destination(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    delta: i64,
+) -> bool {
+    matches!(
+        resolve_devtools_history_traversal_destination(
+            conn,
+            owner,
+            &DevToolsHistoryTraversalDestination::Delta(delta),
+        ),
+        Ok(ResolvedDevToolsHistoryTraversal::Entry { .. })
+    )
+}
+
 pub(super) fn start_session_owner_history_traversal_from_renderer(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,

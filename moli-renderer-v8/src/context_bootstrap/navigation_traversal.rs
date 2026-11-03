@@ -532,10 +532,18 @@ fn queue_browser_owned_top_level_history_traversal<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    if super::session_history::binding(scope, unsafe { &mut *host_ptr }, owner)
-        .popup
-        .is_some()
-    {
+    let host = unsafe { &mut *host_ptr };
+    let binding = super::session_history::binding(scope, host, owner);
+    if binding.popup.is_some() {
+        return;
+    }
+    // Failure to project a browser-owned entry and an out-of-range delta
+    // both reach this fallback. Only the former may supersede a navigation.
+    let model = host.session_histories.get_mut(binding.popup).clone();
+    let source = host
+        .pending_joint_history_step(&model)
+        .unwrap_or_else(|| model.current_step());
+    if model.step_by_delta_from(source, delta).is_none() {
         return;
     }
     let top_owner = super::navigation_window::runtime_top_window_owner(scope, owner);
@@ -549,7 +557,7 @@ fn queue_browser_owned_top_level_history_traversal<'s>(
     {
         return;
     }
-    unsafe { &mut *host_ptr }.record_pending_top_level_history_traversal(delta);
+    host.record_pending_top_level_history_traversal(delta);
 }
 
 pub(crate) fn queue_top_level_history_traversal_by_delta(

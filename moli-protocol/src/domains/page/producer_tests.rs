@@ -3367,6 +3367,131 @@ async fn initial_document_navigation_new_request_releases_older_wait_before_adop
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn initial_document_navigation_noop_history_preserves_accepted_location() {
+    // Delta zero here is an internal Noop traversal, not history.go(0),
+    // which the renderer represents as a Location reload instead.
+    for delta in [i64::MIN, -999, 0, 999, i64::MAX] {
+        let (mut ctx, owner) = initial_document_navigation_context_for_test();
+        let pending = ctx.with_fixture(|conn| {
+            conn.start_initial_document_page_ensure_for_owner(&owner)
+                .unwrap()
+                .unwrap()
+        });
+        let completed = ctx.drive_owned_wait(pending.wait()).await.unwrap();
+        let url = "data:text/html,<title>first-navigation</title>";
+        let first = ctx
+            .with_fixture(|conn| prepare_initial_document_navigation_for_test(conn, &owner, url));
+        let mut command = crate::conn::CommandDispatchContext::default();
+        let (mut context, _scope) =
+            crate::conn::CommandWorkflowContext::take_from(&mut command, None, None);
+        let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+        {
+            let mut running = Box::pin(first.run(&mut driver, &mut context));
+            assert!(futures_util::poll!(&mut running).is_pending());
+            let history = ctx.with_fixture(|conn| {
+                let page = conn
+                    .pending_target_page_residence_identity_for_owner(&owner)
+                    .unwrap();
+                super::PreparedRendererNavigation::prepare_owner_action(
+                    conn,
+                    crate::conn::TopLevelNavigationOwnerAction::history(
+                        owner.clone(),
+                        page,
+                        moli_core::page::RendererPendingTopLevelHistoryTraversal { delta },
+                    ),
+                )
+            });
+            assert!(
+                futures_util::poll!(&mut running).is_pending(),
+                "Noop history delta {delta} must not cancel the accepted Location navigation"
+            );
+            let mut installer = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+            ctx.drive_owned_wait(completed.install_using(&mut installer))
+                .await
+                .unwrap();
+            if let Some(history) = history {
+                let mut history_command = crate::conn::CommandDispatchContext::default();
+                ctx.run_fixture_projection(&mut history_command, move |driver, context| {
+                    Box::pin(history.run(driver, context))
+                })
+                .await
+                .unwrap();
+            }
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                ctx.drive_owned_wait(running),
+            )
+            .await
+            .expect("the valid navigation must resume after adoption")
+            .unwrap();
+        }
+        ctx.with_fixture(|conn| {
+            context.finish_projection(conn, &mut command);
+            assert_eq!(conn.browser_context.as_ref().unwrap().target_url(), url);
+            assert_eq!(
+                conn.loaded_page_mut_for_owner(&owner)
+                    .unwrap()
+                    .final_url()
+                    .as_str(),
+                url
+            );
+        });
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initial_document_navigation_valid_history_supersedes_older_admission() {
+    let (ctx, owner) = initial_document_navigation_context_for_test();
+    let first = ctx.with_fixture(|conn| {
+        bind_pending_initial_navigation_page_for_test(conn, &owner);
+        let state = &mut conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .owner_state;
+        for url in ["data:text/html,previous", "about:blank"] {
+            state.record_loaded_page_navigation_history((url.to_owned(), String::new()));
+        }
+        prepare_initial_document_navigation_for_test(conn, &owner, "data:text/html,first")
+    });
+    let mut command = crate::conn::CommandDispatchContext::default();
+    let (mut context, _scope) =
+        crate::conn::CommandWorkflowContext::take_from(&mut command, None, None);
+    let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+    {
+        let mut running = Box::pin(first.run(&mut driver, &mut context));
+        assert!(futures_util::poll!(&mut running).is_pending());
+        let history = ctx.with_fixture(|conn| {
+            let page = conn
+                .pending_target_page_residence_identity_for_owner(&owner)
+                .unwrap();
+            super::PreparedRendererNavigation::prepare_owner_action(
+                conn,
+                crate::conn::TopLevelNavigationOwnerAction::history(
+                    owner.clone(),
+                    page,
+                    moli_core::page::RendererPendingTopLevelHistoryTraversal { delta: -1 },
+                ),
+            )
+            .expect("a traversal with an existing destination must remain admissible")
+        });
+        assert!(matches!(
+            futures_util::poll!(&mut running),
+            std::task::Poll::Ready(Ok(()))
+        ));
+        ctx.with_fixture(|conn| {
+            assert!(!conn.has_pending_document_navigation_for_owner(&owner));
+            conn.runtime_session_owner_slot_mut_for_owner(&owner)
+                .unwrap()
+                .fail_initial_document_page_build("test teardown".to_owned());
+        });
+        drop(history);
+    }
+    ctx.with_fixture(|conn| context.finish_projection(conn, &mut command));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn initial_document_navigation_latest_request_wins_in_either_resume_order() {
     for newer_first in [false, true] {
         let (mut ctx, owner) = initial_document_navigation_context_for_test();
