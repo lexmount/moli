@@ -38,6 +38,7 @@ pub(crate) struct PreparedRendererNavigation {
 enum RendererNavigationWork {
     InitialDocument {
         waiter: crate::conn::InitialDocumentPageBuildWaiter,
+        admission: crate::conn::CommandWaitLifetime,
         action: Box<crate::conn::TopLevelNavigationOwnerAction>,
     },
     Complete(CommandOutputPlan),
@@ -172,14 +173,15 @@ impl PreparedRendererNavigation {
             .pending_target_page_residence_identity_for_owner(action.owner_scope())
             .as_ref()
             == Some(action.page_owner())
-            && let Some(waiter) = conn
-                .runtime_session_owner_slot_for_owner(action.owner_scope())
-                .and_then(|slot| slot.initial_document_page_build_waiter())
+            && let Some((waiter, admission)) = conn
+                .runtime_session_owner_slot_mut_for_owner(action.owner_scope())
+                .and_then(|slot| slot.reserve_initial_document_navigation())
         {
             return Some(Self {
                 owner: action.owner_scope().clone(),
                 work: RendererNavigationWork::InitialDocument {
                     waiter,
+                    admission,
                     action: Box::new(action),
                 },
                 source: None,
@@ -318,10 +320,19 @@ impl PreparedRendererNavigation {
     ) -> Result<()> {
         retain_background(context, self.prefix);
         match self.work {
-            RendererNavigationWork::InitialDocument { waiter, action } => {
-                if waiter.wait().await.is_ok()
+            RendererNavigationWork::InitialDocument {
+                waiter,
+                admission,
+                action,
+            } => {
+                let adopted = tokio::select! {
+                    biased;
+                    () = admission.wait_revoked() => false,
+                    result = waiter.wait() => result.is_ok(),
+                };
+                if adopted
                     && let Some(prepared) = driver.with_state(move |state| {
-                        state.prepare_renderer_navigation_owner_action(*action)
+                        state.resume_initial_document_navigation(*action, admission)
                     })?
                 {
                     Box::pin(prepared.run(driver, context)).await?;

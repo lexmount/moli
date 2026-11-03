@@ -1236,12 +1236,17 @@ fn start_top_level_same_document_navigate(
     match page
         .start_top_level_same_document_navigation_with_history_replacement(url, replace_current)
     {
-        Ok(pending) => NavigateCommandStart::PendingSameDocument(Box::new(
-            PendingSameDocumentNavigateCommand {
-                pending,
-                result_projection,
-            },
-        )),
+        Ok(pending) => {
+            if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
+                slot.cancel_initial_document_page_build();
+            }
+            NavigateCommandStart::PendingSameDocument(Box::new(
+                PendingSameDocumentNavigateCommand {
+                    pending,
+                    result_projection,
+                },
+            ))
+        }
         Err(error) => {
             NavigateCommandStart::CompletePlan(CommandOutputPlan::error(-32000, error.to_string()))
         }
@@ -1555,6 +1560,9 @@ fn start_same_document_history_traversal_command(
             ));
         }
     };
+    if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(&fallback.owner) {
+        slot.cancel_initial_document_page_build();
+    }
     PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
         command_id,
         owner_scope: fallback.owner.clone(),
