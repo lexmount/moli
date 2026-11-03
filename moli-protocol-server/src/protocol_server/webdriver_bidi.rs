@@ -326,6 +326,10 @@ impl BidiSocketActor {
         scheduler: &mut CdpScheduler,
         receivers: &mut CdpSchedulerEventReceivers,
     ) {
+        // Release the handler before renderer cleanup can wait on an abandoned prompt.
+        // An attached Classic session retains its independent registration.
+        let _ = scheduler
+            .unregister_automation_javascript_dialog_handler(FrontendProtocol::WebDriverBidi);
         self.release_pending_runtime_command_state(scheduler, receivers)
             .await;
         let plan = self.bidi.release_event_source_hook_plan();
@@ -764,6 +768,11 @@ async fn handle_bidi_socket_message(
             None,
         ),
     };
+    admission_event_sources.extend_protocol_output(apply_bidi_dialog_handler_lifecycle(
+        scheduler,
+        command_method.as_deref(),
+        &outcome,
+    ));
     let BidiCommandOutcome {
         response,
         channel: command_channel,
@@ -1061,6 +1070,22 @@ async fn handle_bidi_socket_message(
         return false;
     }
     true
+}
+
+fn apply_bidi_dialog_handler_lifecycle(
+    scheduler: &mut CdpScheduler,
+    method: Option<&str>,
+    outcome: &BidiCommandOutcome,
+) -> ProtocolOutputSequence {
+    if outcome.close_connection {
+        return scheduler
+            .unregister_automation_javascript_dialog_handler(FrontendProtocol::WebDriverBidi);
+    }
+    if method == Some("session.new") && outcome.response["type"] == "success" {
+        scheduler
+            .register_automation_javascript_dialog_handler(FrontendProtocol::WebDriverBidi, false);
+    }
+    ProtocolOutputSequence::empty()
 }
 
 async fn send_bidi_json_events(socket: &mut WebSocket, events: Vec<serde_json::Value>) -> bool {
@@ -3302,6 +3327,56 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn bidi_dialog_handler_follows_successful_session_creation_and_end() {
+        let (mut scheduler, _) = CdpScheduler::new(moli_protocol::CdpConnection::new());
+        let mut bidi = BidiConnectionState::new();
+        let mut registry = BidiSessionRegistry::new();
+        for (id, method, params, expected_available) in [
+            (1, "session.status", json!({}), false),
+            (2, "session.new", json!({"capabilities": false}), false),
+            (3, "session.new", json!({}), true),
+            (4, "session.new", json!({}), true),
+            (5, "session.end", json!({}), false),
+            (6, "session.end", json!({}), false),
+        ] {
+            let outcome = bidi.handle_message_with_session_registry(
+                json!({"id": id, "method": method, "params": params}),
+                &mut registry,
+            );
+            let _ = apply_bidi_dialog_handler_lifecycle(&mut scheduler, Some(method), &outcome);
+            assert_eq!(
+                scheduler.has_automation_javascript_dialog_handler(),
+                expected_available,
+                "{method}: {:?}",
+                outcome.response
+            );
+        }
+    }
+
+    #[test]
+    fn bidi_session_end_keeps_an_independent_classic_dialog_handler() {
+        let (mut scheduler, _) = CdpScheduler::new(moli_protocol::CdpConnection::new());
+        assert!(scheduler.register_automation_javascript_dialog_handler(
+            FrontendProtocol::WebDriverClassic,
+            true
+        ));
+        let mut bidi = BidiConnectionState::new();
+        let mut registry = BidiSessionRegistry::new();
+        for (id, method) in [(1, "session.new"), (2, "session.end")] {
+            let outcome = bidi.handle_message_with_session_registry(
+                json!({"id": id, "method": method, "params": {}}),
+                &mut registry,
+            );
+            assert_eq!(outcome.response["type"], "success");
+            let _ = apply_bidi_dialog_handler_lifecycle(&mut scheduler, Some(method), &outcome);
+            assert!(scheduler.has_automation_javascript_dialog_handler());
+        }
+        let _ = scheduler
+            .unregister_automation_javascript_dialog_handler(FrontendProtocol::WebDriverClassic);
+        assert!(!scheduler.has_automation_javascript_dialog_handler());
+    }
 
     #[test]
     fn webdriver_classic_click_errors_use_existing_bidi_input_error_mapping() {

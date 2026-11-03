@@ -1635,7 +1635,7 @@ pub(super) async fn webdriver_classic_new_session(
             ));
         }
     };
-    if let Err(error) = runtime.set_javascript_dialog_handler_enabled(true).await {
+    if let Err(error) = runtime.register_javascript_dialog_handler().await {
         state
             .classic_session_registry
             .lock()
