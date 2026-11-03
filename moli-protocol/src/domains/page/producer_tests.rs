@@ -3133,6 +3133,70 @@ async fn stale_page_residence_same_document_navigation_cannot_mutate_replacement
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn initial_document_navigation_waits_for_adoption_and_honors_cancellation() {
+    let mut ctx = TestContext::from_conn(CdpConnection::default());
+    let mut bc = BrowserContext::new("BID-initial-navigation".into());
+    bc.set_active_target_id("TID-initial-navigation");
+    bc.set_target_url("about:blank".to_owned());
+    bc.attach_active_session("SID-initial-navigation");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    let owner = CommandOwnerScope::for_session("SID-initial-navigation");
+    let page = ctx.with_fixture(|conn| {
+        let slot = conn
+            .runtime_session_owner_slot_mut_for_owner(&owner)
+            .unwrap();
+        slot.start_initial_document_page_build();
+        assert!(slot.bind_initial_document_page_build_renderer_page(
+            crate::conn::RendererPageResidenceIdentity::from_parts(
+                moli_core::RendererOwnerLocalHostId::new_for_testing(7),
+                moli_core::PageId::new_for_testing(1),
+            ),
+        ));
+        conn.pending_target_page_residence_identity_for_owner(&owner)
+            .unwrap()
+    });
+    let action = crate::conn::TopLevelNavigationOwnerAction::from_prepared(
+        owner.clone(),
+        page,
+        RendererDocumentSourcedTopLevelLocationNavigation::new(
+            renderer_document_identity_for_test(1, 1),
+            "https://example.test/next".to_owned(),
+        ),
+    );
+    let prepared = ctx
+        .with_fixture(|conn| super::PreparedRendererNavigation::prepare_owner_action(conn, action))
+        .expect("an exact initial Page's accepted navigation must survive pending adoption");
+    ctx.with_fixture(|conn| {
+        let slot = conn
+            .runtime_session_owner_slot_mut_for_owner(&owner)
+            .unwrap();
+        assert!(slot.has_initial_document_page_build_in_progress());
+        assert!(!slot.has_loaded_page());
+        assert!(!conn.has_pending_document_navigation_for_owner(&owner));
+        conn.runtime_session_owner_slot_mut_for_owner(&owner)
+            .unwrap()
+            .fail_initial_document_page_build("target closed before adoption".to_owned());
+    });
+    let mut command = crate::conn::CommandDispatchContext::default();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        ctx.run_fixture_projection(&mut command, move |driver, context| {
+            Box::pin(prepared.run(driver, context))
+        }),
+    )
+    .await
+    .expect("cancelled adoption must release its navigation waiter")
+    .unwrap();
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            "about:blank"
+        );
+        assert!(!conn.has_pending_document_navigation_for_owner(&owner));
+    });
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn prepared_top_level_location_navigation_waits_for_its_scheduler_turn() {
     let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-location".into());

@@ -36,6 +36,10 @@ pub(crate) struct PreparedRendererNavigation {
 }
 
 enum RendererNavigationWork {
+    InitialDocument {
+        waiter: crate::conn::InitialDocumentPageBuildWaiter,
+        action: Box<crate::conn::TopLevelNavigationOwnerAction>,
+    },
     Complete(CommandOutputPlan),
     Load(Box<BackgroundNavigationLoadJob>),
     Request(Box<PreparedInterceptedNavigationRequest>),
@@ -159,6 +163,29 @@ impl PreparedRendererNavigation {
         conn: &mut CdpConnection,
         action: crate::conn::TopLevelNavigationOwnerAction,
     ) -> Option<Self> {
+        // A synchronous popup's initial Document can accept Location changes
+        // before protocol adoption. Its native output is already routable,
+        // but navigation must wait until that exact Page has been installed.
+        // Wait outside the producing output cursor, then recheck residence so
+        // closing or replacing the target cannot revive a stale navigation.
+        if conn
+            .pending_target_page_residence_identity_for_owner(action.owner_scope())
+            .as_ref()
+            == Some(action.page_owner())
+            && let Some(waiter) = conn
+                .runtime_session_owner_slot_for_owner(action.owner_scope())
+                .and_then(|slot| slot.initial_document_page_build_waiter())
+        {
+            return Some(Self {
+                owner: action.owner_scope().clone(),
+                work: RendererNavigationWork::InitialDocument {
+                    waiter,
+                    action: Box::new(action),
+                },
+                source: None,
+                prefix: CommandOutputPlan::default(),
+            });
+        }
         let (owner, page, request) = action.into_parts();
         if !conn.target_page_output_residence_is_current(&page) {
             return None;
@@ -291,6 +318,15 @@ impl PreparedRendererNavigation {
     ) -> Result<()> {
         retain_background(context, self.prefix);
         match self.work {
+            RendererNavigationWork::InitialDocument { waiter, action } => {
+                if waiter.wait().await.is_ok()
+                    && let Some(prepared) = driver.with_state(move |state| {
+                        state.prepare_renderer_navigation_owner_action(*action)
+                    })?
+                {
+                    Box::pin(prepared.run(driver, context)).await?;
+                }
+            }
             RendererNavigationWork::Complete(plan) => retain_background(context, plan),
             RendererNavigationWork::Load(job) => {
                 let (response, _) = job.run(None).await;
