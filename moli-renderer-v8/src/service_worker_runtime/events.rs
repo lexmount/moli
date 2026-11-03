@@ -765,7 +765,7 @@ mod referrer_tests {
     fn navigation_fetch_metadata_preserves_explicit_cache_modes_on_soft_reload() {
         use moli_fetch::BrowserNavigationRequestKind as Kind;
         for mode in [RequestMode::Navigate, RequestMode::Cors] {
-            for kind in [Kind::Navigate, Kind::Reload] {
+            for kind in [Kind::Navigate, Kind::Reload, Kind::HistoryTraversal] {
                 for (cache, label) in [
                     (RequestCacheMode::Default, "default"),
                     (RequestCacheMode::Validate, "no-cache"),
