@@ -112,7 +112,7 @@ pub struct WebDriverNodeReference {
     pub target_id: String,
     pub browsing_context_id: String,
     pub backend_node_id: u32,
-    pub is_element: bool,
+    pub kind: crate::automation::WebDriverNodeKind,
     pub(crate) frame_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
 }
 

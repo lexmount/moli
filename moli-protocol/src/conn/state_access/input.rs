@@ -107,7 +107,7 @@ impl ProtocolWorkflowState<'_> {
             shared_id.into_string(),
             backend_node_id,
             Some(&frame_id),
-            true,
+            crate::automation::WebDriverNodeKind::Element,
         );
         Some(event)
     }

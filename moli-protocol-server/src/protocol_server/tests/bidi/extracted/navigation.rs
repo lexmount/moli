@@ -10,7 +10,9 @@ async fn websocket_bidi_node_references_work_in_classic_element_commands() {
         .as_str()
         .unwrap()
         .to_owned();
-    let url = classic_data_url_for_bidi_test("<!doctype html><h1>Ready</h1><h2>Untouched</h2>");
+    let url = classic_data_url_for_bidi_test(
+        "<!doctype html><h1>Ready</h1><h2>Untouched</h2><h3>Classic untouched</h3>",
+    );
     let navigation = send_bidi_command(
         &mut socket,
         2,
@@ -35,6 +37,16 @@ async fn websocket_bidi_node_references_work_in_classic_element_commands() {
     )
     .await;
     let untouched_id = untouched["result"]["nodes"][0]["sharedId"]
+        .as_str()
+        .unwrap();
+    let classic = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session_id}/element"),
+        json!({"using": "css selector", "value": "h3"}),
+    )
+    .await;
+    let classic_id = classic["value"]["element-6066-11e4-a52e-4f735466cecf"]
         .as_str()
         .unwrap();
     let (status, text) = classic_request_status_on_server_with_body(
@@ -75,7 +87,7 @@ async fn websocket_bidi_node_references_work_in_classic_element_commands() {
     )
     .await;
     assert_eq!(replaced["type"], "success");
-    for id in [shared_id, untouched_id] {
+    for id in [shared_id, untouched_id, classic_id] {
         let (_, stale) = classic_request_status_on_server_with_body(
             addr,
             "GET",
@@ -122,6 +134,14 @@ async fn websocket_bidi_node_references_work_in_classic_element_commands() {
     })).await;
     assert_eq!(old_bidi_node["type"], "error", "{old_bidi_node}");
     assert_eq!(old_bidi_node["error"], "no such node", "{old_bidi_node}");
+    let old_classic_node = send_bidi_command(&mut socket, 7, "script.callFunction", json!({
+        "functionDeclaration": "function(node) { return node.textContent; }",
+        "target": {"context": &context}, "arguments": [{"sharedId": classic_id}], "awaitPromise": false
+    })).await;
+    assert_eq!(
+        old_classic_node["error"], "no such node",
+        "{old_classic_node}"
+    );
     socket.close(None).await.unwrap();
     for id in [&session_id, &other_session] {
         let deleted = classic_request_on_server_with_body(

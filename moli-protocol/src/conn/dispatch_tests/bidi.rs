@@ -94,11 +94,20 @@ async fn bidi_node_arguments_release_temporary_handles_on_success_and_error() {
     for _ in 0..3 {
         let reference = ctx
             .state
-            .with_state(|state| state.webdriver_node_reference(&context, shared_id.as_str()))
+            .with_state(|state| {
+                state.webdriver_node_reference(
+                    &context,
+                    shared_id.as_str(),
+                    crate::automation::WebDriverNodeKind::Element,
+                )
+            })
             .unwrap()
             .unwrap()
             .unwrap();
-        assert!(reference.is_element);
+        assert_eq!(
+            reference.kind,
+            crate::automation::WebDriverNodeKind::Element
+        );
     }
     assert_eq!(roots(&mut ctx), before);
     // Releasing the argument group must not disown the separately returned

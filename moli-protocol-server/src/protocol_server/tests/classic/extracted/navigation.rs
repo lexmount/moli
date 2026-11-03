@@ -828,13 +828,12 @@ async fn webdriver_classic_element_reference_owner_rejects_forged_and_stales_aft
 
     let element_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
     assert!(
-        element_id.starts_with("moli-node-") && element_id.contains("-element-"),
-        "element id should be owner-shaped: {element_id}"
+        moli_protocol::automation::is_webdriver_bidi_node_shared_id(&element_id),
+        "element id should be a shared node reference: {element_id}"
     );
     let node_id = element_id
-        .strip_prefix("moli-node-")
-        .and_then(|value| value.split_once("-element-").map(|(node_id, _)| node_id))
-        .expect("owner-shaped element id contains node id");
+        .strip_prefix("moli:bidi-renderer-node:")
+        .expect("shared element reference contains a backend node identity");
     let forged_legacy_id = format!("moli-node-{node_id}");
     let (forged_status, forged) = classic_request_status_and_json(
         app.clone(),
@@ -992,7 +991,7 @@ async fn webdriver_classic_url_routes_execute_through_devtools_runtime() {
         .as_str()
         .expect("element reference id");
     assert!(
-        element_id.starts_with("moli-node-"),
+        moli_protocol::automation::is_webdriver_bidi_node_shared_id(element_id),
         "unexpected element id: {element_id}"
     );
 
@@ -1018,7 +1017,7 @@ async fn webdriver_classic_url_routes_execute_through_devtools_runtime() {
             .as_str()
             .unwrap_or_else(|| panic!("{using} locator should return an element: {located:?}"));
         assert!(
-            located_id.starts_with("moli-node-"),
+            moli_protocol::automation::is_webdriver_bidi_node_shared_id(located_id),
             "{using} locator returned unexpected element id: {located_id}"
         );
     }

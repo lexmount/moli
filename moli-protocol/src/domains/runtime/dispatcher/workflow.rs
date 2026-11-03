@@ -114,6 +114,9 @@ impl RuntimeWorkflow {
             AutomationCommand::LocateNodes(command) => {
                 return Box::pin(execute_devtools_locate_nodes_command_using(self, command)).await;
             }
+            AutomationCommand::GetOrCreateNodeReference(command) => {
+                return self.get_or_create_node_reference(command).await;
+            }
             _ => {}
         }
         let result_kind = devtools_runtime_command_result_kind(&command);
@@ -343,7 +346,7 @@ impl RuntimeWorkflow {
         shared_id: &str,
         backend_node_id: u32,
         frame_id: Option<&str>,
-        is_element: bool,
+        kind: WebDriverNodeKind,
     ) -> Result<(), DevToolsError> {
         self.query(move |state| {
             state.prepare_runtime_bidi_binding_registration(
@@ -359,9 +362,56 @@ impl RuntimeWorkflow {
                 shared_id.to_owned(),
                 backend_node_id,
                 frame_id,
-                is_element,
+                kind,
             )
         })
+    }
+
+    async fn get_or_create_node_reference(
+        &mut self,
+        command: DevToolsGetOrCreateNodeReferenceCommand,
+    ) -> Result<AutomationResult, DevToolsError> {
+        let owner = self
+            .state(|state| state.runtime_dom_query_owner(&command.context))?
+            .ok_or_else(|| {
+                DevToolsError::new(DevToolsErrorKind::NoSuchTarget, MissingRuntimeTarget)
+            })?;
+        let lookup_owner = owner.clone();
+        let node = self
+            .query(move |state| {
+                state.prepare_webdriver_node_reference_query(
+                    &lookup_owner,
+                    command.reference,
+                    command.context.protocol,
+                )
+            })
+            .await?
+            .filter(|node| WebDriverNodeKind::from_snapshot(&node.snapshot) == command.kind)
+            .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchNode, "node not found"))?;
+        let backend_node_id = node.snapshot.backend_node_id.ok_or_else(|| {
+            DevToolsError::new(
+                DevToolsErrorKind::NoSuchNode,
+                "node has no backend identity",
+            )
+        })?;
+        let shared_id = webdriver_bidi_node_shared_id_for_backend_node_id(backend_node_id);
+        if self
+            .state(|state| {
+                state.webdriver_node_reference(&command.context, shared_id.as_str(), command.kind)
+            })??
+            .is_some()
+        {
+            return Ok(AutomationResult::NodeReference(shared_id));
+        }
+        self.register_node_binding(
+            &owner,
+            shared_id.as_str(),
+            backend_node_id,
+            node.frame_id.as_deref(),
+            command.kind,
+        )
+        .await?;
+        Ok(AutomationResult::NodeReference(shared_id))
     }
 
     pub(in crate::domains::runtime) fn register_node_reference(

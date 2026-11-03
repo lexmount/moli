@@ -126,12 +126,13 @@ impl CdpScheduler {
         &mut self,
         context: &moli_protocol::automation::AutomationContext,
         shared_id: &str,
+        kind: moli_protocol::automation::WebDriverNodeKind,
     ) -> Result<
         Option<moli_protocol::WebDriverNodeReference>,
         moli_protocol::automation::DevToolsError,
     > {
         self.state
-            .with_state(|state| state.webdriver_node_reference(context, shared_id))
+            .with_state(|state| state.webdriver_node_reference(context, shared_id, kind))
             .expect("live protocol actor state")
     }
 

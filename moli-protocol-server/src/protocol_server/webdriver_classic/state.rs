@@ -21,7 +21,6 @@ use moli_protocol_webdriver_classic::{
     ClassicActionTick, ClassicDevToolsCommandContext, ClassicElementOriginViewportPoints,
     ClassicError, ClassicErrorCode, ClassicPageLoadStrategy, ClassicSessionRegistry,
     ClassicTimeouts, ClassicUnhandledPromptBehavior, ClassicViewportBounds, ClassicWindowPosition,
-    cdp_node_id_from_classic_element_id, cdp_node_id_from_classic_shadow_root_id,
     perform_actions_ticks_with_state_and_viewport,
     release_actions_commands as build_release_actions_commands,
 };
@@ -103,30 +102,9 @@ impl SharedClassicSessionRegistry {
 pub(super) struct ClassicSessionManager {
     registry: ClassicSessionRegistry,
     runtimes: BTreeMap<String, ClassicSessionRuntimeHandle>,
-    next_element_id: u64,
-    next_shadow_root_id: u64,
-    element_owners: BTreeMap<(String, String), ClassicElementOwner>,
-    element_ids_by_owner: BTreeMap<(String, ClassicElementOwner), String>,
-    shadow_root_owners: BTreeMap<(String, String), ClassicShadowRootOwner>,
     window_positions: BTreeMap<(String, String), ClassicWindowPosition>,
     uploaded_files: BTreeMap<String, Vec<PathBuf>>,
     download_directories: BTreeMap<String, PathBuf>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct ClassicElementOwner {
-    node_id: u32,
-    reference: ClassicPageBoundDomReference,
-    target_id: String,
-    browsing_context_target_id: String,
-}
-
-#[derive(Debug, Clone)]
-struct ClassicShadowRootOwner {
-    node_id: u32,
-    reference: ClassicPageBoundDomReference,
-    target_id: String,
-    browsing_context_target_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -250,165 +228,6 @@ impl ClassicSessionManager {
         self.download_directories.get(session_id).cloned()
     }
 
-    pub(super) fn register_element_reference(
-        &mut self,
-        binding: &ClassicSessionBinding,
-        node_id: u32,
-        reference: ClassicPageBoundDomReference,
-    ) -> String {
-        let owner = ClassicElementOwner {
-            node_id,
-            reference,
-            target_id: binding.target_id.clone(),
-            browsing_context_target_id: binding.browsing_context_target_id().to_owned(),
-        };
-        let owner_key = (binding.session_id.clone(), owner.clone());
-        if let Some(element_id) = self.element_ids_by_owner.get(&owner_key) {
-            return element_id.clone();
-        }
-
-        self.next_element_id += 1;
-        let element_id = format!("moli-node-{node_id}-element-{}", self.next_element_id);
-        self.element_owners
-            .insert((binding.session_id.clone(), element_id.clone()), owner);
-        self.element_ids_by_owner
-            .insert(owner_key, element_id.clone());
-        element_id
-    }
-
-    pub(super) fn register_shadow_root_reference(
-        &mut self,
-        binding: &ClassicSessionBinding,
-        node_id: u32,
-        reference: ClassicPageBoundDomReference,
-    ) -> String {
-        if let Some(((_, shadow_root_id), _)) =
-            self.shadow_root_owners
-                .iter()
-                .find(|((session_id, _), owner)| {
-                    session_id == &binding.session_id
-                        && owner.node_id == node_id
-                        && owner.reference == reference
-                        && owner.target_id == binding.target_id
-                        && owner.browsing_context_target_id == binding.browsing_context_target_id()
-                })
-        {
-            return shadow_root_id.clone();
-        }
-
-        self.next_shadow_root_id += 1;
-        let shadow_root_id = format!("moli-shadow-{node_id}-shadow-{}", self.next_shadow_root_id);
-        self.shadow_root_owners.insert(
-            (binding.session_id.clone(), shadow_root_id.clone()),
-            ClassicShadowRootOwner {
-                node_id,
-                reference,
-                target_id: binding.target_id.clone(),
-                browsing_context_target_id: binding.browsing_context_target_id().to_owned(),
-            },
-        );
-        shadow_root_id
-    }
-
-    pub(super) fn resolve_element_reference(
-        &self,
-        binding: &ClassicSessionBinding,
-        element_id: &str,
-    ) -> Result<ClassicPageBoundDomReference, ClassicError> {
-        Ok(self
-            .resolve_element_owner(binding, element_id)?
-            .reference
-            .clone())
-    }
-
-    pub(super) fn register_bidi_element_reference(
-        &mut self,
-        binding: &ClassicSessionBinding,
-        element_id: &str,
-        node_id: u32,
-        reference: ClassicPageBoundDomReference,
-    ) {
-        let owner = ClassicElementOwner {
-            node_id,
-            reference,
-            target_id: binding.target_id.clone(),
-            browsing_context_target_id: binding.browsing_context_target_id().to_owned(),
-        };
-        self.element_owners.insert(
-            (binding.session_id.clone(), element_id.to_owned()),
-            owner.clone(),
-        );
-        // An imported alias must not replace an ID already returned to the client.
-        self.element_ids_by_owner
-            .entry((binding.session_id.clone(), owner))
-            .or_insert_with(|| element_id.to_owned());
-    }
-
-    fn resolve_element_owner(
-        &self,
-        binding: &ClassicSessionBinding,
-        element_id: &str,
-    ) -> Result<&ClassicElementOwner, ClassicError> {
-        if !moli_protocol::automation::is_webdriver_bidi_node_shared_id(element_id) {
-            cdp_node_id_from_classic_element_id(element_id)?;
-        }
-        let Some(owner) = self
-            .element_owners
-            .get(&(binding.session_id.clone(), element_id.to_owned()))
-        else {
-            return Err(ClassicError::new(
-                ClassicErrorCode::NoSuchElement,
-                "element not found",
-            ));
-        };
-        if owner.target_id != binding.target_id
-            || owner.browsing_context_target_id != binding.browsing_context_target_id()
-        {
-            return Err(ClassicError::new(
-                ClassicErrorCode::NoSuchElement,
-                "element not found in the current browsing context",
-            ));
-        }
-        Ok(owner)
-    }
-
-    pub(super) fn resolve_shadow_root_reference(
-        &self,
-        binding: &ClassicSessionBinding,
-        shadow_root_id: &str,
-    ) -> Result<ClassicPageBoundDomReference, ClassicError> {
-        Ok(self
-            .resolve_shadow_root_owner(binding, shadow_root_id)?
-            .reference
-            .clone())
-    }
-
-    fn resolve_shadow_root_owner(
-        &self,
-        binding: &ClassicSessionBinding,
-        shadow_root_id: &str,
-    ) -> Result<&ClassicShadowRootOwner, ClassicError> {
-        cdp_node_id_from_classic_shadow_root_id(shadow_root_id)?;
-        let Some(owner) = self
-            .shadow_root_owners
-            .get(&(binding.session_id.clone(), shadow_root_id.to_owned()))
-        else {
-            return Err(ClassicError::new(
-                ClassicErrorCode::NoSuchShadowRoot,
-                "shadow root not found",
-            ));
-        };
-        if owner.target_id != binding.target_id
-            || owner.browsing_context_target_id != binding.browsing_context_target_id()
-        {
-            return Err(ClassicError::new(
-                ClassicErrorCode::NoSuchShadowRoot,
-                "shadow root not found",
-            ));
-        }
-        Ok(owner)
-    }
-
     pub(super) fn timeouts(&self, session_id: &str) -> Option<ClassicTimeouts> {
         self.registry.timeouts(session_id)
     }
@@ -482,12 +301,6 @@ impl ClassicSessionManager {
         if !self.registry.release_session(session_id) {
             return None;
         }
-        self.element_owners
-            .retain(|(owner_session_id, _), _| owner_session_id != session_id);
-        self.element_ids_by_owner
-            .retain(|(owner_session_id, _), _| owner_session_id != session_id);
-        self.shadow_root_owners
-            .retain(|(owner_session_id, _), _| owner_session_id != session_id);
         self.window_positions
             .retain(|(owner_session_id, _), _| owner_session_id != session_id);
         if let Some(paths) = self.uploaded_files.remove(session_id) {
@@ -562,6 +375,7 @@ impl ClassicSessionRuntimeHandle {
         &self,
         context: AutomationContext,
         shared_id: String,
+        kind: moli_protocol::automation::WebDriverNodeKind,
     ) -> Result<Option<moli_protocol::WebDriverNodeReference>, DevToolsError> {
         let (response_tx, response_rx) = oneshot::channel();
         let closed = || {
@@ -574,6 +388,7 @@ impl ClassicSessionRuntimeHandle {
             .send(ClassicSessionRuntimeRequest::WebDriverNodeReference {
                 context,
                 shared_id,
+                kind,
                 response_tx,
             })
             .map_err(|_| closed())?;
@@ -947,6 +762,7 @@ enum ClassicSessionRuntimeRequest {
     WebDriverNodeReference {
         context: AutomationContext,
         shared_id: String,
+        kind: moli_protocol::automation::WebDriverNodeKind,
         response_tx:
             oneshot::Sender<Result<Option<moli_protocol::WebDriverNodeReference>, DevToolsError>>,
     },
@@ -1042,9 +858,11 @@ async fn handle_classic_session_runtime_request(
         ClassicSessionRuntimeRequest::WebDriverNodeReference {
             context,
             shared_id,
+            kind,
             response_tx,
         } => {
-            let _ = response_tx.send(scheduler.webdriver_node_reference(&context, &shared_id));
+            let _ =
+                response_tx.send(scheduler.webdriver_node_reference(&context, &shared_id, kind));
             ClassicSessionRuntimeRequestOutcome::Continue
         }
         ClassicSessionRuntimeRequest::Execute {

@@ -2305,7 +2305,7 @@ fn collects_action_element_origins_for_pointer_and_wheel_sources() {
                 "id": "mouse",
                 "actions": [{
                     "type": "pointerMove",
-                    "origin": { "element-6066-11e4-a52e-4f735466cecf": "moli-node-7" },
+                    "origin": { "element-6066-11e4-a52e-4f735466cecf": "moli:bidi-renderer-node:2000000007" },
                     "x": 0,
                     "y": 0
                 }]
@@ -2315,7 +2315,7 @@ fn collects_action_element_origins_for_pointer_and_wheel_sources() {
                 "id": "wheel",
                 "actions": [{
                     "type": "scroll",
-                    "origin": { "element-6066-11e4-a52e-4f735466cecf": "moli-node-9" },
+                    "origin": { "element-6066-11e4-a52e-4f735466cecf": "moli:bidi-renderer-node:2000000009" },
                     "x": 0,
                     "y": 0,
                     "deltaX": 0,
@@ -2332,7 +2332,10 @@ fn collects_action_element_origins_for_pointer_and_wheel_sources() {
     .expect("element origins should collect");
     assert_eq!(
         origins,
-        vec!["moli-node-7".to_owned(), "moli-node-9".to_owned()]
+        vec![
+            "moli:bidi-renderer-node:2000000007".to_owned(),
+            "moli:bidi-renderer-node:2000000009".to_owned()
+        ]
     );
 
     let invalid = action_element_origin_ids(&json!({

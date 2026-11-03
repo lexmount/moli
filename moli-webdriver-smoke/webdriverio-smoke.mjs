@@ -27,7 +27,8 @@ const fixture = createServer((req, res) => {
     ? '<!doctype html><title>Second page</title><h1>Link navigation succeeded</h1>'
     : `<!doctype html><title>First page</title><h1>Ready</h1><h2>Untouched</h2><h3>Classic first</h3>
        <input id="name"><button id="submit" onclick="document.querySelector('#result').textContent='Hello '+document.querySelector('#name').value">Submit</button>
-       <p id="result"></p><a id="next" href="/next">Next</a>`);
+       <p id="result"></p><a id="next" href="/next">Next</a><div id="shadow-host"></div>
+       <script>document.querySelector('#shadow-host').attachShadow({mode:'open'}).innerHTML='<span>Shadow shared</span>';</script>`);
 });
 const fixturePort = await listen(fixture);
 const reservation = createServer();
@@ -96,18 +97,24 @@ async function workflow(name, capabilities, expectedBidi) {
         arguments: [{ sharedId: value[key] }], awaitPromise: false,
       });
       assert.equal(echoed.result.value, 'Ready');
-      const findClassicFirst = async () => {
+      const findClassic = async selector => {
         const response = await fetch(`${endpoint}/session/${browser.sessionId}/element`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ using: 'css selector', value: 'h3' }),
+          body: JSON.stringify({ using: 'css selector', value: selector }),
         });
         assert.equal(response.status, 200);
         return (await response.json()).value[key];
       };
-      const classicId = await findClassicFirst();
+      const classicId = await findClassic('h3');
+      const direct = await browser.scriptCallFunction({
+        target: { context }, functionDeclaration: 'function(node) { return node; }',
+        arguments: [{ sharedId: classicId }], awaitPromise: false,
+      });
+      assert.equal(direct.result.sharedId, classicId, `${name}: Classic reference accepted directly by BiDi`);
       const classicFirst = await browser.browsingContextLocateNodes({
         context, locator: { type: 'css', value: 'h3' },
       });
+      assert.equal(classicFirst.nodes[0].sharedId, classicId, `${name}: one node ID across both protocols`);
       const imported = await fetch(`${endpoint}/session/${browser.sessionId}/execute/sync`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -116,7 +123,16 @@ async function workflow(name, capabilities, expectedBidi) {
       });
       assert.equal(imported.status, 200);
       assert.equal((await imported.json()).value[key], classicId, `${name}: preserve existing Classic ID`);
-      assert.equal(await findClassicFirst(), classicId, `${name}: repeated Classic lookup identity`);
+      assert.equal(await findClassic('h3'), classicId, `${name}: repeated Classic lookup identity`);
+      const host = await findClassic('#shadow-host');
+      const shadowResponse = await fetch(`${endpoint}/session/${browser.sessionId}/element/${host}/shadow`);
+      assert.equal(shadowResponse.status, 200);
+      const shadowId = (await shadowResponse.json()).value['shadow-6066-11e4-a52e-4f735466cecf'];
+      const shadow = await browser.scriptCallFunction({
+        target: { context }, functionDeclaration: 'function(root) { return root; }',
+        arguments: [{ sharedId: shadowId }], awaitPromise: false,
+      });
+      assert.equal(shadow.result.sharedId, shadowId, `${name}: shared ShadowRoot identity`);
       const untouched = await browser.browsingContextLocateNodes({
         context, locator: { type: 'css', value: 'h2' },
       });

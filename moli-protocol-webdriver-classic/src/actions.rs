@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::{
     CLASSIC_ELEMENT_REFERENCE_KEY, ClassicDevToolsCommandContext, ClassicError, ClassicErrorCode,
-    cdp_node_id_from_classic_element_id, geometry_border_quad, required_object_string,
+    geometry_border_quad, required_object_string,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1750,7 +1750,7 @@ fn element_origin_reference(
             "element origin reference must be a string",
         ));
     };
-    cdp_node_id_from_classic_element_id(element_id)?;
+    // References are opaque; the session owner resolves them before dispatch.
     Ok(element_id.to_owned())
 }
 
