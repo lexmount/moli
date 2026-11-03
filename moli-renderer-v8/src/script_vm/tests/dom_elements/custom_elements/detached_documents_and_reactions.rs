@@ -7,7 +7,7 @@ fn custom_element_reactions_preserve_dom_exceptions_through_nested_callbacks() {
         "(() => {{const checks = {}; return JSON.stringify([checks.length, checks.filter(row => !row.passed)]);}})()",
         include_str!("reaction_exceptions.js")
     );
-    assert_eq!(vm.eval(&source).unwrap(), "[296,[]]");
+    assert_eq!(vm.eval(&source).unwrap(), "[368,[]]");
 }
 
 #[test]
