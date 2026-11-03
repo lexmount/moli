@@ -739,6 +739,8 @@ mod referrer_tests {
                     (RequestCacheMode::Validate, "no-cache"),
                     (RequestCacheMode::Bypass, "reload"),
                     (RequestCacheMode::NoStore, "no-store"),
+                    (RequestCacheMode::ForceCache, "force-cache"),
+                    (RequestCacheMode::OnlyIfCached, "only-if-cached"),
                 ] {
                     let request = Request::get("https://example.test/document")
                         .unwrap()
