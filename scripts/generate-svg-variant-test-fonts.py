@@ -4,9 +4,9 @@
 # ///
 """Generate tiny, distinguishable faces for inline SVG typography regressions.
 
-The family has regular, italic and condensed faces. Their M outlines deliberately
-cannot be reproduced by synthesizing a slant or scaling the regular face. This
-lets raster tests distinguish actual variant selection from normal fallback.
+The family has regular, italic, condensed, semibold and bold faces. Their M
+outlines deliberately differ, so raster tests distinguish actual face selection
+from normal fallback or synthetic styling.
 """
 from pathlib import Path
 
@@ -29,8 +29,9 @@ def glyph(points=()):
     return pen.glyph()
 
 
-def build_face(suffix: str, style: str, width_class: int, points, advance: int):
+def build_face(suffix: str, style: str, width_class: int, points, advance: int, weight: int = 400):
     italic = suffix == "italic"
+    bold = weight >= 700
     builder = FontBuilder(1000, isTTF=True)
     builder.setupGlyphOrder([".notdef", "space", "M"])
     builder.setupCharacterMap({0x20: "space", 0x4D: "M"})
@@ -51,13 +52,13 @@ def build_face(suffix: str, style: str, width_class: int, points, advance: int):
     builder.setupOS2(
         sTypoAscender=800, sTypoDescender=-200, sTypoLineGap=0,
         usWinAscent=800, usWinDescent=200, sxHeight=800, sCapHeight=800,
-        usWeightClass=400, usWidthClass=width_class, fsType=0,
-        fsSelection=1 if italic else 1 << 6,
+        usWeightClass=weight, usWidthClass=width_class, fsType=0,
+        fsSelection=1 if italic else (1 << 5 if bold else (1 << 6 if weight == 400 else 0)),
     )
     builder.setupPost(italicAngle=-12 if italic else 0)
     builder.setupMaxp()
     builder.setupHead(created=OPEN_TYPE_UNIX_EPOCH, modified=OPEN_TYPE_UNIX_EPOCH,
-                      macStyle=2 if italic else 0)
+                      macStyle=(2 if italic else 0) | (1 if bold else 0))
     builder.save(FIXTURES / f"moli-svg-{suffix}.ttf")
 
 
@@ -66,6 +67,8 @@ def main():
     build_face("regular", "Regular", 5, [(0, 0), (600, 0), (600, 800), (0, 800)], 700)
     build_face("italic", "Italic", 5, [(0, 0), (600, 0), (600, 800)], 700)
     build_face("condensed", "Condensed", 3, [(0, 0), (300, 0), (300, 800), (0, 800)], 400)
+    build_face("semibold", "SemiBold", 5, [(0, 400), (300, 0), (600, 400), (300, 800)], 700, 600)
+    build_face("bold", "Bold", 5, [(0, 0), (600, 0), (600, 200), (200, 200), (200, 800), (0, 800)], 700, 700)
 
 
 if __name__ == "__main__":
