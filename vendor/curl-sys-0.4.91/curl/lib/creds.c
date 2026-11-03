@@ -29,6 +29,7 @@
 #include "curl_trc.h"
 #include "strcase.h"
 #include "urldata.h"
+#include "moli_refcount.h"
 
 
 CURLcode Curl_creds_create(const char *user,
@@ -132,10 +133,8 @@ void Curl_creds_link(struct Curl_creds **pdest, struct Curl_creds *src)
   if(*pdest != src) {
     Curl_creds_unlink(pdest);
     *pdest = src;
-    if(src) {
-      DEBUGASSERT(src->refcount < UINT32_MAX);
-      src->refcount++;
-    }
+    if(src)
+      moli_refcount_link(&src->refcount);
   }
 }
 
@@ -144,11 +143,8 @@ void Curl_creds_unlink(struct Curl_creds **pcreds)
   if(*pcreds) {
     struct Curl_creds *creds = *pcreds;
 
-    DEBUGASSERT(creds->refcount);
     *pcreds = NULL;
-    if(creds->refcount)
-      creds->refcount--;
-    if(!creds->refcount) {
+    if(moli_refcount_unlink(&creds->refcount)) {
       curlx_memzero(creds, sizeof(*creds) + creds->bufsize);
       curlx_free(creds);
     }
