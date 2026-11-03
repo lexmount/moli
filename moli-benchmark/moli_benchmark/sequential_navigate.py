@@ -381,13 +381,16 @@ def summarize_network_activity(
                 entry["response_status"] = response.get("status")
                 entry["response_mime_type"] = response.get("mimeType")
         elif method == "Network.loadingFinished":
-            entry.update(
-                {
-                    "terminal": "finished",
-                    "terminal_sequence": record.sequence,
-                    "terminal_ms": _record_elapsed_ms(record, started),
-                }
-            )
+            # Chromium can finish its internal error Document after the network
+            # request failed. Keep the request classified by its transport error.
+            if entry["terminal"] != "failed":
+                entry.update(
+                    {
+                        "terminal": "finished",
+                        "terminal_sequence": record.sequence,
+                        "terminal_ms": _record_elapsed_ms(record, started),
+                    }
+                )
         elif method == "Network.loadingFailed":
             entry.update(
                 {
@@ -419,19 +422,61 @@ def summarize_network_activity(
     }
 
 
+def _is_error_document_completion(
+    timeline: dict[str, Any],
+    terminals: list[dict[str, Any]],
+    error_documents: list[tuple[int, dict[str, Any]]],
+) -> bool:
+    if timeline["type"] != "Document" or len(terminals) != 2:
+        return False
+    failed, finished = terminals
+    if (
+        failed["method"] != "Network.loadingFailed"
+        or finished["method"] != "Network.loadingFinished"
+        or failed["resource_type"] != "Document"
+        or failed["canceled"] is not False
+        or not isinstance(failed["error_text"], str)
+        or not failed["error_text"]
+    ):
+        return False
+    if not all(
+        isinstance(timeline[key], str) and timeline[key]
+        for key in ("frame_id", "loader_id", "url")
+    ):
+        return False
+    start = timeline["start_sequence"]
+    if start is None or start >= failed["sequence"]:
+        return False
+    return any(
+        failed["sequence"] < sequence < finished["sequence"]
+        and frame.get("id") == timeline["frame_id"]
+        and frame.get("loaderId") == timeline["loader_id"]
+        and frame.get("unreachableUrl") == timeline["url"]
+        for sequence, frame in error_documents
+    )
+
+
 def network_event_order_violations(
     records: Iterable[RecordedCdpMessage],
     *,
     session_id: str,
 ) -> list[dict[str, Any]]:
     timelines: dict[str, dict[str, Any]] = {}
+    error_documents: list[tuple[int, dict[str, Any]]] = []
     for record in records:
         payload = record.payload
         method = payload.get("method")
-        if payload.get("sessionId") != session_id or method not in NETWORK_EVENT_METHODS:
+        if payload.get("sessionId") != session_id:
             continue
         params = payload.get("params")
         if not isinstance(params, dict):
+            continue
+        if method == "Page.frameNavigated":
+            frame = params.get("frame")
+            if isinstance(frame, dict) and frame.get("url") == "chrome-error://chromewebdata/":
+                error_documents.append((record.sequence, frame))
+            continue
+        if method not in NETWORK_EVENT_METHODS:
             continue
         request_id = params.get("requestId")
         if not isinstance(request_id, str) or not request_id:
@@ -442,6 +487,8 @@ def network_event_order_violations(
                 "request_id": request_id,
                 "url": None,
                 "type": None,
+                "frame_id": None,
+                "loader_id": None,
                 "start_sequence": None,
                 "response_sequence": None,
                 "terminals": [],
@@ -452,6 +499,8 @@ def network_event_order_violations(
             if isinstance(request, dict):
                 timeline["url"] = request.get("url", timeline["url"])
             timeline["type"] = params.get("type", timeline["type"])
+            timeline["frame_id"] = params.get("frameId", timeline["frame_id"])
+            timeline["loader_id"] = params.get("loaderId", timeline["loader_id"])
             if timeline["start_sequence"] is None:
                 timeline["start_sequence"] = record.sequence
         elif method == "Network.responseReceived":
@@ -460,12 +509,21 @@ def network_event_order_violations(
                 timeline["response_sequence"] = record.sequence
         else:
             timeline["terminals"].append(
-                {"method": method, "sequence": record.sequence}
+                {
+                    "method": method,
+                    "sequence": record.sequence,
+                    "resource_type": params.get("type"),
+                    "canceled": params.get("canceled"),
+                    "error_text": params.get("errorText"),
+                }
             )
 
     violations: list[dict[str, Any]] = []
     for timeline in timelines.values():
         terminals = timeline.pop("terminals")
+        error_document_finished = _is_error_document_completion(
+            timeline, terminals, error_documents
+        )
         first_start = timeline["start_sequence"]
         first_response = timeline["response_sequence"]
         first_terminal = min(
@@ -498,16 +556,20 @@ def network_event_order_violations(
             key=lambda terminal: terminal["sequence"],
             default=None,
         )
-        if first_successful_terminal is not None and (
-            first_response is None
-            or first_successful_terminal["sequence"] < first_response
+        if (
+            first_successful_terminal is not None
+            and not error_document_finished
+            and (
+                first_response is None
+                or first_successful_terminal["sequence"] < first_response
+            )
         ):
             report(
                 "successful_terminal_before_response",
                 sequence=first_successful_terminal["sequence"],
                 terminal_method=first_successful_terminal["method"],
             )
-        if len(terminals) > 1:
+        if len(terminals) > 1 and not error_document_finished:
             report(
                 "duplicate_terminal",
                 terminal_sequences=[terminal["sequence"] for terminal in terminals],
