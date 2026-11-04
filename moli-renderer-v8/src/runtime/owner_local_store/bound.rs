@@ -765,7 +765,10 @@ pub(super) fn page_ready_descriptor_snapshot(
             crate::page_task_queue::RendererPageTimerSelection::ExcludeUnexpiredIdleCallbacks,
         )
         .or_else(|| {
-            if descriptors.is_empty() {
+            // A javascript: navigation can be waiting for its owner handoff
+            // rather than a typed source. Its pending slot is runnable work
+            // even before the handoff wake has been consumed.
+            if descriptors.is_empty() && entry.pending_javascript_navigation_handoff().is_none() {
                 entry.page_vm().due_page_timer_ready_descriptor(
                     crate::page_task_queue::RendererPageTimerSelection::AnyReady,
                 )
