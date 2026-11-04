@@ -935,7 +935,11 @@ impl RuntimeOwner {
         easy.get_mut()
             .buffered_mut()
             .expect("buffered request should use buffered collector")
-            .begin_request(self.config.http_max_response_size());
+            .begin_request(
+                self.config.http_max_response_size(),
+                job.request.redirect_handling() == crate::RequestRedirectHandling::FollowByCaller
+                    && matches!(&job.response_tx, RuntimeResponseTx::Raw(_)),
+            );
         let proxy_route = match resolve_http_proxy_route(&self.config, &job.current_url) {
             Ok(route) => route,
             Err(error) => return Err((job.response_tx, error)),
@@ -1512,7 +1516,13 @@ impl RuntimeOwner {
                     .context("fetch runtime request cancelled during shutdown"),
             ));
         }
-        if let Err(error) = result {
+        let header_terminated = easy
+            .as_ref()
+            .and_then(|easy| easy.get_ref().buffered())
+            .is_some_and(ResponseCollector::header_terminated);
+        if let Err(error) = result
+            && (!header_terminated || job.cancel_handle.is_cancelled())
+        {
             if job.cancel_handle.is_cancelled() {
                 return Err((
                     job.response_tx,

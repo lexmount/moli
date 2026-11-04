@@ -391,7 +391,7 @@ fn transfer_progress_preserves_cancellation_and_body_observations_on_reuse() {
         FetchTransferHandler::new_buffered(ResponseCollector::new(Some(cancel.clone())));
     for _ in 0..2 {
         cancel.begin_response_progress();
-        handler.buffered_mut().unwrap().begin_request(None);
+        handler.buffered_mut().unwrap().begin_request(None, false);
         handler.begin_transfer(None, false);
         assert!(handler.progress(4.0, 0.0, 0.0, 0.0));
         assert!(!cancel.response_timing().body_bytes_received());

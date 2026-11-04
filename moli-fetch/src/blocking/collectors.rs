@@ -130,7 +130,10 @@ pub(crate) fn log_request_completion(
 pub(crate) struct ResponseCollector {
     body: Vec<u8>,
     headers: Vec<(String, Vec<u8>)>,
+    status: u16,
     status_text: Option<String>,
+    stop_at_redirect: bool,
+    header_terminated: bool,
     max_response_size: Option<usize>,
     response_too_large: bool,
     cancel_handle: Option<FetchCancelHandle>,
@@ -152,13 +155,20 @@ impl ResponseCollector {
         }
     }
 
-    pub(crate) fn begin_request(&mut self, max_response_size: Option<usize>) {
+    pub(crate) fn begin_request(
+        &mut self,
+        max_response_size: Option<usize>,
+        stop_at_redirect: bool,
+    ) {
         if let Some(cancel) = &self.cancel_handle {
             self.response_progress = Some(cancel.response_progress());
         }
         self.body.clear();
         self.headers.clear();
+        self.status = 0;
         self.status_text = None;
+        self.stop_at_redirect = stop_at_redirect;
+        self.header_terminated = false;
         self.max_response_size = max_response_size;
         self.response_too_large = false;
     }
@@ -173,6 +183,10 @@ impl ResponseCollector {
 
     pub(crate) fn body(&self) -> &[u8] {
         &self.body
+    }
+
+    pub(crate) fn header_terminated(&self) -> bool {
+        self.header_terminated
     }
 }
 
@@ -1103,11 +1117,21 @@ impl Handler for ResponseCollector {
         let line = line.trim_end_matches(['\r', '\n']);
 
         if line.is_empty() {
+            if self.stop_at_redirect
+                && matches!(self.status, 301 | 302 | 303 | 307 | 308)
+                && self.headers.iter().any(|(name, _)| name == "location")
+            {
+                // The caller owns the next hop. Its unused body must not
+                // delay redirects, including libcurl's buffered auth path.
+                self.header_terminated = true;
+                return false;
+            }
             return !self.response_too_large;
         }
 
         if let Some(parsed) = parse_http_response_status_line(data) {
             self.headers.clear();
+            self.status = parsed.status;
             self.status_text = Some(parsed.status_text);
             self.body.clear();
             if let Some(progress) = &self.response_progress {
@@ -1338,7 +1362,7 @@ mod tests {
     #[test]
     fn buffered_status_message_tracks_final_response_and_resets_between_requests() {
         let mut collector = ResponseCollector::new(None);
-        collector.begin_request(None);
+        collector.begin_request(None, false);
         assert!(collector.header(b"HTTP/1.1 103 Early Hints\r\n"));
         assert!(collector.header(b"Link: </early.css>; rel=preload\r\n"));
         assert!(collector.header(b"\r\n"));
@@ -1347,10 +1371,46 @@ mod tests {
         assert_eq!(collector.status_text(), Some("\u{a0}caf\u{e9}\u{ff}"));
         assert!(collector.headers().is_empty());
 
-        collector.begin_request(None);
+        collector.begin_request(None, false);
         assert_eq!(collector.status_text(), None);
         assert!(collector.header(b"HTTP/1.1 200 \r\n"));
         assert_eq!(collector.status_text(), Some(""));
+    }
+
+    #[test]
+    fn buffered_single_hop_stops_at_redirect_headers_but_preserves_auth_and_final_bodies() {
+        let mut collector = ResponseCollector::new(None);
+        collector.begin_request(None, true);
+        assert!(collector.header(b"HTTP/1.1 401 Unauthorized\r\n"));
+        assert!(collector.header(b"WWW-Authenticate: Digest realm=\"test\"\r\n"));
+        assert!(collector.header(b"\r\n"));
+        assert_eq!(collector.write(b"challenge").unwrap(), 9);
+        assert!(!collector.header_terminated());
+        assert!(collector.header(b"HTTP/1.1 302 Found\r\n"));
+        assert!(collector.header(b"Location: /next\r\n"));
+        assert!(!collector.header(b"\r\n"));
+        assert!(collector.header_terminated());
+        assert!(collector.body().is_empty());
+
+        collector.begin_request(None, true);
+        assert!(collector.header(b"HTTP/1.1 200 OK\r\n"));
+        assert!(collector.header(b"\r\n"));
+        assert_eq!(collector.write(b"final").unwrap(), 5);
+        assert!(!collector.header_terminated());
+        assert_eq!(collector.body(), b"final");
+
+        collector.begin_request(None, false);
+        assert!(collector.header(b"HTTP/1.1 302 Found\r\n"));
+        assert!(collector.header(b"Location: /next\r\n"));
+        assert!(collector.header(b"\r\n"));
+        assert_eq!(collector.write(b"redirect body").unwrap(), 13);
+        assert!(!collector.header_terminated());
+
+        collector.begin_request(None, true);
+        assert!(collector.header(b"HTTP/1.1 302 Found\r\n"));
+        assert!(collector.header(b"\r\n"));
+        assert_eq!(collector.write(b"no Location").unwrap(), 11);
+        assert!(!collector.header_terminated());
     }
 
     fn raw_streaming_collector_with_headers(
