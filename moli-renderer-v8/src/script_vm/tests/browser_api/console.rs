@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn console_namespace_uses_its_realm_intrinsics_and_webidl_descriptors() {
+    let mut vm = new_storage_html_test_vm("https://console-namespace.test/");
+    let source = format!(
+        r#"(() => {{
+const probe = {};
+const iframe = document.createElement('iframe');
+document.body.appendChild(iframe);
+try {{
+  return probe(globalThis) && probe(iframe.contentWindow) &&
+    Object.getPrototypeOf(console) !== Object.getPrototypeOf(iframe.contentWindow.console);
+}} finally {{ iframe.remove(); }}
+}})()"#,
+        include_str!("console_namespace.js")
+    );
+    assert_eq!(vm.eval(&source).unwrap(), "true");
+}
+
+#[test]
 fn console_reporting_does_not_add_page_object_conversions() {
     let mut vm = new_storage_test_vm("https://console-reporting.test/");
     let result = vm.eval(r#"
