@@ -20,7 +20,7 @@ pub(crate) fn load_cached_streaming_response_lookup(
     request_url: &Url,
     cookie_header: Option<&str>,
 ) -> Result<Option<CachedStreamingResponseLookup>> {
-    if !request.cache_mode().allows_http_cache_lookup() {
+    if !request.effective_cache_mode().allows_http_cache_lookup() {
         return Ok(None);
     }
     let Some((store, key)) =
@@ -54,7 +54,9 @@ pub(crate) fn load_cached_streaming_response_lookup(
         key,
         cached,
         force_validate,
-        request.cache_mode().allows_stale_http_cache_response(),
+        request
+            .effective_cache_mode()
+            .allows_stale_http_cache_response(),
     )))
 }
 
@@ -188,7 +190,9 @@ fn cache_lookup_force_validate(
     request_url: &Url,
     cached: &HttpCachedEntryReader,
 ) -> bool {
-    request.cache_mode().requires_http_cache_validation()
+    request
+        .effective_cache_mode()
+        .requires_http_cache_validation()
         || (request_cache_control_requires_validation(config, request, request_url)
             && !cached_response_is_fresh_immutable(
                 &cached.metadata.headers,

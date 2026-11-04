@@ -361,7 +361,7 @@ impl ResourceRequestClient {
         let key = script_text_cache_key(&request).for_page_cache_partition(page_cache_partition_id);
         let lookup = {
             let mut cache = self.resource_runtime.memory_cache().lock();
-            if request.cache_mode().allows_memory_cache_lookup() {
+            if request.effective_cache_mode().allows_memory_cache_lookup() {
                 cache.lookup_script_text(key.clone())
             } else {
                 cache.replace_script_text(key.clone())
@@ -544,7 +544,7 @@ impl ResourceRequestClient {
         let key = script_text_cache_key(&request).for_page_cache_partition(page_cache_partition_id);
         let lookup = {
             let mut cache = self.resource_runtime.memory_cache().lock();
-            if request.cache_mode().allows_memory_cache_lookup() {
+            if request.effective_cache_mode().allows_memory_cache_lookup() {
                 cache.lookup_script_text(key.clone())
             } else {
                 cache.replace_script_text(key.clone())
@@ -715,7 +715,7 @@ impl ResourceRequestClient {
         let cache_key = raw_subresource_memory_cache_key(&request).map(|key| {
             key.for_page_cache_partition(self.page_network_policy.memory_cache_partition_id())
         });
-        if request.cache_mode().allows_memory_cache_lookup()
+        if request.effective_cache_mode().allows_memory_cache_lookup()
             && let Some(cache_key) = cache_key.as_ref()
             && let Some(cached) = self
                 .resource_runtime
@@ -753,7 +753,7 @@ impl ResourceRequestClient {
         let cache_key = raw_subresource_memory_cache_key(&request).map(|key| {
             key.for_page_cache_partition(self.page_network_policy.memory_cache_partition_id())
         });
-        if request.cache_mode().allows_memory_cache_lookup()
+        if request.effective_cache_mode().allows_memory_cache_lookup()
             && let Some(cache_key) = cache_key.as_ref()
             && let Some(cached) = self
                 .resource_runtime

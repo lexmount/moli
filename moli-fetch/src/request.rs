@@ -162,8 +162,7 @@ pub enum RequestCacheMode {
 }
 
 impl RequestCacheMode {
-    /// Select the HTTP fetch policy without rewriting the author Request object.
-    pub fn for_fetch_headers(self, headers: &crate::RequestHeaders) -> Self {
+    fn for_fetch_headers(self, headers: &crate::RequestHeaders) -> Self {
         if self == Self::Default
             && headers.iter().any(|(name, _)| {
                 [
@@ -760,6 +759,13 @@ impl Request {
 
     pub fn cache_mode(&self) -> RequestCacheMode {
         self.cache_mode
+    }
+
+    /// Cache policy for executing this request. Conditional author headers turn
+    /// default into no-store without changing the cache mode exposed to script
+    /// or a service worker.
+    pub fn effective_cache_mode(&self) -> RequestCacheMode {
+        self.cache_mode.for_fetch_headers(&self.request_headers)
     }
 
     pub fn with_fetch_priority_hint(mut self, fetch_priority: Option<FetchPriorityHint>) -> Self {

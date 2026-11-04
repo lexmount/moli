@@ -255,7 +255,7 @@ fn outgoing_request_header_bytes_for_url(
 
     // Cache modes affect intermediary caches as well as our local lookup.
     // Explicit request fields retain precedence, including empty values.
-    match request.cache_mode() {
+    match request.effective_cache_mode() {
         crate::RequestCacheMode::Validate => {
             if !header_present(&outgoing, "cache-control") {
                 outgoing.push(("Cache-Control".to_owned(), b"max-age=0".to_vec()));

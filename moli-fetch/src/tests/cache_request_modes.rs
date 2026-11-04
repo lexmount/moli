@@ -4,6 +4,7 @@ use super::*;
 enum Transport {
     Raw,
     Html,
+    Buffered,
 }
 
 impl Transport {
@@ -11,6 +12,7 @@ impl Transport {
         let client = FetchClient::new(config, new_shared_browser_cookie_store());
         let result = match self {
             Self::Raw => client.fetch(request).await,
+            Self::Buffered => client.fetch(request.with_single_hop()).await,
             Self::Html => match client.fetch_html_stream(request).await {
                 Ok(response) => response.into_materialized_text_response().await,
                 Err(error) => Err(error),
@@ -29,7 +31,7 @@ fn cached(body: &str, control: &str) -> ScriptedResponse {
 
 #[tokio::test]
 async fn force_cache_and_cache_only_reuse_stale_entries_without_validation() -> Result<()> {
-    for transport in [Transport::Raw, Transport::Html] {
+    for transport in [Transport::Raw, Transport::Html, Transport::Buffered] {
         for control in ["max-age=0, must-revalidate", "no-cache"] {
             let cache_dir = unique_test_cache_dir();
             let mut config = FetchConfig::default();
@@ -39,7 +41,7 @@ async fn force_cache_and_cache_only_reuse_stale_entries_without_validation() -> 
                 cached("must not be requested", "max-age=600"),
             ]);
             let request = Request::get(&server.url())?;
-            let response = transport.fetch(&config, request.clone()).await?;
+            let response = Transport::Raw.fetch(&config, request.clone()).await?;
             assert!(!response.from_cache);
             for mode in [RequestCacheMode::ForceCache, RequestCacheMode::OnlyIfCached] {
                 let response = transport
@@ -57,6 +59,51 @@ async fn force_cache_and_cache_only_reuse_stale_entries_without_validation() -> 
 }
 
 #[tokio::test]
+async fn buffered_cache_hits_preserve_redirect_policy() -> Result<()> {
+    for status in [200, 302] {
+        let cache_dir = unique_test_cache_dir();
+        let mut config = FetchConfig::default();
+        config.set_http_cache_dir(Some(cache_dir.display().to_string()));
+        let server = ScriptedHttpServer::spawn(vec![
+            ScriptedResponse::status(status, "Cached")
+                .with_header("Location", "/must-not-be-followed")
+                .with_header("Cache-Control", "max-age=600"),
+            ScriptedResponse::ok("unexpected network request"),
+        ]);
+        let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+        let request = Request::get(&server.url())?;
+        client.fetch_raw(request.clone().with_single_hop()).await?;
+        for handling in [
+            RequestRedirectHandling::Manual,
+            RequestRedirectHandling::Error,
+            RequestRedirectHandling::FollowByCaller,
+        ] {
+            for mode in [RequestCacheMode::OnlyIfCached, RequestCacheMode::Default] {
+                let response = client
+                    .fetch(
+                        request
+                            .clone()
+                            .with_redirect_handling(handling)
+                            .with_cache_mode(mode),
+                    )
+                    .await?;
+                assert!(response.from_cache, "{status}, {handling:?}, {mode:?}");
+                assert_eq!(response.status, status);
+                assert_eq!(response.status_text.as_deref(), Some("Cached"));
+                assert!(!response.redirected);
+                assert!(response.redirect_chain.is_empty());
+                assert_eq!(response.final_url, request.url);
+            }
+        }
+        assert!(client.shutdown().is_clean());
+        assert_eq!(server.hits(), 1);
+        server.shutdown();
+        fs::remove_dir_all(cache_dir)?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn cache_only_mode_misses_reject_without_network_on_every_transport() -> Result<()> {
     for enabled in [false, true] {
         let cache_dir = unique_test_cache_dir();
@@ -66,18 +113,27 @@ async fn cache_only_mode_misses_reject_without_network_on_every_transport() -> R
         }
         let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("forbidden")]);
         let client = FetchClient::new(&config, new_shared_browser_cookie_store());
-        for path in 0..4 {
+        for path in 0..5 {
             let request =
                 Request::get(&server.url())?.with_cache_mode(RequestCacheMode::OnlyIfCached);
             let error = match path {
                 0 => client.fetch_raw(request).await.unwrap_err(),
                 1 => client.fetch(request.with_single_hop()).await.unwrap_err(),
                 2 => client.fetch_html_stream(request).await.err().unwrap(),
-                _ => client
+                3 => client
                     .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
                     .await
                     .err()
                     .unwrap(),
+                _ => client
+                    .fetch_raw(request.with_auth(RequestAuth {
+                        target: RequestAuthTarget::Server,
+                        scheme: RequestAuthScheme::Digest,
+                        username: "user".to_owned(),
+                        password: "password".to_owned(),
+                    }))
+                    .await
+                    .unwrap_err(),
             };
             assert!(
                 error.is::<crate::FetchCacheMiss>(),
@@ -101,7 +157,7 @@ async fn cache_only_mode_misses_reject_without_network_on_every_transport() -> R
 
 #[tokio::test]
 async fn cache_only_mode_keeps_vary_partition_and_cancellation_checks() -> Result<()> {
-    for transport in [Transport::Raw, Transport::Html] {
+    for transport in [Transport::Raw, Transport::Html, Transport::Buffered] {
         let cache_dir = unique_test_cache_dir();
         let mut config = FetchConfig::default();
         config.set_http_cache_dir(Some(cache_dir.display().to_string()));
@@ -110,7 +166,7 @@ async fn cache_only_mode_keeps_vary_partition_and_cancellation_checks() -> Resul
         ]);
         let mut request = Request::get(&server.url())?;
         request.request_headers = vec![("Accept-Language".to_owned(), "en".to_owned())].into();
-        transport.fetch(&config, request.clone()).await?;
+        Transport::Raw.fetch(&config, request.clone()).await?;
         let cache_only = request.with_cache_mode(RequestCacheMode::OnlyIfCached);
         let mut varied = cache_only.clone();
         varied.request_headers = vec![("Accept-Language".to_owned(), "fr".to_owned())].into();
@@ -129,10 +185,17 @@ async fn cache_only_mode_keeps_vary_partition_and_cancellation_checks() -> Resul
         let client = FetchClient::new(&config, new_shared_browser_cookie_store());
         let cancel = FetchCancelHandle::new();
         cancel.cancel();
-        let error = client
-            .fetch_raw_with_cancel(cache_only, cancel)
-            .await
-            .unwrap_err();
+        let error = if matches!(transport, Transport::Buffered) {
+            client
+                .fetch_with_cancel(cache_only.with_single_hop(), cancel)
+                .await
+                .unwrap_err()
+        } else {
+            client
+                .fetch_raw_with_cancel(cache_only, cancel)
+                .await
+                .unwrap_err()
+        };
         assert!(error.is::<crate::FetchCancelled>(), "{error:#}");
         assert!(client.shutdown().is_clean());
         assert_eq!(server.hits(), 1);
