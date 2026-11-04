@@ -199,13 +199,12 @@ fn build_native_layout_pass_recursive(
                     .members
                     .push(crate::capture_layout_resources::CaptureLayoutMember {
                         identity,
-                        viewport: request.viewport,
                         fonts,
                         available_font_slots,
                         available_fonts,
                     });
             }
-            Some(temporary)
+            (!services.has_same_font_selection(&temporary)).then_some(temporary)
         } else {
             None
         };
@@ -222,8 +221,8 @@ fn build_native_layout_pass_recursive(
         let finish = |services: &mut DocumentLayoutServices| {
             finish_prepared_layout_pass(prepared, &source, services, &mut frames)
         };
-        if let Some(services) = capture_services.as_mut() {
-            finish(services)
+        if capture_identity.is_some() {
+            finish(capture_services.as_mut().unwrap_or(services))
         } else if let Some(resources) = resources {
             services.with_stylesheet_font_declarations(
                 resources.web_fonts().iter().filter_map(|resource| {

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use moli_layout::{
-    DocumentLayoutServices, LayoutViewport, WebFontRegistration, WebFontRegistrationError,
+    DocumentLayoutServices, WebFontRegistration, WebFontRegistrationError,
     WebFontRegistrationOutcome,
 };
 
@@ -24,7 +24,6 @@ pub(crate) struct CaptureLayoutIdentity {
 #[derive(Clone, Debug)]
 pub(crate) struct CaptureLayoutMember {
     pub(crate) identity: CaptureLayoutIdentity,
-    pub(crate) viewport: LayoutViewport,
     pub(crate) fonts: StylesheetResourceSnapshot,
     pub(crate) available_font_slots: Vec<String>,
     pub(crate) available_fonts: CaptureAvailableFonts,
