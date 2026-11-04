@@ -2,6 +2,7 @@ use super::*;
 use crate::context_bootstrap::indexed_db::{
     idb_database_name_getter, idb_database_object_store_names_getter, idb_database_version_getter,
     idb_transaction_db_getter, idb_transaction_error_getter, idb_transaction_mode_getter,
+    idb_transaction_object_store_names_getter,
 };
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
@@ -28,6 +29,8 @@ struct IdbDatabasePrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::IDBTransaction, enumerable)]
 struct IdbTransactionPrototypeDeclaration {
+    #[webapi(accessor_property, getter = idb_transaction_object_store_names_getter, receiver = web_api_interfaces::IDBTransaction::is_instance)]
+    object_store_names: (),
     #[webapi(accessor_property, getter = idb_transaction_db_getter, receiver = web_api_interfaces::IDBTransaction::is_instance)]
     db: (),
     #[webapi(accessor_property, getter = idb_transaction_mode_getter, receiver = web_api_interfaces::IDBTransaction::is_instance)]

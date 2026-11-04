@@ -161,7 +161,6 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
         snapshot
     };
     let version = snapshot.version;
-    let names = snapshot.stores.keys().cloned().collect::<Vec<_>>();
     let tables = indexed_db_handle_tables(scope, database);
     for table in &tables {
         for store in table
@@ -181,7 +180,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
             } else {
                 snapshot
                     .stores
-                    .get(store.name())
+                    .get(&store.metadata.origin.name)
                     .cloned()
                     .expect("existing store has upgrade snapshot")
             };
@@ -220,13 +219,6 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
         }
     }
     set_indexed_db_database_version(scope, database, version);
-    let transaction_names = new_idb_name_list(scope, &names);
-    let _ = transaction.define_own_property(
-        scope,
-        v8str(scope, "objectStoreNames").into(),
-        transaction_names.into(),
-        v8::PropertyAttribute::NONE,
-    );
 }
 
 // Update native metadata for every alias. Author shadows and cached keyPath
@@ -487,5 +479,96 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_index<'s>(
         }
     }
     sync_indexed_db_store_handles(scope, database, &store_name);
+    Ok(())
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_object_store<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    store: v8::Local<'s, v8::Object>,
+    name: moli_indexeddb::IndexedDbName,
+) -> Result<(), IndexedDbError> {
+    let unavailable = || IndexedDbError::InvalidState("The object store is unavailable.".into());
+    let state = object_store_native_state(scope, store).ok_or_else(unavailable)?;
+    let (transaction, database, old_name, identity) = {
+        let state = state.borrow();
+        if state.deleted {
+            return Err(unavailable());
+        }
+        (
+            state.transaction.to_local(scope).ok_or_else(unavailable)?,
+            state.database.to_local(scope).ok_or_else(unavailable)?,
+            state.name().clone(),
+            Rc::clone(&state.metadata.origin),
+        )
+    };
+    if indexed_db_transaction_mode(scope, transaction) != Some(TransactionMode::VersionChange) {
+        return Err(IndexedDbError::InvalidState(
+            "The store requires a versionchange transaction.".into(),
+        ));
+    }
+    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
+        .unwrap_or(false)
+    {
+        return Err(IndexedDbError::TransactionInactive(
+            "The transaction is not active.".into(),
+        ));
+    }
+    if old_name == name {
+        return Ok(());
+    }
+    let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
+    let (candidate, renamed) = {
+        let mirror = mirror.borrow();
+        let metadata = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
+        if metadata.contains_key(&name) {
+            return Err(IndexedDbError::Constraint(
+                "The object store name already exists.".into(),
+            ));
+        }
+        let renamed = metadata
+            .get(&old_name)
+            .ok_or_else(missing_mirror)?
+            .with_name(&name);
+        let candidate = edit_shared(metadata, |metadata| {
+            metadata.remove(&old_name);
+            metadata.insert(name.clone(), renamed.clone());
+        });
+        (candidate, renamed)
+    };
+    let handle =
+        transaction_handle_from_value(scope, transaction.into()).ok_or_else(unavailable)?;
+    let client = sql::indexed_db_request_sql_client(scope, transaction).ok_or_else(unavailable)?;
+    let context = transaction
+        .get_creation_context(scope)
+        .ok_or_else(unavailable)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    crate::context_bootstrap::indexed_db::schedule_schema_operation(
+        scope,
+        transaction,
+        client,
+        moli_indexeddb::sqlite::service::Command::RenameStore {
+            transaction: handle,
+            name: old_name,
+            new_name: name,
+        },
+        None,
+    )?;
+    mirror.borrow_mut().metadata = Some(candidate);
+    for table in indexed_db_handle_tables(scope, database) {
+        for store in table
+            .borrow()
+            .object_stores
+            .values()
+            .filter_map(std::rc::Weak::upgrade)
+        {
+            let mut store = store.borrow_mut();
+            if !store.deleted
+                && store.transaction.to_local(scope) == Some(transaction)
+                && Rc::ptr_eq(&store.metadata.origin, &identity)
+            {
+                store.metadata = renamed.clone();
+            }
+        }
+    }
     Ok(())
 }

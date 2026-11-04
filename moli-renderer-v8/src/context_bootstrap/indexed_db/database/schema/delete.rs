@@ -56,7 +56,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_delete_object_store
                 schedule_schema_failure(scope, transaction, error);
                 return;
             }
-            sync_transaction_object_store_names_from_database(scope, transaction, database);
             rv.set_undefined();
         }
         Err(error) => {

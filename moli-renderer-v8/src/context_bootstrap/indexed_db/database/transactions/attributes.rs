@@ -36,3 +36,17 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_transaction_error_getter<'s>
         rv.set(value);
     }
 }
+
+pub(in crate::context_bootstrap::indexed_db) fn idb_transaction_object_store_names_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("transaction receiver was validated");
+    if let Some(names) =
+        crate::context_bootstrap::indexed_db::indexed_db_transaction_store_names(scope, receiver)
+    {
+        rv.set(crate::context_bootstrap::indexed_db::new_idb_name_list(scope, &names).into());
+    }
+}

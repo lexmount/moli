@@ -79,9 +79,11 @@ async function schemaAttributesProbe(prefix = 'schema-attributes') {
         set() { ++traps; throw new Error('author setter: ' + name); }
       });
     }
+    index.name = 'renamed';
     store.createIndex('temporary', 'other');
     store.deleteIndex('temporary');
-    equal('native name list after schema edits', Array.from(storeGet(store, 'indexNames')), ['index']);
+    store.name = 'renamedStore';
+    equal('native name list after schema edits', Array.from(storeGet(store, 'indexNames')), ['renamed']);
     equal('old name list is a snapshot', Array.from(before), ['index']);
     check('schema edits preserve keyPath identities', storeGet(store, 'keyPath') === storePath && indexGet(index, 'keyPath') === indexPath);
     equal('exposed array mutations survive schema edits', [storePath[0], indexPath[0]], ['authorStorePath', 'authorIndexPath']);
@@ -95,10 +97,10 @@ async function schemaAttributesProbe(prefix = 'schema-attributes') {
   for (const [object, names] of [[retainedStore, attributes[0][1]], [retainedIndex, attributes[1][1]]]) {
     for (const name of names) check(`shadow ${name} survives schema edits`, Object.getOwnPropertyDescriptor(object, name).configurable === false);
   }
-  const tx = db.transaction('store');
+  const tx = db.transaction('renamedStore');
   const done = transaction(tx);
-  const store = tx.objectStore('store');
-  const index = store.index('index');
+  const store = tx.objectStore('renamedStore');
+  const index = store.index('renamed');
   equal('new handles expose original native key paths', [store.keyPath, index.keyPath], [['id'], ['tag']]);
   check('new handles use distinct arrays', store.keyPath !== storePath && index.keyPath !== indexPath);
   const get = request(store.get([1]));
@@ -117,17 +119,17 @@ async function schemaAttributesProbe(prefix = 'schema-attributes') {
     abort.onupgradeneeded = () => {
       try {
         const tx = abort.transaction;
-        oldStore = tx.objectStore('store'); oldPath = oldStore.keyPath;
-        oldIndex = oldStore.index('index'); oldIndexPath = oldIndex.keyPath;
+        oldStore = tx.objectStore('renamedStore'); oldPath = oldStore.keyPath;
+        oldIndex = oldStore.index('renamed'); oldIndexPath = oldIndex.keyPath;
         newStore = abort.result.createObjectStore('temporary', {keyPath: ['newKey']}); newPath = newStore.keyPath;
         newIndex = newStore.createIndex('newIndex', ['newTag']); newIndexPath = newIndex.keyPath;
-        oldStore.deleteIndex('index');
+        oldStore.deleteIndex('renamed');
         oldStore.createIndex('replacement', 'other');
-        abort.result.deleteObjectStore('store');
+        abort.result.deleteObjectStore('renamedStore');
         check('deleted store keeps keyPath identity', oldStore.keyPath === oldPath);
         check('deleted index keeps keyPath identity', oldIndex.keyPath === oldIndexPath);
         tx.abort();
-        equal('abort restores native name list', Array.from(oldStore.indexNames), ['index']);
+        equal('abort restores native name list', Array.from(oldStore.indexNames), ['renamed']);
         equal('abort clears new store name list', Array.from(newStore.indexNames), []);
       } catch (error) { reject(error); }
     };

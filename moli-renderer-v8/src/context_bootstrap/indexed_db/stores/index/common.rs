@@ -16,6 +16,7 @@ pub(in crate::context_bootstrap::indexed_db) fn index_active_transaction<'s>(
     object_store_active_transaction(scope, store)
 }
 
+// Snapshot mutable native SQL labels after script-visible argument conversion.
 pub(in crate::context_bootstrap::indexed_db) fn index_operation_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     index: v8::Local<'s, v8::Object>,

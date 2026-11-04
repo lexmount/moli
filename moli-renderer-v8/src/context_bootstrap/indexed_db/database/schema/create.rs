@@ -94,7 +94,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_create_object_store
                 }
                 return;
             }
-            sync_transaction_object_store_names_from_database(scope, transaction, database);
             if let Some(store) = create_object_store_object(scope, database, transaction, &info) {
                 rv.set(store.into());
             } else {

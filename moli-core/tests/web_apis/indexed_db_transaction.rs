@@ -3,6 +3,8 @@ use super::*;
 
 #[path = "indexed_db_transaction/index_rename.rs"]
 mod index_rename;
+#[path = "indexed_db_transaction/store_rename.rs"]
+mod store_rename;
 
 async fn assert_multi_entry_keys(scenario: &str) -> Result<()> {
     let server = FixtureServer::spawn().await?;

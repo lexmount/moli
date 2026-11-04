@@ -16,9 +16,9 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_get_callback<'s
         return;
     };
     let store = args.this();
-    let Some((transaction, store_name)) = object_store_operation_state(scope, store) else {
+    if object_store_active_transaction(scope, store).is_none() {
         return;
-    };
+    }
     let query = match parse_key_or_range(scope, parsed.query) {
         Ok(Some(query)) => query,
         Ok(None) => {
@@ -34,6 +34,9 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_get_callback<'s
             error.throw(scope);
             return;
         }
+    };
+    let Some((transaction, store_name)) = object_store_operation_state(scope, store) else {
+        return;
     };
     let Some(request) = create_operation_request(scope, store, transaction) else {
         return;
