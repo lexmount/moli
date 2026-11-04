@@ -10,8 +10,19 @@ pub(in crate::context_bootstrap) fn ensure_window_lazy_surface_value<'s>(
     let Some(surface) = WindowLazySurface::from_slot(slot) else {
         return Ok(None);
     };
-    let Some(relevant_context) = receiver.get_creation_context(scope) else {
-        return Ok(None);
+    let relevant_context = if let Some(context) = receiver.get_creation_context(scope) {
+        context
+    } else {
+        // V8 can detach a retained WindowProxy before an associated object is
+        // first read. Its own getter still enters the original native Realm.
+        // Materialize there only when the receiver is that exact global.
+        let context = scope.get_current_context();
+        if !receiver.strict_equals(context.global(scope).into())
+            || crate::util::context_host_ptr_from_context_slot(context).is_none()
+        {
+            return Ok(None);
+        }
+        context
     };
     if relevant_context == scope.get_current_context() {
         let target_window = relevant_context.global(scope);
