@@ -38,7 +38,7 @@ impl FetchClientHandle {
     /// Prepare resource-dependent request headers before interception or
     /// network admission, after the caller has selected the resource kind.
     pub fn prepare_request(&self, request: &mut Request) {
-        request.prepare_headers(&self.config);
+        request.prepare_accept_header(&self.config);
     }
 
     /// Creates native WebSockets on this client's HTTP owner and Multi. The

@@ -787,7 +787,7 @@ impl Request {
     /// Finalize Accept once the caller has selected the request's resource kind.
     /// Repeated admission (including ServiceWorker fallback) preserves the
     /// original value, including an explicitly empty header.
-    pub(crate) fn prepare_headers(&mut self, config: &FetchConfig) {
+    pub(crate) fn prepare_accept_header(&mut self, config: &FetchConfig) {
         let has_accept = |headers: &crate::RequestHeaders| {
             headers
                 .iter()

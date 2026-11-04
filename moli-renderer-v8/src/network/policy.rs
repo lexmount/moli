@@ -438,10 +438,14 @@ impl PageNetworkPolicySnapshot {
     /// Existing request fields, including empty values, take precedence.
     pub(crate) fn apply_request_headers(&self, request: &mut Request) {
         if !self.extra_http_headers.is_empty() {
-            request.request_headers = merge_page_network_policy_headers(
-                &self.extra_http_headers,
-                &request.request_headers,
+            let mut headers = moli_fetch::RequestHeaders::from_bytes(
+                self.extra_http_headers
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.to_vec()))
+                    .collect(),
             );
+            headers.overlay(std::mem::take(&mut request.request_headers));
+            request.request_headers = headers;
         }
     }
 
@@ -479,20 +483,6 @@ impl PageNetworkPolicySnapshot {
         self.apply_request_headers(&mut request);
         Ok(request)
     }
-}
-
-fn merge_page_network_policy_headers(
-    context_headers: &[(Box<str>, Box<[u8]>)],
-    request_headers: &moli_fetch::RequestHeaders,
-) -> moli_fetch::RequestHeaders {
-    let mut headers = moli_fetch::RequestHeaders::from_bytes(
-        context_headers
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_vec()))
-            .collect(),
-    );
-    headers.overlay(request_headers.clone());
-    headers
 }
 
 #[cfg(test)]
