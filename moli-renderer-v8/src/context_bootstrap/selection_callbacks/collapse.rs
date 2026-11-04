@@ -1,7 +1,9 @@
 use super::*;
-use crate::native_bridge::callback_value_dom_handle;
 use crate::native_bridge::element::{contenteditable_editing_host, focus_element};
 use crate::native_bridge::throw_dom_exception;
+use crate::native_bridge::{
+    callback_value_dom_handle, node_runtime_and_handle_from_object_or_detached,
+};
 use crate::webidl;
 
 /// Throw a DOMException with the IndexSizeError name and code (1).
@@ -38,25 +40,18 @@ fn nodes_share_dom_tree_root<'s>(
     a: v8::Local<'s, v8::Object>,
     b: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let a_root = selection_dom_tree_root(scope, a);
-    let b_root = selection_dom_tree_root(scope, b);
-    a_root.strict_equals(b_root.into())
-}
-
-fn selection_dom_tree_root<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    node: v8::Local<'s, v8::Object>,
-) -> v8::Local<'s, v8::Object> {
-    let mut current = node;
-    loop {
-        if let Some(parent) = object_property_as_object(scope, current, "parentNode")
-            && !parent.strict_equals(current.into())
-        {
-            current = parent;
-            continue;
-        }
-        return current;
+    let Ok((runtime, a)) = node_runtime_and_handle_from_object_or_detached(scope, a) else {
+        return false;
+    };
+    let Ok((other_runtime, b)) = node_runtime_and_handle_from_object_or_detached(scope, b) else {
+        return false;
+    };
+    if runtime != other_runtime {
+        return false;
     }
+    let dom = unsafe { &*runtime }.dom_host();
+    dom.root_node_handle(a)
+        .is_some_and(|root| dom.root_node_handle(b) == Some(root))
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -339,7 +334,14 @@ pub(in crate::context_bootstrap) fn selection_extend_callback<'s>(
         return;
     }
 
-    let anchor_offset = selection_anchor_offset(scope, args.this());
+    // An ordinary Range cannot span distinct DOM roots. Extending into a
+    // different shadow tree replaces it with a caret at the new focus.
+    let (anchor_node, anchor_offset) =
+        if nodes_share_dom_tree_root(scope, anchor_node, parsed.focus_node) {
+            (anchor_node, selection_anchor_offset(scope, args.this()))
+        } else {
+            (parsed.focus_node, parsed.focus_offset)
+        };
     let direction = match boundary_order(
         scope,
         anchor_node,

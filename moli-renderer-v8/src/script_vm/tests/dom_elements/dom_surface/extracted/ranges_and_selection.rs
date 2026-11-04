@@ -1073,3 +1073,36 @@ fn range_document_type_preflight_preserves_partial_contents_and_live_boundaries(
         "6"
     );
 }
+
+#[test]
+fn extending_selection_into_another_shadow_root_replaces_the_anchor() {
+    let mut vm = new_storage_html_test_vm("https://selection-shadow-root.test/");
+    let result = vm
+        .eval(
+            r#"
+        const make = () => {
+            const host = document.body.appendChild(document.createElement('div'));
+            const root = host.attachShadow({mode: 'open'});
+            return root.appendChild(document.createTextNode('abcd'));
+        };
+        const first = make(), second = make(), selection = document.getSelection();
+        const iframe = document.body.appendChild(document.createElement('iframe'));
+        for (const realm of [window, iframe.contentWindow]) {
+            const extend = realm.Selection.prototype.extend;
+            selection.collapse(first, 1);
+            const previous = selection.getRangeAt(0);
+            extend.call(selection, second, 2);
+            if (selection.anchorNode !== second || selection.focusNode !== second ||
+                selection.anchorOffset !== 2 || selection.focusOffset !== 2 ||
+                !selection.isCollapsed || selection.getRangeAt(0) === previous)
+                throw new Error('selection must become a fresh caret in the new DOM root');
+            extend.call(selection, second, 3);
+            if (selection.anchorOffset !== 2 || selection.focusOffset !== 3 || selection.isCollapsed)
+                throw new Error('same-root extension must retain the anchor across realms');
+        }
+        'ok';
+    "#,
+        )
+        .unwrap();
+    assert_eq!(result, "ok");
+}
