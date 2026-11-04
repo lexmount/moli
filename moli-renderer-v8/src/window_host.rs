@@ -95,15 +95,22 @@ struct WindowRequestAnimationFrameArgs {
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Window.requestIdleCallback")]
-struct WindowRequestIdleCallbackArgs<'s> {
+struct WindowRequestIdleCallbackArgs {
     #[webidl(
         required,
         converter = "callback_function",
         missing_message = "Failed to execute 'requestIdleCallback' on 'Window': parameter 1 is not a function."
     )]
     callback: webidl::WebIdlCallbackFunction,
-    #[webidl(index = 1, converter = "raw")]
-    options: Option<v8::Local<'s, v8::Value>>,
+    #[webidl(dictionary)]
+    options: IdleRequestOptions,
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "Window.requestIdleCallback")]
+struct IdleRequestOptions {
+    #[webidl(converter = "unsigned_long")]
+    timeout: Option<u32>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -945,7 +952,10 @@ pub(super) fn window_request_idle_callback<'s>(
         return;
     };
 
-    let timeout_deadline_ms = parse_idle_callback_timeout_ms(scope, parsed.options)
+    let timeout_deadline_ms = parsed
+        .options
+        .timeout
+        .filter(|timeout_ms| *timeout_ms > 0)
         .map(|timeout_ms| current_time_ms() + timeout_ms as f64)
         .unwrap_or(-1.0);
     let runtime = unsafe { &mut *host_ptr };
@@ -2151,24 +2161,6 @@ fn parse_timer_delay_ms<'s>(
     prefix: &'static str,
 ) -> u32 {
     webidl::timer_milliseconds_arg(scope, args, 1, prefix)
-}
-
-fn parse_idle_callback_timeout_ms(
-    scope: &mut v8::PinScope<'_, '_>,
-    options: Option<v8::Local<'_, v8::Value>>,
-) -> Option<u32> {
-    let Ok(options) = v8::Local::<v8::Object>::try_from(options?) else {
-        return None;
-    };
-    let timeout = options.get(scope, v8str(scope, "timeout").into())?;
-    if timeout.is_null_or_undefined() {
-        return None;
-    }
-    let raw = timeout.number_value(scope).unwrap_or(0.0);
-    if !raw.is_finite() || raw <= 0.0 {
-        return Some(0);
-    }
-    Some(raw.min(u32::MAX as f64) as u32)
 }
 
 pub(crate) fn build_window_idle_deadline<'s>(

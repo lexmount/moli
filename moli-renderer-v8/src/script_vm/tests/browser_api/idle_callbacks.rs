@@ -1,6 +1,77 @@
 use super::*;
 
 #[tokio::test]
+async fn idle_callback_options_use_webidl_conversion_and_positive_timeouts() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm("https://idle-options-conversion.test/");
+    vm.eval(include_str!("idle_options_conversion.js"))
+        .expect("idle option conversion matrix should schedule");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("idle option conversion matrix should drain");
+    let rows: Vec<serde_json::Value> = serde_json::from_str(
+        &vm.eval("JSON.stringify(__idleOptionsProbe)")
+            .expect("idle option conversion observations should evaluate"),
+    )
+    .expect("idle option conversion observations should be JSON");
+    let expected = [
+        ("omitted", "ok", false),
+        ("undefined", "ok", false),
+        ("null-options", "ok", false),
+        ("zero", "ok", false),
+        ("negative-zero", "ok", false),
+        ("undefined-member", "ok", false),
+        ("null-member", "ok", false),
+        ("nan", "ok", false),
+        ("infinity", "ok", false),
+        ("negative-one", "ok", false),
+        ("wrapped-zero", "ok", false),
+        ("wrapped-positive", "ok", true),
+        ("fractional-zero", "ok", false),
+        ("positive", "ok", true),
+        ("coerced", "ok", true),
+        ("boolean-options", "TypeError", false),
+        ("number-options", "TypeError", false),
+        ("string-options", "TypeError", false),
+        ("symbol-member", "TypeError", false),
+        ("bigint-member", "TypeError", false),
+        ("throwing-getter", "marker", false),
+        ("throwing-coercion", "marker", false),
+    ];
+    assert_eq!(rows.len(), expected.len());
+    for (row, (name, outcome, expired)) in rows.iter().zip(expected) {
+        assert_eq!(row["name"], name);
+        assert_eq!(row["outcome"], outcome, "{name}: {row}");
+        let accepted = outcome == "ok";
+        assert_eq!(row["calls"], usize::from(accepted), "{name}: {row}");
+        assert_eq!(row["positiveHandle"], accepted, "{name}: {row}");
+        assert_eq!(
+            row["didTimeout"],
+            serde_json::json!(accepted.then_some(expired)),
+            "{name}: {row}"
+        );
+        assert_eq!(
+            row["timeCorrect"],
+            serde_json::json!(accepted.then_some(true)),
+            "{name}: {row}"
+        );
+        assert_eq!(
+            row["gets"],
+            usize::from(matches!(
+                name,
+                "coerced" | "throwing-getter" | "throwing-coercion"
+            )),
+            "{name}: {row}"
+        );
+        assert_eq!(
+            row["coercions"],
+            usize::from(matches!(name, "coerced" | "throwing-coercion")),
+            "{name}: {row}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn idle_deadline_remaining_time_uses_dom_clock_resolution() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm("https://idle-deadline-resolution.test/");
@@ -47,13 +118,16 @@ async fn idle_callback_timeout_is_a_deadline_not_a_dispatch_delay() {
       didTimeout: deadline.didTimeout,
       timeRemaining: deadline.timeRemaining()
     };
-  }, { timeout: 0 });
+  }, { timeout: 1 });
   requestIdleCallback(deadline => {
     globalThis.__idleCallbackTimeoutProbe.long = {
       didTimeout: deadline.didTimeout,
       hasTimeRemaining: deadline.timeRemaining() > 0
     };
   }, { timeout: 100000 });
+  // Let the positive timeout expire before its callback is dispatched.
+  const start = performance.now();
+  while (performance.now() - start < 10) {}
   return "scheduled";
 })()
 "#,
