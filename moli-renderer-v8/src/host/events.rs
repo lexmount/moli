@@ -160,6 +160,7 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
     target: EventTargetHandle,
     event: v8::Local<'s, v8::Object>,
     arguments: &[v8::Local<'s, v8::Value>],
+    legacy_event_handler: bool,
 ) -> Option<v8::Global<v8::Value>> {
     let receiver = event_target_receiver(scope, host_ptr, target, event);
     let has_event_argument = arguments.len() == 1 && arguments[0].strict_equals(event.into());
@@ -184,6 +185,7 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
         receiver,
         (!invocation_target_in_shadow_tree).then_some(event),
         arguments,
+        legacy_event_handler,
     )
 }
 
@@ -197,6 +199,7 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
     receiver: v8::Local<'s, v8::Value>,
     current_event: Option<v8::Local<'s, v8::Object>>,
     arguments: &[v8::Local<'s, v8::Value>],
+    legacy_event_handler: bool,
 ) -> Option<v8::Global<v8::Value>> {
     let relevant_identity = callback.relevant_identity();
     let invocation = CallbackInvocation::new(
@@ -210,6 +213,11 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
         current_event,
     )
     .with_execution_context_currentness(host_ptr, relevant_identity);
+    let invocation = if legacy_event_handler {
+        invocation.with_legacy_event_handler()
+    } else {
+        invocation
+    };
     match CallbackInvoker::invoke(
         scope,
         "event listener",
@@ -234,7 +242,51 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
     }
 }
 
+fn is_native_document_handler_target(
+    host_ptr: *mut JsContextHost,
+    target: EventTargetHandle,
+    event_type: &str,
+) -> bool {
+    let EventTargetHandle::Node(handle) = target else {
+        return false;
+    };
+    let host = unsafe { &*host_ptr };
+    (host
+        .dom_host()
+        .node(handle)
+        .is_some_and(|node| node.is_document())
+        && crate::native_bridge::element::is_native_document_event_handler(event_type))
+        || (host.dom_host().is_shadow_root(handle) && event_type == "slotchange")
+}
+
 fn invoke_event_handler_property<'s>(
+    registry: &mut HostEventTargetRegistry,
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut JsContextHost,
+    target: EventTargetHandle,
+    invocation_target_in_shadow_tree: bool,
+    target_object: v8::Local<'s, v8::Object>,
+    event_type: &str,
+    event: v8::Local<'s, v8::Object>,
+) {
+    // These interfaces have no content attributes. Their handlers live only
+    // in native slots and participate in the listener snapshot below.
+    if is_native_document_handler_target(host_ptr, target, event_type) {
+        return;
+    }
+    invoke_event_handler_property_for_target(
+        registry,
+        scope,
+        host_ptr,
+        target,
+        invocation_target_in_shadow_tree,
+        target_object,
+        event_type,
+        event,
+    );
+}
+
+fn invoke_event_handler_property_for_target<'s>(
     registry: &mut HostEventTargetRegistry,
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
@@ -347,6 +399,7 @@ fn invoke_event_handler_property<'s>(
             target,
             event,
             &[message, source, lineno, colno, error],
+            true,
         );
         if temporary {
             unsafe { &mut *host_ptr }.release_event_callback(callback_id);
@@ -384,6 +437,7 @@ fn invoke_event_handler_property<'s>(
         target,
         event,
         &[event.into()],
+        true,
     );
     if temporary {
         unsafe { &mut *host_ptr }.release_event_callback(callback_id);
@@ -1062,6 +1116,45 @@ impl HostEventTargetRegistry {
             });
     }
 
+    fn event_handler_registration_id(
+        &self,
+        target: EventTargetHandle,
+        event_type: &str,
+    ) -> Option<u64> {
+        match self.handler_properties.get(&target)?.get(event_type)? {
+            EventHandlerPropertyEntry::Callback {
+                registration_id, ..
+            } => Some(*registration_id),
+            EventHandlerPropertyEntry::Null => None,
+        }
+    }
+
+    fn call_native_handler_if_current<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        host_ptr: *mut JsContextHost,
+        target: EventTargetHandle,
+        invocation_target_in_shadow_tree: bool,
+        event_type: &str,
+        event: v8::Local<'s, v8::Object>,
+        registration_id: u64,
+    ) -> std::result::Result<(), String> {
+        if self.event_handler_registration_id(target, event_type) == Some(registration_id) {
+            let object = event_target_object(scope, host_ptr, target)?;
+            invoke_event_handler_property_for_target(
+                self,
+                scope,
+                host_ptr,
+                target,
+                invocation_target_in_shadow_tree,
+                object,
+                event_type,
+                event,
+            );
+        }
+        Ok(())
+    }
+
     fn call_listeners_filtered<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -1073,6 +1166,11 @@ impl HostEventTargetRegistry {
         filter: ListenerFilter,
         at_target: bool,
     ) -> std::result::Result<DispatchStatus, String> {
+        let native_handler_target = is_native_document_handler_target(host_ptr, target, event_type);
+        let mut pending_handler = (native_handler_target
+            && !matches!(filter, ListenerFilter::Capturing))
+        .then(|| self.event_handler_registration_id(target, event_type))
+        .flatten();
         let snapshot: Vec<(
             u64,
             crate::native_bridge::EventCallbackId,
@@ -1085,14 +1183,11 @@ impl HostEventTargetRegistry {
             bool,
             bool,
         )> = {
-            let Some(target_map) = self.listeners.get(&target) else {
-                return Ok(DispatchStatus::Continue);
-            };
-            let Some(entries) = target_map.get(event_type) else {
-                return Ok(DispatchStatus::Continue);
-            };
-            entries
-                .iter()
+            self.listeners
+                .get(&target)
+                .and_then(|target_map| target_map.get(event_type))
+                .into_iter()
+                .flatten()
                 .filter(|entry| !entry.removed)
                 .filter(|entry| match filter {
                     ListenerFilter::Capturing => entry.capture,
@@ -1116,7 +1211,7 @@ impl HostEventTargetRegistry {
                 .collect()
         };
 
-        if snapshot.is_empty() {
+        if snapshot.is_empty() && pending_handler.is_none() {
             return Ok(DispatchStatus::Continue);
         }
 
@@ -1148,6 +1243,20 @@ impl HostEventTargetRegistry {
             ),
         ) in snapshot.into_iter().enumerate()
         {
+            if pending_handler.is_some_and(|id| id < listener_id) {
+                self.call_native_handler_if_current(
+                    scope,
+                    host_ptr,
+                    target,
+                    invocation_target_in_shadow_tree,
+                    event_type,
+                    event,
+                    pending_handler.take().unwrap(),
+                )?;
+                if event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT) {
+                    return Ok(DispatchStatus::StopImmediate);
+                }
+            }
             let still_registered = self
                 .listeners
                 .get(&target)
@@ -1203,6 +1312,7 @@ impl HostEventTargetRegistry {
                 target,
                 event,
                 &[event.into()],
+                false,
             );
             if let Some(listener_started) = listener_started {
                 let layout_trace = layout_trace_before
@@ -1240,6 +1350,20 @@ impl HostEventTargetRegistry {
             }
             set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
 
+            if event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT) {
+                return Ok(DispatchStatus::StopImmediate);
+            }
+        }
+        if let Some(id) = pending_handler {
+            self.call_native_handler_if_current(
+                scope,
+                host_ptr,
+                target,
+                invocation_target_in_shadow_tree,
+                event_type,
+                event,
+                id,
+            )?;
             if event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT) {
                 return Ok(DispatchStatus::StopImmediate);
             }

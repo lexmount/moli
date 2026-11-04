@@ -7,7 +7,8 @@ use crate::{
 };
 
 use super::super::super::node::{
-    node_is_document, node_is_element, node_runtime_and_handle_from_object_or_detached,
+    NativeNodeReference, node_is_document, node_is_element,
+    node_runtime_and_handle_from_object_or_detached,
 };
 use super::super::forms::form_associated_form_owner;
 use super::super::{element_attribute, queue_text_track_load_if_needed};
@@ -126,6 +127,13 @@ const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onreadystatechange",
 ];
 
+pub(crate) fn is_native_document_event_handler(event_type: &str) -> bool {
+    GENERIC_EVENT_HANDLER_PROPERTIES
+        .iter()
+        .chain(DOCUMENT_EVENT_HANDLER_PROPERTIES.iter())
+        .any(|property| property.strip_prefix("on") == Some(event_type))
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum GlobalEventHandlerOwner {
     Document,
@@ -218,9 +226,9 @@ fn set_event_handler_property_for_target<'s>(
     let Some(event_type) = event_handler_event_type(&handler_name) else {
         return;
     };
-    let handler = v8::Local::<v8::Function>::try_from(value).ok();
+    let handler = v8::Local::<v8::Object>::try_from(value).ok();
     unsafe { &mut *runtime_ptr }
-        .set_registered_event_handler_property(scope, target, event_type, handler);
+        .set_registered_dom_event_handler_property(scope, target, event_type, handler);
 }
 
 fn document_event_handler_getter_function<'s>(
@@ -232,20 +240,20 @@ fn document_event_handler_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some(NativeNodeReference::Tree { node, .. }) =
+        NativeNodeReference::from_object(scope, args.this())
     else {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     };
-    if !node_is_document(unsafe { &*runtime_ptr }, handle) {
+    if !node_is_document(unsafe { &*node.runtime_ptr }, node.handle) {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     }
     rv.set(event_handler_property_value_for_target(
         scope,
-        runtime_ptr,
-        EventTargetHandle::Node(handle),
+        node.runtime_ptr,
+        EventTargetHandle::Node(node.handle),
         args.data(),
     ));
 }
@@ -259,20 +267,68 @@ fn document_event_handler_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some(NativeNodeReference::Tree { node, .. }) =
+        NativeNodeReference::from_object(scope, args.this())
     else {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     };
-    if !node_is_document(unsafe { &*runtime_ptr }, handle) {
+    if !node_is_document(unsafe { &*node.runtime_ptr }, node.handle) {
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     }
     set_event_handler_property_for_target(
         scope,
-        runtime_ptr,
-        EventTargetHandle::Node(handle),
+        node.runtime_ptr,
+        EventTargetHandle::Node(node.handle),
+        args.data(),
+        args.get(0),
+    );
+    rv.set_undefined();
+}
+
+pub(crate) fn shadow_root_event_handler_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if !crate::web_api_interfaces::ShadowRoot::is_instance(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let Some(NativeNodeReference::Tree { node, .. }) =
+        NativeNodeReference::from_object(scope, args.this())
+    else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    rv.set(event_handler_property_value_for_target(
+        scope,
+        node.runtime_ptr,
+        EventTargetHandle::Node(node.handle),
+        args.data(),
+    ));
+}
+
+pub(crate) fn shadow_root_event_handler_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if !crate::web_api_interfaces::ShadowRoot::is_instance(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let Some(NativeNodeReference::Tree { node, .. }) =
+        NativeNodeReference::from_object(scope, args.this())
+    else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    set_event_handler_property_for_target(
+        scope,
+        node.runtime_ptr,
+        EventTargetHandle::Node(node.handle),
         args.data(),
         args.get(0),
     );
