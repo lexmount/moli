@@ -741,6 +741,27 @@ impl SubresourcePolicyContext {
             cross_origin_isolated: policy.cross_origin_isolated,
         }
     }
+    /// Select network credentials without changing the author-visible Request.
+    /// SameOrigin reuses Fetch's per-hop credential gate, including its sticky
+    /// omission after a redirect leaves the client origin. Neither policy is
+    /// conditional on the agent cluster's crossOriginIsolated capability.
+    pub(super) fn network_credentials_mode(
+        self,
+        mode: moli_fetch::RequestMode,
+        credentials: moli_fetch::RequestCredentialsMode,
+    ) -> moli_fetch::RequestCredentialsMode {
+        if mode == moli_fetch::RequestMode::NoCors
+            && credentials == moli_fetch::RequestCredentialsMode::Include
+            && (self.cross_origin_embedder_policy
+                == crate::cross_origin_isolation::CrossOriginEmbedderPolicy::Credentialless
+                || self.document_isolation_policy
+                    == crate::cross_origin_isolation::DocumentIsolationPolicy::IsolateAndCredentialless)
+        {
+            moli_fetch::RequestCredentialsMode::SameOrigin
+        } else {
+            credentials
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

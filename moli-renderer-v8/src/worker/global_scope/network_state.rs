@@ -5,6 +5,8 @@ use super::*;
 pub(in crate::worker) struct PendingWorkerFetch {
     pub(in crate::worker) resolver: v8::Global<v8::PromiseResolver>,
     pub(in crate::worker) document_url: Url,
+    /// Effective network credentials; script-visible Request and FetchEvent
+    /// keep the author's original mode.
     pub(in crate::worker) credentials_mode: RequestCredentialsMode,
     pub(in crate::worker) request_mode: moli_fetch::RequestMode,
     pub(in crate::worker) redirect_mode: RequestRedirectMode,
