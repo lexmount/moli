@@ -4,6 +4,7 @@ mod image_repeat;
 mod planar_transforms;
 mod print;
 mod print_isolation;
+mod print_preparation;
 mod transform_precision;
 
 use base64::Engine as _;

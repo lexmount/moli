@@ -1353,6 +1353,17 @@ impl DocumentLayoutServices {
         }
     }
 
+    /// Whether a temporary view can borrow this document's initialized text
+    /// contexts without changing font selection or resource registrations.
+    /// Include exact payloads, descriptors, memberships and priority order;
+    /// a family name or shared byte pointer alone is not sufficient.
+    pub fn has_same_font_selection(&self, other: &Self) -> bool {
+        self.system_font_policy == other.system_font_policy
+            && self.web_fonts == other.web_fonts
+            && self.web_font_order == other.web_font_order
+            && self.has_font_face_set_order == other.has_font_face_set_order
+    }
+
     pub fn has_stylesheet_web_fonts(&self) -> bool {
         self.web_fonts
             .values()

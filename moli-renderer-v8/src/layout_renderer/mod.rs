@@ -167,13 +167,12 @@ fn build_native_layout_pass_recursive(
                     .members
                     .push(crate::capture_layout_resources::CaptureLayoutMember {
                         identity,
-                        viewport: request.viewport,
                         fonts,
                         available_font_slots,
                         available_fonts,
                     });
             }
-            Some(temporary)
+            (!services.has_same_font_selection(&temporary)).then_some(temporary)
         } else {
             None
         };
@@ -189,7 +188,8 @@ fn build_native_layout_pass_recursive(
             tree,
             embedded_document_services,
         };
-        if let Some(services) = capture_services.as_mut() {
+        if frames.tree.capture_overlay.is_some() {
+            let services = capture_services.as_mut().unwrap_or(services);
             build_layout_pass_with_working_set(
                 &source,
                 &mut styles,
