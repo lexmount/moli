@@ -35,7 +35,19 @@
         let committedSettled = false;
         let finishedSettled = false;
         const beforeEntry = navigation.currentEntry;
+        // Native history capture must not read author-shadowed activation fields.
+        let activationReads = 0;
+        const activation = navigation.activation;
+        if (activation) {
+          for (const name of ["entry", "from", "navigationType"]) {
+            Object.defineProperty(activation, name, {
+              configurable: true,
+              get() { activationReads++; throw new Error("author activation " + name); },
+            });
+          }
+        }
         const result = navigation.reload();
+        parent.document.body.setAttribute("data-activation-reads", String(activationReads));
         parent.document.body.setAttribute(
           "data-sync-shape",
           [
