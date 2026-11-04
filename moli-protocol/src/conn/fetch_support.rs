@@ -1517,6 +1517,7 @@ pub struct PendingSubresourceFetchRequestStage {
     pub session_id: Option<String>,
     pub owner_kind: PendingSubresourceFetchOwnerKind,
     pub request_id: String,
+    pub redirected_request_id: Option<String>,
     pub blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
 }
 

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde_json::{Value, json};
 use url::Url;
 
@@ -187,6 +189,40 @@ fn prepare_subresource_fetch_pause_sources(
             resource_type,
             &info.url,
         );
+        // Each Fetch handler owns an interception id for every HTTP hop,
+        // including hops that do not match that handler's URL patterns.
+        let mut child_fetch_ids = HashMap::new();
+        if let Some(document) = child_document.as_ref() {
+            for (index, fetch_session_id) in fetch_snapshot
+                .fetch_session_ids(session_id)
+                .into_iter()
+                .enumerate()
+            {
+                let fetch_id = if index == 0 {
+                    request_id.clone()
+                } else {
+                    let Some((id, _)) =
+                        conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
+                    else {
+                        return network::NetworkPreparedOutputs::from_subresource_fetch_pauses_and_continuations(outputs, automatic);
+                    };
+                    id
+                };
+                let previous = conn
+                    .runtime_session_owner_slot_mut_for_owner(owner)
+                    .and_then(|slot| {
+                        slot.replace_child_document_fetch_request_id(
+                            network_request_id.clone(),
+                            fetch_session_id.clone(),
+                            fetch_id.clone(),
+                        )
+                    });
+                child_fetch_ids.insert(
+                    fetch_session_id,
+                    (fetch_id, previous.filter(|_| document.redirect.is_some())),
+                );
+            }
+        }
         if request_stage_pause_sessions.is_empty() {
             if child_document.is_some() {
                 let network_output =
@@ -319,6 +355,22 @@ fn prepare_subresource_fetch_pause_sources(
             .first()
             .expect("request-stage pause session should be present")
             .clone();
+        let (request_id, redirected_request_id) = if let Some(ids) = child_fetch_ids
+            .get(&first_pause_session.session_id)
+            .filter(|_| first_pause_session.owner_kind == PendingSubresourceFetchOwnerKind::Fetch)
+        {
+            ids.clone()
+        } else if child_fetch_ids.is_empty() {
+            (request_id, None)
+        } else {
+            // A BiDi interceptor must not reuse a Fetch handler's hidden id.
+            let Some((id, _)) =
+                conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
+            else {
+                return network::NetworkPreparedOutputs::from_subresource_fetch_pauses_and_continuations(outputs, automatic);
+            };
+            (id, None)
+        };
         let residence = match detached_parser_script_fetch_continuation {
             Some(continuation) => {
                 crate::conn::PendingSubresourceFetchResidence::DetachedParserScript(continuation)
@@ -351,15 +403,24 @@ fn prepare_subresource_fetch_pause_sources(
         );
         let mut remaining_sessions = Vec::new();
         for session in request_stage_pause_sessions.into_iter().skip(1) {
-            let Some((next_request_id, _)) =
-                conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
-            else {
-                return network::NetworkPreparedOutputs::from_subresource_fetch_pauses_and_continuations(outputs, automatic);
+            let (next_request_id, redirected_request_id) = if let Some(ids) = child_fetch_ids
+                .get(&session.session_id)
+                .filter(|_| session.owner_kind == PendingSubresourceFetchOwnerKind::Fetch)
+            {
+                ids.clone()
+            } else {
+                let Some((id, _)) =
+                    conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
+                else {
+                    return network::NetworkPreparedOutputs::from_subresource_fetch_pauses_and_continuations(outputs, automatic);
+                };
+                (id, None)
             };
             remaining_sessions.push(PendingSubresourceFetchRequestStage {
                 session_id: session.session_id,
                 owner_kind: session.owner_kind,
                 request_id: next_request_id,
+                redirected_request_id,
                 blocked_intercepts: blocked_intercepts.clone(),
             });
         }
@@ -389,7 +450,7 @@ fn prepare_subresource_fetch_pause_sources(
             .with_blocked_intercepts(blocked_intercepts)
             .with_fetch_request_id(request_id.clone())
             .with_child_document(child_document);
-        let payload = subresource_request_paused_payload(
+        let mut payload = subresource_request_paused_payload(
             &request_id,
             &pending,
             &info.url,
@@ -398,6 +459,9 @@ fn prepare_subresource_fetch_pause_sources(
             info.request_body.as_deref(),
             info.request_cookie_report.as_ref(),
         );
+        if let Some(previous) = redirected_request_id {
+            payload["redirectedRequestId"] = json!(previous);
+        }
         outputs.push(network::TargetSubresourceFetchPauseOutput::new(
             network_output,
             first_pause_session.session_id,
@@ -420,9 +484,7 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
 ) {
     for output in outputs {
         let network_request_id = output.network_output().network_request_id().to_owned();
-        let mut redirected_request_id = None;
-        if let Some(document) = output.network_output().child_document()
-            && let Some(fetch_id) = output.network_output().fetch_request_id()
+        if output.network_output().child_document().is_some()
             && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
         {
             if let Some(handle) = output.network_output().request_handle() {
@@ -431,13 +493,7 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
                     network_request_id.clone(),
                 );
             }
-            let previous = slot.replace_child_document_fetch_request_id(
-                network_request_id.clone(),
-                fetch_id.to_owned(),
-            );
-            if document.redirect.is_some() {
-                redirected_request_id = previous;
-            }
+            slot.record_fetch_pause_announced_request_id(network_request_id.clone());
         }
         if !network_session_ids.is_empty() {
             // A request is already observable at the Fetch pause. Its body
@@ -466,10 +522,7 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
         let event_session_id = fetch.session_id;
         let request_id = fetch.request_id;
         let mut pending = fetch.pending;
-        let mut payload = fetch.payload;
-        if let Some(previous) = redirected_request_id {
-            payload["redirectedRequestId"] = json!(previous);
-        }
+        let payload = fetch.payload;
         let pending_owner_session_id = event_session_id
             .as_deref()
             .filter(|session_id| conn.session_route(Some(session_id)).is_some())
@@ -618,7 +671,7 @@ pub(super) fn next_chained_subresource_request_pause_event(
     };
     pending.action_session_id = next.session_id.clone();
     pending.owner_kind = next.owner_kind;
-    let payload = subresource_request_paused_payload(
+    let mut payload = subresource_request_paused_payload(
         &next.request_id,
         &pending,
         &url,
@@ -627,6 +680,9 @@ pub(super) fn next_chained_subresource_request_pause_event(
         body.as_deref(),
         request_cookie_report.as_ref(),
     );
+    if let Some(previous) = &next.redirected_request_id {
+        payload["redirectedRequestId"] = json!(previous);
+    }
     let event = subresource_request_paused_event(
         next.session_id.as_deref(),
         &next.request_id,
