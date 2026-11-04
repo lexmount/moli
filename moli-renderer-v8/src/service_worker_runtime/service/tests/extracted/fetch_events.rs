@@ -1,5 +1,53 @@
 use super::*;
 
+fn starting_controlled_fetch(
+    service: &ServiceWorkerRuntimeServiceOwner,
+    request_client: ResourceRequestClient,
+    document_url: Url,
+    request_url: Url,
+    completion_tx: crate::page_task_queue::RendererResourceCompletionSender,
+) -> (
+    ServiceWorkerVersionId,
+    ServiceWorkerFetchJob,
+    ServiceWorkerFetchRequest,
+) {
+    let version_id = ServiceWorkerVersionId(1);
+    insert_registered_version(
+        service,
+        ServiceWorkerRegistrationId(1),
+        version_id,
+        document_url.join("worker.js").unwrap(),
+        document_url.join("./").unwrap(),
+        [document_url.clone()],
+    );
+    let client_id = client_id_for_document(service, &document_url);
+    let run = exact_version_run(service, version_id);
+    service
+        .inner
+        .state
+        .lock()
+        .versions
+        .get_mut(&version_id)
+        .unwrap()
+        .running_state = ServiceWorkerVersionRunningState::Starting {
+        host: new_loading_test_host(version_id, &run),
+    };
+    let request = test_fetch_request(client_id, request_url.clone());
+    let mut job = test_fetch_job(
+        service,
+        9,
+        version_id,
+        &run,
+        client_id,
+        document_url,
+        request_url,
+        completion_tx,
+        moli_fetch::FetchCancelHandle::new(),
+    );
+    job.request_client = request_client;
+    (version_id, job, request)
+}
+
 #[test]
 fn controlled_fetch_inserts_accept_before_queuing_and_preserves_author_values() {
     use crate::types::SubresourceResourceType as Resource;
@@ -37,31 +85,14 @@ fn controlled_fetch_inserts_accept_before_queuing_and_preserves_author_values() 
         ] {
             for author in [None, Some(""), Some("application/custom")] {
                 let service = new_service_worker_runtime_service();
-                let registration_id = ServiceWorkerRegistrationId(1);
-                let version_id = ServiceWorkerVersionId(1);
-                let document_url = url("https://example.test/app/page.html");
-                let request_url = url("https://example.test/app/resource");
-                insert_registered_version(
+                let completion_queue = async_subresource_completion_queue();
+                let (version_id, mut job, mut request) = starting_controlled_fetch(
                     &service,
-                    registration_id,
-                    version_id,
-                    url("https://example.test/app/worker.js"),
-                    url("https://example.test/app/"),
-                    [document_url.clone()],
+                    configured_client.handle(),
+                    url("https://example.test/app/page.html"),
+                    url("https://example.test/app/resource"),
+                    completion_queue.sender(),
                 );
-                let client_id = client_id_for_document(&service, &document_url);
-                let run = exact_version_run(&service, version_id);
-                service
-                    .inner
-                    .state
-                    .lock()
-                    .versions
-                    .get_mut(&version_id)
-                    .unwrap()
-                    .running_state = ServiceWorkerVersionRunningState::Starting {
-                    host: new_loading_test_host(version_id, &run),
-                };
-                let mut request = test_fetch_request(client_id, request_url.clone());
                 request.destination = destination;
                 if matches!(destination, Destination::Document | Destination::Iframe) {
                     request.request_mode = moli_fetch::RequestMode::Navigate;
@@ -71,19 +102,6 @@ fn controlled_fetch_inserts_accept_before_queuing_and_preserves_author_values() 
                         .headers
                         .push(("aCcEpT".to_owned(), value.to_owned()));
                 }
-                let completion_queue = async_subresource_completion_queue();
-                let mut job = test_fetch_job(
-                    &service,
-                    9,
-                    version_id,
-                    &run,
-                    client_id,
-                    document_url,
-                    request_url,
-                    completion_queue.sender(),
-                    moli_fetch::FetchCancelHandle::new(),
-                );
-                job.request_client = configured_client.handle();
                 job.destination = destination;
                 job.request.request_mode = request.request_mode;
                 job.network_context.resource_type = resource;
@@ -179,50 +197,20 @@ async fn controlled_fetch_fallback_matches_page_accept_on_the_wire() {
         }
         for author in [None, Some(""), Some("application/author")] {
             let service = new_service_worker_runtime_service();
-            let registration_id = ServiceWorkerRegistrationId(1);
-            let version_id = ServiceWorkerVersionId(1);
-            let document_url = url(&format!("{origin}/app/page"));
-            let request_url = url(&format!("{origin}/app/data"));
-            insert_registered_version(
+            let queue = async_subresource_completion_queue();
+            let (version_id, mut job, mut request) = starting_controlled_fetch(
                 &service,
-                registration_id,
-                version_id,
-                url(&format!("{origin}/app/worker.js")),
-                url(&format!("{origin}/app/")),
-                [document_url.clone()],
+                client.handle(),
+                url(&format!("{origin}/app/page")),
+                url(&format!("{origin}/app/data")),
+                queue.sender(),
             );
-            let client_id = client_id_for_document(&service, &document_url);
-            let run = exact_version_run(&service, version_id);
-            service
-                .inner
-                .state
-                .lock()
-                .versions
-                .get_mut(&version_id)
-                .unwrap()
-                .running_state = ServiceWorkerVersionRunningState::Starting {
-                host: new_loading_test_host(version_id, &run),
-            };
-            let mut request = test_fetch_request(client_id, request_url.clone());
             request.destination = ServiceWorkerRequestDestination::Style;
             if let Some(value) = author {
                 request
                     .headers
                     .push(("AcCePt".to_owned(), value.to_owned()));
             }
-            let queue = async_subresource_completion_queue();
-            let mut job = test_fetch_job(
-                &service,
-                9,
-                version_id,
-                &run,
-                client_id,
-                document_url,
-                request_url,
-                queue.sender(),
-                moli_fetch::FetchCancelHandle::new(),
-            );
-            job.request_client = client.handle();
             job.destination = request.destination;
             job.network_context.resource_type = crate::types::SubresourceResourceType::Stylesheet;
             job.request = job
@@ -314,8 +302,6 @@ async fn controlled_fetch_fallback_matches_page_accept_on_the_wire() {
 fn controlled_fetch_prepares_page_headers_while_offline_or_blocked() {
     for offline in [true, false] {
         let service = new_service_worker_runtime_service();
-        let version_id = ServiceWorkerVersionId(1);
-        let document_url = url("https://example.test/app/page.html");
         let request_url = url("https://example.test/app/style.css");
         let client = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
         client.set_extra_http_headers(
@@ -326,41 +312,15 @@ fn controlled_fetch_prepares_page_headers_while_offline_or_blocked() {
         } else {
             client.set_blocked_url_patterns(&[request_url.to_string()]);
         }
-        insert_registered_version(
-            &service,
-            ServiceWorkerRegistrationId(1),
-            version_id,
-            url("https://example.test/app/worker.js"),
-            url("https://example.test/app/"),
-            [document_url.clone()],
-        );
-        let client_id = client_id_for_document(&service, &document_url);
-        let run = exact_version_run(&service, version_id);
-        service
-            .inner
-            .state
-            .lock()
-            .versions
-            .get_mut(&version_id)
-            .unwrap()
-            .running_state = ServiceWorkerVersionRunningState::Starting {
-            host: new_loading_test_host(version_id, &run),
-        };
-        let mut request = test_fetch_request(client_id, request_url.clone());
-        request.destination = ServiceWorkerRequestDestination::Style;
         let mut queue = async_subresource_completion_queue();
-        let mut job = test_fetch_job(
+        let (version_id, mut job, mut request) = starting_controlled_fetch(
             &service,
-            9,
-            version_id,
-            &run,
-            client_id,
-            document_url,
+            client.handle(),
+            url("https://example.test/app/page.html"),
             request_url,
             queue.sender(),
-            moli_fetch::FetchCancelHandle::new(),
         );
-        job.request_client = client.handle();
+        request.destination = ServiceWorkerRequestDestination::Style;
         job.destination = request.destination;
         job.network_context.resource_type = crate::types::SubresourceResourceType::Stylesheet;
         assert!(service.dispatch_controlled_fetch_job(job, request).is_ok());
