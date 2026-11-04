@@ -765,19 +765,12 @@ pub(in crate::domains) fn project_page_output_finite(
                 .page_mut()
                 .and_then(PagePreparedOutputSlot::take_document_lifecycle_events)
             {
-                let (binding, accepted) = conn
-                    .ingest_renderer_document_lifecycle_events_for_owner(&owner, renderer_events);
-                if let Some(binding) = binding {
-                    let mut events = Vec::new();
-                    emit_bound_renderer_document_lifecycle_background_events(
-                        conn,
-                        &mut events,
-                        &owner,
-                        &binding,
-                        &accepted,
-                    );
-                    context.command.protocol_events_mut().extend(events);
-                }
+                let output = super::project_renderer_document_lifecycle_background_events(
+                    conn,
+                    &owner,
+                    renderer_events,
+                );
+                context.command.protocol_events_mut().extend(output);
             }
         }
         ProtocolOutputSlot::DocumentTitleChanged => {

@@ -252,6 +252,27 @@ fn emit_renderer_navigation_domcontentloaded_background_events(
     }
 }
 
+pub(crate) fn project_renderer_document_lifecycle_background_events(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    events: Vec<RendererDocumentLifecycleEvent>,
+) -> Vec<BackgroundProtocolEvent> {
+    let (binding, accepted) =
+        conn.ingest_renderer_document_lifecycle_events_for_owner(owner, events);
+    let mut output = Vec::new();
+    if let Some(binding) = binding {
+        emit_bound_renderer_document_lifecycle_background_events(
+            conn,
+            &mut output,
+            owner,
+            &binding,
+            &accepted,
+        );
+    }
+    output.extend(conn.publish_ready_main_document_load_output(owner));
+    output
+}
+
 pub(crate) fn emit_bound_renderer_document_lifecycle_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,

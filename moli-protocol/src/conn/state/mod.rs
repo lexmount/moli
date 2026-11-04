@@ -5,7 +5,6 @@ mod browser_identity;
 mod dedicated_worker_target;
 mod devtools_renderer_channel;
 mod devtools_session;
-mod document_lifecycle_observer;
 mod emulation;
 mod fetch;
 mod identity;
@@ -56,9 +55,6 @@ pub(crate) use devtools_session::{
     DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DevToolsNetworkSessionState,
     DevToolsSessionLifecycle, DevToolsSessionState, PreparedRendererCallReplacements,
     SessionRendererCallReplay, SessionRendererCallTermination,
-};
-pub(crate) use document_lifecycle_observer::{
-    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
 };
 pub(crate) use page_residence_token::{TargetPageResidenceObservation, TargetPageResidenceToken};
 

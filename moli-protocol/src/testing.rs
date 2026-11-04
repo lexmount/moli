@@ -19,8 +19,7 @@ use super::conn::{
 };
 use crate::automation::{AutomationCommand, AutomationResult, DevToolsError};
 use crate::domains::activity::{
-    ProtocolSchedulerWork, ProtocolSchedulerWorkKind, RuntimeCommandOutputBarrierCompletion,
-    RuntimeCommandOutputBarrierPermit,
+    ProtocolSchedulerWork, RuntimeCommandOutputBarrierCompletion, RuntimeCommandOutputBarrierPermit,
 };
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask, RendererOutputFence, RendererOutputStreamControl,
@@ -2369,42 +2368,12 @@ impl TestContext {
         loop {
             let selected_index = match self.pending_protocol_scheduler_work.front() {
                 Some(front)
-                    if front.is_ready()
-                        && self
-                            .state
-                            .with_state(|state| state.protocol_work_predecessor_is_projected(front))
-                            .expect("live test owner") =>
+                    if self
+                        .state
+                        .with_state(|state| state.protocol_work_predecessor_is_projected(front))
+                        .expect("live test owner") =>
                 {
                     0
-                }
-                Some(front)
-                    if front.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction =>
-                {
-                    let Some(index) =
-                        self.pending_protocol_scheduler_work
-                            .iter()
-                            .position(|candidate| {
-                                candidate.is_ready()
-                                    && self
-                                        .state
-                                        .with_state(|state| {
-                                            state.protocol_work_predecessor_is_projected(candidate)
-                                        })
-                                        .expect("live test owner")
-                                    && candidate.navigation_dependency()
-                                        == crate::ProtocolNavigationDependency::ReplacesPendingLoad
-                            })
-                    else {
-                        return;
-                    };
-                    // Production checks the pending load observer out of the
-                    // FIFO while it waits for the renderer. An unconstrained
-                    // location owner action may then run and replace that
-                    // exact source Document, which completes the observer as
-                    // Superseded. Keeping the pending observer at the front in
-                    // this protocol-only harness would deadlock the action
-                    // needed to make it terminal.
-                    index
                 }
                 Some(_) | None => return,
             };
@@ -2787,10 +2756,9 @@ pub(crate) async fn collect_ready_scheduler_output(
             }
             CdpSchedulerEvent::ProtocolWorkPublished { work } => {
                 assert!(
-                    work.is_ready()
-                        && state
-                            .with_state(|state| state.protocol_work_predecessor_is_projected(&work))
-                            .expect("live test owner"),
+                    state
+                        .with_state(|state| state.protocol_work_predecessor_is_projected(&work))
+                        .expect("live test owner"),
                     "pending work requires the stateful test scheduler"
                 );
                 match state

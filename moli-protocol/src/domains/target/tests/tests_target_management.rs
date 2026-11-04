@@ -1600,6 +1600,13 @@ async fn send_message_to_target_preserves_nested_scheduler_events() {
             .attach_active_session("SID-9")
     });
     ctx.with_fixture(|conn| conn.commit_declared_session_fixtures_for_test());
+    ctx.process_async(json!({
+        "id": 1400,
+        "method": "Page.enable",
+        "sessionId": "SID-9"
+    }))
+    .await;
+    ctx.expect_result(1400, json!({}), Some("SID-9"));
 
     let raw = json!({
         "id": 1402,
@@ -1607,10 +1614,8 @@ async fn send_message_to_target_preserves_nested_scheduler_events() {
         "params": {
             "message": serde_json::to_string(&json!({
                 "id": 7702,
-                "method": "Page.navigate",
-                "params": {
-                    "url": "data:text/html,<html><body>nested scheduler event</body></html>"
-                }
+                "method": "Page.startScreencast",
+                "params": { "format": "png" }
             }))
             .expect("nested message json"),
             "sessionId": "SID-9"
@@ -1645,17 +1650,25 @@ async fn send_message_to_target_preserves_nested_scheduler_events() {
             };
             nested["id"] == json!(7702) && nested.get("result").is_some()
         }),
-        "nested Page.navigate result should be wrapped in a Target event: {messages:?}"
+        "nested Page.startScreencast result should be wrapped in a Target event: {messages:?}"
     );
-    assert!(
-        scheduler_events.iter().any(|event| matches!(
-            event,
-            crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                if work.kind()
-                    == crate::domains::activity::ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
-        )),
-        "nested Page.navigate deferred scheduler event should be returned to the outer turn: {scheduler_events:?}"
-    );
+    let [registration]: [_; 1] = scheduler_events
+        .into_iter()
+        .filter_map(|event| match event {
+            crate::conn::CdpSchedulerEvent::PageScreencastStarted { registration } => {
+                Some(registration)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("nested screencast subscription should be returned to the outer turn");
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.page_screencast_subscription_status(&registration),
+            crate::domains::page::PageScreencastSubscriptionStatus::Ready
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
