@@ -360,7 +360,7 @@ fn append_browser_navigation_headers(
     append_encoded_header_if_missing(
         outgoing,
         "Accept",
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7".to_owned(),
+        crate::default_accept_header("document").to_owned(),
     );
     append_encoded_header_if_missing(
         outgoing,
@@ -403,15 +403,12 @@ fn append_browser_subresource_headers(
         return;
     }
 
-    let accept = match metadata {
-        BrowserRequestMetadata::Image => {
-            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
-        }
-        BrowserRequestMetadata::EventSource => "text/event-stream",
-        BrowserRequestMetadata::Manifest => "*/*",
-        BrowserRequestMetadata::TextTrack => "text/vtt,*/*;q=0.1",
-        _ => "*/*",
-    };
+    let accept = crate::default_accept_header(match metadata {
+        BrowserRequestMetadata::Image => "image",
+        BrowserRequestMetadata::EventSource => "eventsource",
+        BrowserRequestMetadata::TextTrack => "track",
+        _ => "",
+    });
     append_encoded_header_if_missing(outgoing, "Accept", accept.to_owned());
     append_encoded_header_if_missing(
         outgoing,
