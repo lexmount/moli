@@ -687,6 +687,7 @@ impl DocumentRuntime {
         self.script_element_request_csp_violation_with_nonce(request_url, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn script_element_request_csp_violation_with_nonce(
         &self,
         request_url: &Url,
@@ -740,6 +741,7 @@ impl DocumentRuntime {
         self.script_element_request_csp_report_only_violation_with_nonce(request_url, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn script_element_request_csp_report_only_violation_with_nonce(
         &self,
         request_url: &Url,
@@ -814,6 +816,68 @@ impl DocumentRuntime {
         DocumentContentSecurityPolicyCheck {
             report_only_violation,
             enforced_violation,
+        }
+    }
+
+    pub(crate) fn module_request_csp_violation(
+        &self,
+        request_url: &Url,
+        kind: crate::module_runtime::ModuleKind,
+        redirect_status: ContentSecurityPolicyRedirectStatus,
+        request: ContentSecurityPolicyScriptElementRequest<'_>,
+        disposition: ContentSecurityPolicyDisposition,
+    ) -> Option<DocumentContentSecurityPolicyViolation> {
+        let policies = match disposition {
+            ContentSecurityPolicyDisposition::Enforce => self
+                .document_content_security_policies_for_optional_document(
+                    Some(self.document_handle()),
+                    &self.policy_container.response_content_security_policies,
+                    &self.policy_container.content_security_reporting_endpoints,
+                ),
+            ContentSecurityPolicyDisposition::Report => {
+                document_response_content_security_policies(
+                    &self
+                        .policy_container
+                        .response_content_security_report_only_policies,
+                    &self.policy_container.content_security_reporting_endpoints,
+                )
+            }
+        };
+        let resource_kind = crate::content_security_policy::module_csp_resource_kind(
+            kind,
+            ContentSecurityPolicyResourceKind::DocumentScriptElement,
+        );
+        match resource_kind {
+            ContentSecurityPolicyResourceKind::DocumentScriptElement => {
+                document_script_element_url_policy_violation_from_document_policies(
+                    policies,
+                    self.document_url(),
+                    request_url,
+                    redirect_status,
+                    disposition,
+                    request,
+                )
+            }
+            ContentSecurityPolicyResourceKind::DocumentStyleElement => {
+                document_style_element_url_policy_violation_from_document_policies(
+                    policies,
+                    self.document_url(),
+                    request_url,
+                    redirect_status,
+                    disposition,
+                    ContentSecurityPolicyStyleElementRequest {
+                        nonce: request.nonce,
+                    },
+                )
+            }
+            _ => document_url_policy_violation_from_document_policies(
+                policies,
+                self.document_url(),
+                request_url,
+                resource_kind,
+                redirect_status,
+                disposition,
+            ),
         }
     }
 

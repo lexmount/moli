@@ -589,6 +589,7 @@ impl ScriptVm {
             Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
                 load_id,
                 fetched_source,
+                preload.module_key().kind(),
                 preload.fetch_metadata(),
             ),
             Err(error) => Err(ModuleLoadError::new(ModuleLoadStage::Fetch, error)),

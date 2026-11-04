@@ -354,6 +354,7 @@ fn module_graph_redirect_final_url_obeys_script_src_csp() {
         .module_graph_fetched_source_or_csp_error(
             7,
             fetched_source,
+            crate::module_runtime::ModuleKind::JavaScript,
             &crate::module_runtime::ModuleFetchMetadata::default(),
         )
         .expect_err("redirected module final URL should be blocked by script-src");

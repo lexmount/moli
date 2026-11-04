@@ -250,6 +250,10 @@ impl NativeModuleGraphFetchRequest {
         &self.fetch_metadata
     }
 
+    pub(crate) fn kind(&self) -> ModuleKind {
+        self.kind
+    }
+
     pub(crate) fn pending_fetch_key(&self) -> Option<&ModuleMapKey> {
         self.module_key.as_ref()
     }

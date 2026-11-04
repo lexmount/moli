@@ -629,6 +629,7 @@ fn start_worker_module_graph_fetch(
             crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
         ),
     };
+    let resource_kind = request.module_type().csp_resource_kind(resource_kind);
     let initial_csp_report_only_violation =
         content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
             &content_security_report_only_policies,

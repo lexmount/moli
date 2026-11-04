@@ -8,6 +8,25 @@ use moli_fetch::{
     Request, RequestCredentialsMode, RequestMode, RequestRedirectMode, RequestResourceType,
 };
 
+/// Synthetic modules use their fetch destination's policy, rather than the
+/// script/worker policy of the graph which imports them.
+pub(crate) fn module_csp_resource_kind(
+    kind: crate::module_runtime::ModuleKind,
+    script_kind: ContentSecurityPolicyResourceKind,
+) -> ContentSecurityPolicyResourceKind {
+    use crate::module_runtime::ModuleKind;
+    match kind {
+        ModuleKind::JavaScript | ModuleKind::WebAssembly => script_kind,
+        ModuleKind::Json | ModuleKind::Text => match script_kind {
+            ContentSecurityPolicyResourceKind::DocumentScriptElement => {
+                ContentSecurityPolicyResourceKind::DocumentConnect
+            }
+            _ => ContentSecurityPolicyResourceKind::WorkerConnect,
+        },
+        ModuleKind::Css => ContentSecurityPolicyResourceKind::DocumentStyleElement,
+    }
+}
+
 pub(crate) fn create_security_policy_violation_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     fields: &ContentSecurityPolicyViolationEventFields<'_>,

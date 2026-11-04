@@ -566,6 +566,7 @@ impl ScriptVm {
             Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
                 load_id,
                 fetched_source,
+                child_inflight.inflight.kind(),
                 child_inflight.inflight.fetch_metadata(),
             ),
             Err(error) => Err(ModuleLoadError::new(

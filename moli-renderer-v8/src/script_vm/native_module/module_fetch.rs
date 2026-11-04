@@ -508,6 +508,7 @@ impl ScriptVm {
             Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
                 load_id,
                 fetched_source,
+                graph_continuation.request().kind(),
                 graph_continuation.request().fetch_metadata(),
             ),
             Err(error) => Err(ModuleLoadError::new(
@@ -843,30 +844,29 @@ impl ScriptVm {
         &mut self,
         load_id: u64,
         fetched_source: ModuleGraphFetchedSource,
+        kind: ModuleKind,
         fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
     ) -> std::result::Result<ModuleGraphFetchedSource, ModuleLoadError> {
         if fetched_source.redirected() {
             let redirect_status =
                 crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect;
             let request = module_fetch_csp_request(fetch_metadata);
-            if let Some(violation) = self
-                .document_runtime
-                .script_element_request_csp_report_only_violation_with_redirect_status(
-                    fetched_source.final_url(),
-                    redirect_status,
-                    request,
-                )
-            {
+            if let Some(violation) = self.document_runtime.module_request_csp_violation(
+                fetched_source.final_url(),
+                kind,
+                redirect_status,
+                request,
+                crate::content_security_policy::ContentSecurityPolicyDisposition::Report,
+            ) {
                 self.queue_content_security_policy_violation_event_best_effort(&violation);
             }
-            if let Some(violation) = self
-                .document_runtime
-                .script_element_request_csp_violation_with_redirect_status(
-                    fetched_source.final_url(),
-                    redirect_status,
-                    request,
-                )
-            {
+            if let Some(violation) = self.document_runtime.module_request_csp_violation(
+                fetched_source.final_url(),
+                kind,
+                redirect_status,
+                request,
+                crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
+            ) {
                 self.queue_content_security_policy_violation_event_best_effort(&violation);
                 return Err(ModuleLoadError::new(
                     ModuleLoadStage::Fetch,
@@ -884,15 +884,13 @@ impl ScriptVm {
         key: &ModuleMapKey,
         fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
     ) -> Option<ModuleLoadError> {
-        if !matches!(key.kind(), ModuleKind::JavaScript | ModuleKind::WebAssembly) {
-            return None;
-        }
-        let violation = self
-            .document_runtime
-            .script_element_request_csp_violation_with_request(
-                key.url(),
-                module_fetch_csp_request(fetch_metadata),
-            )?;
+        let violation = self.document_runtime.module_request_csp_violation(
+            key.url(),
+            key.kind(),
+            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect,
+            module_fetch_csp_request(fetch_metadata),
+            crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
+        )?;
         self.queue_content_security_policy_violation_event_best_effort(&violation);
         Some(ModuleLoadError::new(
             ModuleLoadStage::Fetch,
@@ -908,16 +906,13 @@ impl ScriptVm {
         key: &ModuleMapKey,
         fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
     ) {
-        if !matches!(key.kind(), ModuleKind::JavaScript | ModuleKind::WebAssembly) {
-            return;
-        }
-        if let Some(violation) = self
-            .document_runtime
-            .script_element_request_csp_report_only_violation_with_request(
-                key.url(),
-                module_fetch_csp_request(fetch_metadata),
-            )
-        {
+        if let Some(violation) = self.document_runtime.module_request_csp_violation(
+            key.url(),
+            key.kind(),
+            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect,
+            module_fetch_csp_request(fetch_metadata),
+            crate::content_security_policy::ContentSecurityPolicyDisposition::Report,
+        ) {
             self.queue_content_security_policy_violation_event_best_effort(&violation);
         }
     }
@@ -1348,6 +1343,7 @@ impl ScriptVm {
             Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
                 load_id,
                 fetched_source,
+                graph_continuation.request().kind(),
                 graph_continuation.request().fetch_metadata(),
             ),
             Err(error) => Err(ModuleLoadError::new(
@@ -1414,6 +1410,7 @@ impl ScriptVm {
             Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
                 load_id,
                 fetched_source,
+                graph_continuation.request().kind(),
                 graph_continuation.request().fetch_metadata(),
             ),
             Err(error) => Err(ModuleLoadError::new(
@@ -1479,6 +1476,7 @@ impl ScriptVm {
             Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
                 target.load_id(),
                 fetched_source,
+                inflight.kind(),
                 inflight.fetch_metadata(),
             ),
             Err(error) => Err(ModuleLoadError::new(
