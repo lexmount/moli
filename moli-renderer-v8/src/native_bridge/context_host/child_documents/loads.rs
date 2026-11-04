@@ -860,43 +860,6 @@ impl JsContextHost {
         ))
     }
 
-    pub(crate) fn continue_child_document_fetch(
-        &mut self,
-        internal_id: u64,
-        mut fetch: ChildDocumentFetch,
-        redirect_headers: Option<moli_fetch::RequestHeaders>,
-        url: url::Url,
-        method: String,
-        headers: moli_fetch::RequestHeaders,
-        body: Option<bytes::Bytes>,
-    ) {
-        if let Some(interception) = fetch.request.as_mut() {
-            interception.apply_request_override(url, method, headers, body, redirect_headers);
-            let request = interception.request();
-            if let Some(info) = fetch.network_info.as_mut() {
-                info.url = request.url.clone();
-                info.method = request.method.clone();
-                info.request_headers = request.request_headers.clone();
-                info.request_body_bytes = request.body.clone();
-                info.request_body = request
-                    .body
-                    .as_ref()
-                    .map(|body| String::from_utf8_lossy(body).into_owned());
-            }
-        }
-        // A superseded navigation has already settled without this request.
-        if self
-            .pending_child_document_navigations
-            .get(&fetch.target.load_id())
-            .is_some_and(|pending| pending.target == fetch.target)
-        {
-            fetch.start();
-        }
-        self.record_pending_subresource_continue_event(
-            PendingSubresourceContinueEvent::Completed { internal_id },
-        );
-    }
-
     pub(crate) fn fail_child_document_fetch(
         &mut self,
         internal_id: u64,
@@ -983,44 +946,121 @@ impl ChildDocumentFetch {
         }
     }
 
-    fn start(mut self) {
-        let resource_loader = self.resource_loader.clone();
-        resource_loader.spawn_resource_task(async move {
-            let result = self.load().await;
-            self.complete_hop(result);
-        });
+    pub(crate) fn apply_request_override(
+        &mut self,
+        redirect_headers: Option<moli_fetch::RequestHeaders>,
+        url: url::Url,
+        method: String,
+        headers: moli_fetch::RequestHeaders,
+        body: Option<bytes::Bytes>,
+    ) {
+        if let Some(interception) = self.request.as_mut() {
+            interception.apply_request_override(url, method, headers, body, redirect_headers);
+            let request = interception.request();
+            if let Some(info) = self.network_info.as_mut() {
+                info.url = request.url.clone();
+                info.method = request.method.clone();
+                info.request_headers = request.request_headers.clone();
+                info.request_body_bytes = request.body.clone();
+                info.request_body = request
+                    .body
+                    .as_ref()
+                    .map(|body| String::from_utf8_lossy(body).into_owned());
+            }
+        }
     }
 
-    async fn load(&mut self) -> Result<Option<ChildDocumentLoadOutcome>, String> {
-        let request = self
+    pub(crate) fn set_auth(
+        &mut self,
+        auth: crate::SubresourceAuthCredentials,
+    ) -> Result<(), String> {
+        self.resource_loader
+            .restart_after_response()
+            .map_err(|error| error.to_string())?;
+        if let Some(request) = self.request.as_mut() {
+            request.request_mut().set_auth(Some(auth.into()));
+        }
+        Ok(())
+    }
+
+    /// The navigation retains its executor; only an owned transfer future leaves the Page.
+    pub(crate) fn response_future(
+        &self,
+    ) -> impl std::future::Future<Output = Result<crate::protocol_types::NavigationResponse, String>>
+    + Send
+    + 'static {
+        let response = self
             .request
-            .take()
-            .ok_or_else(|| UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP.to_owned())?;
-        if let Some(client_id) = self.service_worker_client_id
-            && let Some(response) = self
-                .browser_context_runtime
-                .fetch_service_worker_child_main_resource_for_reserved_client(
-                    client_id,
-                    request.request(),
-                    self.resource_loader.request_client(),
-                    self.resource_loader.task_runner(),
-                    self.completion_tx.clone(),
-                )
+            .as_ref()
+            .map(|request| request.fetch_buffered());
+        let service_worker_request = self.service_worker_client_id.and_then(|client_id| {
+            self.request
+                .as_ref()
+                .map(|request| (client_id, request.request().clone()))
+        });
+        let runtime = self.browser_context_runtime.clone();
+        let loader = self.resource_loader.clone();
+        let completion_tx = self.completion_tx.clone();
+        // A child load can be scheduled inside a deep V8 callback. Box before
+        // handing the response future to Tokio so its transport state is not
+        // copied through every scheduler stack frame.
+        Box::pin(async move {
+            let response =
+                response.ok_or_else(|| UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP.to_owned())?;
+            if let Some((client_id, request)) = service_worker_request
+                && let Some(response) = runtime
+                    .fetch_service_worker_child_main_resource_for_reserved_client(
+                        client_id,
+                        &request,
+                        loader.request_client(),
+                        loader.task_runner(),
+                        completion_tx,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?
+            {
+                loader
+                    .note_service_worker_response_ready()
+                    .map_err(|error| error.to_string())?;
+                return Ok(response);
+            }
+            let (response, observation) = response
                 .await
                 .map_err(|error| error.to_string())?
-        {
-            self.resource_loader
-                .note_service_worker_response_ready()
-                .map_err(|error| error.to_string())?;
+                .into_parts();
             let (head, body) = response.into_body();
-            return self.accept_response(request, head, body);
-        }
-        let response = request
-            .fetch_raw()
-            .await
-            .map_err(|error| error.to_string())?;
-        let (head, body) = response.into_body();
-        self.accept_response(request, head, body)
+            Ok(
+                crate::protocol_types::NavigationResponse::from_head_and_materialized_body(
+                    head, body,
+                )
+                .with_network_request_headers(
+                    observation.map(|observation| observation.into_headers()),
+                ),
+            )
+        })
+    }
+
+    pub(crate) fn complete_response(
+        mut self,
+        response: Result<crate::protocol_types::NavigationResponse, String>,
+    ) {
+        let result = response.and_then(|response| {
+            let request = self
+                .request
+                .take()
+                .ok_or_else(|| UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP.to_owned())?;
+            let (head, body) = response.into_body();
+            self.accept_response(request, head, body)
+        });
+        self.complete_hop(result);
+    }
+
+    fn start(self) {
+        let resource_loader = self.resource_loader.clone();
+        let response = self.response_future();
+        resource_loader.spawn_resource_task(async move {
+            self.complete_response(response.await);
+        });
     }
 
     fn accept_response(

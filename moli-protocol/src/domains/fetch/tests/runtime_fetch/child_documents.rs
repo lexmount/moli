@@ -1,4 +1,6 @@
 use super::*;
+#[path = "child_documents/stages.rs"]
+mod stages;
 
 const CHILD_BODY_EXPRESSION: &str =
     "document.querySelector('iframe').contentDocument?.body?.textContent ?? ''";

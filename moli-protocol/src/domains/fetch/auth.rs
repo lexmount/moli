@@ -196,34 +196,43 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     .unwrap_or_else(|| CommandOutputPlan::error(-32000, "RequestNotFound")),
             ));
         }
-        match command.action {
+        // With no browser authentication UI, the last handler's Default action
+        // exposes the challenge response to a child navigation like CancelAuth.
+        let action = if matches!(command.action, DevToolsAuthChallengeAction::Default)
+            && pending.resource_type == moli_core::page::SubresourceResourceType::Document
+        {
+            DevToolsAuthChallengeAction::Cancel
+        } else {
+            command.action
+        };
+        match action {
             DevToolsAuthChallengeAction::Default | DevToolsAuthChallengeAction::Cancel => {
-                let cancel_correlation =
-                    if matches!(command.action, DevToolsAuthChallengeAction::Cancel)
-                        && pending.intercept_response
-                    {
-                        let continued = continued_subresource_request(&pending);
-                        match PreparedSubresourceCorrelation::prepare(
-                            conn,
-                            owner,
-                            &request_id,
-                            &continued,
-                            true,
-                        ) {
-                            Some(correlation) => Some(correlation),
-                            None => {
-                                conn.register_pending_subresource_fetch_auth_request_for_owner(
-                                    owner, request_id, pending,
-                                );
-                                return Some(FetchCommandTaskStep::Complete(
-                                    CommandOutputPlan::error(-32000, "RequestNotFound"),
-                                ));
-                            }
+                let cancel_correlation = if matches!(action, DevToolsAuthChallengeAction::Cancel)
+                    && pending.intercept_response
+                {
+                    let continued = continued_subresource_request(&pending);
+                    match PreparedSubresourceCorrelation::prepare(
+                        conn,
+                        owner,
+                        &request_id,
+                        &continued,
+                        true,
+                    ) {
+                        Some(correlation) => Some(correlation),
+                        None => {
+                            conn.register_pending_subresource_fetch_auth_request_for_owner(
+                                owner, request_id, pending,
+                            );
+                            return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                                -32000,
+                                "RequestNotFound",
+                            )));
                         }
-                    } else {
-                        None
-                    };
-                let native = match command.action {
+                    }
+                } else {
+                    None
+                };
+                let native = match action {
                     DevToolsAuthChallengeAction::Default => {
                         RendererPageCommand::FailPendingSubresourceAuth {
                             internal_id: pending.internal_id,
@@ -258,7 +267,7 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                         )));
                     }
                 };
-                let state = match command.action {
+                let state = match action {
                     DevToolsAuthChallengeAction::Default => {
                         PendingContinueWithAuthState::SubresourceAuthFail {
                             pending: Box::new(pending),
@@ -440,7 +449,7 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
     })
 }
 
-fn continued_subresource_request(
+pub(super) fn continued_subresource_request(
     pending: &PendingSubresourceFetchAuthRequest,
 ) -> PendingSubresourceFetchRequest {
     PendingSubresourceFetchRequest {
@@ -528,7 +537,7 @@ fn next_chained_navigation_auth_required_event(
     ))
 }
 
-fn next_chained_subresource_auth_required_event(
+pub(super) fn next_chained_subresource_auth_required_event(
     conn: &mut CdpConnection,
     command_session_id: Option<&str>,
     mut pending: PendingSubresourceFetchAuthRequest,

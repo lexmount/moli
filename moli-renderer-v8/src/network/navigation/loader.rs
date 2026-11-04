@@ -266,11 +266,11 @@ impl NavigationResourceLoader {
         }
     }
 
-    pub(crate) fn prepare_redirect(&self) -> Result<()> {
+    pub(crate) fn restart_after_response(&self) -> Result<()> {
         let mut state = self.inner.state.lock();
         ensure!(
             *state == NavigationResourceLoaderState::ResponseReady,
-            "navigation redirect requires a completed response (state: {:?})",
+            "navigation restart requires a completed response (state: {:?})",
             *state
         );
         *state = NavigationResourceLoaderState::Created;

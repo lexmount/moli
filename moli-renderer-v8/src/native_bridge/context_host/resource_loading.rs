@@ -2099,11 +2099,18 @@ impl JsContextHost {
             &pending.pending.continuation,
             PendingSubresourceContinuation::EventSource(_)
                 | PendingSubresourceContinuation::Xhr { .. }
+                | PendingSubresourceContinuation::ChildDocument(_)
         ) {
             return;
         }
         let error_text = crate::network_host::ABORTED_ERROR_TEXT.to_owned();
-        if let Some(handle) = pending.pending.info.network_request_handle {
+        let child_document = matches!(
+            pending.pending.continuation,
+            PendingSubresourceContinuation::ChildDocument(_)
+        );
+        if let Some(handle) = pending.pending.info.network_request_handle
+            && !child_document
+        {
             self.record_subresource_response_started(
                 SubresourceResponseStarted::new(
                     handle,
@@ -2130,19 +2137,21 @@ impl JsContextHost {
                 ),
             );
         } else {
-            self.record_subresource_network(
-                SubresourceNetworkRecord::failure(
-                    pending.pending.info.frame_id.clone(),
-                    pending.pending.info.document_url.clone(),
-                    pending.request_url.clone(),
-                    pending.request_method.clone(),
-                    pending.request_headers.clone(),
-                    pending.request_body.clone(),
-                    pending.pending.info.resource_type,
-                    error_text,
-                )
-                .with_request_body_bytes(pending.pending.info.request_body_bytes.clone()),
-            );
+            let mut record = SubresourceNetworkRecord::failure(
+                pending.pending.info.frame_id.clone(),
+                pending.pending.info.document_url.clone(),
+                pending.request_url.clone(),
+                pending.request_method.clone(),
+                pending.request_headers.clone(),
+                pending.request_body.clone(),
+                pending.pending.info.resource_type,
+                error_text,
+            )
+            .with_request_body_bytes(pending.pending.info.request_body_bytes.clone());
+            if let Some(handle) = pending.pending.info.network_request_handle {
+                record = record.with_request_handle(handle);
+            }
+            self.record_subresource_network(record);
         }
     }
 

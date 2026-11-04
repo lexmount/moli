@@ -756,6 +756,17 @@ impl TargetFetchState {
         session_id: Option<&str>,
         allow_pending_completion: bool,
     ) -> Option<ClaimedSubresourceContinueRequest> {
+        if allow_pending_completion {
+            // Native cancellation also invalidates response/auth interception
+            // ids, including bodies retained while an iframe was paused.
+            self.pending_subresource_fetch_auths.retain(|_, pending| {
+                pending.internal_id != internal_id || &pending.page_owner != expected_page_owner
+            });
+            self.pending_subresource_fetch_responses
+                .retain(|_, pending| {
+                    pending.internal_id != internal_id || &pending.page_owner != expected_page_owner
+                });
+        }
         let in_flight_matches = self
             .in_flight_subresource_fetches
             .get(&internal_id)

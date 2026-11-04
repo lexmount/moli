@@ -423,6 +423,16 @@ impl ScriptVm {
             trace_fields,
             trace_started,
         );
+        if matches!(
+            &pending.continuation,
+            PendingSubresourceContinuation::ChildDocument(_)
+        ) {
+            let PendingSubresourceContinuation::ChildDocument(fetch) = pending.continuation else {
+                unreachable!();
+            };
+            fetch.complete_response(result);
+            return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+        }
         if pending.continuation.is_detached_window_fetch()
             || pending.execution_context.is_window_network_only()
         {
