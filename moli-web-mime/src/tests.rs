@@ -548,6 +548,45 @@ fn derives_effective_response_mime_for_body_consumers() {
 }
 
 #[test]
+fn navigation_nosniff_defaults_missing_or_invalid_mime_to_plain_text() {
+    for supplied in [None, Some(""), Some("invalid")] {
+        let mut headers: Vec<(String, Vec<u8>)> = supplied
+            .map(|mime| vec![("Content-Type".to_owned(), mime.as_bytes().to_vec())])
+            .unwrap_or_default();
+        assert_eq!(navigation_response_mime_type_from_headers(&headers), None);
+        headers.push(("X-Content-Type-Options".to_owned(), b"nosniff".to_vec()));
+        assert_eq!(
+            navigation_response_mime_type_from_headers(&headers).as_deref(),
+            Some("text/plain"),
+            "{supplied:?}"
+        );
+        assert_eq!(
+            computed_response_mime_type(
+                &headers,
+                MimeSniffingContext::Image,
+                b"\x89PNG\r\n\x1a\nrest"
+            ),
+            "image/png",
+            "the navigation default must not suppress image subresource sniffing"
+        );
+    }
+}
+
+#[test]
+fn navigation_nosniff_preserves_supplied_document_mime() {
+    for supplied in ["Text/HTML; charset=gbk", "image/png", "application/xml"] {
+        let headers = vec![
+            ("Content-Type".to_owned(), supplied.as_bytes().to_vec()),
+            ("X-Content-Type-Options".to_owned(), b"nosniff".to_vec()),
+        ];
+        assert_eq!(
+            navigation_response_mime_type_from_headers(&headers),
+            mime_essence(supplied)
+        );
+    }
+}
+
+#[test]
 fn determines_nosniff_from_first_option_token() {
     assert!(determine_nosniff(&[(
         "X-Content-Type-Options".to_owned(),
@@ -565,6 +604,21 @@ fn determines_nosniff_from_first_option_token() {
         "x-content-type-options".to_owned(),
         b"sniff".to_vec()
     )]));
+    assert!(determine_nosniff(&[(
+        "X-Content-Type-Options".to_owned(),
+        b" \tNoSniff \t, other".to_vec()
+    )]));
+    for value in [
+        b"nosniff\x0b".as_slice(),
+        b"nosniff\x0c",
+        b"nosniff\x0b,nosniff",
+        b"\x0cnosniff",
+        b"nosniff\xa0",
+    ] {
+        let headers = vec![("X-Content-Type-Options".to_owned(), value.to_vec())];
+        assert!(!determine_nosniff(&headers), "{value:?}");
+        assert_eq!(navigation_response_mime_type_from_headers(&headers), None);
+    }
 }
 
 #[test]

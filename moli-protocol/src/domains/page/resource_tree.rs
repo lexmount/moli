@@ -359,7 +359,7 @@ pub(super) fn network_error_page_unreachable_url(
 }
 
 pub(super) fn main_document_mime_type(page: &Page) -> String {
-    moli_web_mime::effective_response_mime_essence(page.headers(), None)
+    moli_web_mime::navigation_response_mime_type_from_headers(page.headers())
         .unwrap_or_else(default_document_mime_type)
 }
 
@@ -693,7 +693,7 @@ pub(super) fn prepare_native_tree(
                     unreachable_url,
                     security_origin,
                     secure_context_type,
-                    moli_web_mime::effective_response_mime_essence(&state.headers, None)
+                    moli_web_mime::navigation_response_mime_type_from_headers(&state.headers)
                         .unwrap_or_else(default_document_mime_type),
                     children,
                 );

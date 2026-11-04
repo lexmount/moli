@@ -301,8 +301,9 @@ impl ConcurrentParseTimeRuntime {
         let mut body_source = RawDocumentBodySource::External(raw_body);
         if response_headers_indicate_xml_document(&response_headers) {
             let body = collect_streaming_raw_body(&mut body_source).await?;
-            let content_type = moli_web_mime::response_document_content_type(&response_headers)
-                .unwrap_or_else(|| "application/xml".to_owned());
+            let content_type =
+                moli_web_mime::navigation_response_mime_type_from_headers(&response_headers)
+                    .unwrap_or_else(|| "application/xml".to_owned());
             let (source, character_set) = decode_document_response(
                 &body,
                 &response_headers,
@@ -477,7 +478,7 @@ impl ConcurrentParseTimeRuntime {
 }
 
 fn response_headers_indicate_xml_document(headers: &[(String, Vec<u8>)]) -> bool {
-    moli_web_mime::response_document_content_type(headers)
+    moli_web_mime::navigation_response_mime_type_from_headers(headers)
         .is_some_and(|mime| moli_web_mime::is_xml_document_mime(&mime))
 }
 
@@ -621,7 +622,7 @@ fn response_document_parser(
     headers: &[(String, Vec<u8>)],
     env: &PageVmEnvConfig,
 ) -> (ParseTimeDriverState, DocumentStreamingDecoder) {
-    let content_type = moli_web_mime::response_document_content_type(headers);
+    let content_type = moli_web_mime::navigation_response_mime_type_from_headers(headers);
     let text_type = content_type
         .as_deref()
         .filter(|mime| moli_web_mime::is_text_document_mime(mime));
@@ -1029,6 +1030,41 @@ mod tests {
                 ),
                 expected_preload,
                 "{mime}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn untyped_nosniff_navigation_suppresses_html_preloads_before_body_arrives() {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
+        for supplied in [None, Some("invalid"), Some("text/html")] {
+            let mut headers = vec![("X-Content-Type-Options".to_owned(), b"nosniff".to_vec())];
+            if let Some(mime) = supplied {
+                headers.push(("Content-Type".to_owned(), mime.as_bytes().to_vec()));
+            }
+            let (mut state, _) = response_document_parser(
+                Url::parse("https://example.test/data").unwrap(),
+                &headers,
+                &default_test_page_vm_env_config(),
+            );
+            let is_html = supplied == Some("text/html");
+            assert_eq!(state.is_text_document, !is_html, "{supplied:?}");
+            state
+                .buffered_document_preloads
+                .bind_resource_runtime(hooks.owner_wake(), hooks.resource_task_runner());
+            scan_prebootstrap_html_chunk_into_state(
+                &mut state,
+                &loader,
+                "<script defer src='/literal.js'></script>",
+                None,
+            );
+            assert_eq!(
+                state.buffered_document_preloads.entries.contains_key(
+                    &classic_preload_key_for_streaming_test("https://example.test/literal.js")
+                ),
+                is_html,
+                "{supplied:?}",
             );
         }
     }
