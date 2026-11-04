@@ -1,3 +1,4 @@
+mod natural_dimensions;
 use super::*;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
