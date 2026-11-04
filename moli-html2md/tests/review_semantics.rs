@@ -1129,3 +1129,48 @@ fn content_after_a_nested_list_can_make_the_outer_list_loose() {
         "- a\n  - b\n- d"
     );
 }
+
+/// A projected adapter may expose children without a cheap sibling lookup.
+struct Iterated<'a>(&'a Tree);
+
+impl Dom for Iterated<'_> {
+    type NodeId = usize;
+
+    fn node_kind(&self, node: usize) -> moli_html2md::NodeKind<'_> {
+        self.0.node_kind(node)
+    }
+
+    fn first_child(&self, _node: usize) -> Option<usize> {
+        panic!("conversion must use the adapter's child iterator")
+    }
+
+    fn next_sibling(&self, _node: usize) -> Option<usize> {
+        panic!("conversion must not rescan projected siblings")
+    }
+
+    fn children(&self, node: usize) -> impl Iterator<Item = usize> {
+        self.0.children(node)
+    }
+
+    fn attribute(&self, node: usize, name: &str) -> Option<&str> {
+        self.0.attribute(node, name)
+    }
+}
+
+#[test]
+fn all_content_paths_accept_an_independent_child_iterator() {
+    for source in [
+        "<h1 id=title>Title</h1><a href=#title>Back</a><ul><li>A</li><li>B</li></ul>",
+        "<pre><code class=language-rust>A<br>B<span>C</span></code></pre>",
+        "<pre><a href=/source>Source</a></pre><h2><h3>Nested heading</h3></h2>",
+        "<table><caption>Caption</caption><colgroup><col></colgroup><thead><tr><th id=h>A</th></tr></thead><tbody><tr><td headers=h>B</td></tr></tbody></table>",
+        "<table><tr><td colspan=2><p>A</p><blockquote>B</blockquote><table><tr><td>C</td></tr></table></td></tr></table>",
+        "<span><span><math><semantics><mfrac><mi>x</mi><mn>2</mn></mfrac><annotation>Hidden</annotation></semantics></math></span><span aria-hidden=true>Visual copy</span></span>",
+        "<svg><title>Icon</title></svg><video><source src=/movie.mp4></video>",
+        "<select><option>A</option><option selected>B</option></select><textarea>Text</textarea>",
+    ] {
+        let tree = Tree::parse(source);
+        let expected = convert(&tree, tree.root);
+        assert_eq!(convert(&Iterated(&tree), tree.root), expected, "{source}");
+    }
+}

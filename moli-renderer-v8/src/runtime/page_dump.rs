@@ -1,85 +1,21 @@
-use std::borrow::Cow;
-
-use crate::dom::native::{DomHost, NativeDom, NativeNodeId};
+use crate::dom::native::{NativeDom, NativeNodeId};
 use crate::runtime::page_surface::{
     RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
 };
+use moli_html2md::Dom;
 use moli_page_types::MAX_DOM_OUTPUT_TREE_DEPTH;
 
 use super::page_vm::PageVm;
 
+mod live_dom;
 mod visibility;
 
 impl PageVm {
     pub(crate) fn render_page_dump(&mut self, options: RendererPageDumpOptions) -> String {
-        let markdown_base_url = (options.format == RendererPageDumpFormat::Markdown)
-            .then(|| self.vm().document_runtime.dom_host().document_base_url())
-            .flatten();
-        let markdown_dom = (options.format == RendererPageDumpFormat::Markdown)
-            .then(|| markdown_export_dom(self.vm().document_runtime.dom_host()));
-        let styles = if let Some(dom) = markdown_dom.as_deref() {
-            let mut nodes = Vec::new();
-            if let Some(body) = dom.body_node_id() {
-                // The root style carries inherited visibility into the body.
-                if let Some(html) = dom.document_element_node_id() {
-                    nodes.push(html);
-                }
-                collect_node_ids(dom, body, &mut nodes);
-            } else {
-                collect_node_ids(dom, dom.document_node_id(), &mut nodes);
-            }
-            nodes.retain(|node| {
-                dom.node(*node)
-                    .is_some_and(|node| node.as_element().is_some())
-            });
-            let values = self
-                .vm()
-                .computed_style_export_values_for_document_snapshot(
-                    nodes.iter().copied(),
-                    &[
-                        "display",
-                        "visibility",
-                        "baseline-shift",
-                        "position",
-                        "float",
-                        "flex-direction",
-                    ]
-                    .map(str::to_owned),
-                );
-            nodes
-                .into_iter()
-                .zip(values)
-                .map(|(node, style)| {
-                    let mut values = style.values.into_iter();
-                    (
-                        node,
-                        visibility::ExportStyle {
-                            display: values.next().unwrap_or_default(),
-                            visibility: values.next().unwrap_or_default(),
-                            baseline_shift: values.next().unwrap_or_default(),
-                            position: values.next().unwrap_or_default(),
-                            float: values.next().unwrap_or_default(),
-                            flex_direction: values.next().unwrap_or_default(),
-                            original_display: style.original_display,
-                            own_visibility: style.own_visibility,
-                            hides_contents: style.hides_contents,
-                        },
-                    )
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        if let Some(dom) = markdown_dom.as_deref()
-            && !options.with_base
-            && !options.with_frames
-            && options.strip == RendererPageDumpStripOptions::default()
-        {
-            return render_markdown_document_with_styles(dom, styles, markdown_base_url.as_ref());
+        if options.format == RendererPageDumpFormat::Markdown {
+            return self.render_markdown_dump(options.strip);
         }
-        let mut dom = markdown_dom
-            .map(Cow::into_owned)
-            .unwrap_or_else(|| self.vm().document_runtime.dom_host().dom().clone());
+        let mut dom = self.vm().document_runtime.dom_host().dom().clone();
 
         if options.with_base {
             let href = self
@@ -95,12 +31,61 @@ impl PageVm {
         }
         apply_strip_options(&mut dom, options.strip);
 
-        match options.format {
-            RendererPageDumpFormat::Html => dom.serialize_document(),
-            RendererPageDumpFormat::Markdown => {
-                render_markdown_document_with_styles(&dom, styles, markdown_base_url.as_ref())
+        dom.serialize_document()
+    }
+
+    fn render_markdown_dump(&self, strip: RendererPageDumpStripOptions) -> String {
+        let host = self.vm().document_runtime.dom_host();
+        let base_url = host.document_base_url();
+        let dom = live_dom::LiveDom::new(host);
+        let native = host.dom();
+        let mut nodes = Vec::new();
+        if let Some(body) = native.body_node_id() {
+            if let Some(html) = native.document_element_node_id() {
+                nodes.push(html);
             }
+            collect_node_ids(&dom, body, &mut nodes);
+        } else {
+            collect_node_ids(&dom, native.document_node_id(), &mut nodes);
         }
+        nodes.retain(|node| matches!(dom.node_kind(*node), moli_html2md::NodeKind::Element(_)));
+        let values = self
+            .vm()
+            .computed_style_export_values_for_document_snapshot(
+                nodes.iter().copied(),
+                &[
+                    "display",
+                    "visibility",
+                    "baseline-shift",
+                    "position",
+                    "float",
+                    "flex-direction",
+                ]
+                .map(str::to_owned),
+            );
+        let styles = nodes
+            .iter()
+            .copied()
+            .zip(values)
+            .map(|(node, style)| {
+                let mut values = style.values.into_iter();
+                (
+                    node,
+                    visibility::ExportStyle {
+                        display: values.next().unwrap_or_default(),
+                        visibility: values.next().unwrap_or_default(),
+                        baseline_shift: values.next().unwrap_or_default(),
+                        position: values.next().unwrap_or_default(),
+                        float: values.next().unwrap_or_default(),
+                        flex_direction: values.next().unwrap_or_default(),
+                        original_display: style.original_display,
+                        own_visibility: style.own_visibility,
+                        hides_contents: style.hides_contents,
+                    },
+                )
+            })
+            .collect();
+        render_markdown_view(&dom, styles, base_url.as_ref(), strip)
     }
 
     fn inline_child_frame_markups_into_dump_dom(&mut self, dom: &mut NativeDom) {
@@ -122,32 +107,6 @@ impl PageVm {
             let _ = dom.set_attribute(owner_node_id, "data-moli-frame-url", &snapshot.url);
         }
     }
-}
-
-/// Project the rendered tree into a dump-only DOM, keeping node IDs for live style lookup.
-/// Shadow contents replace host children; slots expose assigned nodes or fallback content.
-fn markdown_export_dom(host: &DomHost) -> Cow<'_, NativeDom> {
-    if host.snapshot_connected_shadow_root_bindings().is_empty() {
-        return Cow::Borrowed(host.dom());
-    }
-
-    let mut dom = host.dom().clone();
-    let root = host.document_handle();
-    let mut stack = vec![root];
-    while let Some(parent) = stack.pop() {
-        let children = crate::dom_presentation::flat_children(host, root, parent);
-        let existing = dom.child_ids(parent).collect::<Vec<_>>();
-        if existing != children {
-            for child in existing {
-                let _ = dom.remove_child(parent, child);
-            }
-            for &child in &children {
-                let _ = dom.append_child(parent, child);
-            }
-        }
-        stack.extend(children.into_iter().rev());
-    }
-    Cow::Owned(dom)
 }
 
 fn inject_base_href(dom: &mut NativeDom, href: &str) {
@@ -217,40 +176,7 @@ fn apply_strip_options(dom: &mut NativeDom, strip: RendererPageDumpStripOptions)
 
     let mut remove = Vec::new();
     for node_id in node_ids {
-        let Some(node) = dom.node(node_id) else {
-            continue;
-        };
-        let Some(element) = node.as_element() else {
-            continue;
-        };
-        let tag = element.local_name();
-        let should_remove = (strip.js && matches!(tag, "script" | "noscript"))
-            || (strip.css
-                && (tag == "style"
-                    || (tag == "link"
-                        && dom
-                            .get_attribute(node_id, "rel")
-                            .unwrap_or_default()
-                            .split_ascii_whitespace()
-                            .any(|token| token.eq_ignore_ascii_case("stylesheet")))))
-            || (strip.ui
-                && matches!(
-                    tag,
-                    "header"
-                        | "footer"
-                        | "nav"
-                        | "aside"
-                        | "form"
-                        | "input"
-                        | "button"
-                        | "select"
-                        | "textarea"
-                        | "option"
-                        | "dialog"
-                        | "menu"
-                        | "menuitem"
-                ));
-        if should_remove {
+        if should_strip_node(dom, node_id, strip) {
             remove.push(node_id);
         }
     }
@@ -264,11 +190,52 @@ fn apply_strip_options(dom: &mut NativeDom, strip: RendererPageDumpStripOptions)
     }
 }
 
-fn collect_node_ids(dom: &NativeDom, node_id: NativeNodeId, out: &mut Vec<NativeNodeId>) {
+fn should_strip_node(
+    dom: &NativeDom,
+    node_id: NativeNodeId,
+    strip: RendererPageDumpStripOptions,
+) -> bool {
+    let Some(element) = dom.node(node_id).and_then(|node| node.as_element()) else {
+        return false;
+    };
+    let tag = element.local_name();
+    (strip.js && matches!(tag, "script" | "noscript"))
+        || (strip.css
+            && (tag == "style"
+                || (tag == "link"
+                    && element
+                        .attribute("rel")
+                        .unwrap_or_default()
+                        .split_ascii_whitespace()
+                        .any(|token| token.eq_ignore_ascii_case("stylesheet")))))
+        || (strip.ui
+            && matches!(
+                tag,
+                "header"
+                    | "footer"
+                    | "nav"
+                    | "aside"
+                    | "form"
+                    | "input"
+                    | "button"
+                    | "select"
+                    | "textarea"
+                    | "option"
+                    | "dialog"
+                    | "menu"
+                    | "menuitem"
+            ))
+}
+
+fn collect_node_ids(
+    dom: &impl Dom<NodeId = NativeNodeId>,
+    node_id: NativeNodeId,
+    out: &mut Vec<NativeNodeId>,
+) {
     let mut stack = vec![node_id];
     while let Some(node_id) = stack.pop() {
         out.push(node_id);
-        let child_ids = dom.child_ids(node_id).collect::<Vec<_>>();
+        let child_ids = dom.children(node_id).collect::<Vec<_>>();
         stack.extend(child_ids.into_iter().rev());
     }
 }
@@ -278,13 +245,26 @@ fn render_markdown_document(dom: &NativeDom) -> String {
     render_markdown_document_with_styles(dom, Vec::new(), None)
 }
 
+#[cfg(test)]
 fn render_markdown_document_with_styles(
     dom: &NativeDom,
     styles: Vec<(NativeNodeId, visibility::ExportStyle)>,
     base_url: Option<&url::Url>,
 ) -> String {
-    let root = dom.body_node_id().unwrap_or(dom.document_node_id());
-    let visible = visibility::MarkdownDom::new(dom, styles, base_url);
+    render_markdown_view(dom, styles, base_url, Default::default())
+}
+
+fn render_markdown_view(
+    dom: &impl live_dom::MarkdownSource,
+    styles: Vec<(NativeNodeId, visibility::ExportStyle)>,
+    base_url: Option<&url::Url>,
+    strip: RendererPageDumpStripOptions,
+) -> String {
+    let root = dom
+        .native()
+        .body_node_id()
+        .unwrap_or(dom.native().document_node_id());
+    let visible = visibility::MarkdownDom::new(dom, styles, base_url, strip);
     moli_html2md::Converter::new(moli_html2md::Options {
         max_depth: MAX_DOM_OUTPUT_TREE_DEPTH,
         default_code_language: Some("text".to_owned()),

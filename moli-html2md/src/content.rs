@@ -69,22 +69,18 @@ pub(crate) fn fallback_text<D: Dom + ?Sized>(
     }
     // Title text is two levels below SVG and obeys the same depth limit as body text.
     if matches!(dom.node_kind(node), NodeKind::Element("svg")) && remaining_depth > 2 {
-        let mut child = dom.first_child(node);
-        while let Some(id) = child {
+        for id in dom.children(node) {
             if dom.node_kind(id) == NodeKind::Element("title") {
                 let mut text = String::new();
-                let mut title_child = dom.first_child(id);
-                while let Some(part) = title_child {
+                for part in dom.children(id) {
                     if let NodeKind::Text(value) = dom.node_kind(part) {
                         text.push_str(value);
                     }
-                    title_child = dom.next_sibling(part);
                 }
                 if !text.trim().is_empty() {
                     return Some(text);
                 }
             }
-            child = dom.next_sibling(id);
         }
     }
     None
@@ -148,14 +144,12 @@ pub(crate) fn code_language<'a, D: Dom + ?Sized>(
     node: D::NodeId,
     default: Option<&'a str>,
 ) -> Option<&'a str> {
-    let mut child = dom.first_child(node);
-    while let Some(id) = child {
+    for id in dom.children(node) {
         if dom.node_kind(id) == NodeKind::Element("code")
             && let Some(language) = class_language(dom.attribute(id, "class"))
         {
             return Some(language);
         }
-        child = dom.next_sibling(id);
     }
     class_language(dom.attribute(node, "class")).or(default)
 }

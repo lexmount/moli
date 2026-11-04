@@ -280,9 +280,7 @@ pub(crate) fn sources<'a, D: Dom + ?Sized>(
         urls.push(src);
     }
     if tag != "iframe" && depth + 1 < limit {
-        let mut child = dom.first_child(node);
-        while let Some(id) = child {
-            child = dom.next_sibling(id);
+        for id in dom.children(node) {
             if dom.node_kind(id) == NodeKind::Element("source")
                 && let Some(src) = direct_source(dom, id)
                 && seen.insert(src)

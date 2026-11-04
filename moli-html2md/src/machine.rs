@@ -6,10 +6,10 @@ use crate::writer::{Style, Writer, longest_run};
 use crate::{Dom, NodeKind, Options};
 use std::collections::HashSet;
 
-enum Task<'a, Id> {
+enum Task<'a, Id, Children> {
     Visit(Id, usize),
-    Children(Option<Id>, usize),
-    MathChildren(Option<Id>, usize),
+    Children(Children, usize),
+    MathChildren(Children, usize),
     Boundary,
     LayoutBoundary,
     ChoiceBoundary,
@@ -21,7 +21,7 @@ enum Task<'a, Id> {
     EndHeading(usize),
     EndList(usize),
     EndItem(String),
-    RawChildren(Option<Id>, usize, bool),
+    RawChildren(Children, usize, bool),
     EndRawBlock,
     EndCode,
     EndPre(Option<&'a str>),
@@ -36,10 +36,11 @@ struct List {
     loose: bool,
 }
 
-struct Machine<'a, D: Dom + ?Sized> {
+struct Machine<'a, D: Dom + ?Sized, Children> {
     dom: &'a D,
     options: &'a Options,
-    tasks: Vec<Task<'a, D::NodeId>>,
+    child_nodes: fn(&'a D, D::NodeId) -> Children,
+    tasks: Vec<Task<'a, D::NodeId, Children>>,
     writers: Vec<Writer<'a>>,
     lists: Vec<List>,
     tables: Vec<Table<D::NodeId>>,
@@ -53,6 +54,7 @@ pub(crate) fn convert<D: Dom + ?Sized>(dom: &D, root: D::NodeId, options: &Optio
     let mut machine = Machine {
         dom,
         options,
+        child_nodes: D::children,
         tasks: vec![Task::Visit(root, 0)],
         writers: vec![Writer::default()],
         lists: Vec::new(),
@@ -66,30 +68,28 @@ pub(crate) fn convert<D: Dom + ?Sized>(dom: &D, root: D::NodeId, options: &Optio
     machine.take_writer().into_string()
 }
 
-impl<'a, D: Dom + ?Sized> Machine<'a, D> {
+impl<'a, D: Dom + ?Sized, Children: Iterator<Item = D::NodeId>> Machine<'a, D, Children> {
     fn run(&mut self) {
         while let Some(task) = self.tasks.pop() {
             match task {
                 Task::Visit(node, depth) => self.visit(node, depth),
-                Task::Children(Some(node), depth) => {
-                    // Keep one sibling continuation, not a vector of every
-                    // child. Traversal storage is bounded by depth, not width.
-                    self.tasks
-                        .push(Task::Children(self.dom.next_sibling(node), depth));
-                    self.tasks.push(Task::Visit(node, depth));
-                }
-                Task::MathChildren(Some(node), depth) => {
-                    self.tasks
-                        .push(Task::MathChildren(self.dom.next_sibling(node), depth));
-                    // The recognized group contains one semantic branch,
-                    // whitespace and hidden copies. Keep text in DOM order.
-                    if !crate::mathml::is_hidden_alternative(self.dom, node) {
+                Task::Children(mut children, depth) => {
+                    // Keep one iterator continuation per parent. Ordinary DOM
+                    // adapters stream siblings without allocating a child list.
+                    if let Some(node) = children.next() {
+                        self.tasks.push(Task::Children(children, depth));
                         self.tasks.push(Task::Visit(node, depth));
                     }
                 }
-                Task::Children(None, _)
-                | Task::MathChildren(None, _)
-                | Task::RawChildren(None, _, _) => {}
+                Task::MathChildren(mut children, depth) => {
+                    if let Some(node) = children.next() {
+                        self.tasks.push(Task::MathChildren(children, depth));
+                        // Keep the semantic branch and its surrounding text.
+                        if !crate::mathml::is_hidden_alternative(self.dom, node) {
+                            self.tasks.push(Task::Visit(node, depth));
+                        }
+                    }
+                }
                 Task::Boundary => self.writer().boundary(2),
                 Task::LayoutBoundary => self.writer().layout_boundary(),
                 Task::InlineSpace => self.writer().text(" "),
@@ -174,7 +174,12 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                     self.writer()
                         .append_block(item.into(), separation, separation);
                 }
-                Task::RawChildren(Some(node), depth, inline) => self.raw_node(node, depth, inline),
+                Task::RawChildren(mut children, depth, inline) => {
+                    if let Some(node) = children.next() {
+                        self.tasks.push(Task::RawChildren(children, depth, inline));
+                        self.raw_node(node, depth, inline);
+                    }
+                }
                 Task::EndRawBlock => {
                     if !self.raw.is_empty() && !self.raw.ends_with('\n') {
                         self.raw.push('\n');
@@ -231,7 +236,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
     fn children(&mut self, node: D::NodeId, depth: usize) {
         if depth < self.options.max_depth {
             self.tasks
-                .push(Task::Children(self.dom.first_child(node), depth));
+                .push(Task::Children((self.child_nodes)(self.dom, node), depth));
         }
     }
 
@@ -400,7 +405,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                 self.tasks.push(end);
                 if depth + 1 < self.options.max_depth {
                     self.tasks.push(Task::RawChildren(
-                        self.dom.first_child(node),
+                        (self.child_nodes)(self.dom, node),
                         depth + 1,
                         tag == "code",
                     ));
@@ -498,8 +503,10 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             .is_some()
         {
             self.emit_anchors_within(node, self.options.max_depth - depth);
-            self.tasks
-                .push(Task::MathChildren(self.dom.first_child(node), depth + 1));
+            self.tasks.push(Task::MathChildren(
+                (self.child_nodes)(self.dom, node),
+                depth + 1,
+            ));
             return;
         }
         if let Some(label) =
@@ -656,11 +663,6 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
     }
 
     fn raw_node(&mut self, node: D::NodeId, depth: usize, inline: bool) {
-        self.tasks.push(Task::RawChildren(
-            self.dom.next_sibling(node),
-            depth,
-            inline,
-        ));
         if depth >= self.options.max_depth {
             return;
         }
@@ -688,7 +690,7 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                     self.tasks.push(Task::EndRawBlock);
                 }
                 self.tasks.push(Task::RawChildren(
-                    self.dom.first_child(node),
+                    (self.child_nodes)(self.dom, node),
                     depth + 1,
                     inline,
                 ));
@@ -736,41 +738,35 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
 }
 
 fn subtree_has_nested_heading<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> bool {
-    let mut pending = Vec::new();
-    let mut child = dom.first_child(root);
-    while let Some(id) = child {
-        pending.push((id, 1));
-        child = dom.next_sibling(id);
-    }
-    while let Some((node, depth)) = pending.pop() {
+    let mut pending = vec![(dom.children(root), 1)];
+    while let Some((mut children, depth)) = pending.pop() {
+        let Some(node) = children.next() else {
+            continue;
+        };
+        pending.push((children, depth));
         if matches!(
             dom.node_kind(node),
             NodeKind::Element("h1" | "h2" | "h3" | "h4" | "h5" | "h6")
         ) {
             return true;
         }
-        if depth + 1 >= limit {
-            continue;
-        }
-        let mut child = dom.first_child(node);
-        while let Some(id) = child {
-            pending.push((id, depth + 1));
-            child = dom.next_sibling(id);
+        if depth + 1 < limit {
+            pending.push((dom.children(node), depth + 1));
         }
     }
     false
 }
 
 fn subtree_has_link<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> bool {
-    let mut pending = vec![(dom.first_child(root), 1)];
-    while let Some((node, depth)) = pending.pop() {
-        let Some(node) = node else {
-            continue;
-        };
+    let mut pending = vec![(dom.children(root), 1)];
+    while let Some((mut children, depth)) = pending.pop() {
         if depth >= limit {
             continue;
         }
-        pending.push((dom.next_sibling(node), depth));
+        let Some(node) = children.next() else {
+            continue;
+        };
+        pending.push((children, depth));
         if matches!(dom.node_kind(node), NodeKind::Element("a"))
             && dom
                 .attribute(node, "href")
@@ -778,28 +774,28 @@ fn subtree_has_link<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> 
         {
             return true;
         }
-        pending.push((dom.first_child(node), depth + 1));
+        pending.push((dom.children(node), depth + 1));
     }
     false
 }
 
 fn subtree_has_block<D: Dom + ?Sized>(dom: &D, root: D::NodeId, limit: usize) -> bool {
-    let mut pending = vec![(dom.first_child(root), 1)];
-    while let Some((node, depth)) = pending.pop() {
-        let Some(node) = node else {
-            continue;
-        };
+    let mut pending = vec![(dom.children(root), 1)];
+    while let Some((mut children, depth)) = pending.pop() {
         if depth >= limit {
             continue;
         }
-        pending.push((dom.next_sibling(node), depth));
+        let Some(node) = children.next() else {
+            continue;
+        };
+        pending.push((children, depth));
         if matches!(
             dom.node_kind(node),
             NodeKind::Element("table" | "pre" | "blockquote" | "ul" | "ol" | "hr")
         ) {
             return true;
         }
-        pending.push((dom.first_child(node), depth + 1));
+        pending.push((dom.children(node), depth + 1));
     }
     false
 }

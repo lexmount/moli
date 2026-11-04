@@ -12,15 +12,15 @@ pub(crate) fn needed<D: Dom + ?Sized>(
     depth: usize,
     limit: usize,
 ) -> bool {
-    let mut stack = vec![(dom.first_child(root), depth + 1)];
-    while let Some((node, depth)) = stack.pop() {
-        let Some(node) = node else {
-            continue;
-        };
+    let mut stack = vec![(dom.children(root), depth + 1)];
+    while let Some((mut children, depth)) = stack.pop() {
         if depth >= limit {
             continue;
         }
-        stack.push((dom.next_sibling(node), depth));
+        let Some(node) = children.next() else {
+            continue;
+        };
+        stack.push((children, depth));
         if let NodeKind::Element(tag) = dom.node_kind(node) {
             if matches!(
                 tag,
@@ -49,7 +49,7 @@ pub(crate) fn needed<D: Dom + ?Sized>(
                 return true;
             }
         }
-        stack.push((dom.first_child(node), depth + 1));
+        stack.push((dom.children(node), depth + 1));
     }
     false
 }
@@ -73,15 +73,15 @@ pub(crate) fn requires_table_structure<D: Dom + ?Sized>(
     }) {
         return true;
     }
-    let mut stack = vec![(dom.first_child(root), depth + 1)];
-    while let Some((node, depth)) = stack.pop() {
-        let Some(node) = node else {
-            continue;
-        };
+    let mut stack = vec![(dom.children(root), depth + 1)];
+    while let Some((mut children, depth)) = stack.pop() {
         if depth >= limit {
             continue;
         }
-        stack.push((dom.next_sibling(node), depth));
+        let Some(node) = children.next() else {
+            continue;
+        };
+        stack.push((children, depth));
         if let NodeKind::Element(tag) = dom.node_kind(node) {
             if tag == "table" {
                 continue;
@@ -104,7 +104,7 @@ pub(crate) fn requires_table_structure<D: Dom + ?Sized>(
                 return true;
             }
         }
-        stack.push((dom.first_child(node), depth + 1));
+        stack.push((dom.children(node), depth + 1));
     }
     false
 }
@@ -115,19 +115,19 @@ pub(crate) fn has_cells<D: Dom + ?Sized>(
     depth: usize,
     limit: usize,
 ) -> bool {
-    let mut stack = vec![(dom.first_child(root), depth + 1)];
-    while let Some((node, depth)) = stack.pop() {
-        let Some(node) = node else {
-            continue;
-        };
+    let mut stack = vec![(dom.children(root), depth + 1)];
+    while let Some((mut children, depth)) = stack.pop() {
         if depth >= limit {
             continue;
         }
+        let Some(node) = children.next() else {
+            continue;
+        };
         if matches!(dom.node_kind(node), NodeKind::Element("th" | "td")) {
             return true;
         }
-        stack.push((dom.next_sibling(node), depth));
-        stack.push((dom.first_child(node), depth + 1));
+        stack.push((children, depth));
+        stack.push((dom.children(node), depth + 1));
     }
     false
 }
@@ -139,10 +139,10 @@ enum TextMode {
     Pre,
 }
 
-enum Task<Id> {
+enum Task<Id, Children> {
     Node(Id, usize, TextMode),
-    Siblings(Option<Id>, usize, TextMode),
-    MathSiblings(Option<Id>, usize, TextMode),
+    Siblings(Children, usize, TextMode),
+    MathSiblings(Children, usize, TextMode),
     Close(String),
     EndTable,
     Fallback(String, usize),
@@ -209,15 +209,18 @@ pub(crate) fn render<D: Dom + ?Sized>(
                 output.push_str(&tag);
                 output.push('>');
             }
-            Task::Siblings(None, _, _) | Task::MathSiblings(None, _, _) => {}
-            Task::Siblings(Some(node), depth, mode) => {
-                tasks.push(Task::Siblings(dom.next_sibling(node), depth, mode));
-                tasks.push(Task::Node(node, depth, mode));
-            }
-            Task::MathSiblings(Some(node), depth, mode) => {
-                tasks.push(Task::MathSiblings(dom.next_sibling(node), depth, mode));
-                if !crate::mathml::is_hidden_alternative(dom, node) {
+            Task::Siblings(mut children, depth, mode) => {
+                if let Some(node) = Iterator::next(&mut children) {
+                    tasks.push(Task::Siblings(children, depth, mode));
                     tasks.push(Task::Node(node, depth, mode));
+                }
+            }
+            Task::MathSiblings(mut children, depth, mode) => {
+                if let Some(node) = Iterator::next(&mut children) {
+                    tasks.push(Task::MathSiblings(children, depth, mode));
+                    if !crate::mathml::is_hidden_alternative(dom, node) {
+                        tasks.push(Task::Node(node, depth, mode));
+                    }
                 }
             }
             Task::Node(node, depth, mode) => {
@@ -303,7 +306,7 @@ pub(crate) fn render<D: Dom + ?Sized>(
                             content.text(value);
                             write_text(value, &mut output);
                         } else {
-                            tasks.push(Task::Siblings(dom.first_child(node), depth + 1, mode));
+                            tasks.push(Task::Siblings(dom.children(node), depth + 1, mode));
                         }
                     }
                     NodeKind::Element(tag) => {
@@ -542,7 +545,7 @@ pub(crate) fn render<D: Dom + ?Sized>(
                                     output.push_str(&crate::anchors::markup(&id));
                                 }
                             }
-                            tasks.push(Task::MathSiblings(dom.first_child(node), depth + 1, mode));
+                            tasks.push(Task::MathSiblings(dom.children(node), depth + 1, mode));
                         } else {
                             if matches!(mode, TextMode::Normal)
                                 && let Some(label) =
@@ -550,11 +553,11 @@ pub(crate) fn render<D: Dom + ?Sized>(
                             {
                                 tasks.push(Task::Fallback(label, content.mark()));
                             }
-                            tasks.push(Task::Siblings(dom.first_child(node), depth + 1, mode));
+                            tasks.push(Task::Siblings(dom.children(node), depth + 1, mode));
                         }
                     }
                     NodeKind::Document => {
-                        tasks.push(Task::Siblings(dom.first_child(node), depth + 1, mode))
+                        tasks.push(Task::Siblings(dom.children(node), depth + 1, mode))
                     }
                 }
             }

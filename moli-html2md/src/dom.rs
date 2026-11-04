@@ -25,6 +25,11 @@ pub trait Dom {
     fn node_kind(&self, node: Self::NodeId) -> NodeKind<'_>;
     fn first_child(&self, node: Self::NodeId) -> Option<Self::NodeId>;
     fn next_sibling(&self, node: Self::NodeId) -> Option<Self::NodeId>;
+    /// Iterate children in conversion order. Projected DOMs can override this
+    /// to resolve slot assignment once per parent, without a sibling index.
+    fn children(&self, node: Self::NodeId) -> impl Iterator<Item = Self::NodeId> {
+        std::iter::successors(self.first_child(node), move |node| self.next_sibling(*node))
+    }
     fn attribute(&self, node: Self::NodeId, name: &str) -> Option<&str>;
     /// Current input/textarea value supplied by an adapter. None uses the
     /// source default; Some("") suppresses that default after a clear. Empty
