@@ -78,7 +78,26 @@ fn dynamic_function_imports_preserve_each_initiators_nonce_for_identical_source(
         assert_eq!(request.specifier(), "./dependency.mjs");
         assert_eq!(request.base_url(), &script_url);
         assert_eq!(request.fetch_metadata().nonce(), nonce);
-        assert!(request.fetch_metadata().integrity().is_none());
+        assert_eq!(
+            request.fetch_metadata().credentials_mode,
+            moli_fetch::RequestCredentialsMode::Include
+        );
+        assert_eq!(
+            request
+                .fetch_metadata()
+                .request_metadata
+                .referrer_policy
+                .as_deref(),
+            Some("no-referrer")
+        );
+        assert!(request.fetch_metadata().parser_inserted);
+        assert!(
+            request
+                .fetch_metadata()
+                .request_metadata
+                .integrity
+                .is_none()
+        );
     }
 }
 
