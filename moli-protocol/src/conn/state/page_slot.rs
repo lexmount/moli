@@ -1750,9 +1750,23 @@ impl TargetPageSlot {
             );
         };
         if binding != expected_binding {
-            return RendererDocumentLifecycleObserver::resolved(
-                RendererDocumentLifecycleObservation::Superseded,
-            );
+            // document.open() interrupts the old exact epoch without replacing
+            // its navigation. Late observers must see the same interruption
+            // as observers already registered when the restart happened, so
+            // settling the old load boundary preserves the new epoch's output.
+            let document_reopened = binding.renderer_frame == expected_binding.renderer_frame
+                && binding.renderer_document == expected_binding.renderer_document
+                && binding.page_attachment_id == expected_binding.page_attachment_id
+                && binding.navigation == expected_binding.navigation
+                && binding.frame_id == expected_binding.frame_id
+                && binding.loader_id == expected_binding.loader_id
+                && binding.renderer_epoch.0 > expected_binding.renderer_epoch.0
+                && binding.document_open_replacement_epoch == Some(binding.renderer_epoch);
+            return RendererDocumentLifecycleObserver::resolved(if document_reopened {
+                RendererDocumentLifecycleObservation::Interrupted
+            } else {
+                RendererDocumentLifecycleObservation::Superseded
+            });
         }
         let Some(snapshot) = self.renderer_document_lifecycle.authoritative.snapshot else {
             return RendererDocumentLifecycleObserver::resolved(
