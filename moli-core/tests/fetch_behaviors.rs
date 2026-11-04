@@ -14,6 +14,8 @@ mod preload_lifecycle;
 
 #[path = "fetch_behaviors/preload_as.rs"]
 mod preload_as;
+#[path = "fetch_behaviors/preload_crossorigin.rs"]
+mod preload_crossorigin;
 
 #[path = "fetch_behaviors/font_binary.rs"]
 mod font_binary;
