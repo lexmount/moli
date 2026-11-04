@@ -142,22 +142,12 @@ impl ScriptVm {
 
         let context = pending.context;
         let resolver = pending.resolver;
-        let registration = pending.registration;
-        let active_worker = pending.active_worker;
         let removed = completion.result;
         let context_ptr: *const v8::Global<v8::Context> = &context;
         self.with_context_scope_by_ptr(context_ptr, move |scope, _host_ptr| {
             let resolver = v8::Local::new(scope, &resolver);
-            let registration = v8::Local::new(scope, &registration);
-            let active_worker = active_worker
-                .as_ref()
-                .map(|worker| v8::Local::new(scope, worker));
             crate::context_bootstrap::settle_service_worker_unregister_completion(
-                scope,
-                resolver,
-                Some(registration),
-                active_worker,
-                removed,
+                scope, resolver, removed,
             );
             Ok(())
         })?;
