@@ -807,7 +807,7 @@ impl JsContextHost {
         mut fetch: ChildDocumentFetch,
     ) -> Option<u64> {
         if let Some(request) = fetch.request.as_mut() {
-            request.set_interception(false);
+            request.set_manual_redirects(false);
         }
         let Some(request) = fetch.request.as_ref().filter(|request| {
             matches!(request.request().url.scheme(), "http" | "https")
@@ -871,12 +871,8 @@ impl JsContextHost {
         body: Option<bytes::Bytes>,
     ) {
         if let Some(interception) = fetch.request.as_mut() {
-            let request = interception.request_mut();
-            request.url = url;
-            request.method = method;
-            request.request_headers = headers;
-            request.body = body;
-            *request = request.clone().with_redirect_headers(redirect_headers);
+            interception.apply_request_override(url, method, headers, body, redirect_headers);
+            let request = interception.request();
             if let Some(info) = fetch.network_info.as_mut() {
                 info.url = request.url.clone();
                 info.method = request.method.clone();
@@ -974,7 +970,7 @@ impl ChildDocumentFetch {
     pub(crate) fn set_network_info(&mut self, info: PendingSubresourceFetchInfo) {
         self.network_info = Some(info);
         if let Some(request) = self.request.as_mut() {
-            request.set_interception(true);
+            request.set_manual_redirects(true);
         }
     }
 

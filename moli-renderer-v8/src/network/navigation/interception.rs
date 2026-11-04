@@ -11,12 +11,12 @@ use super::NavigationResourceLoader;
 /// The navigation owner decides when a hop may start and where its result can
 /// commit. This object owns transport routing, request overrides and redirects;
 /// it deliberately has no DevTools session or frame-lifecycle state.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct NavigationInterception {
     loader: NavigationResourceLoader,
     request: Request,
     navigation_url: Url,
-    intercept_redirects: bool,
+    manual_redirects: bool,
 }
 
 struct CancelOnDrop(Option<NavigationResourceLoader>);
@@ -35,7 +35,7 @@ impl NavigationInterception {
             navigation_url: request.url.clone(),
             loader,
             request,
-            intercept_redirects: false,
+            manual_redirects: false,
         }
     }
 
@@ -51,12 +51,29 @@ impl NavigationInterception {
         &mut self.request
     }
 
-    pub fn set_interception(&mut self, enabled: bool) {
-        self.intercept_redirects = enabled;
+    /// Return each HTTP redirect to the navigation owner for its next-hop decision.
+    pub fn set_manual_redirects(&mut self, enabled: bool) {
+        self.manual_redirects = enabled;
+    }
+
+    /// Overrides the current transport hop without changing the document's URL.
+    pub fn apply_request_override(
+        &mut self,
+        url: Url,
+        method: String,
+        headers: moli_fetch::RequestHeaders,
+        body: Option<bytes::Bytes>,
+        redirect_headers: Option<moli_fetch::RequestHeaders>,
+    ) {
+        self.request.url = url;
+        self.request.method = method;
+        self.request.request_headers = headers;
+        self.request.body = body;
+        self.request.set_redirect_headers(redirect_headers);
     }
 
     pub fn navigation_url(&self, response: &ResponseHead) -> Url {
-        if !self.intercept_redirects && response.redirected {
+        if !self.manual_redirects && response.redirected {
             response.final_url.clone()
         } else {
             self.navigation_url.clone()
@@ -68,7 +85,7 @@ impl NavigationInterception {
             &self.request.url,
             moli_url_policy::LocalFileNavigationAccess::Denied,
         )?;
-        Ok(if self.intercept_redirects {
+        Ok(if self.manual_redirects {
             self.request.clone().with_single_hop()
         } else {
             self.request.clone()
@@ -117,7 +134,7 @@ impl NavigationInterception {
     /// Returns the next hop to its owner before any transport is started.
     /// Synthetic and network responses use exactly the same redirect rules.
     pub fn follow_redirect(&mut self, head: &ResponseHead) -> Result<Option<RedirectInfo>> {
-        if !self.intercept_redirects {
+        if !self.manual_redirects {
             return Ok(None);
         }
         let Some(next_url) = crate::network_host::next_redirect_url(

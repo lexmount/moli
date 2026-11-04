@@ -85,16 +85,15 @@ impl PreparedInterceptedNavigationRequest {
                     prior_journal,
                     journal,
                 ));
-                let request = interception.request_mut();
-                request.url = pending.navigation.requested_url.clone();
-                request.method = pending.navigation.request_method.clone();
-                request.request_headers = pending.navigation.request_headers.clone();
-                request.body = pending.navigation.clone_request_body_bytes();
-                *request = request
-                    .clone()
-                    .with_redirect_headers(pending.navigation.redirect_headers.clone());
+                interception.apply_request_override(
+                    pending.navigation.requested_url.clone(),
+                    pending.navigation.request_method.clone(),
+                    pending.navigation.request_headers.clone(),
+                    pending.navigation.clone_request_body_bytes(),
+                    pending.navigation.redirect_headers.clone(),
+                );
                 if let Some(auth) = auth {
-                    request.set_auth(Some(auth.into()));
+                    interception.request_mut().set_auth(Some(auth.into()));
                 }
                 Ok(interception)
             } else {
@@ -117,7 +116,7 @@ impl PreparedInterceptedNavigationRequest {
                             crate::automation::DevToolsNetworkResourceType::Document,
                         )
                     });
-                prepared.set_interception(intercept);
+                prepared.set_manual_redirects(intercept);
                 prepared
             }))
         };
@@ -245,13 +244,17 @@ impl PreparedInterceptedNavigationRequest {
             self.pending.navigation.redirect_chain = hop.redirect_chain().to_vec();
             self.pending.navigation.redirect_headers = None;
             let pending = self.pending;
-            let executor = request.clone();
-            let prior = self.prior_journal.clone().unwrap_or_default();
+            let prior = self.prior_journal.take().unwrap_or_default();
             let redirected = driver.with_state(move |state| {
-                state.prepare_fetch_navigation_redirect(pending, executor, prior)
+                state.prepare_fetch_navigation_redirect(pending, request, prior)
             });
             match redirected {
-                Ok(RedirectNavigation::Continue(pending)) => self.pending = *pending,
+                Ok(RedirectNavigation::Continue(next)) => {
+                    let (pending, executor, prior) = *next;
+                    self.pending = pending;
+                    request = executor;
+                    self.prior_journal = Some(prior);
+                }
                 Ok(RedirectNavigation::Paused(plan)) => {
                     self.transferred.mark_transferred();
                     return PreparedFetchNavigationResponse::Transferred(*plan);
@@ -417,7 +420,13 @@ pub(crate) fn accept_navigation_response(
 }
 
 pub(crate) enum RedirectNavigation {
-    Continue(Box<PendingFetchNavigation>),
+    Continue(
+        Box<(
+            PendingFetchNavigation,
+            NavigationInterception,
+            NetworkObservationJournal,
+        )>,
+    ),
     Paused(Box<crate::domains::command_output::CommandOutputPlan>),
     Superseded,
 }
@@ -463,7 +472,7 @@ pub(crate) fn prepare_navigation_redirect(
                 Some(pending.navigation.frame_id.clone()),
             );
         }
-        return RedirectNavigation::Continue(Box::new(pending));
+        return RedirectNavigation::Continue(Box::new((pending, executor, prior)));
     }
     pending.interception = Some((executor, prior));
     let owner = pending.navigation.owner.clone();

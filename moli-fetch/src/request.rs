@@ -1063,8 +1063,12 @@ impl Request {
     }
 
     pub fn with_redirect_headers(mut self, headers: Option<crate::RequestHeaders>) -> Self {
-        self.redirect_headers = headers;
+        self.set_redirect_headers(headers);
         self
+    }
+
+    pub fn set_redirect_headers(&mut self, headers: Option<crate::RequestHeaders>) {
+        self.redirect_headers = headers;
     }
 
     pub fn with_credentials_mode(mut self, credentials_mode: RequestCredentialsMode) -> Self {
