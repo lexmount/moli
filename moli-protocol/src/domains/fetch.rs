@@ -4,7 +4,7 @@ mod auth;
 mod body_stream;
 mod cleanup;
 mod commands;
-pub(crate) use cleanup::CompletedSubresourceFailure;
+pub(crate) use cleanup::CompletedSubresourceCleanup;
 pub(crate) use cleanup::PreparedFetchCleanup;
 mod document_navigation;
 mod document_request;

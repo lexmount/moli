@@ -320,6 +320,108 @@ async fn child_frame_document_transport_failure_after_continue_has_one_terminal(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn ending_fetch_session_resumes_child_navigation_through_remaining_handlers() {
+    for detach in [false, true] {
+        for another_handler in [false, true] {
+            let hits = Arc::new(AtomicUsize::new(0));
+            let (addr, server) =
+                serve_child_document_fixture("<!doctype html><iframe></iframe>", &hits).await;
+            let mut ctx = TestContext::new();
+            with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1")
+                .await;
+            ctx.with_fixture(|conn| {
+                for session in ["SID-child-a", "SID-child-b"] {
+                    assert!(
+                        conn.browser_context
+                            .as_mut()
+                            .unwrap()
+                            .assign_attached_session_to_target("TID-1", session.to_owned())
+                    );
+                }
+            });
+            ctx.sent.clear();
+            for (id, session) in [(39_200, "SID-child-a"), (39_201, "SID-child-b")] {
+                if session == "SID-child-b" && !another_handler {
+                    continue;
+                }
+                ctx.process_async(json!({
+                    "id":id,"method":"Fetch.enable","sessionId":session,
+                    "params":{"patterns":[{"resourceType":"Document"}]}
+                }))
+                .await;
+                ctx.expect_result(id, json!({}), Some(session));
+            }
+            enable_runtime_async(&mut ctx, "SID-1", 39_202).await;
+            evaluate_script(
+                &mut ctx,
+                39_203,
+                "document.querySelector('iframe').src = '/child'",
+            )
+            .await;
+            let url = format!("http://{addr}/child");
+            let paused = child_document_pause_in_session(&mut ctx, "SID-child-a", &url).await;
+            let network_id = paused["params"]["networkId"].as_str().unwrap().to_owned();
+            assert_eq!(hits.load(Ordering::SeqCst), 0);
+            if detach {
+                ctx.process_async(json!({
+                    "id":39_204,"method":"Target.detachFromTarget",
+                    "params":{"sessionId":"SID-child-a"}
+                }))
+                .await;
+                ctx.expect_result(39_204, json!({}), None);
+            } else {
+                ctx.process_async(json!({
+                    "id":39_204,"method":"Fetch.disable","sessionId":"SID-child-a"
+                }))
+                .await;
+                ctx.expect_result(39_204, json!({}), Some("SID-child-a"));
+            }
+            if another_handler {
+                let next = child_document_pause_in_session(&mut ctx, "SID-child-b", &url).await;
+                assert_eq!(next["params"]["networkId"], network_id);
+                assert_ne!(next["params"]["requestId"], paused["params"]["requestId"]);
+                assert_eq!(
+                    hits.load(Ordering::SeqCst),
+                    0,
+                    "ending one handler must not bypass another"
+                );
+                continue_child_document(&mut ctx, 39_205, &next).await;
+            }
+            wait_until_message(
+                &mut ctx,
+                "SID-1",
+                "child navigation after Fetch session ends",
+                |message| {
+                    matches!(
+                        message["method"].as_str(),
+                        Some("Network.loadingFinished" | "Network.loadingFailed")
+                    ) && message["params"]["requestId"] == network_id
+                },
+            )
+            .await;
+            let terminals = terminal_events(&ctx, &network_id);
+            assert_eq!(terminals.len(), 1);
+            assert_eq!(
+                terminals[0]["method"], "Network.loadingFinished",
+                "ending an interceptor must leave a valid child navigation running"
+            );
+            evaluate_until_value_async(
+                &mut ctx,
+                "SID-1",
+                39_206,
+                CHILD_BODY_EXPRESSION,
+                &json!("child"),
+                "child committed after interception ends",
+            )
+            .await;
+            assert_eq!(hits.load(Ordering::SeqCst), 1);
+            assert_eq!(terminal_events(&ctx, &network_id).len(), 1);
+            server.abort();
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn child_frame_document_ignored_response_finishes_network_without_commit() {
     for (status, attachment) in [(204, false), (205, false), (200, true)] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -502,15 +502,9 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
     .await;
     ctx.expect_result(36_401, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
-        "id": 36_402,
-        "method": "Fetch.enable",
-        "sessionId": "SID-1"
-    }))
-    .await;
-    ctx.expect_result(36_402, json!({}), Some("SID-1"));
-    // The Runtime.enable helper clears collected events. Consume the child
-    // navigation first, even when it finishes during the preceding commands.
+    // Finish fixture navigation before enabling request interception;
+    // otherwise a late-starting child Document can itself pause here.
+    // Runtime.enable also clears events, so consume this exact terminal first.
     wait_until_message(
         &mut ctx,
         "SID-1",
@@ -521,6 +515,13 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
         },
     )
     .await;
+    ctx.process_async(json!({
+        "id": 36_402,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(36_402, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 36_403).await;
 
     ctx.process_async(json!({
