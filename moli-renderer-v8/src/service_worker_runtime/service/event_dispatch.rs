@@ -304,7 +304,7 @@ impl ServiceWorkerRuntimeService {
         );
         fetch_job
             .request_client
-            .prepare_request(&mut fetch_job.request);
+            .prepare_service_worker_request(&mut fetch_job.request);
         request.headers = fetch_job.request.request_headers.to_byte_strings();
         let (dispatch_event, start_launch, fallback_job) = {
             let mut state = self.inner.state.lock();
