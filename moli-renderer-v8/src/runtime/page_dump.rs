@@ -1,4 +1,6 @@
-use crate::dom::native::{NativeDom, NativeNodeId};
+use std::borrow::Cow;
+
+use crate::dom::native::{DomHost, NativeDom, NativeNodeId};
 use crate::runtime::page_surface::{
     RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
 };
@@ -13,8 +15,9 @@ impl PageVm {
         let markdown_base_url = (options.format == RendererPageDumpFormat::Markdown)
             .then(|| self.vm().document_runtime.dom_host().document_base_url())
             .flatten();
-        let styles = if options.format == RendererPageDumpFormat::Markdown {
-            let dom = self.vm().document_runtime.dom_host().dom();
+        let markdown_dom = (options.format == RendererPageDumpFormat::Markdown)
+            .then(|| markdown_export_dom(self.vm().document_runtime.dom_host()));
+        let styles = if let Some(dom) = markdown_dom.as_deref() {
             let mut nodes = Vec::new();
             if let Some(body) = dom.body_node_id() {
                 // The root style carries inherited visibility into the body.
@@ -67,18 +70,16 @@ impl PageVm {
         } else {
             Vec::new()
         };
-        if options.format == RendererPageDumpFormat::Markdown
+        if let Some(dom) = markdown_dom.as_deref()
             && !options.with_base
             && !options.with_frames
             && options.strip == RendererPageDumpStripOptions::default()
         {
-            return render_markdown_document_with_styles(
-                self.vm().document_runtime.dom_host().dom(),
-                styles,
-                markdown_base_url.as_ref(),
-            );
+            return render_markdown_document_with_styles(dom, styles, markdown_base_url.as_ref());
         }
-        let mut dom = self.vm().document_runtime.dom_host().dom().clone();
+        let mut dom = markdown_dom
+            .map(Cow::into_owned)
+            .unwrap_or_else(|| self.vm().document_runtime.dom_host().dom().clone());
 
         if options.with_base {
             let href = self
@@ -121,6 +122,32 @@ impl PageVm {
             let _ = dom.set_attribute(owner_node_id, "data-moli-frame-url", &snapshot.url);
         }
     }
+}
+
+/// Project the rendered tree into a dump-only DOM, keeping node IDs for live style lookup.
+/// Shadow contents replace host children; slots expose assigned nodes or fallback content.
+fn markdown_export_dom(host: &DomHost) -> Cow<'_, NativeDom> {
+    if host.snapshot_connected_shadow_root_bindings().is_empty() {
+        return Cow::Borrowed(host.dom());
+    }
+
+    let mut dom = host.dom().clone();
+    let root = host.document_handle();
+    let mut stack = vec![root];
+    while let Some(parent) = stack.pop() {
+        let children = crate::dom_presentation::flat_children(host, root, parent);
+        let existing = dom.child_ids(parent).collect::<Vec<_>>();
+        if existing != children {
+            for child in existing {
+                let _ = dom.remove_child(parent, child);
+            }
+            for &child in &children {
+                let _ = dom.append_child(parent, child);
+            }
+        }
+        stack.extend(children.into_iter().rev());
+    }
+    Cow::Owned(dom)
 }
 
 fn inject_base_href(dom: &mut NativeDom, href: &str) {
