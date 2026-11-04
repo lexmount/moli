@@ -169,9 +169,12 @@ fn apply_history_traversal_by_delta(
                     crate::native_bridge::OwnerDispatchScope::Top,
                     crate::native_bridge::OwnerDispatchScope::Top,
                 )
-                && host.dispatch_main_document_tree_beforeunload(scope)
             {
-                host.record_pending_top_level_history_traversal(delta);
+                // The browser owns entries absent from the renderer's view.
+                // It must resolve a destination before checking beforeunload:
+                // an out-of-range request must not fire events or let a
+                // beforeunload handler perpetually enqueue another traversal.
+                host.record_pending_top_level_history_traversal(delta, false);
             }
             return;
         }
@@ -383,7 +386,7 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
                     host.top_level_navigation_history()
                         .select_joint_traversal(key, step);
                 }
-                host.record_pending_top_level_history_traversal(delta);
+                host.record_pending_top_level_history_traversal(delta, true);
                 return true;
             }
             let Ok(url) = url::Url::parse(&target_url) else {
