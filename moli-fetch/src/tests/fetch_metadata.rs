@@ -91,7 +91,7 @@ async fn default_accept_is_prepared_for_every_transport() -> Result<()> {
         (
             Some(BrowserRequestMetadata::TextModule),
             RequestMode::Cors,
-            "*/*",
+            "text/plain,*/*;q=0.5",
         ),
         (
             None,
@@ -194,44 +194,51 @@ async fn default_accept_is_prepared_for_every_transport() -> Result<()> {
 
 #[tokio::test]
 async fn accept_is_prepared_after_redirect_restores_interception_headers() -> Result<()> {
-    for configured in [None, Some("application/json")] {
-        let server = ScriptedHttpServer::spawn(vec![
-            ScriptedResponse::status(302, "Found").with_header("Location", "/final"),
-            ScriptedResponse::ok("ok"),
-        ]);
-        let mut config = FetchConfig::default();
-        if let Some(value) = configured {
-            config.set_default_request_headers(vec![("aCcEpT".to_owned(), value.to_owned())]);
-        }
-        let client = FetchClient::new(&config, new_shared_browser_cookie_store());
-        let target = Url::parse(&server.url())?;
-        let request = Request::new_browser(
-            "GET",
-            target.clone(),
-            None,
-            vec![("Accept".to_owned(), "application/override".to_owned())],
-            (&target).into(),
-        )
-        .with_request_mode(RequestMode::Cors)
-        .with_browser_request_metadata(BrowserRequestMetadata::Image)
-        .with_redirect_headers(Some(crate::RequestHeaders::default()));
-        assert_eq!(client.fetch_raw(request).await?.status, 200);
-        let requests = server.requests();
-        server.shutdown();
-        assert_eq!(requests.len(), 2);
-        for (request, expected) in requests.iter().zip([
-            "application/override",
-            configured
-                .unwrap_or("image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"),
-        ]) {
-            let values: Vec<_> = request
-                .lines()
-                .filter_map(|line| {
-                    let (name, value) = line.split_once(':')?;
-                    name.eq_ignore_ascii_case("accept").then(|| value.trim())
-                })
-                .collect();
-            assert_eq!(values, [expected], "{request}");
+    for (metadata, default_accept) in [
+        (
+            BrowserRequestMetadata::Image,
+            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        ),
+        (BrowserRequestMetadata::TextModule, "text/plain,*/*;q=0.5"),
+    ] {
+        for configured in [None, Some("application/json")] {
+            let server = ScriptedHttpServer::spawn(vec![
+                ScriptedResponse::status(302, "Found").with_header("Location", "/final"),
+                ScriptedResponse::ok("ok"),
+            ]);
+            let mut config = FetchConfig::default();
+            if let Some(value) = configured {
+                config.set_default_request_headers(vec![("aCcEpT".to_owned(), value.to_owned())]);
+            }
+            let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+            let target = Url::parse(&server.url())?;
+            let request = Request::new_browser(
+                "GET",
+                target.clone(),
+                None,
+                vec![("Accept".to_owned(), "application/override".to_owned())],
+                (&target).into(),
+            )
+            .with_request_mode(RequestMode::Cors)
+            .with_browser_request_metadata(metadata)
+            .with_redirect_headers(Some(crate::RequestHeaders::default()));
+            assert_eq!(client.fetch_raw(request).await?.status, 200);
+            let requests = server.requests();
+            server.shutdown();
+            assert_eq!(requests.len(), 2);
+            for (request, expected) in requests
+                .iter()
+                .zip(["application/override", configured.unwrap_or(default_accept)])
+            {
+                let values: Vec<_> = request
+                    .lines()
+                    .filter_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("accept").then(|| value.trim())
+                    })
+                    .collect();
+                assert_eq!(values, [expected], "{request}");
+            }
         }
     }
     Ok(())
