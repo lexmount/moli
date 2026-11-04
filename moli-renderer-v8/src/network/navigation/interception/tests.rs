@@ -42,7 +42,7 @@ async fn redirect_body_cancellation_does_not_cancel_the_next_navigation_hop() {
         RendererResourceTaskRunner::from_current_tokio().unwrap(),
     );
     let mut navigation = NavigationInterception::new(loader.clone(), request);
-    navigation.set_interception(true);
+    navigation.set_manual_redirects(true);
     let response = navigation.fetch_raw_stream().await.unwrap();
     let redirect = navigation
         .follow_redirect(&response.response().head())
@@ -147,7 +147,7 @@ async fn buffered_auth_redirect_does_not_wait_for_its_body_or_cancel_the_next_ho
         RendererResourceTaskRunner::from_current_tokio().unwrap(),
     );
     let mut navigation = NavigationInterception::new(loader.clone(), request);
-    navigation.set_interception(true);
+    navigation.set_manual_redirects(true);
     let response = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         navigation.fetch_buffered(),
