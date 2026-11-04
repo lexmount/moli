@@ -157,3 +157,107 @@ async fn markdown_tracks_manual_slot_reassignment() {
         assert_eq!(page.vm_mut().eval("document.getElementById('source').parentNode.id").unwrap(), "host");
     }).await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_reads_shadow_slots_and_live_updates_without_mutating_the_dom() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/").unwrap());
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = `<div id=host><span slot=title>Title</span><p>Body</p><span slot=unused>Unassigned</span></div>`;
+            globalThis.markdownShadow = document.querySelector('#host').attachShadow({mode:'closed'});
+            markdownShadow.innerHTML = `<h2><slot name=title>Default title</slot></h2><main><slot>Default body</slot></main><p><slot name=empty>Fallback</slot></p>`;
+        "#).unwrap();
+        let snapshot = "JSON.stringify([document.body.innerHTML, markdownShadow.innerHTML, Array.from(markdownShadow.querySelectorAll('slot'), slot => slot.assignedNodes().map(node => node.textContent))])";
+        let before = page.vm_mut().eval(snapshot).unwrap();
+        let dom_version = page.vm().document_runtime.dom_host().dom_version();
+        for with_frames in [false, true] {
+            for with_base in [false, true] {
+                for strip_css in [false, true] {
+                    let mut config = options(strip_css);
+                    config.with_frames = with_frames;
+                    config.with_base = with_base;
+                    assert_eq!(page.render_page_dump(config), "## Title\n\nBody\n\nFallback");
+                    assert_eq!(page.vm().document_runtime.dom_host().dom_version(), dom_version);
+                    assert_eq!(page.vm_mut().eval(snapshot).unwrap(), before);
+                }
+            }
+        }
+        page.vm_mut().eval(r#"
+            document.querySelector('[slot=title]').slot = 'unused';
+            document.querySelector('p').textContent = 'Updated body';
+            markdownShadow.querySelector('[name=empty]').textContent = 'Updated fallback';
+        "#).unwrap();
+        assert_eq!(page.render_page_dump(options(false)), "## Default title\n\nUpdated body\n\nUpdated fallback");
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_shadow_visibility_follows_slots_and_shadow_hosts() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/").unwrap());
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = `<div id=host><span slot=restored style="visibility:visible">Restored</span><span><span>Inherited hidden</span></span></div><p>Outside</p>`;
+            globalThis.markdownShadow = document.querySelector('#host').attachShadow({mode:'open'});
+            markdownShadow.innerHTML = `<section style="display:none"><slot name=restored></slot><slot></slot></section>`;
+        "#).unwrap();
+        for strip_css in [false, true] {
+            assert_eq!(page.render_page_dump(options(strip_css)), "Outside");
+        }
+        page.vm_mut().eval("markdownShadow.querySelector('section').style = 'visibility:hidden'").unwrap();
+        for strip_css in [false, true] {
+            assert_eq!(page.render_page_dump(options(strip_css)), "Restored\n\nOutside");
+        }
+        page.vm_mut().eval("document.querySelector('#host').style = 'display:none'").unwrap();
+        assert_eq!(page.render_page_dump(options(false)), "Outside");
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_manual_slots_preserve_order_nested_roots_and_fallback() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/").unwrap());
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = `<div id=host><p id=first>First</p><p id=second>Second</p><div id=nested>Unassigned nested text</div><p>Unassigned</p></div>`;
+            globalThis.markdownShadow = document.querySelector('#host').attachShadow({mode:'closed', slotAssignment:'manual'});
+            markdownShadow.innerHTML = '<slot><p>Fallback</p></slot>';
+            document.querySelector('#nested').attachShadow({mode:'open'}).innerHTML = '<p>Nested</p>';
+            markdownShadow.querySelector('slot').assign(document.querySelector('#second'), document.querySelector('#nested'), document.querySelector('#first'));
+        "#).unwrap();
+        assert_eq!(page.render_page_dump(options(false)), "Second\n\nNested\n\nFirst");
+        page.vm_mut().eval("markdownShadow.querySelector('slot').assign(document.querySelector('#first'), document.querySelector('#second'))").unwrap();
+        assert_eq!(page.render_page_dump(options(true)), "First\n\nSecond");
+        page.vm_mut().eval("markdownShadow.querySelector('slot').assign()").unwrap();
+        assert_eq!(page.render_page_dump(options(false)), "Fallback");
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn markdown_shadow_strip_options_preserve_live_controls_and_attributes() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), Url::parse("https://example.test/article/").unwrap());
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = '<div id=host></div>';
+            globalThis.markdownShadow = document.querySelector('#host').attachShadow({mode:'open'});
+            markdownShadow.innerHTML = `<nav>Navigation</nav><p><a href=docs style="display:block" onclick="return false">Docs</a></p><textarea>Default</textarea><p style="display:none">Hidden</p>`;
+            markdownShadow.querySelector('textarea').value = 'Edited';
+        "#).unwrap();
+        let snapshot = "JSON.stringify([markdownShadow.innerHTML, markdownShadow.querySelector('textarea').value])";
+        let before = page.vm_mut().eval(snapshot).unwrap();
+        for strip_css in [false, true] {
+            let output = page.render_page_dump(options(strip_css));
+            assert!(output.contains("Navigation"), "{output}");
+            assert!(output.contains("[Docs](https://example.test/article/docs)"), "{output}");
+            assert!(output.contains("Edited"), "{output}");
+            assert!(!output.contains("Default") && !output.contains("Hidden"), "{output}");
+            let mut config = options(strip_css);
+            config.strip.ui = true;
+            config.strip.js = true;
+            assert_eq!(page.render_page_dump(config), "[Docs](https://example.test/article/docs)");
+            assert_eq!(page.vm_mut().eval(snapshot).unwrap(), before);
+        }
+    }).await;
+}

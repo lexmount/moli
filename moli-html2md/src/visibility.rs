@@ -14,10 +14,11 @@ pub(crate) fn nonrendered_serialized_state<D: Dom + ?Sized>(dom: &D, node: D::No
     if !hidden {
         return false;
     }
-    let Some(child) = dom.first_child(node) else {
+    let mut children = dom.children(node);
+    let Some(child) = children.next() else {
         return false;
     };
-    if dom.next_sibling(child).is_some() {
+    if children.next().is_some() {
         return false;
     }
     let NodeKind::Text(text) = dom.node_kind(child) else {

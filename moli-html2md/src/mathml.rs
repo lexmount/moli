@@ -10,9 +10,7 @@ pub(crate) fn primary_alternative<D: Dom + ?Sized>(
 ) -> Option<D::NodeId> {
     let mut primary = None;
     let mut alternative = false;
-    let mut child = dom.first_child(node);
-    while let Some(id) = child {
-        child = dom.next_sibling(id);
+    for id in dom.children(node) {
         if ignorable(dom.node_kind(id)) {
             continue;
         }
@@ -34,10 +32,8 @@ pub(crate) fn primary_alternative<D: Dom + ?Sized>(
                 found = Some(id);
                 break;
             }
-            let mut children = dom.first_child(candidate);
             let mut single = None;
-            while let Some(id) = children {
-                children = dom.next_sibling(id);
+            for id in dom.children(candidate) {
                 if ignorable(dom.node_kind(id)) {
                     continue;
                 }
@@ -65,9 +61,9 @@ fn ignorable(kind: NodeKind<'_>) -> bool {
         || matches!(kind, NodeKind::Text(text) if text.trim().is_empty())
 }
 
-enum Task<Id> {
+enum Task<Id, Children> {
     Node(Id, usize),
-    Sibling(Option<Id>, usize),
+    Sibling(Children, usize),
     Close(String),
 }
 
@@ -84,11 +80,12 @@ pub(crate) fn render<D: Dom + ?Sized>(dom: &D, root: D::NodeId, max_depth: usize
                 output.push_str(&tag);
                 output.push('>');
             }
-            Task::Sibling(Some(node), depth) => {
-                tasks.push(Task::Sibling(dom.next_sibling(node), depth));
-                tasks.push(Task::Node(node, depth));
+            Task::Sibling(mut children, depth) => {
+                if let Some(node) = Iterator::next(&mut children) {
+                    tasks.push(Task::Sibling(children, depth));
+                    tasks.push(Task::Node(node, depth));
+                }
             }
-            Task::Sibling(None, _) => {}
             Task::Node(node, depth) => {
                 if depth >= max_depth {
                     continue;
@@ -105,13 +102,11 @@ pub(crate) fn render<D: Dom + ?Sized>(dom: &D, root: D::NodeId, max_depth: usize
                             output.push_str("<mrow>");
                             tasks.push(Task::Close("mrow".to_owned()));
                         }
-                        let mut child = dom.first_child(node);
-                        while let Some(id) = child {
+                        for id in dom.children(node) {
                             if matches!(dom.node_kind(id), NodeKind::Element(_)) {
                                 tasks.push(Task::Node(id, depth + 1));
                                 break;
                             }
-                            child = dom.next_sibling(id);
                         }
                     }
                     NodeKind::Element(tag) => {
@@ -131,10 +126,10 @@ pub(crate) fn render<D: Dom + ?Sized>(dom: &D, root: D::NodeId, max_depth: usize
                         }
                         output.push('>');
                         tasks.push(Task::Close(tag.to_owned()));
-                        tasks.push(Task::Sibling(dom.first_child(node), depth + 1));
+                        tasks.push(Task::Sibling(dom.children(node), depth + 1));
                     }
                     NodeKind::Document => {
-                        tasks.push(Task::Sibling(dom.first_child(node), depth + 1));
+                        tasks.push(Task::Sibling(dom.children(node), depth + 1));
                     }
                     NodeKind::Other => {}
                 }

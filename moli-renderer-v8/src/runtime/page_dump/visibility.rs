@@ -4,7 +4,10 @@ use moli_html2md::{Dom, NodeKind};
 use url::Url;
 
 use crate::dom::forms::InputType;
-use crate::dom::native::{NativeDom, NativeNodeId};
+use crate::dom::native::NativeNodeId;
+use crate::runtime::page_surface::RendererPageDumpStripOptions;
+
+use super::live_dom::MarkdownSource;
 
 /// Computed properties needed for document export. Paint effects such as
 /// opacity and composited colors do not determine whether source text exists.
@@ -24,8 +27,8 @@ pub(super) struct ExportStyle {
 /// Read the current page's computed visibility without mutating the live DOM.
 /// Explicit disclosure content remains useful in a document dump, even while
 /// its tab or section is closed. Other non-rendered UI is not document text.
-pub(super) struct MarkdownDom<'a> {
-    dom: &'a NativeDom,
+pub(super) struct MarkdownDom<'a, D: MarkdownSource> {
+    dom: &'a D,
     suppressed: HashSet<NativeNodeId>,
     invisible: HashSet<NativeNodeId>,
     blocks: HashSet<NativeNodeId>,
@@ -35,6 +38,7 @@ pub(super) struct MarkdownDom<'a> {
     attribute_overrides: HashMap<NativeNodeId, HashMap<String, String>>,
     unchecked_controls: HashSet<NativeNodeId>,
     fragment_links: bool,
+    strip: RendererPageDumpStripOptions,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,17 +49,18 @@ enum VisibilityMode {
     Hidden,
 }
 
-impl<'a> MarkdownDom<'a> {
+impl<'a, D: MarkdownSource> MarkdownDom<'a, D> {
     pub(super) fn new(
-        dom: &'a NativeDom,
+        dom: &'a D,
         styles: impl IntoIterator<Item = (NativeNodeId, ExportStyle)>,
         base_url: Option<&Url>,
+        strip: RendererPageDumpStripOptions,
     ) -> Self {
         // The caller supplies element styles in DOM pre-order. Inherited state
         // below is computed once, after the parent has been visited.
         let styles: Vec<_> = styles.into_iter().collect();
-        let document_element = dom.document_element_node_id();
-        let body = dom.body_node_id();
+        let document_element = dom.native().document_element_node_id();
+        let body = dom.native().body_node_id();
         let document_visibility_is_hidden = styles.iter().any(|(node, values)| {
             (Some(*node) == document_element || Some(*node) == body)
                 && matches!(values.visibility.as_str(), "hidden" | "collapse")
@@ -158,7 +163,7 @@ impl<'a> MarkdownDom<'a> {
             if matches!(
                 Dom::node_kind(dom, node),
                 NodeKind::Element("input" | "textarea")
-            ) && let Some(element) = dom.node(node).and_then(|node| node.as_element())
+            ) && let Some(element) = dom.native().node(node).and_then(|node| node.as_element())
             {
                 // A clean textarea gets its default from child text, not the
                 // control-state slot (which is initially empty). Once dirty,
@@ -213,16 +218,14 @@ impl<'a> MarkdownDom<'a> {
                 VisibilityMode::RootVeil
             } else if disclosure_root && matches!(computed_visibility, "hidden" | "collapse") {
                 VisibilityMode::DisclosureVeil
+            } else if !values.own_visibility {
+                // Inherited visibility follows the same distributed parent
+                // as traversal, including across a slot assignment.
+                parent_visibility
             } else if computed_visibility == "visible" {
                 VisibilityMode::Normal
             } else if matches!(computed_visibility, "hidden" | "collapse") {
-                match parent_visibility {
-                    VisibilityMode::RootVeil if !values.own_visibility => VisibilityMode::RootVeil,
-                    VisibilityMode::DisclosureVeil if !values.own_visibility => {
-                        VisibilityMode::DisclosureVeil
-                    }
-                    _ => VisibilityMode::Hidden,
-                }
+                VisibilityMode::Hidden
             } else {
                 parent_visibility
             };
@@ -323,7 +326,7 @@ impl<'a> MarkdownDom<'a> {
         // Invisible cells still occupy columns. A wholly invisible table/list
         // has no structure to export, unless a descendant restores visibility.
         let mut visible_subtrees = HashSet::new();
-        for node in node_order.into_iter().rev() {
+        for node in node_order.iter().copied().rev() {
             if suppressed.contains(&node) {
                 continue;
             }
@@ -338,6 +341,11 @@ impl<'a> MarkdownDom<'a> {
                 suppressed.insert(node);
             }
         }
+        suppressed.extend(
+            node_order
+                .into_iter()
+                .filter(|node| super::should_strip_node(dom.native(), *node, strip)),
+        );
         Self {
             dom,
             suppressed,
@@ -349,6 +357,7 @@ impl<'a> MarkdownDom<'a> {
             attribute_overrides,
             unchecked_controls,
             fragment_links,
+            strip,
         }
     }
 
@@ -363,7 +372,7 @@ impl<'a> MarkdownDom<'a> {
     }
 }
 
-fn content_context(dom: &NativeDom, mut node: NativeNodeId) -> bool {
+fn content_context(dom: &impl MarkdownSource, mut node: NativeNodeId) -> bool {
     loop {
         if matches!(
             Dom::node_kind(dom, node),
@@ -391,7 +400,11 @@ fn content_context(dom: &NativeDom, mut node: NativeNodeId) -> bool {
     }
 }
 
-fn target_is_disclosure(dom: &NativeDom, targets: &HashMap<&str, NativeNodeId>, id: &str) -> bool {
+fn target_is_disclosure(
+    dom: &impl MarkdownSource,
+    targets: &HashMap<&str, NativeNodeId>,
+    id: &str,
+) -> bool {
     targets.get(id).is_some_and(|&target| {
         content_context(dom, target)
             && (matches!(
@@ -432,7 +445,7 @@ fn resolve_srcset(base_url: &Url, value: &str) -> Option<String> {
     (!resolved.is_empty()).then(|| resolved.join(", "))
 }
 
-impl Dom for MarkdownDom<'_> {
+impl<D: MarkdownSource> Dom for MarkdownDom<'_, D> {
     type NodeId = NativeNodeId;
 
     fn node_kind(&self, node: Self::NodeId) -> NodeKind<'_> {
@@ -490,8 +503,17 @@ impl Dom for MarkdownDom<'_> {
         self.next_retained(self.dom.next_sibling(node))
     }
 
+    fn children(&self, node: Self::NodeId) -> impl Iterator<Item = Self::NodeId> {
+        self.dom
+            .children(node)
+            .filter(|node| !self.suppressed.contains(node))
+    }
+
     fn attribute(&self, node: Self::NodeId, name: &str) -> Option<&str> {
-        if name == "checked" && self.unchecked_controls.contains(&node) {
+        if (name == "checked" && self.unchecked_controls.contains(&node))
+            || (self.strip.css && name == "style")
+            || (self.strip.js && name.starts_with("on"))
+        {
             return None;
         }
         self.attribute_overrides

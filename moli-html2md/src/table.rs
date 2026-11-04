@@ -50,9 +50,7 @@ impl<Id: Copy> Table<Id> {
             targets: VecDeque::new(),
         };
         let mut cells = Vec::new();
-        let mut child = dom.first_child(node);
-        while let Some(node) = child.filter(|_| depth + 1 < max_depth) {
-            child = dom.next_sibling(node);
+        for node in dom.children(node).take_while(|_| depth + 1 < max_depth) {
             match dom.node_kind(node) {
                 NodeKind::Element("caption") if table.rows.is_empty() => {
                     table.captions.push(Cell {
@@ -66,9 +64,7 @@ impl<Id: Copy> Table<Id> {
                 }
                 NodeKind::Element(tag @ ("thead" | "tbody" | "tfoot")) => {
                     table.defer_target(dom, node, cells.len());
-                    let mut row = dom.first_child(node);
-                    while let Some(node) = row.filter(|_| depth + 2 < max_depth) {
-                        row = dom.next_sibling(node);
+                    for node in dom.children(node).take_while(|_| depth + 2 < max_depth) {
                         match dom.node_kind(node) {
                             NodeKind::Element("tr") => {
                                 table.add_row(dom, node, depth + 2, max_depth, tag, &mut cells)?
@@ -81,9 +77,7 @@ impl<Id: Copy> Table<Id> {
                 NodeKind::Element(tag @ ("colgroup" | "col")) => {
                     table.defer_target(dom, node, cells.len());
                     if tag == "colgroup" {
-                        let mut column = dom.first_child(node);
-                        while let Some(node) = column.filter(|_| depth + 2 < max_depth) {
-                            column = dom.next_sibling(node);
+                        for node in dom.children(node).take_while(|_| depth + 2 < max_depth) {
                             table.defer_target(dom, node, cells.len());
                         }
                     }
@@ -111,9 +105,7 @@ impl<Id: Copy> Table<Id> {
         let row_node = node;
         let start = cells.len();
         let mut all_headers = true;
-        let mut child = dom.first_child(node);
-        while let Some(node) = child.filter(|_| depth + 1 < max_depth) {
-            child = dom.next_sibling(node);
+        for node in dom.children(node).take_while(|_| depth + 1 < max_depth) {
             match dom.node_kind(node) {
                 NodeKind::Element(tag @ ("th" | "td")) => {
                     // GFM has no cell spans. Never use their values to allocate

@@ -134,28 +134,33 @@ fn walk<D: Dom + ?Sized>(
     limit: usize,
     mut found: impl FnMut(D::NodeId) -> bool,
 ) -> bool {
-    let mut stack = vec![(Some(root), 0, false)];
-    while let Some((node, depth, siblings)) = stack.pop() {
-        let Some(node) = node else {
+    let retained = |node, depth| {
+        depth < limit
+            && !matches!(
+                dom.node_kind(node),
+                NodeKind::Other
+                    | NodeKind::Element("head" | "script" | "style" | "noscript" | "template")
+            )
+    };
+    if !retained(root, 0) {
+        return false;
+    }
+    if found(root) {
+        return true;
+    }
+    let mut stack = vec![(dom.children(root), 1)];
+    while let Some((mut children, depth)) = stack.pop() {
+        let Some(node) = children.next() else {
             continue;
         };
-        if siblings {
-            stack.push((dom.next_sibling(node), depth, true));
-        }
-        if depth >= limit {
-            continue;
-        }
-        if matches!(
-            dom.node_kind(node),
-            NodeKind::Other
-                | NodeKind::Element("head" | "script" | "style" | "noscript" | "template")
-        ) {
+        stack.push((children, depth));
+        if !retained(node, depth) {
             continue;
         }
         if found(node) {
             return true;
         }
-        stack.push((dom.first_child(node), depth + 1, true));
+        stack.push((dom.children(node), depth + 1));
     }
     false
 }
