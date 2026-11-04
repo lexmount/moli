@@ -2394,17 +2394,19 @@ impl CdpScheduler {
         {
             immediate.append(resident);
         }
+        // Load publication closes its own provisional load window when its
+        // post-load action is admitted. Apply that before releasing the batch.
+        self.apply_scheduler_events_with_load_predecessors(
+            scheduler,
+            &load_predecessors,
+            future_load_predecessor,
+        );
         if let Some(output) = self.queues.take_unconstrained_renderer_output(source) {
             // The producing Native turn already authorizes this output. In
             // particular, Debugger.paused must reach the client while ordinary
             // adapter work is suspended by that very pause.
             immediate.append(output);
         }
-        self.apply_scheduler_events_with_load_predecessors(
-            scheduler,
-            &load_predecessors,
-            future_load_predecessor,
-        );
         Ok(self
             .route_background_events_around_inflight_navigation(immediate.into_background_events()))
     }
@@ -2919,6 +2921,12 @@ impl CdpScheduler {
                 &load_predecessors,
                 future_load_predecessor,
             );
+            let mut immediate_output = immediate_output;
+            if let Some(output) = self.queues.take_unconstrained_renderer_output(
+                renderer_output_cursor.expect("the concrete publication retains its cursor"),
+            ) {
+                immediate_output.append(output);
+            }
             if let Some(started) = trace_started {
                 tracing::info!(
                     target: "moli_cdp_runtime",

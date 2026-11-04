@@ -1041,6 +1041,58 @@ async fn runtime_response_cannot_release_renderer_output_with_an_exact_load_pred
 }
 
 #[test]
+fn load_publication_cannot_become_a_successor_of_its_own_post_load_action() {
+    let page = PageId::new_for_testing(7);
+    let document = root_document_lifecycle_identity(page, 1);
+    let parent = renderer_publication(
+        page,
+        1,
+        RendererOutputPublicationOrdering::AfterPendingPageLoad {
+            source_document: document,
+        },
+    );
+    let timer = renderer_publication(
+        page,
+        2,
+        RendererOutputPublicationOrdering::AfterPendingPageLoad {
+            source_document: document,
+        },
+    );
+    let mut queues = SchedulerQueues::default();
+    for publication in [&parent, &timer] {
+        queues.enqueue_pending_renderer_output_projection(
+            publication_cursor(publication),
+            Vec::new(),
+            Some(future_load_candidate(publication)),
+        );
+    }
+    queues.close_load_publication_window(publication_cursor(&parent));
+    let observation = deferred_main_document_load_observation_id(1);
+    assert_eq!(
+        queues.bind_main_document_load_predecessor(
+            observation,
+            &load_interest_for_publication(&parent)
+        ),
+        1
+    );
+    let (parent_predecessors, parent_candidate) = queues
+        .renderer_output_order(publication_cursor(&parent))
+        .unwrap();
+    assert!(
+        parent_predecessors.is_empty() && parent_candidate.is_none(),
+        "the publication carrying Load cannot depend on its post-load successor"
+    );
+    assert_eq!(
+        queues
+            .renderer_output_order(publication_cursor(&timer))
+            .unwrap()
+            .0,
+        [observation],
+        "a later timer must keep its exact load predecessor"
+    );
+}
+
+#[test]
 fn provisional_load_binding_prevents_specialized_wait_drain_from_overtaking_ingress() {
     let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
     let cursor = publication_cursor(&publication);
@@ -1063,6 +1115,167 @@ fn provisional_load_binding_prevents_specialized_wait_drain_from_overtaking_ingr
         "a specialized wait drain must not steal same-ingress work before command completion gets its load-binding opportunity"
     );
     assert_eq!(queues.protocol_residence_len(), 2);
+}
+
+#[tokio::test]
+async fn external_load_wait_cannot_publish_post_load_before_held_load_output() {
+    async fn command(
+        scheduler: &mut CdpScheduler,
+        receivers: &mut super::CdpSchedulerEventReceivers,
+        message: serde_json::Value,
+    ) -> ProtocolOutputSequence {
+        let handle = scheduler.state.handle();
+        let raw = message.to_string();
+        let pending = handle.process_message_for_test(&raw);
+        tokio::pin!(pending);
+        let mut output = ProtocolOutputSequence::empty();
+        loop {
+            tokio::select! {
+                biased;
+                outcome = &mut pending => {
+                    output.append(scheduler.apply_renderer_owner_turn_outcome(receivers, outcome.unwrap()).await
+                        .unwrap_or_else(|failure| panic!("fixture command failed: {:?}", failure.into_parts().1)));
+                    let sent = messages(&output);
+                    assert!(sent.iter().any(|event| event["id"] == message["id"] && event.get("result").is_some()),
+                        "fixture command failed: {message}; output={sent:?}");
+                    return output;
+                }
+                input = receivers.recv_interleaved_input() => {
+                    output.append(scheduler.complete_interleaved_scheduler_input(receivers, input.unwrap()).await
+                        .unwrap_or_else(|failure| panic!("fixture input failed: {:?}", failure.into_parts().1)));
+                }
+            }
+        }
+    }
+
+    fn messages(output: &ProtocolOutputSequence) -> Vec<serde_json::Value> {
+        output
+            .events
+            .iter()
+            .cloned()
+            .filter_map(BackgroundProtocolEvent::into_wire_message)
+            .collect()
+    }
+
+    async fn external_drain(
+        scheduler: &mut CdpScheduler,
+        receivers: &mut super::CdpSchedulerEventReceivers,
+    ) -> ProtocolOutputSequence {
+        let mut output = scheduler.complete_ready_protocol_residences_for_external_load_wait();
+        while !scheduler.queues.pending_loads.is_empty() {
+            let completed = receivers.protocol_work_completion_rx.recv().await.unwrap();
+            output.append(scheduler.complete_protocol_work(completed).unwrap());
+        }
+        output.append(scheduler.complete_ready_protocol_residences_for_external_load_wait());
+        output
+    }
+
+    tokio::task::LocalSet::new().run_until(async {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let (release, stylesheet) = tokio::sync::watch::channel(false);
+            let fixture = axum::Router::new()
+                .route("/page", axum::routing::get(|| async {
+                    axum::response::Html("<link rel=stylesheet href=/held.css><body>load order</body>")
+                }))
+                .route("/held.css", axum::routing::get(move || {
+                    let mut stylesheet = stylesheet.clone();
+                    async move {
+                        stylesheet.wait_for(|ready| *ready).await.unwrap();
+                        ([("Content-Type", "text/css")], "body { color: black; }")
+                    }
+                }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap() });
+            let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
+                moli_protocol::CdpInitialStoragePartition::memory(),
+                moli_core::runtime::NavigationRuntimeConfig::new(
+                    moli_fetch::FetchConfig::default(), moli_core::OptionalResourceFetchMask::NONE,
+                    true, moli_core::LayoutPolicy::OnDemand,
+                ),
+            );
+            command(&mut scheduler, &mut receivers, json!({"id": 1, "method": "Page.enable"})).await;
+            let owner = AutomationContext {
+                protocol: FrontendProtocol::Cdp, session_id: None,
+                target_id: Some(DevToolsTargetId::from(moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID)),
+                browser_context_id: None,
+            };
+            command(&mut scheduler, &mut receivers, json!({"id": 2, "method": "Network.enable"})).await;
+            command(&mut scheduler, &mut receivers, json!({"id": 3, "method": "Page.setLifecycleEventsEnabled", "params": {"enabled": true}})).await;
+            let navigation = scheduler.execute_automation_command_with_protocol_messages(
+                &mut receivers, AutomationCommand::Navigate(moli_protocol::automation::DevToolsNavigateCommand {
+                    context: owner.clone(), url: format!("http://{address}/page"), referrer: None,
+                    wait: DevToolsNavigationWait::None,
+                }),
+            ).await;
+            let AutomationResult::Navigate(navigated) = navigation.result.unwrap() else {
+                panic!("fixture navigation should return its committed loader");
+            };
+            let loader = navigated.loader_id.unwrap().into_string();
+            let mut client = navigation.protocol_output.into_messages();
+            while !client.iter().any(|event| event["method"] == "Page.domContentEventFired") {
+                let input = receivers.recv_interleaved_input().await.unwrap();
+                client.extend(scheduler.complete_interleaved_scheduler_input(&mut receivers, input).await
+                    .unwrap_or_else(|failure| panic!("DCL projection failed: {:?}", failure.into_parts().1)).into_messages());
+            }
+            assert!(client.iter().all(|event| event["method"] != "Page.loadEventFired"),
+                "the held stylesheet must keep Load pending");
+            release.send_replace(true);
+
+            // Consume real Native publications until the Document has produced
+            // Load. Retain that frozen batch at the scheduler delivery boundary
+            // instead of handing it to the client.
+            let mut frozen = loop {
+                let input = receivers.recv_interleaved_input().await.unwrap();
+                let output = scheduler.complete_interleaved_scheduler_input(&mut receivers, input).await
+                    .unwrap_or_else(|failure| panic!("lifecycle projection failed: {:?}", failure.into_parts().1));
+                let projected = messages(&output);
+                if projected.iter().any(|event| event["method"] == "Page.loadEventFired") {
+                    break output;
+                }
+                client.extend(projected);
+            };
+            let source = scheduler.queues.protocol_residences.iter().find_map(|residence| match residence {
+                ProtocolSchedulerResidence::ProtocolWork { work, .. }
+                    if work.kind() == moli_protocol::ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction => {
+                        work.renderer_output_source()
+                    }
+                _ => None,
+            }).expect("ready post-load work must retain its producing Native cursor");
+            while !scheduler.state.with_state(|state| state.renderer_output_cursor_is_projected(source)).unwrap() {
+                let input = receivers.recv_interleaved_input().await.unwrap();
+                frozen.append(scheduler.complete_interleaved_scheduler_input(&mut receivers, input).await
+                    .unwrap_or_else(|failure| panic!("source projection failed: {:?}", failure.into_parts().1)));
+            }
+            assert!(scheduler.queues.renderer_output_order(source).is_none(),
+                "the completed source is retained below at its delivery boundary");
+            assert!(scheduler.queues.pending_loads.is_empty());
+            scheduler.queues.enqueue_renderer_output_publication(source, frozen, Vec::new(), None);
+            let held = scheduler.queues.protocol_residences.pop_back().unwrap();
+            scheduler.queues.protocol_residences.push_front(held);
+
+            // Settle any work the specialized drain started, so this checks
+            // actual notifications, including frameStoppedLoading and idle.
+            let premature = external_drain(&mut scheduler, &mut receivers).await;
+            assert!(premature.is_empty(),
+                "post-load notifications overtook the held Load: {:?}", messages(&premature));
+            assert!(scheduler.queues.pending_loads.is_empty());
+
+            client.extend(scheduler.complete_renderer_output_predecessor_before_runtime_response(
+                &RendererOutputFence::new_for_test(source),
+            ).into_messages());
+            client.extend(external_drain(&mut scheduler, &mut receivers).await.into_messages());
+            let load = client.iter().position(|event| event["method"] == "Page.loadEventFired").unwrap();
+            let stopped = client.iter().position(|event| event["method"] == "Page.frameStoppedLoading").unwrap();
+            let document_request = client.iter().find(|event| event["method"] == "Network.requestWillBeSent"
+                && event["params"]["loaderId"] == loader && event["params"]["type"] == "Document")
+                .unwrap()["params"]["requestId"].clone();
+            let finished = client.iter().position(|event| event["method"] == "Network.loadingFinished"
+                && event["params"]["requestId"] == document_request).unwrap();
+            assert!(finished < load && load < stopped, "invalid delivery order: {client:#?}");
+            server.abort();
+        }).await.expect("held-load ordering fixture should finish");
+    }).await;
 }
 
 #[tokio::test]

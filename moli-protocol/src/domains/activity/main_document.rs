@@ -7,7 +7,7 @@ use crate::automation::FrontendProtocol;
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, CommittedRendererDocumentBinding,
     DeferredMainDocumentLoadObservationId, DocumentNavigationToken, NavigationDispatchState,
-    RendererPageResidenceIdentity,
+    RendererDocumentLoadBoundary, RendererPageResidenceIdentity,
 };
 use crate::domains::command_output::{BackgroundProtocolEventBuffer, CommandOutputBuffer};
 use crate::domains::network::{
@@ -610,9 +610,14 @@ impl MainDocumentLoadPublication {
             .is_some_and(|(current, expected)| current.shares_document_owner_with(expected))
     }
 
-    pub(crate) fn boundary(&self, conn: &CdpConnection) -> Option<bool> {
-        let binding = self.completion.state.renderer_document_binding.as_ref()?;
-        conn.renderer_document_load_boundary_for_owner(self.owner_scope(), binding)
+    pub(crate) fn boundary(&self, conn: &CdpConnection) -> RendererDocumentLoadBoundary {
+        self.completion
+            .state
+            .renderer_document_binding
+            .as_ref()
+            .map_or(RendererDocumentLoadBoundary::Pending, |binding| {
+                conn.renderer_document_load_boundary_for_owner(self.owner_scope(), binding)
+            })
     }
 
     pub(crate) fn publish(
