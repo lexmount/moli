@@ -1691,6 +1691,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deferred_load_late_observer_preserves_document_open_load() {
+        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .page_session_state
+            .page_domain_enabled = true;
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        let termination = RendererDocumentLifecycleEvent {
+            kind: RendererDocumentLifecycleEventKind::Terminated {
+                last_reached: Some(RendererDocumentLifecycleMilestone::DomContentLoaded),
+                reason: RendererDocumentTerminationReason::RestartedByDocumentOpen,
+            },
+            ..renderer_termination_event_for_test(started)
+        };
+        let replacement = RendererDocumentLifecycleEvent {
+            epoch: RendererLifecycleEpoch(2),
+            sequence: 4,
+            timestamp_micros: 40,
+            kind: RendererDocumentLifecycleEventKind::Started {
+                reason: RendererLifecycleStartReason::ExplicitDocumentOpen,
+            },
+            ..started
+        };
+        let dcl = RendererDocumentLifecycleEvent {
+            sequence: 5,
+            timestamp_micros: 50,
+            kind: RendererDocumentLifecycleEventKind::Milestone(
+                RendererDocumentLifecycleMilestone::DomContentLoaded,
+            ),
+            ..replacement
+        };
+        let load = RendererDocumentLifecycleEvent {
+            sequence: 6,
+            timestamp_micros: 60,
+            kind: RendererDocumentLifecycleEventKind::Milestone(
+                RendererDocumentLifecycleMilestone::Load,
+            ),
+            ..replacement
+        };
+        let (_, accepted) = conn.ingest_renderer_document_lifecycle_events_for_owner(
+            &owner,
+            vec![termination, replacement, dcl, load],
+        );
+        assert_eq!(accepted, vec![termination, replacement, dcl]);
+        // The deferred navigation's binding was captured before document.open(),
+        // but its observer can be installed after the replacement has loaded.
+        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
+            &owner,
+            Some(&binding),
+            RendererDocumentLifecycleMilestone::Load,
+        );
+        assert_eq!(
+            observer.observation(),
+            RendererDocumentLifecycleObservation::Interrupted
+        );
+        conn.enqueue_deferred_main_document_load_completion(deferred_load_admission_for_test(
+            binding,
+        ));
+        let work = take_deferred_load_work_for_test(&mut conn);
+        assert!(work.is_ready());
+        let mut ctx = crate::testing::TestContext::from_conn(conn);
+        let (events, _) = ctx
+            .run_fixture_scheduler_work(work)
+            .await
+            .into_protocol_event_parts();
+        let messages = events
+            .into_iter()
+            .map(|event| event.into_protocol_message())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message["method"] == "Page.loadEventFired")
+                .count(),
+            1,
+            "late admission must release the replacement load already owned by this loader: {messages:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn deferred_load_observer_reports_exact_document_interruption() {
         let (conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
         let ctx = crate::testing::TestContext::from_conn(conn);
