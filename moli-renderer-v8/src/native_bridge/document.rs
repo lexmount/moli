@@ -180,12 +180,13 @@ pub(crate) use detached_objects::{
     write_detached_native_attribute_ns_appending_to_current_reaction_queue,
 };
 pub(in crate::native_bridge) use detached_objects::{
-    define_detached_native_handle, detached_append_child_method_callback,
-    detached_clone_node_method_callback, detached_doctype_name, detached_doctype_public_id,
-    detached_doctype_system_id, detached_insert_before_method_callback,
-    detached_parent_node_object, detached_processing_instruction_target,
-    detached_record_tree_mutation, detached_remove_child_method_callback,
-    detached_replace_child_method_callback, detached_set_owner_document,
+    canonical_detached_node_object, define_detached_native_handle,
+    detached_append_child_method_callback, detached_clone_node_method_callback,
+    detached_doctype_name, detached_doctype_public_id, detached_doctype_system_id,
+    detached_insert_before_method_callback, detached_parent_node_object,
+    detached_processing_instruction_target, detached_record_tree_mutation,
+    detached_remove_child_method_callback, detached_replace_child_method_callback,
+    detached_set_owner_document,
 };
 pub(in crate::native_bridge) use detached_objects::{
     detached_attach_shadow_method_callback, detached_blur_method_callback,
@@ -1235,6 +1236,9 @@ fn document_html_collection_getter<'s>(
         );
         return;
     };
+    let Some(receiver) = canonical_detached_node_object(scope, receiver) else {
+        return;
+    };
     // A child Document wrapper can precede its Window realm. Follow the
     // associated Window once available, including through a borrowed getter.
     let context = document_associated_window_for_object(scope, runtime_ptr, handle, receiver)
@@ -1281,7 +1285,8 @@ fn document_associated_window_for_object<'s>(
     if !node_is_document(runtime, handle) {
         return None;
     }
-    if let Some(window) = get_private_value(scope, document, DOCUMENT_ASSOCIATED_WINDOW_SLOT)
+    let backing = super::node::node_backing_object(scope, document)?;
+    if let Some(window) = get_private_value(scope, backing, DOCUMENT_ASSOCIATED_WINDOW_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
         return Some(window);
@@ -1289,7 +1294,7 @@ fn document_associated_window_for_object<'s>(
     if runtime.dom_host().document_handle() != handle {
         return None;
     }
-    document
+    canonical_detached_node_object(scope, document)?
         .get_creation_context(scope)
         .map(|context| context.global(scope))
 }
@@ -1313,6 +1318,9 @@ pub(in crate::native_bridge) fn set_document_associated_window<'s>(
     document: v8::Local<'s, v8::Object>,
     window: v8::Local<'s, v8::Object>,
 ) {
+    let Some(document) = super::node::node_backing_object(scope, document) else {
+        return;
+    };
     set_private_value(
         scope,
         document,
@@ -1631,14 +1639,7 @@ fn detached_method_forward<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     helper_name: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let backing = super::node::node_backing_object(scope, args.this())?;
-    // Detached tree relations retain the canonical wrapper's identity. A
-    // registered proxy without mirrored state uses its native backing instead.
-    let receiver = if get_private_value(scope, args.this(), DETACHED_STATE_SLOT).is_some() {
-        args.this()
-    } else {
-        backing
-    };
+    let receiver = canonical_detached_node_object(scope, args.this())?;
     let mut forwarded = Vec::with_capacity(args.length() as usize + 1);
     forwarded.push(receiver.into());
     for index in 0..args.length() {

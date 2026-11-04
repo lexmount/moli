@@ -25,9 +25,8 @@ pub(in crate::native_bridge::document) use self::builders::{
     build_detached_element_object, build_detached_html_document_object,
     build_detached_processing_instruction_object, build_detached_text_object,
     copy_detached_element_bridge_members, generic_html_element_proxy,
-    html_element_constructor_name, mirror_detached_private_slots, new_detached_state_object,
-    new_map_object, remove_detached_element_instance_selector_matching_methods,
-    select_html_element_proxy,
+    html_element_constructor_name, new_detached_state_object, new_map_object,
+    remove_detached_element_instance_selector_matching_methods, select_html_element_proxy,
 };
 pub(in crate::native_bridge::document) use self::clone::*;
 pub(in crate::native_bridge::document) use self::collections::*;
@@ -84,8 +83,8 @@ pub(crate) use self::state_tree::{
     write_detached_native_attribute_ns_appending_to_current_reaction_queue,
 };
 pub(in crate::native_bridge) use self::state_tree::{
-    define_detached_native_handle, detached_doctype_name, detached_doctype_public_id,
-    detached_doctype_system_id, detached_parent_node_object,
+    canonical_detached_node_object, define_detached_native_handle, detached_doctype_name,
+    detached_doctype_public_id, detached_doctype_system_id, detached_parent_node_object,
     detached_processing_instruction_target, detached_record_tree_mutation,
     detached_set_owner_document,
 };
@@ -102,8 +101,9 @@ pub(in crate::native_bridge::document) use self::state_tree::{
     detached_set_owner_document_appending_to_current_reaction_queue, detached_set_parent,
     detached_sibling_object, detached_state_kind, detached_state_object, detached_state_string,
     detached_tree_query_version, detached_tree_root_object,
-    detached_update_existing_children_projection, read_detached_native_text_content,
-    sync_detached_native_insert, sync_detached_native_insert_appending_to_current_reaction_queue,
+    detached_update_existing_children_projection, pair_detached_native_handle_with_wrapper,
+    read_detached_native_text_content, sync_detached_native_insert,
+    sync_detached_native_insert_appending_to_current_reaction_queue,
     sync_detached_native_set_attribute, sync_detached_native_set_attribute_ns,
     with_detached_tree_reaction_scope, write_detached_native_text_content,
     write_detached_native_text_content_appending_to_current_reaction_queue,

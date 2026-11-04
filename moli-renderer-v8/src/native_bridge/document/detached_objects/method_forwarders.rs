@@ -860,7 +860,9 @@ pub(crate) fn ensure_detached_document_implementation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if let Some(cached) = get_private_object(scope, document, DETACHED_DOCUMENT_IMPLEMENTATION_SLOT)
+    let document = canonical_detached_node_object(scope, document)?;
+    let backing = crate::native_bridge::node::node_backing_object(scope, document)?;
+    if let Some(cached) = get_private_object(scope, backing, DETACHED_DOCUMENT_IMPLEMENTATION_SLOT)
     {
         return Some(cached);
     }
@@ -877,7 +879,7 @@ pub(crate) fn ensure_detached_document_implementation<'s>(
     }
     set_private_value(
         scope,
-        document,
+        backing,
         DETACHED_DOCUMENT_IMPLEMENTATION_SLOT,
         implementation.into(),
     );

@@ -101,6 +101,14 @@ pub(in crate::native_bridge::document) fn generic_html_element_proxy<'s>(
         .ok()?;
     let proxy = v8::Proxy::new(scope, target, handler)?;
     moli_webapi_declare::register_web_api_proxy(scope, proxy).ok()?;
+    // This factory publishes the canonical wrapper. Native aliases register
+    // their brand separately and do not replace this identity association.
+    set_private_value(
+        scope,
+        target,
+        crate::dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
+        proxy.into(),
+    );
     let proxy: v8::Local<'s, v8::Value> = proxy.into();
     v8::Local::<v8::Object>::try_from(proxy).ok()
 }
@@ -118,6 +126,12 @@ pub(in crate::native_bridge::document) fn select_html_element_proxy<'s>(
     .ok()?;
     let proxy = v8::Proxy::new(scope, target, handler)?;
     moli_webapi_declare::register_web_api_proxy(scope, proxy).ok()?;
+    set_private_value(
+        scope,
+        target,
+        crate::dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
+        proxy.into(),
+    );
     let proxy: v8::Local<'s, v8::Value> = proxy.into();
     v8::Local::<v8::Object>::try_from(proxy).ok()
 }
@@ -374,26 +388,13 @@ fn select_html_element_proxy_set_callback<'s>(
     );
 }
 
-pub(in crate::native_bridge::document) fn mirror_detached_private_slots<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Object>,
-    target: v8::Local<'s, v8::Object>,
-) {
-    for slot in [
-        DETACHED_STATE_SLOT,
-        DETACHED_LIVE_DELEGATE_SLOT,
-        DETACHED_NATIVE_HANDLE_SLOT,
-    ] {
-        if let Some(value) = get_private_value(scope, source, slot) {
-            set_private_value(scope, target, slot, value);
-        }
-    }
-}
-
 pub(in crate::native_bridge::document) fn copy_detached_element_bridge_members<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
 ) {
+    let Some(target) = crate::native_bridge::node::node_backing_object(scope, target) else {
+        return;
+    };
     let Some(parent) = target.get_prototype(scope) else {
         return;
     };
@@ -632,9 +633,8 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
     if html_like && local_name == "select" {
         install_detached_select_instance_properties(scope, object);
         if let Some(proxy) = select_html_element_proxy(scope, object) {
-            mirror_detached_private_slots(scope, object, proxy);
             if let Some((_, handle)) = native_handle {
-                define_detached_native_handle(scope, proxy, handle);
+                pair_detached_native_handle_with_wrapper(scope, proxy, handle);
             }
             object = proxy;
         }

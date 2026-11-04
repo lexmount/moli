@@ -9,6 +9,7 @@ fn live_named_node_map_cache<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let element = crate::native_bridge::node::node_backing_object(scope, element)?;
     get_private_value(scope, element, NAMED_NODE_MAP_CACHE_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
@@ -18,7 +19,9 @@ fn set_live_named_node_map_cache<'s>(
     element: v8::Local<'s, v8::Object>,
     wrapper: v8::Local<'s, v8::Object>,
 ) {
-    set_private_value(scope, element, NAMED_NODE_MAP_CACHE_SLOT, wrapper.into());
+    if let Some(backing) = crate::native_bridge::node::node_backing_object(scope, element) {
+        set_private_value(scope, backing, NAMED_NODE_MAP_CACHE_SLOT, wrapper.into());
+    }
 }
 
 pub(crate) fn live_named_node_map_wrapper<'s>(
@@ -26,6 +29,8 @@ pub(crate) fn live_named_node_map_wrapper<'s>(
     runtime_ptr: *mut JsContextHost,
     element: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
+    let element = crate::native_bridge::document::canonical_detached_node_object(scope, element)
+        .expect("validated attributes receiver must have a backing");
     if let Some(wrapper) = live_named_node_map_cache(scope, element) {
         refresh_named_node_map_wrapper(scope, wrapper, element);
         return wrapper;

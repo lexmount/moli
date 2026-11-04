@@ -966,7 +966,10 @@ fn set_child_document_ready_state<'s>(
     document: v8::Local<'s, v8::Object>,
     ready_state: DocumentReadyState,
 ) -> bool {
-    if let Some(state) = get_private_object(scope, document, DETACHED_STATE_SLOT) {
+    let backing = crate::native_bridge::node::node_backing_object(scope, document);
+    if let Some(state) =
+        backing.and_then(|backing| get_private_object(scope, backing, DETACHED_STATE_SLOT))
+    {
         if let Some(value) = v8_string(scope, ready_state.as_str()) {
             let key = v8str(scope, "readyState").into();
             if state

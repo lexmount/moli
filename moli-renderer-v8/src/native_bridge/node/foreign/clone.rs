@@ -14,6 +14,9 @@ fn foreign_live_script_already_started(
 ) -> bool {
     let object = v8::Global::new(scope, object);
     let object = v8::Local::new(scope, object);
+    let Some(object) = node_backing_object(scope, object) else {
+        return false;
+    };
     if let Some(state) = get_private_object(scope, object, DETACHED_STATE_SLOT) {
         let local_name = object_defined_string_property(scope, state, "localName")
             .or_else(|| object_defined_string_property(scope, object, "localName"));

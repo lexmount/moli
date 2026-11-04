@@ -34,15 +34,15 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::{
     context_bootstrap::{build_dom_rect_object, throw_dom_exception_value},
-    native_bridge::document::{DETACHED_STATE_SLOT, detached_native_handle_for_runtime},
+    native_bridge::document::detached_native_handle_for_runtime,
     native_bridge::{JsContextHost, callback_value_dom_handle, wrapped_handle_value},
     native_bridge::{
         compute_mock_intersection_client_rect, compute_mock_intersection_scrollport_client_rect,
     },
     util::{
         callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
-        get_private_object, get_private_value, serialize_v8_array, serialize_v8_iter_array,
-        set_private_value, throw_range_error, throw_type_error, v8_string, v8str,
+        get_private_value, serialize_v8_array, serialize_v8_iter_array, set_private_value,
+        throw_range_error, throw_type_error, v8_string, v8str,
     },
     webidl_callback_execution::PreparedWebIdlCallbackExecution,
 };
@@ -1170,7 +1170,7 @@ fn is_detached_node_value<'s>(
     };
     let object = v8::Global::new(scope, object);
     let object = v8::Local::new(scope, object);
-    get_private_object(scope, object, DETACHED_STATE_SLOT).is_some()
+    crate::native_bridge::receiver_has_detached_state(scope, object)
 }
 
 pub(super) fn mutation_observer_disconnect_callback(

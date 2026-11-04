@@ -72,6 +72,117 @@ fn native_node_alias_test_vm(setup: &str) -> StandaloneScriptVmHarness {
     vm
 }
 
+fn assert_node_private_state_is_backing_only(vm: &mut StandaloneScriptVmHarness) {
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        for name in ["nodeAliasTargets", "nodeAliases"] {
+            let objects = global
+                .get(scope, crate::util::v8str(scope, name).into())
+                .unwrap();
+            let objects = v8::Local::<v8::Array>::try_from(objects).unwrap();
+            for index in 0..objects.length() {
+                let object = objects.get_index(scope, index).unwrap();
+                let object = v8::Local::<v8::Object>::try_from(object).unwrap();
+                let backing = moli_webapi_declare::web_api_object_target(scope, object).unwrap();
+                assert!(!backing.is_proxy());
+                if object.is_proxy() {
+                    for slot in [
+                        crate::native_bridge::document::DETACHED_STATE_SLOT,
+                        crate::native_bridge::document::DETACHED_NATIVE_HANDLE_SLOT,
+                        crate::native_bridge::document::DETACHED_LIVE_DELEGATE_SLOT,
+                        "__moliDetachedElementBridgePrototype",
+                        "__moliNamedNodeMapCache",
+                        "__moliAttrObjectCache",
+                        "__moliAriaElementReference:aria-controls",
+                        "__moliDetachedDOMImplementation",
+                        "__moliDocumentAssociatedWindow",
+                    ] {
+                        assert!(
+                            crate::util::get_private_value(scope, object, slot).is_none(),
+                            "{name}[{index}] must not own {slot}"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn native_node_factories_keep_private_state_only_on_backing_objects() {
+    let mut vm = native_node_alias_test_vm(
+        r#"
+        const detached = document.implementation.createHTMLDocument('');
+        const parsed = new DOMParser().parseFromString(
+          '<!doctype html><body><x-native></x-native><select><option>one</option></select>', 'text/html');
+        globalThis.nodeAliasTargets = [
+          detached.createElement('select'), parsed.body.firstChild, parsed.body.lastChild,
+          detached.createTextNode('text'), detached.createDocumentFragment()
+        ];
+    "#,
+    );
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let values = global
+            .get(scope, crate::util::v8str(scope, "nodeAliasTargets").into())
+            .unwrap();
+        let values = v8::Local::<v8::Array>::try_from(values).unwrap();
+        for index in 0..3 {
+            let object =
+                v8::Local::<v8::Object>::try_from(values.get_index(scope, index).unwrap()).unwrap();
+            assert!(
+                object.is_proxy(),
+                "factory {index} must exercise a canonical native Proxy"
+            );
+            let backing = moli_webapi_declare::web_api_object_target(scope, object).unwrap();
+            assert!(
+                crate::util::get_private_object(
+                    scope,
+                    backing,
+                    crate::native_bridge::document::DETACHED_STATE_SLOT
+                )
+                .is_some()
+            );
+            assert!(
+                crate::util::get_private_value(
+                    scope,
+                    backing,
+                    crate::native_bridge::document::DETACHED_NATIVE_HANDLE_SLOT
+                )
+                .is_some()
+            );
+            let canonical = crate::util::get_private_object(
+                scope,
+                backing,
+                crate::dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
+            )
+            .unwrap();
+            assert_eq!(
+                canonical, object,
+                "backing retains canonical JS identity for factory {index}"
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_node_private_state_is_backing_only(&mut vm);
+    vm.eval(r#"
+        const n = Node.prototype;
+        const text = Object.getOwnPropertyDescriptor(n, 'textContent');
+        for (let i = 0; i < nodeAliases.length; i++) {
+          const original = nodeAliasTargets[i], alias = nodeAliases[i];
+          assertAlias(n.getRootNode.call(alias) === n.getRootNode.call(original), 'factory root ' + i);
+          assertAlias(n.isEqualNode.call(n.cloneNode.call(alias, true), n.cloneNode.call(original, true)), 'factory clone ' + i);
+          text.set.call(alias, 'updated');
+          assertAlias(original.textContent === 'updated', 'factory state ' + i);
+        }
+        assertAlias(aliasTraps === 0, 'factory state lookup ran traps');
+    "#).unwrap();
+    assert_node_private_state_is_backing_only(&mut vm);
+}
+
 #[test]
 fn detached_node_alias_arguments_preserve_native_identity() {
     let mut vm = native_node_alias_test_vm(
@@ -209,6 +320,7 @@ fn detached_node_aliases_follow_adoption_through_dom_methods() {
           const argument = i === 0 ? original : alias;
           assertAlias(document.adoptNode(argument) === argument, 'adopt return identity');
           assertAlias(n.appendChild.call(document.body, alias) === alias, 'append adopted alias');
+          assertAlias(document.body.lastChild === original, 'adoption keeps canonical wrapper');
           assertAlias(n.isSameNode.call(alias, original), 'identity after adoption');
           assertAlias(n.contains.call(document.body, alias), 'live contains adopted alias');
           assertAlias(n.getRootNode.call(alias) === document, 'live root after adoption');
@@ -221,6 +333,111 @@ fn detached_node_aliases_follow_adoption_through_dom_methods() {
     "#,
     )
     .unwrap();
+    assert_node_private_state_is_backing_only(&mut vm);
+}
+
+#[test]
+fn native_node_alias_caches_preserve_canonical_attribute_identity() {
+    let mut vm = native_node_alias_test_vm(
+        r#"
+        const detached = document.implementation.createHTMLDocument('');
+        const select = detached.createElement('select');
+        select.setAttribute('data-owner', 'before');
+        globalThis.nodeAliasTargets = [select, detached];
+    "#,
+    );
+    vm.eval(r#"
+        const [element, doc] = nodeAliasTargets;
+        const [alias, documentAlias] = nodeAliases;
+        const attributes = Object.getOwnPropertyDescriptor(Element.prototype, 'attributes');
+        assertAlias(attributes.get.call(alias) === element.attributes, 'shared NamedNodeMap');
+        const attr = Element.prototype.getAttributeNode.call(alias, 'data-owner');
+        assertAlias(attr === element.getAttributeNode('data-owner'), 'shared Attr cache');
+        assertAlias(attr.ownerElement === element, 'canonical Attr owner');
+        Element.prototype.setAttribute.call(alias, 'data-owner', 'after');
+        assertAlias(attr.value === 'after', 'cached Attr follows native mutation');
+        const added = doc.createAttribute('data-added');
+        Element.prototype.setAttributeNode.call(alias, added);
+        assertAlias(added.ownerElement === element, 'setAttributeNode canonical owner');
+        assertAlias(Element.prototype.setAttributeNode.call(element, added) === added, 'same Attr through canonical receiver');
+        assertAlias(Element.prototype.removeAttributeNode.call(alias, added) === added && added.ownerElement === null,
+                    'remove Attr through alias');
+        const controls = Object.getOwnPropertyDescriptor(Element.prototype, 'ariaControlsElements');
+        const references = [element];
+        controls.set.call(alias, references);
+        assertAlias(controls.get.call(element) === controls.get.call(alias) && controls.get.call(element)[0] === element,
+                    'shared ARIA references');
+        controls.set.call(element, null);
+        assertAlias(controls.get.call(alias) === null, 'ARIA references clear through canonical node');
+        const implementation = Object.getOwnPropertyDescriptor(Document.prototype, 'implementation');
+        assertAlias(implementation.get.call(documentAlias) === doc.implementation, 'shared DOMImplementation');
+        assertAlias(aliasTraps === 0, 'cache lookup ran traps');
+    "#).unwrap();
+    assert_node_private_state_is_backing_only(&mut vm);
+}
+
+#[test]
+fn native_node_alias_observers_report_canonical_targets() {
+    let mut vm = native_node_alias_test_vm(
+        r#"
+        const detached = document.implementation.createHTMLDocument('');
+        globalThis.nodeAliasTargets = [detached.createElement('select')];
+    "#,
+    );
+    vm.eval(
+        r#"
+        const element = nodeAliasTargets[0], alias = nodeAliases[0];
+        const observer = new MutationObserver(() => {});
+        observer.observe(alias, {attributes: true, childList: true});
+        Element.prototype.setAttribute.call(alias, 'data-observed', 'yes');
+        const option = element.ownerDocument.createElement('option');
+        Node.prototype.appendChild.call(alias, option);
+        const records = observer.takeRecords();
+        assertAlias(records.length === 2 && records.every(record => record.target === element),
+                    'observer reports canonical target');
+        assertAlias(records[1].addedNodes[0] === option, 'observer reports canonical added node');
+        observer.disconnect();
+        assertAlias(aliasTraps === 0, 'observe ran traps');
+    "#,
+    )
+    .unwrap();
+    assert_node_private_state_is_backing_only(&mut vm);
+}
+
+#[test]
+fn native_node_alias_results_use_the_canonical_receivers_realm() {
+    let mut vm = native_node_alias_test_vm(
+        r#"
+        const frame = document.createElement('iframe');
+        document.body.appendChild(frame);
+        const foreign = frame.contentDocument;
+        const element = foreign.createElement('div');
+        element.appendChild(foreign.createElement('span'));
+        foreign.body.appendChild(element);
+        globalThis.nodeAliasTargets = [element, foreign.body, foreign];
+    "#,
+    );
+    vm.eval(r#"
+        const n = Node.prototype;
+        for (let i = 0; i < nodeAliases.length; i++) {
+          const canonical = nodeAliasTargets[i], alias = nodeAliases[i];
+          for (const name of ['ownerDocument', 'parentNode', 'firstChild', 'lastChild']) {
+            const getter = Object.getOwnPropertyDescriptor(n, name).get;
+            assertAlias(getter.call(alias) === getter.call(canonical), 'foreign ' + name + ' ' + i);
+          }
+          assertAlias(n.getRootNode.call(alias) === n.getRootNode.call(canonical), 'foreign root ' + i);
+          const clone = n.cloneNode.call(alias, true), canonicalClone = n.cloneNode.call(canonical, true);
+          assertAlias(Object.getPrototypeOf(clone) === Object.getPrototypeOf(canonicalClone), 'foreign clone realm ' + i);
+        }
+        const doc = nodeAliasTargets[2], documentAlias = nodeAliases[2];
+        const defaultView = Object.getOwnPropertyDescriptor(Document.prototype, 'defaultView');
+        assertAlias(defaultView.get.call(documentAlias) === doc.defaultView, 'foreign defaultView identity');
+        const forms = Object.getOwnPropertyDescriptor(Document.prototype, 'forms');
+        assertAlias(Object.getPrototypeOf(forms.get.call(documentAlias)) === Object.getPrototypeOf(doc.forms),
+                    'foreign collection realm');
+        assertAlias(aliasTraps === 0, 'foreign receiver lookup ran traps');
+    "#).unwrap();
+    assert_node_private_state_is_backing_only(&mut vm);
 }
 
 #[test]
