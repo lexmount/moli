@@ -38,9 +38,8 @@ pub(crate) use self::collectors::{
 };
 
 use crate::{
-    BrowserRequestMetadata, CookieHeaderPolicy, FetchConfig, NegotiatedHttpVersion,
-    NetworkRequestExtraInfo, RedirectInfo, Request, RequestAuthScheme, RequestAuthTarget,
-    ResponseHead, proxy::HttpProxyRoute,
+    CookieHeaderPolicy, FetchConfig, NegotiatedHttpVersion, NetworkRequestExtraInfo, RedirectInfo,
+    Request, RequestAuthScheme, RequestAuthTarget, ResponseHead, proxy::HttpProxyRoute,
 };
 
 const MAX_REDIRECTS: usize = 10;
@@ -414,26 +413,7 @@ fn append_browser_subresource_headers(
             .accept_language()
             .to_owned(),
     );
-    let destination = match metadata {
-        BrowserRequestMetadata::Audio => "audio",
-        BrowserRequestMetadata::AudioWorklet => "audioworklet",
-        BrowserRequestMetadata::Font => "font",
-        BrowserRequestMetadata::Image => "image",
-        BrowserRequestMetadata::JsonModule => "json",
-        BrowserRequestMetadata::TextModule => "text",
-        BrowserRequestMetadata::Manifest => "manifest",
-        BrowserRequestMetadata::Script => "script",
-        BrowserRequestMetadata::SharedWorker => "sharedworker",
-        BrowserRequestMetadata::Worker => "worker",
-        BrowserRequestMetadata::Style | BrowserRequestMetadata::StyleModule => "style",
-        BrowserRequestMetadata::TextTrack => "track",
-        BrowserRequestMetadata::Video => "video",
-        BrowserRequestMetadata::Beacon
-        | BrowserRequestMetadata::EventSource
-        | BrowserRequestMetadata::Fetch
-        | BrowserRequestMetadata::Ping
-        | BrowserRequestMetadata::Xhr => "empty",
-    };
+    let destination = metadata.fetch_destination();
     append_fetch_metadata_headers(
         outgoing,
         request,
@@ -955,7 +935,7 @@ fn effective_connect_timeout(config: &FetchConfig, request: &Request) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RequestMode;
+    use crate::{BrowserRequestMetadata, RequestMode};
 
     fn url(value: &str) -> Url {
         Url::parse(value).expect("valid URL")

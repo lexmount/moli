@@ -45,6 +45,7 @@ type ScriptTextLoadCallback = Box<dyn FnOnce(ScriptTextLoadResult) + Send + 'sta
 pub(in crate::network) struct ScriptTextCacheKey {
     page_cache_partition_id: u64,
     url: String,
+    fetch_destination: Option<&'static str>,
     credentials_mode: String,
     request_origin: Option<String>,
     request_mode: String,
@@ -61,6 +62,7 @@ pub(in crate::network) struct ScriptTextCacheKey {
 pub(in crate::network) struct RawSubresourceCacheKey {
     page_cache_partition_id: u64,
     url: String,
+    fetch_destination: Option<&'static str>,
     resource_type: &'static str,
     credentials_mode: String,
     request_origin: Option<String>,
@@ -595,6 +597,9 @@ pub(in crate::network) fn script_text_cache_key(request: &Request) -> ScriptText
     ScriptTextCacheKey {
         page_cache_partition_id: 0,
         url: request.url.as_str().to_owned(),
+        fetch_destination: request
+            .browser_request_metadata()
+            .map(BrowserRequestMetadata::fetch_destination),
         credentials_mode: request.credentials_mode.as_ref().to_owned(),
         request_origin: request
             .request_origin()
@@ -635,6 +640,9 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
     Some(RawSubresourceCacheKey {
         page_cache_partition_id: 0,
         url: request.url.as_str().to_owned(),
+        fetch_destination: request
+            .browser_request_metadata()
+            .map(BrowserRequestMetadata::fetch_destination),
         resource_type: raw_subresource_cache_resource_type_key(request.resource_type),
         credentials_mode: request.credentials_mode.as_ref().to_owned(),
         request_origin: request
@@ -791,6 +799,7 @@ fn script_text_key_retained_bytes(key: &ScriptTextCacheKey) -> usize {
         });
     key.url
         .len()
+        .saturating_add(key.fetch_destination.map_or(0, str::len))
         .saturating_add(key.credentials_mode.len())
         .saturating_add(key.request_origin.as_deref().map_or(0, str::len))
         .saturating_add(key.request_mode.len())
@@ -807,6 +816,7 @@ fn raw_subresource_key_retained_bytes(key: &RawSubresourceCacheKey) -> usize {
     key.url
         .len()
         .saturating_add(key.resource_type.len())
+        .saturating_add(key.fetch_destination.map_or(0, str::len))
         .saturating_add(key.credentials_mode.len())
         .saturating_add(key.request_origin.as_deref().map_or(0, str::len))
         .saturating_add(key.request_mode.len())

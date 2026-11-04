@@ -1,3 +1,4 @@
+mod module_destination_cache;
 mod websocket;
 
 use anyhow::Result;
