@@ -33,52 +33,32 @@ impl<'a> LiveDom<'a> {
 }
 
 /// Query acceleration for one export, while `host` is immutably borrowed.
-/// Assignment is indexed on the first visit to a host/slot, so unrelated or
-/// unassigned shadow subtrees are never scanned. Values contain node IDs only.
+/// Only slot assignment needs an index. Shadow-root and fallback children
+/// retain their native order and are borrowed directly from the live DOM.
 #[derive(Default)]
 struct ProjectionCache {
     parents: HashMap<NativeNodeId, Option<NativeNodeId>>,
-    children: HashMap<NativeNodeId, Rc<[NativeNodeId]>>,
+    slot_children: HashMap<NativeNodeId, Option<Rc<[NativeNodeId]>>>,
 }
 
 impl LiveDom<'_> {
-    fn projected_children(&self, node: NativeNodeId) -> Option<Rc<[NativeNodeId]>> {
-        if !self.has_shadow_roots {
-            return None;
+    fn assigned_children(&self, slot: NativeNodeId) -> Option<Rc<[NativeNodeId]>> {
+        if let Some(children) = self.projection.borrow().slot_children.get(&slot) {
+            return children.clone();
         }
-        let dom = self.host.dom();
-        let element = dom.node(node)?.as_element()?;
-        let shadow_root = self.host.shadow_root_handle(node);
-        if shadow_root.is_none() && !element.is_html_element("slot") {
-            return None;
-        }
-        if let Some(children) = self.projection.borrow().children.get(&node) {
-            return Some(Rc::clone(children));
-        }
-        let (children, suppressed) = if let Some(root) = shadow_root {
-            (dom.child_ids(root).collect::<Vec<_>>(), None)
-        } else {
-            let assigned = self.host.assigned_nodes_for_slot_with_options(node, false);
-            if assigned.is_empty() {
-                (dom.child_ids(node).collect(), None)
-            } else {
-                (assigned, Some(node))
-            }
-        };
-        let children: Rc<[NativeNodeId]> = children.into();
+        let assigned = self.host.assigned_nodes_for_slot_with_options(slot, false);
+        let children: Option<Rc<[NativeNodeId]>> = (!assigned.is_empty()).then(|| assigned.into());
         let mut cache = self.projection.borrow_mut();
-        if let Some(parent) = suppressed {
-            for child in dom.child_ids(parent) {
-                cache.parents.insert(child, None);
-            }
-        }
         // Invert the canonical assignment once, instead of repeatedly scanning
         // a manual slot's assignment list for each parent lookup.
-        for &child in children.iter() {
-            cache.parents.insert(child, Some(node));
+        if let Some(children) = &children {
+            for &child in children.iter() {
+                cache.parents.insert(child, Some(slot));
+            }
         }
-        cache.children.insert(node, Rc::clone(&children));
-        Some(children)
+        // Remember empty assignment without copying the fallback children.
+        cache.slot_children.insert(slot, children.clone());
+        children
     }
 }
 
@@ -137,15 +117,23 @@ impl MarkdownSource for LiveDom<'_> {
         }
         // Ordinary edges retain their native parent even when another subtree
         // contains shadow content. Cache only relationships at tree boundaries.
-        let projected_parent = self.host.dom().node(native_parent).is_some_and(|parent| {
-            if let Some(element) = parent.as_element() {
-                element.is_html_element("slot")
-                    || self.host.shadow_root_handle(native_parent).is_some()
-            } else {
-                parent.is_document_fragment() && self.host.is_shadow_root(native_parent)
+        let parent = self.host.dom().node(native_parent)?;
+        let Some(element) = parent.as_element() else {
+            if parent.is_document_fragment() {
+                return self
+                    .host
+                    .shadow_root_host(native_parent)
+                    .or(Some(native_parent));
             }
-        });
-        if !projected_parent {
+            return Some(native_parent);
+        };
+        if element.is_html_element("slot") {
+            return self
+                .assigned_children(native_parent)
+                .is_none()
+                .then_some(native_parent);
+        }
+        if self.host.shadow_root_handle(native_parent).is_none() {
             return Some(native_parent);
         }
         if let Some(parent) = self.projection.borrow().parents.get(&node) {
@@ -187,10 +175,20 @@ impl Dom for LiveDom<'_> {
     }
 
     fn children(&self, node: Self::NodeId) -> impl Iterator<Item = Self::NodeId> {
-        match self.projected_children(node) {
-            Some(nodes) => ChildNodes::Projected(ProjectedChildren { nodes, next: 0 }),
-            None => ChildNodes::Native(self.host.dom().child_ids(node)),
+        let dom = self.host.dom();
+        if self.has_shadow_roots
+            && let Some(element) = dom.node(node).and_then(|node| node.as_element())
+        {
+            if let Some(root) = self.host.shadow_root_handle(node) {
+                return ChildNodes::Native(dom.child_ids(root));
+            }
+            if element.is_html_element("slot")
+                && let Some(nodes) = self.assigned_children(node)
+            {
+                return ChildNodes::Projected(ProjectedChildren { nodes, next: 0 });
+            }
         }
+        ChildNodes::Native(dom.child_ids(node))
     }
 
     fn attribute(&self, node: Self::NodeId, name: &str) -> Option<&str> {
