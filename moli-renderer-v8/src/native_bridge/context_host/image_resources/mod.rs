@@ -130,6 +130,22 @@ impl super::JsContextHost {
         });
     }
 
+    pub(crate) fn pending_image_resource_matches_request(
+        &self,
+        element: DomHandle,
+        pending: super::PendingImageLoadEvent,
+        request: &ImageRequestKey,
+    ) -> bool {
+        self.image_resources
+            .identity(element)
+            .is_some_and(|identity| {
+                identity.sequence == pending.id()
+                    && identity.document_handle == pending.owner_document_handle()
+                    && identity.document_owner == pending.document_task_owner()
+                    && &identity.request_key == request
+            })
+    }
+
     pub(crate) fn retire_image_resource_for_element(&mut self, element: DomHandle) -> bool {
         self.image_resources.retire_element(element)
     }
