@@ -5,6 +5,7 @@ mod corp;
 mod fetch_metadata;
 mod header_bytes;
 mod header_eof;
+mod mixed_content;
 mod mixed_transport;
 mod redirect_auth;
 mod request_security;
