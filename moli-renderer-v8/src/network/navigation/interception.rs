@@ -93,17 +93,18 @@ impl NavigationInterception {
     }
 
     async fn execute<T>(
-        &self,
+        loader: &NavigationResourceLoader,
         operation: impl std::future::Future<Output = Result<T>>,
     ) -> Result<T> {
-        let mut guard = CancelOnDrop(Some(self.loader.clone()));
+        let mut guard = CancelOnDrop(Some(loader.clone()));
         let result = operation.await;
         guard.0.take();
         result
     }
 
     pub async fn fetch_text(&self) -> Result<NetworkFetchResult<Response>> {
-        self.execute(
+        Self::execute(
+            &self.loader,
             self.loader
                 .fetch_with_network_metadata(self.transport_request()?),
         )
@@ -111,24 +112,30 @@ impl NavigationInterception {
     }
 
     pub async fn fetch_raw(&self) -> Result<RawResponse> {
-        self.execute(self.loader.fetch_raw(self.transport_request()?))
-            .await
+        Self::execute(
+            &self.loader,
+            self.loader.fetch_raw(self.transport_request()?),
+        )
+        .await
     }
 
     pub async fn fetch_raw_stream(&self) -> Result<NetworkFetchResult<StreamingRawResponse>> {
-        self.execute(
+        Self::execute(
+            &self.loader,
             self.loader
                 .fetch_raw_stream_with_network_metadata(self.transport_request()?),
         )
         .await
     }
 
-    pub async fn fetch_buffered(&self) -> Result<NetworkFetchResult<RawResponse>> {
-        self.execute(
-            self.loader
-                .fetch_raw_with_network_metadata(self.transport_request()?),
-        )
-        .await
+    /// Prepares an owned transfer future while keeping redirect state with its owner.
+    pub fn fetch_buffered(
+        &self,
+    ) -> impl std::future::Future<Output = Result<NetworkFetchResult<RawResponse>>> + Send + 'static
+    {
+        let loader = self.loader.clone();
+        let request = self.transport_request();
+        async move { Self::execute(&loader, loader.fetch_raw_with_network_metadata(request?)).await }
     }
 
     /// Returns the next hop to its owner before any transport is started.
@@ -168,7 +175,7 @@ impl NavigationInterception {
         self.request
             .update_referrer_for_redirect(&head.final_url, &head.headers);
         self.request.follow_redirect(redirect.clone())?;
-        self.loader.prepare_redirect()?;
+        self.loader.restart_after_response()?;
         self.navigation_url = next_url;
         Ok(Some(redirect))
     }

@@ -31,7 +31,8 @@ use super::params::{
 };
 use super::state::{
     PreparedSubresourceCorrelation, action_session_id_for_devtools_context,
-    pending_request_action_result_with_id_validation, take_pending_navigation,
+    pending_request_action_result_with_id_validation,
+    pending_subresource_response_request_for_action_session, take_pending_navigation,
     take_pending_subresource_fetch_request_for_action_session,
     take_pending_subresource_response_request_for_action_session,
 };
@@ -435,6 +436,31 @@ fn start_devtools_continue_intercepted_request_command(
         return super::document_navigation::finish_untracked_navigation(
             &pending.navigation,
             Vec::new(),
+        );
+    }
+    if command.context.protocol == FrontendProtocol::Cdp
+        && pending_subresource_response_request_for_action_session(
+            conn,
+            owner,
+            action_session_id,
+            &request_id,
+        )
+        .is_some()
+    {
+        // Chromium also accepts continueRequest without response overrides at
+        // a response pause. Keep its body and handler-chain checks in one path.
+        return start_devtools_continue_intercepted_response_command(
+            conn,
+            command_id,
+            owner,
+            &DevToolsContinueInterceptedResponseCommand {
+                context: command.context.clone(),
+                request_id: command.request_id.clone(),
+                response_code: None,
+                response_headers: None,
+                response_phrase: None,
+                auth_credentials: None,
+            },
         );
     }
     pending_request_action_output_plan(

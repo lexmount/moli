@@ -52,24 +52,6 @@ impl ScriptVm {
                 .map(|body| String::from_utf8_lossy(body).into_owned());
         }
         let pending = match continuation {
-            PendingSubresourceContinuation::ChildDocument(fetch) => {
-                // The child navigation has no renderer response or auth stage
-                // yet, so `intercept_response` cannot pause it again.
-                self._context_host
-                    .borrow_mut()
-                    .continue_child_document_fetch(
-                        internal_id,
-                        *fetch,
-                        redirect_headers,
-                        url.unwrap_or_else(|| info.url.clone()),
-                        method.unwrap_or_else(|| info.method.clone()),
-                        headers.unwrap_or_else(|| info.request_headers.clone()),
-                        info.request_body_bytes.clone(),
-                    );
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(
-                    PendingSubresourceContinueOutcome::Started,
-                ));
-            }
             PendingSubresourceContinuation::WebSocket(connection) => {
                 let request_url = url.unwrap_or_else(|| info.url.clone());
                 let headers_overridden = headers.is_some();
@@ -347,6 +329,27 @@ impl ScriptVm {
                 internal_id,
             }));
         }
+        if matches!(
+            &pending.continuation,
+            PendingSubresourceContinuation::ChildDocument(_)
+        ) {
+            self.spawn_running_child_document_fetch(
+                RunningSubresourceFetchState {
+                    pending,
+                    request_url,
+                    request_method,
+                    request_headers,
+                    request_body,
+                    intercept_response,
+                    handle_auth_requests,
+                    initial_auth_network_request_headers: None,
+                },
+                None,
+            );
+            return Ok(AsyncSubresourceCommandExecution::without_window_realm(
+                PendingSubresourceContinueOutcome::Started,
+            ));
+        }
         // Request interception may resume after the initiating Document has
         // navigated. The lease retains the request-time frozen client; looking
         // up the ambient Page loader here would silently rebind policy/backend
@@ -421,6 +424,33 @@ impl ScriptVm {
             PendingSubresourceContinueOutcome::Started,
         ))
     }
+    fn spawn_running_child_document_fetch(
+        &mut self,
+        mut state: RunningSubresourceFetchState,
+        auth: Option<crate::SubresourceAuthCredentials>,
+    ) {
+        let PendingSubresourceContinuation::ChildDocument(fetch) = &mut state.pending.continuation
+        else {
+            unreachable!("child document transfer requires its navigation owner");
+        };
+        fetch.apply_request_override(
+            state.pending.redirect_headers.clone(),
+            state.request_url.clone(),
+            state.request_method.clone(),
+            state.request_headers.clone(),
+            state.pending.info.request_body_bytes.clone(),
+        );
+        let prepared = match auth {
+            Some(auth) => fetch.set_auth(auth),
+            None => Ok(()),
+        };
+        let response = fetch.response_future();
+        self.spawn_running_subresource_response(state, async move {
+            prepared?;
+            response.await
+        });
+    }
+
     pub(super) fn continue_csp_report_via_service_worker(
         &mut self,
         pending: PendingSubresourceFetchState,
@@ -575,6 +605,27 @@ impl ScriptVm {
             initial_network_request_headers,
             response,
         } = pending;
+        if matches!(
+            &pending_fetch.continuation,
+            PendingSubresourceContinuation::ChildDocument(_)
+        ) {
+            self.spawn_running_child_document_fetch(
+                RunningSubresourceFetchState {
+                    pending: pending_fetch,
+                    request_url,
+                    request_method,
+                    request_headers: original_request_headers,
+                    request_body,
+                    intercept_response,
+                    handle_auth_requests: true,
+                    initial_auth_network_request_headers: initial_network_request_headers,
+                },
+                Some(auth),
+            );
+            return Ok(AsyncSubresourceCommandExecution::without_window_realm(
+                PendingSubresourceContinueOutcome::Started,
+            ));
+        }
         // A redirect may have discarded the upload before the auth challenge.
         if let Some(target) = WorkerOwnedFetchTarget::from_continuation(&pending_fetch.continuation)
         {

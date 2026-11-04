@@ -8,6 +8,32 @@ impl ScriptVm {
         state: RunningSubresourceFetchState,
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
     ) {
+        let response = async move {
+            crate::network_host::fetch_browser_subresource_with_preflight_and_network_metadata(
+                request_client,
+                request,
+                cancel_handle,
+            )
+            .await
+            .map(|observed| {
+                let (response, request_observation) = observed.into_parts();
+                crate::protocol_types::NavigationResponse::from(response)
+                    .with_network_request_headers(
+                        request_observation.map(|observation| observation.into_headers()),
+                    )
+            })
+        };
+        self.spawn_running_subresource_response(state, response);
+    }
+
+    pub(super) fn spawn_running_subresource_response(
+        &mut self,
+        state: RunningSubresourceFetchState,
+        response: impl std::future::Future<
+            Output = std::result::Result<crate::protocol_types::NavigationResponse, String>,
+        > + Send
+        + 'static,
+    ) {
         let task_runner = state.pending.load.task_runner();
         let internal_id = state.pending.info.internal_id;
         let request_url = state.request_url.clone();
@@ -21,20 +47,7 @@ impl ScriptVm {
             host.record_running_subresource_fetch(state);
         }
         task_runner.spawn(async move {
-            let result =
-                crate::network_host::fetch_browser_subresource_with_preflight_and_network_metadata(
-                    request_client,
-                    request,
-                    cancel_handle,
-                )
-                .await
-                .map(|observed| {
-                    let (response, request_observation) = observed.into_parts();
-                    crate::protocol_types::NavigationResponse::from(response)
-                        .with_network_request_headers(
-                            request_observation.map(|observation| observation.into_headers()),
-                        )
-                });
+            let result = response.await;
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
                 internal_id,
                 request_url,

@@ -125,16 +125,29 @@ impl PreparedFetchCleanup {
                     CleanupSubresource::Request(pending)
                 }
             })
-            .chain(
-                subauths
-                    .into_iter()
-                    .map(|(_, pending)| CleanupSubresource::Auth(pending)),
-            )
-            .chain(
-                subresponses
-                    .into_iter()
-                    .map(|(_, pending)| CleanupSubresource::Response(pending)),
-            )
+            .chain(subauths.into_iter().map(|(request_id, pending)| {
+                if resume_navigations
+                    && pending.owner_kind.drains_on_fetch_disable()
+                    && pending.resource_type == moli_core::page::SubresourceResourceType::Document
+                {
+                    CleanupSubresource::ContinueAuth {
+                        request_id,
+                        pending,
+                    }
+                } else {
+                    CleanupSubresource::Auth(pending)
+                }
+            }))
+            .chain(subresponses.into_iter().map(|(_, pending)| {
+                if resume_navigations
+                    && pending.owner_kind.drains_on_fetch_disable()
+                    && pending.resource_type == moli_core::page::SubresourceResourceType::Document
+                {
+                    CleanupSubresource::ContinueResponse(pending)
+                } else {
+                    CleanupSubresource::Response(pending)
+                }
+            }))
             .filter_map(|resource| {
                 admit_subresource_cleanup(conn, owner, resource, &subresource_error)
             })
@@ -366,7 +379,12 @@ enum CleanupSubresource {
     Request(PendingSubresourceFetchRequest),
     ContinueRequest(PendingSubresourceFetchRequest),
     Auth(PendingSubresourceFetchAuthRequest),
+    ContinueAuth {
+        request_id: String,
+        pending: PendingSubresourceFetchAuthRequest,
+    },
     Response(PendingSubresourceFetchResponseRequest),
+    ContinueResponse(PendingSubresourceFetchResponseRequest),
 }
 
 enum PreparedSubresourceCleanup {
@@ -379,6 +397,7 @@ struct PreparedSubresourceCommand {
     owner: CommandOwnerScope,
     binding: Option<TargetRootDocumentProtocolAttachmentIdentity>,
     resource: CleanupSubresource,
+    correlation: Option<super::state::PreparedSubresourceCorrelation>,
 }
 
 fn admit_subresource_cleanup(
@@ -396,6 +415,27 @@ fn admit_subresource_cleanup(
         {
             let event =
                 super::subresource::next_chained_subresource_request_pause_event(conn, request)?;
+            return Some(PreparedSubresourceCleanup::ChainedPause(Box::new(event)));
+        }
+        CleanupSubresource::ContinueResponse(request)
+            if request
+                .response_stage_pause_state()
+                .is_some_and(|chain| !chain.remaining_sessions.is_empty()) =>
+        {
+            let event =
+                super::subresource::next_chained_subresource_response_pause_event(conn, request)?;
+            return Some(PreparedSubresourceCleanup::ChainedPause(Box::new(event)));
+        }
+        CleanupSubresource::ContinueAuth { pending, .. }
+            if pending
+                .auth_stage_pause_state()
+                .is_some_and(|chain| !chain.remaining_sessions.is_empty()) =>
+        {
+            let event = super::auth::next_chained_subresource_auth_required_event(
+                conn,
+                owner.session_id(),
+                pending,
+            )?;
             return Some(PreparedSubresourceCleanup::ChainedPause(Box::new(event)));
         }
         resource => resource,
@@ -437,6 +477,20 @@ fn admit_subresource_cleanup(
                 error_text: reason.to_owned(),
             },
         ),
+        CleanupSubresource::ContinueAuth { pending, .. } => (
+            pending.command_target.as_ref(),
+            RendererPageCommand::CancelPendingSubresourceAuth {
+                internal_id: pending.internal_id,
+            },
+        ),
+        CleanupSubresource::ContinueResponse(request) => (
+            request.command_target.as_ref(),
+            RendererPageCommand::ContinuePendingSubresourceResponse {
+                internal_id: request.internal_id,
+                response_code: None,
+                response_headers: None,
+            },
+        ),
         CleanupSubresource::Response(request) => (
             request.command_target.as_ref(),
             RendererPageCommand::FailPendingSubresourceResponse {
@@ -446,9 +500,31 @@ fn admit_subresource_cleanup(
         ),
     };
     let target = target?;
+    let correlation = match &resource {
+        CleanupSubresource::ContinueAuth {
+            request_id,
+            pending,
+        } if pending.intercept_response => {
+            let continued = super::auth::continued_subresource_request(pending);
+            Some(
+                super::state::PreparedSubresourceCorrelation::prepare_deferred_response_stage(
+                    conn, owner, request_id, &continued,
+                )?,
+            )
+        }
+        _ => None,
+    };
     // Cleanup owns this exact request even after session Closing or Page
     // retirement. The native Document guard prevents touching a replacement.
-    let pending = target.start(command).ok()?;
+    let pending = match target.start(command) {
+        Ok(pending) => pending,
+        Err(_) => {
+            if let Some(correlation) = correlation {
+                correlation.rollback(conn);
+            }
+            return None;
+        }
+    };
     let binding = conn.target_root_document_output_identity_for_owner(owner, target.document());
     Some(PreparedSubresourceCleanup::Command(Box::new(
         PreparedSubresourceCommand {
@@ -456,6 +532,7 @@ fn admit_subresource_cleanup(
             owner: owner.clone(),
             binding,
             resource,
+            correlation,
         },
     )))
 }
@@ -475,12 +552,13 @@ impl PreparedSubresourceCleanup {
 
 impl PreparedSubresourceCommand {
     async fn wait(self, driver: &mut ProtocolWorkflowDriver) -> Option<CommandOutputPlan> {
-        let completed = self.pending.wait().await.ok()?;
+        let completed = self.pending.wait().await;
         let completed = CompletedSubresourceCleanup {
             binding: self.binding,
             owner: self.owner,
             resource: self.resource,
             completed,
+            correlation: self.correlation,
         };
         driver
             .with_state(move |state| state.finish_fetch_cleanup_subresource(completed))
@@ -493,7 +571,8 @@ pub(crate) struct CompletedSubresourceCleanup {
     binding: Option<TargetRootDocumentProtocolAttachmentIdentity>,
     owner: CommandOwnerScope,
     resource: CleanupSubresource,
-    completed: moli_core::page::CompletedPageCommand,
+    completed: Result<moli_core::page::CompletedPageCommand>,
+    correlation: Option<super::state::PreparedSubresourceCorrelation>,
 }
 
 impl CompletedSubresourceCleanup {
@@ -503,12 +582,28 @@ impl CompletedSubresourceCleanup {
             owner,
             resource,
             completed,
+            correlation,
         } = self;
+        let completed = match completed {
+            Ok(completed) => completed,
+            Err(_) => {
+                if let Some(correlation) = correlation {
+                    correlation.rollback(conn);
+                }
+                return None;
+            }
+        };
         let predecessor = completed.renderer_output_predecessor();
-        if matches!(&resource, CleanupSubresource::ContinueRequest(_)) {
-            completed.into_subresource_continue_outcome().ok()?;
+        let result = if matches!(&resource, CleanupSubresource::ContinueRequest(_)) {
+            completed.into_subresource_continue_outcome().map(|_| ())
         } else {
-            completed.into_unit_reply().ok()?;
+            completed.into_unit_reply()
+        };
+        if result.is_err() {
+            if let Some(correlation) = correlation {
+                correlation.rollback(conn);
+            }
+            return None;
         }
         let mut plan = CommandOutputPlan::default();
         if let Some(predecessor) = predecessor {
@@ -520,6 +615,9 @@ impl CompletedSubresourceCleanup {
             .as_ref()
             .is_none_or(|binding| !conn.target_root_document_output_identity_is_current(binding))
         {
+            if let Some(correlation) = correlation {
+                correlation.rollback(conn);
+            }
             return Some(plan);
         }
         let mut events = Vec::new();
@@ -532,7 +630,8 @@ impl CompletedSubresourceCleanup {
                     &pending,
                 )
             }
-            CleanupSubresource::Auth(pending) => {
+            CleanupSubresource::Auth(pending)
+            | CleanupSubresource::ContinueAuth { pending, .. } => {
                 activity::flush_post_subresource_auth_activity_for_owner_background_events(
                     conn,
                     &mut events,
@@ -540,7 +639,8 @@ impl CompletedSubresourceCleanup {
                     &pending,
                 )
             }
-            CleanupSubresource::Response(pending) => {
+            CleanupSubresource::Response(pending)
+            | CleanupSubresource::ContinueResponse(pending) => {
                 activity::flush_post_subresource_response_activity_for_owner_background_events(
                     conn,
                     &mut events,
