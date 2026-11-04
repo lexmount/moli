@@ -2241,6 +2241,7 @@ mod svg_computed_path_precision;
 mod svg_transform_native_receivers;
 
 mod svg_detached_lengths;
+mod svg_path_data;
 mod svg_transform_sync_consolidation;
 
 mod svg_transform_float_arguments;
