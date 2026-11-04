@@ -2785,11 +2785,12 @@ let browser_context =
                     "expression": r#"
 (() => {
   function moliDetachedPageConsoleProfileWork() {
-    let value = 0;
-    for (let i = 0; i < 300000; i += 1)
-      value += Math.sqrt(i + 1);
+    // Starting a nested profile on V8's existing profiler records the current
+    // stack synchronously. A short loop can miss every periodic sample.
+    console.profile("page-console-profile-detach-sample");
+    console.profileEnd("page-console-profile-detach-sample");
     console.profileEnd("page-console-profile-detach");
-    return value > 0;
+    return true;
   }
   return moliDetachedPageConsoleProfileWork();
 })()
@@ -2814,6 +2815,7 @@ let browser_context =
                 messages.iter().any(|message| {
                     message["sessionId"] == json!("SID-page-console-profile-detach-primary")
                         && message["method"] == json!("Profiler.consoleProfileFinished")
+                        && message["params"]["title"] == json!("page-console-profile-detach")
                 })
             },
         )
@@ -2823,6 +2825,7 @@ let browser_context =
             ctx.take_first_matching("primary Profiler.consoleProfileFinished event", |message| {
                 message["sessionId"] == json!("SID-page-console-profile-detach-primary")
                     && message["method"] == json!("Profiler.consoleProfileFinished")
+                    && message["params"]["title"] == json!("page-console-profile-detach")
             });
         assert_eq!(
             primary_finished["params"]["title"],
