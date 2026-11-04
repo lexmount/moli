@@ -6,6 +6,54 @@ use tokio::{
 
 const ONE_BY_ONE_GIF: &[u8] = b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff!\xf9\x04\x01\0\0\0\0,\0\0\0\0\x01\0\x01\0\0\x02\x02D\x01\0;";
 
+#[tokio::test]
+async fn image_dimensions_without_layout_preserve_zero_and_parse_html_integer_prefixes() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://image-dimensions.test/page.html",
+        &loader,
+    );
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval("globalThis.dimensionImage = new Image(); dimensionImage.src = 'image.gif'")
+        .expect("detached image request");
+    let pending = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(pending.len(), 1);
+    vm.fulfill_pending_subresource_fetch(
+        pending[0].internal_id,
+        200,
+        vec![("Content-Type".into(), "image/gif".into())],
+        one_by_one_gif_response_body(),
+    )
+    .expect("decoded image response");
+    run_next_image_event_task(&mut vm, &loader, "image dimension decode").await;
+    let source = include_str!("../../../../tests/fixtures/image-attribute-dimensions.js");
+    let result = vm
+        .eval(&format!("JSON.stringify({source})"))
+        .expect("attribute fixture");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).expect("attribute JSON"),
+        serde_json::json!([
+            [1, 1],
+            [0, 0],
+            [0, 0],
+            [0, 0],
+            [0, 0],
+            [1, 1],
+            [7, 7],
+            [8, 8],
+            [1, 1],
+            [1, 1],
+            [1, 1],
+            [2, 2],
+            [4294967295_u32, 4294967295_u32],
+            [1, 1],
+            [1, 1]
+        ]),
+        "unrendered image dimensions must match the shared Chromium fixture"
+    );
+}
+
 fn one_by_one_gif_response_body() -> crate::runtime::RendererSyntheticResponseBody {
     crate::runtime::RendererSyntheticResponseBody::from_bytes(ONE_BY_ONE_GIF.to_vec())
 }
