@@ -213,28 +213,34 @@ impl MainDocumentNavigationActivity {
         );
         out.extend_background_events_after_messages(pre_domcontentloaded_events);
 
-        let terminated_before_domcontentloaded = initial_renderer_document_lifecycle_events
+        // Adoption can include a terminated epoch followed by document.open().
+        // Only the bound epoch can cancel the replacement's load publication.
+        let mut current_lifecycle_events = initial_renderer_document_lifecycle_events
             .iter()
-            .any(|event| {
-                matches!(
-                    event.kind,
-                    RendererDocumentLifecycleEventKind::Terminated {
-                        last_reached: None,
-                        ..
-                    }
-                )
+            .filter(|event| {
+                renderer_document_binding.as_ref().is_none_or(|binding| {
+                    event.frame == binding.renderer_frame
+                        && event.document == binding.renderer_document
+                        && event.epoch == binding.renderer_epoch
+                })
             });
-        let reached_domcontentloaded =
-            initial_renderer_document_lifecycle_events
-                .iter()
-                .any(|event| {
-                    matches!(
-                        event.kind,
-                        RendererDocumentLifecycleEventKind::Milestone(
-                            RendererDocumentLifecycleMilestone::DomContentLoaded
-                        )
-                    )
-                });
+        let terminated_before_domcontentloaded = current_lifecycle_events.clone().any(|event| {
+            matches!(
+                event.kind,
+                RendererDocumentLifecycleEventKind::Terminated {
+                    last_reached: None,
+                    ..
+                }
+            )
+        });
+        let reached_domcontentloaded = current_lifecycle_events.any(|event| {
+            matches!(
+                event.kind,
+                RendererDocumentLifecycleEventKind::Milestone(
+                    RendererDocumentLifecycleMilestone::DomContentLoaded
+                )
+            )
+        });
         if let Some(binding) = renderer_document_binding.as_ref() {
             let mut renderer_lifecycle_events = Vec::new();
             page::emit_bound_renderer_document_lifecycle_background_events(
@@ -1772,6 +1778,94 @@ mod tests {
             .unwrap()
             .into_protocol_event_parts();
         assert!(events.is_empty() && scheduler.is_empty());
+    }
+
+    #[test]
+    fn navigation_adoption_keeps_load_after_document_open_before_domcontentloaded() {
+        let (mut conn, _, started) = connection_with_dcl_only_renderer_lifecycle();
+        enable_page_events(&mut conn);
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        let terminated = RendererDocumentLifecycleEvent {
+            kind: RendererDocumentLifecycleEventKind::Terminated {
+                last_reached: None,
+                reason: RendererDocumentTerminationReason::RestartedByDocumentOpen,
+            },
+            ..renderer_termination_event_for_test(started)
+        };
+        let restarted = RendererDocumentLifecycleEvent {
+            sequence: 4,
+            timestamp_micros: 40,
+            epoch: RendererLifecycleEpoch(2),
+            kind: RendererDocumentLifecycleEventKind::Started {
+                reason: RendererLifecycleStartReason::ExplicitDocumentOpen,
+            },
+            ..started
+        };
+        let dcl = RendererDocumentLifecycleEvent {
+            sequence: 5,
+            timestamp_micros: 50,
+            kind: RendererDocumentLifecycleEventKind::Milestone(
+                RendererDocumentLifecycleMilestone::DomContentLoaded,
+            ),
+            ..restarted
+        };
+        let load = RendererDocumentLifecycleEvent {
+            sequence: 6,
+            timestamp_micros: 60,
+            kind: RendererDocumentLifecycleEventKind::Milestone(
+                RendererDocumentLifecycleMilestone::Load,
+            ),
+            ..restarted
+        };
+        let (binding, events) = conn.bind_renderer_document_lifecycle_for_owner(
+            &owner,
+            moli_core::page::RendererPageCreationArtifacts {
+                active_document: started.document,
+                active_epoch: restarted.epoch,
+                lifecycle_snapshot: RendererDocumentLifecycleSnapshot {
+                    frame: started.frame,
+                    document: started.document,
+                    epoch: restarted.epoch,
+                    started: RendererLifecycleEventStamp {
+                        sequence: restarted.sequence,
+                        timestamp_micros: restarted.timestamp_micros,
+                    },
+                    dom_content_loaded: Some(RendererLifecycleEventStamp {
+                        sequence: dcl.sequence,
+                        timestamp_micros: dcl.timestamp_micros,
+                    }),
+                    load: None,
+                    terminated: None,
+                },
+                initial_lifecycle_events: vec![started, terminated, restarted, dcl],
+            },
+            None,
+            "FRAME-1".into(),
+            "LID-1".into(),
+        );
+        assert_eq!(events, vec![started, terminated, restarted, dcl]);
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        assert_eq!(load_count(project_lifecycle(&mut conn, vec![load])), 0);
+
+        let mut output = CommandOutputBuffer::default();
+        MainDocumentNavigationActivity::new(
+            navigation_state(),
+            Url::parse("https://example.test/start").unwrap(),
+            empty_main_document_progress_gate_for_test(),
+            None,
+        )
+        .emit_loaded_navigation_commit(&mut conn, &mut output, None, binding, events, None);
+        assert_eq!(
+            load_count(output.into_plan().into_background_events(None, None)),
+            1,
+            "a retired epoch's termination must not discard the replacement's load"
+        );
+        assert_eq!(
+            load_count(conn.publish_ready_main_document_load_output(&owner)),
+            0,
+            "the replacement's load must be published exactly once"
+        );
+        drop(take_deferred_load_work_for_test(&mut conn));
     }
 
     #[test]
