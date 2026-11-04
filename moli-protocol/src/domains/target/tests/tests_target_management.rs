@@ -1543,6 +1543,33 @@ async fn send_message_to_target_wraps_nested_result_in_received_message_event() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn async_send_message_to_target_wraps_nested_page_navigation() {
+    let (release, stylesheet_release) = tokio::sync::watch::channel(false);
+    let requested = Arc::new(tokio::sync::Notify::new());
+    let stylesheet_requested = requested.clone();
+    let fixture = Router::new()
+        .route(
+            "/",
+            get(|| async {
+                axum::response::Html(
+                    "<link rel=stylesheet href=/held.css><body>async target nav</body>",
+                )
+            }),
+        )
+        .route(
+            "/held.css",
+            get(move || {
+                let mut release = stylesheet_release.clone();
+                let requested = stylesheet_requested.clone();
+                async move {
+                    requested.notify_one();
+                    release.wait_for(|ready| *ready).await.unwrap();
+                    ([("Content-Type", "text/css")], "body { color: black; }")
+                }
+            }),
+        );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap() });
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
     ctx.with_fixture(|conn| {
@@ -1552,6 +1579,17 @@ async fn async_send_message_to_target_wraps_nested_page_navigation() {
             .attach_active_session("SID-9")
     });
 
+    ctx.process_async(json!({"id": 1398, "method": "Page.enable", "sessionId": "SID-9"}))
+        .await;
+    ctx.expect_result(1398, json!({}), Some("SID-9"));
+    ctx.process_async(json!({
+        "id": 1399, "method": "Page.setLifecycleEventsEnabled", "sessionId": "SID-9",
+        "params": {"enabled": true}
+    }))
+    .await;
+    ctx.expect_result(1399, json!({}), Some("SID-9"));
+    ctx.take_all();
+
     ctx.process_async(json!({
         "id": 1401,
         "method": "Target.sendMessageToTarget",
@@ -1560,7 +1598,7 @@ async fn async_send_message_to_target_wraps_nested_page_navigation() {
                 "id": 7701,
                 "method": "Page.navigate",
                 "params": {
-                    "url": "data:text/html,<html><body>async target nav</body></html>"
+                    "url": format!("http://{address}/")
                 }
             }))
             .expect("nested message json"),
@@ -1587,6 +1625,29 @@ async fn async_send_message_to_target_wraps_nested_page_navigation() {
             .is_some_and(|loader_id| !loader_id.is_empty()),
         "nested navigation result should include a loader id"
     );
+    tokio::time::timeout(std::time::Duration::from_secs(5), requested.notified())
+        .await
+        .expect("nested navigation should request its load-blocking stylesheet");
+    assert!(
+        ctx.sent
+            .iter()
+            .all(|event| event["method"] != "Page.loadEventFired"),
+        "the nested navigation response must precede its delayed Load: {:?}",
+        ctx.sent
+    );
+    release.send_replace(true);
+    ctx.wait_for_scheduler_message("nested navigation final load", |event| {
+        event["method"] == "Page.loadEventFired" && event["sessionId"] == "SID-9"
+    })
+    .await;
+    ctx.wait_for_scheduler_message("nested navigation loader's Load", |event| {
+        event["method"] == "Page.lifecycleEvent"
+            && event["sessionId"] == "SID-9"
+            && event["params"]["name"] == "load"
+            && event["params"]["loaderId"] == nested_result["result"]["loaderId"]
+    })
+    .await;
+    server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -106,6 +106,7 @@ mod settings;
 mod site_data_manager_surface;
 mod state;
 pub(crate) use state::InitialDocumentPageBuildWaiter;
+pub(crate) use state::RendererDocumentLoadBoundary;
 mod state_access;
 pub(crate) use state::PendingPopupNavigation;
 pub(crate) use state_access::PreparedProtocolCommand;
@@ -2696,14 +2697,19 @@ impl CdpConnection {
             if !publication.is_still_current(self) {
                 continue;
             }
-            let Some(reached_load) = publication.boundary(self) else {
+            let boundary = publication.boundary(self);
+            if boundary == RendererDocumentLoadBoundary::Pending {
                 if let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) {
                     slot.page_slot_mut()
                         .retain_main_document_load_publication(publication);
                 }
                 continue;
-            };
-            let completion = publication.publish(self, reached_load, &mut output);
+            }
+            let completion = publication.publish(
+                self,
+                boundary == RendererDocumentLoadBoundary::Reached,
+                &mut output,
+            );
             let sequence = self
                 .scheduler_state
                 .allocate_protocol_work_publish_sequence();
@@ -2732,10 +2738,11 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
         binding: &CommittedRendererDocumentBinding,
-    ) -> Option<bool> {
-        self.runtime_session_owner_slot_for_owner(owner)?
-            .page_slot()
-            .renderer_document_load_boundary(binding)
+    ) -> RendererDocumentLoadBoundary {
+        self.runtime_session_owner_slot_for_owner(owner)
+            .map_or(RendererDocumentLoadBoundary::Pending, |slot| {
+                slot.page_slot().renderer_document_load_boundary(binding)
+            })
     }
 
     /// Publishes a top-level navigation already moved into prepared output.

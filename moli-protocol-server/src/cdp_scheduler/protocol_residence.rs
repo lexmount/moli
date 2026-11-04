@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use moli_core::RendererOutputCursor;
 use moli_protocol::{
@@ -437,14 +437,21 @@ impl SchedulerQueues {
         &self,
         residence: &ProtocolSchedulerResidence,
     ) -> bool {
-        let source = match residence {
+        // Projection authorizes the facts, but post-load actions must also
+        // wait for their producing batch to leave output residence. Specialized
+        // drains must not turn "projected" into "delivered".
+        let (source, requires_delivery) = match residence {
             ProtocolSchedulerResidence::RendererOutputPublication(work) => {
                 return work.projection_pending;
             }
-            ProtocolSchedulerResidence::ProtocolWork { work, .. } => work.renderer_output_source(),
+            ProtocolSchedulerResidence::ProtocolWork { work, .. } => (
+                work.renderer_output_source(),
+                work.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction,
+            ),
         };
         source.is_some_and(|source| self.protocol_residences.iter().any(|residence| matches!(residence,
-            ProtocolSchedulerResidence::RendererOutputPublication(work) if work.renderer_output_cursor == source && work.projection_pending
+            ProtocolSchedulerResidence::RendererOutputPublication(work)
+                if work.renderer_output_cursor == source && (work.projection_pending || requires_delivery)
         )))
     }
 
@@ -492,6 +499,11 @@ impl SchedulerQueues {
                 (load_predecessors, future_load_predecessor)
             };
         let load_observation_id = work.main_document_load_observation_id();
+        if load_observation_id.is_some()
+            && let Some(source) = work.renderer_output_source()
+        {
+            self.close_load_publication_window(source);
+        }
         assert!(
             load_predecessors.is_empty()
                 || (future_load_predecessor.is_none() && load_observation_id.is_none()),
@@ -596,6 +608,18 @@ impl SchedulerQueues {
         }
     }
 
+    /// The publication that produced Load must precede its post-load action;
+    /// it cannot acquire that same action as a future load predecessor.
+    pub(super) fn close_load_publication_window(&mut self, source: RendererOutputCursor) {
+        for residence in &mut self.protocol_residences {
+            if let ProtocolSchedulerResidence::RendererOutputPublication(work) = residence
+                && work.renderer_output_cursor == source
+            {
+                work.future_load_predecessor = None;
+            }
+        }
+    }
+
     pub(super) fn should_complete_next_residence(
         &self,
         conn: &moli_protocol::ProtocolWorkflowState<'_>,
@@ -628,18 +652,22 @@ impl SchedulerQueues {
         &mut self,
         mut selected: impl FnMut(&ProtocolSchedulerResidence) -> bool,
     ) -> VecDeque<ProtocolSchedulerResidence> {
-        let pending_sources = self
+        let sources = self
             .protocol_residences
             .iter()
             .filter_map(|residence| match residence {
-                ProtocolSchedulerResidence::RendererOutputPublication(work)
-                    if work.projection_pending =>
-                {
-                    Some(work.renderer_output_cursor)
+                ProtocolSchedulerResidence::RendererOutputPublication(work) => {
+                    Some((work.renderer_output_cursor, work.projection_pending))
                 }
                 _ => None,
             })
-            .collect::<HashSet<_>>();
+            .fold(
+                HashMap::<_, bool>::new(),
+                |mut sources, (cursor, pending)| {
+                    *sources.entry(cursor).or_default() |= pending;
+                    sources
+                },
+            );
         let mut snapshot = VecDeque::new();
         let mut retained = VecDeque::with_capacity(self.protocol_residences.len());
         while let Some(residence) = self.protocol_residences.pop_front() {
@@ -649,7 +677,11 @@ impl SchedulerQueues {
                 }
                 ProtocolSchedulerResidence::ProtocolWork { work, .. } => work
                     .renderer_output_source()
-                    .is_some_and(|source| pending_sources.contains(&source)),
+                    .and_then(|source| sources.get(&source))
+                    .is_some_and(|projection_pending| {
+                        *projection_pending
+                            || work.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
+                    }),
             };
             if !pending && selected(&residence) {
                 snapshot.push_back(residence);

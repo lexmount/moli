@@ -194,6 +194,13 @@ struct RendererDocumentLifecycleProtocolState {
     load_publications: Vec<crate::domains::activity::MainDocumentLoadPublication>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RendererDocumentLoadBoundary {
+    Pending,
+    Reached,
+    Interrupted,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct RendererDocumentLifecycleProtocolCursor {
     snapshot: Option<RendererDocumentLifecycleSnapshot>,
@@ -1703,21 +1710,25 @@ impl TargetPageSlot {
     pub(crate) fn renderer_document_load_boundary(
         &self,
         expected: &CommittedRendererDocumentBinding,
-    ) -> Option<bool> {
-        let current = self.renderer_document_lifecycle.binding.as_ref()?;
+    ) -> RendererDocumentLoadBoundary {
+        let Some(current) = self.renderer_document_lifecycle.binding.as_ref() else {
+            return RendererDocumentLoadBoundary::Pending;
+        };
         if !current.shares_document_owner_with(expected) {
-            return None;
+            return RendererDocumentLoadBoundary::Pending;
         }
         if current.renderer_epoch != expected.renderer_epoch {
-            return Some(false);
+            return RendererDocumentLoadBoundary::Interrupted;
         }
-        let snapshot = self.renderer_document_lifecycle.authoritative.snapshot?;
+        let Some(snapshot) = self.renderer_document_lifecycle.authoritative.snapshot else {
+            return RendererDocumentLoadBoundary::Pending;
+        };
         if snapshot.load.is_some() {
-            Some(true)
+            RendererDocumentLoadBoundary::Reached
         } else if snapshot.terminated.is_some() {
-            Some(false)
+            RendererDocumentLoadBoundary::Interrupted
         } else {
-            None
+            RendererDocumentLoadBoundary::Pending
         }
     }
 
