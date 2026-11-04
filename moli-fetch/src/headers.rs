@@ -10,6 +10,7 @@ pub enum DefaultAcceptKind {
     Image,
     EventSource,
     TextTrack,
+    TextModule,
     Other,
 }
 
@@ -24,6 +25,7 @@ pub fn default_accept_header(kind: DefaultAcceptKind) -> &'static str {
         }
         DefaultAcceptKind::EventSource => "text/event-stream",
         DefaultAcceptKind::TextTrack => "text/vtt,*/*;q=0.1",
+        DefaultAcceptKind::TextModule => "text/plain,*/*;q=0.5",
         DefaultAcceptKind::Other => "*/*",
     }
 }

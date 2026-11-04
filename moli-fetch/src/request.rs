@@ -825,6 +825,7 @@ impl Request {
                 Some(BrowserRequestMetadata::Image) => crate::DefaultAcceptKind::Image,
                 Some(BrowserRequestMetadata::EventSource) => crate::DefaultAcceptKind::EventSource,
                 Some(BrowserRequestMetadata::TextTrack) => crate::DefaultAcceptKind::TextTrack,
+                Some(BrowserRequestMetadata::TextModule) => crate::DefaultAcceptKind::TextModule,
                 Some(_) => crate::DefaultAcceptKind::Other,
                 None => return,
             }

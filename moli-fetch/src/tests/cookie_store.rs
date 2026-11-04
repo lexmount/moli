@@ -922,7 +922,10 @@ fn browser_text_module_subresource_headers_use_text_destination() {
 
     let headers = outgoing_request_headers(&config, &request, None);
 
-    assert_eq!(header_value(&headers, "accept"), Some("*/*"));
+    assert_eq!(
+        header_value(&headers, "accept"),
+        Some("text/plain,*/*;q=0.5")
+    );
     assert_eq!(
         header_value(&headers, "sec-fetch-site"),
         Some("same-origin")
