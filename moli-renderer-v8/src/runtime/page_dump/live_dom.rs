@@ -26,6 +26,10 @@ impl<'a> LiveDom<'a> {
             projection: RefCell::new(ProjectionCache::default()),
         }
     }
+
+    pub(super) fn has_shadow_roots(&self) -> bool {
+        self.has_shadow_roots
+    }
 }
 
 /// Query acceleration for one export, while `host` is immutably borrowed.

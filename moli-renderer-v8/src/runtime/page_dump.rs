@@ -36,17 +36,29 @@ impl PageVm {
 
     fn render_markdown_dump(&self, strip: RendererPageDumpStripOptions) -> String {
         let host = self.vm().document_runtime.dom_host();
-        let base_url = host.document_base_url();
         let dom = live_dom::LiveDom::new(host);
-        let native = host.dom();
+        if dom.has_shadow_roots() {
+            self.render_markdown_source(&dom, strip)
+        } else {
+            self.render_markdown_source(host.dom(), strip)
+        }
+    }
+
+    fn render_markdown_source(
+        &self,
+        dom: &impl live_dom::MarkdownSource,
+        strip: RendererPageDumpStripOptions,
+    ) -> String {
+        let base_url = self.vm().document_runtime.dom_host().document_base_url();
+        let native = dom.native();
         let mut nodes = Vec::new();
         if let Some(body) = native.body_node_id() {
             if let Some(html) = native.document_element_node_id() {
                 nodes.push(html);
             }
-            collect_node_ids(&dom, body, &mut nodes);
+            collect_node_ids(dom, body, &mut nodes);
         } else {
-            collect_node_ids(&dom, native.document_node_id(), &mut nodes);
+            collect_node_ids(dom, native.document_node_id(), &mut nodes);
         }
         nodes.retain(|node| matches!(dom.node_kind(*node), moli_html2md::NodeKind::Element(_)));
         let values = self
@@ -85,7 +97,7 @@ impl PageVm {
                 )
             })
             .collect();
-        render_markdown_view(&dom, styles, base_url.as_ref(), strip)
+        render_markdown_view(dom, styles, base_url.as_ref(), strip)
     }
 
     fn inline_child_frame_markups_into_dump_dom(&mut self, dom: &mut NativeDom) {
