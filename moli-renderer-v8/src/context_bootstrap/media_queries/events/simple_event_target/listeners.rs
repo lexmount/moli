@@ -215,13 +215,14 @@ pub(crate) fn simple_object_event_target_register_webidl_listener<'s>(
     event_type: String,
     listener: webidl::WebIdlCallbackInterface,
     options: webidl::EventListenerOptions,
+    signal: Option<ResolvedAbortSignal<'s>>,
 ) {
     let Some(registry) = simple_object_event_listener_registry(scope, target) else {
         return;
     };
     let listener = simple_object_event_listener_parts(scope, listener);
     simple_object_event_target_register_resolved_listener(
-        scope, target, event_type, listener, options, None, registry,
+        scope, target, event_type, listener, options, signal, registry,
     );
 }
 
