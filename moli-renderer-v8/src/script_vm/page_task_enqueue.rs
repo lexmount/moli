@@ -819,6 +819,30 @@ impl ScriptVm {
         Ok(result)
     }
 
+    /// Execute the next ready timer in queue order while a timer recorded
+    /// during classic defer execution still precedes the DCL boundary.
+    ///
+    /// Like the ordinary timer body, this does not checkpoint or reconcile
+    /// callback effects. The PageVm lifecycle owner commits the exact selected
+    /// callback completion after this method returns.
+    pub(super) fn run_next_timeout_before_domcontentloaded_body(
+        &mut self,
+    ) -> Result<HostTimeoutRunResult> {
+        #[cfg(test)]
+        if let Some(message) = self.test_next_timeout_failure.take() {
+            return Err(anyhow!("{message}"));
+        }
+
+        let document_runtime: *mut DocumentRuntime = &mut *self.document_runtime;
+        self.with_default_context_scope(|scope, _host_ptr| {
+            // SAFETY: this is the same synchronous, non-escaping
+            // document-runtime borrow used by `run_next_timeout_body`; the
+            // schedule ranges only decide whether the boundary still needs
+            // a timer turn, preserving the ordinary timer selection order.
+            Ok(unsafe { &mut *document_runtime }.run_next_timeout_before_domcontentloaded(scope))
+        })
+    }
+
     #[cfg(test)]
     pub(super) fn fail_next_timeout_for_testing(&mut self, message: impl Into<String>) {
         self.test_next_timeout_failure = Some(message.into());
