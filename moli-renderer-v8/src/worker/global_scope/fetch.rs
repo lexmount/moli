@@ -192,8 +192,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                     let cache_mode = request_metadata
                         .cache
                         .parse::<moli_fetch::RequestCacheMode>()
-                        .unwrap_or_default()
-                        .for_fetch_headers(&request.request_headers);
+                        .unwrap_or_default();
                     let mut request = request
                         .with_redirect_headers(redirect_headers)
                         .with_redirect_chain(redirect_chain)

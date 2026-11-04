@@ -2197,7 +2197,28 @@ async fn worker_fetch_projects_cache_modes_to_native_wire_requests() {
     let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
     let script = format!(
         "({}).then(value=>{{postMessage(value);close();}},error=>{{postMessage(String(error));close();}})",
-        "(async () => {\n    for (const cache of ['default','no-cache','reload','no-store','force-cache']) {\n        const response = await fetch('/wire/' + cache, {cache});\n        if (await response.text() !== 'ok') throw Error(cache);\n    }\n    await (await fetch('/wire/author', {cache:'reload', headers:{'Cache-Control':'private',Pragma:'author'}})).text();\n    await (await fetch('/wire/conditional', {headers:{'If-None-Match':'\"author\"'}})).text();\n    let rejected = false;\n    try { await fetch('/wire/miss', {mode:'same-origin',cache:'only-if-cached'}); }\n    catch (error) { rejected = error instanceof TypeError; }\n    if (!rejected) throw Error('cache-only miss must reject');\n    return 'passed';\n})()"
+        r#"(async () => {
+    for (const cache of ['default', 'no-cache', 'reload', 'no-store', 'force-cache']) {
+        const request = new Request('/wire/' + cache, {cache});
+        const response = await fetch(request);
+        if (await response.text() !== 'ok') throw Error(cache);
+        if (request.cache !== cache) throw Error('author cache mode changed: ' + cache);
+    }
+    await (await fetch('/wire/author', {
+        cache: 'reload', headers: {'Cache-Control': 'private', Pragma: 'author'}
+    })).text();
+    const conditional = new Request('/wire/conditional', {
+        headers: {'If-None-Match': '"author"'}
+    });
+    if (conditional.cache !== 'default') throw Error('conditional Request.cache');
+    await (await fetch(conditional)).text();
+    if (conditional.cache !== 'default') throw Error('fetch rewrote Request.cache');
+    let rejected = false;
+    try { await fetch('/wire/miss', {mode: 'same-origin', cache: 'only-if-cached'}); }
+    catch (error) { rejected = error instanceof TypeError; }
+    if (!rejected) throw Error('cache-only miss must reject');
+    return 'passed';
+})()"#
     );
     let mut handle =
         spawn_worker_with_request_client(script, format!("http://{address}/worker.js"), loader);
