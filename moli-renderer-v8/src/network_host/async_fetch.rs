@@ -360,7 +360,7 @@ fn validate_actual_cors_response_head(
     request.validate_cors_response_for_url(&response.final_url, &response.headers)
 }
 
-fn next_redirect_url(
+pub(crate) fn next_redirect_url(
     final_url: &url::Url,
     status: u16,
     headers: &[(String, Vec<u8>)],

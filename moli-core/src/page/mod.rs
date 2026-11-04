@@ -155,13 +155,14 @@ pub use moli_renderer_v8::{
 };
 pub use navigation_diagnostics::{NavigationRedirect, NavigationResponse};
 pub use protocol_support::{
-    BidiPreloadChannelHandoff, ChildFrameAttachmentSnapshot, ChildFrameDetachmentSnapshot,
-    ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentNetworkSnapshot,
-    ChildFrameDocumentOpenedSnapshot, ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot,
-    ChildFrameTreeSnapshot, ContentSecurityPolicyIssueSnapshot, ContentSecurityPolicyViolationType,
-    DocumentActivity, DocumentStartScript, EmulatedIdleOverride, EmulatedMediaOverrides,
-    InspectorIssueSnapshot, InspectorSourceCodeLocationSnapshot, PendingRuntimeBindingCall,
-    PendingSubresourceAuthInfo, PendingSubresourceContinueEvent, PendingSubresourceContinueOutcome,
+    BidiPreloadChannelHandoff, ChildDocumentFetchRequest, ChildFrameAttachmentSnapshot,
+    ChildFrameDetachmentSnapshot, ChildFrameDocumentNetworkActivitySnapshot,
+    ChildFrameDocumentNetworkSnapshot, ChildFrameDocumentOpenedSnapshot,
+    ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot, ChildFrameTreeSnapshot,
+    ContentSecurityPolicyIssueSnapshot, ContentSecurityPolicyViolationType, DocumentActivity,
+    DocumentStartScript, EmulatedIdleOverride, EmulatedMediaOverrides, InspectorIssueSnapshot,
+    InspectorSourceCodeLocationSnapshot, PendingRuntimeBindingCall, PendingSubresourceAuthInfo,
+    PendingSubresourceContinueEvent, PendingSubresourceContinueOutcome,
     PendingSubresourceFetchInfo, PendingSubresourceResponseInfo, PermissionOverrideRegistration,
     QuirksModeIssueSnapshot, RuntimeBindingCallSourceIdentity, RuntimeBindingRegistration,
     RuntimeContextRestoreEvent, RuntimeExecutionContextRestoreEvent,

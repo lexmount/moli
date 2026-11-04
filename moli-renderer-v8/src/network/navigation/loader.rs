@@ -216,17 +216,36 @@ impl NavigationResourceLoader {
 
     pub async fn fetch_raw(&self, request: Request) -> Result<RawResponse> {
         self.begin_fetch()?;
+        let single_hop = !request.transport_follows_redirects();
+        let response_cancel = if single_hop {
+            self.inner.cancel.child_for_subrequest()
+        } else {
+            self.inner.cancel.clone()
+        };
         match self
             .request_client
             .fetch_raw_stream_with_cancel(
                 request.with_page_network_policy(),
-                self.inner.cancel.clone(),
+                response_cancel.clone(),
             )
             .await
         {
             Ok(mut response) => {
                 let head = response.head();
                 let mut body = Vec::new();
+                // A caller-owned redirect must not wait for an unbounded
+                // redirect body. Cancel this hop without cancelling navigation.
+                if single_hop
+                    && matches!(head.status, 301 | 302 | 303 | 307 | 308)
+                    && head
+                        .headers
+                        .iter()
+                        .any(|(name, _)| name.eq_ignore_ascii_case("location"))
+                {
+                    response_cancel.cancel();
+                    self.finish_response_ready()?;
+                    return Ok(RawResponse::from_head_and_body(head, body));
+                }
                 while let Some(chunk) = response.next_chunk().await {
                     body.extend_from_slice(&chunk);
                 }
@@ -235,6 +254,9 @@ impl NavigationResourceLoader {
                     return Err(error);
                 }
                 self.finish_response_ready()?;
+                if single_hop {
+                    self.inner.cancel.adopt_response_progress(&response_cancel);
+                }
                 Ok(RawResponse::from_head_and_body(head, body))
             }
             Err(error) => {
@@ -242,6 +264,17 @@ impl NavigationResourceLoader {
                 Err(error)
             }
         }
+    }
+
+    pub(crate) fn prepare_redirect(&self) -> Result<()> {
+        let mut state = self.inner.state.lock();
+        ensure!(
+            *state == NavigationResourceLoaderState::ResponseReady,
+            "navigation redirect requires a completed response (state: {:?})",
+            *state
+        );
+        *state = NavigationResourceLoaderState::Created;
+        Ok(())
     }
 
     pub async fn fetch_raw_stream(&self, request: Request) -> Result<StreamingRawResponse> {

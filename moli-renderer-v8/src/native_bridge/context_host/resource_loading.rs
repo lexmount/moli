@@ -51,14 +51,14 @@ impl JsContextHost {
     fn push_subresource_fetch_pause(
         &mut self,
         info: PendingSubresourceFetchInfo,
-        document_loader_id: Option<String>,
+        child_document: Option<crate::protocol_types::ChildDocumentFetchRequest>,
     ) {
         if let Some(source_document) = self.root_document_lifecycle_identity()
             && self.append_live_turn_owner_action(
                 crate::runtime::RendererOwnerAction::SubresourceFetchPause {
                     source_document,
                     info: Box::new(info.clone()),
-                    document_loader_id,
+                    child_document: child_document.map(Box::new),
                 },
             )
         {
@@ -1551,12 +1551,13 @@ impl JsContextHost {
         load: ResourceLoadLease,
         request_origin: moli_url::WebOrigin,
         mut info: PendingSubresourceFetchInfo,
-        document_loader_id: String,
-        fetch: super::ChildDocumentFetch,
+        mut fetch: super::ChildDocumentFetch,
     ) -> u64 {
+        let child_document = fetch.take_request_metadata();
         self.assign_pending_subresource_fetch_identity(&mut info);
+        fetch.set_network_info(info.clone());
         let internal_id = info.internal_id;
-        self.push_subresource_fetch_pause(info.clone(), Some(document_loader_id));
+        self.push_subresource_fetch_pause(info.clone(), Some(child_document));
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {

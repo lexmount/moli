@@ -2423,6 +2423,13 @@ pub struct PendingSubresourceFetchInfo {
     pub request_cookie_report: Option<StoredCookieQueryReport>,
 }
 
+/// The navigation identity and previous response for one child Document hop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildDocumentFetchRequest {
+    pub loader_id: String,
+    pub redirect: Option<NavigationRedirect>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingSubresourceResponseInfo {
     pub internal_id: u64,
