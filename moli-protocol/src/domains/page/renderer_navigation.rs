@@ -210,9 +210,7 @@ impl PreparedRendererNavigation {
         let step = match request {
             crate::conn::TopLevelNavigationRequest::History(traversal) => {
                 super::navigation::start_session_owner_history_traversal_from_renderer(
-                    conn,
-                    &owner,
-                    traversal.delta,
+                    conn, &owner, traversal,
                 )
             }
             crate::conn::TopLevelNavigationRequest::Location(navigation) => {
@@ -316,7 +314,7 @@ impl PreparedRendererNavigation {
                     }
                 }
                 _ => unreachable!(
-                    "renderer top-level navigation starts only a load, request, or same-document operation"
+                    "renderer top-level navigation starts only an unload check, load, request, or same-document operation"
                 ),
             },
         };

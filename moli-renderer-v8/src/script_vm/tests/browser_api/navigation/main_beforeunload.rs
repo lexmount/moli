@@ -1,5 +1,94 @@
 use super::*;
 
+#[tokio::test]
+async fn history_fallback_defers_beforeunload_until_a_browser_destination_exists() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    for (action, delta) in [
+        ("history.back()", -1),
+        ("history.forward()", 1),
+        ("history.go(-100)", -100),
+    ] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://history-beforeunload.test/source",
+            &loader,
+        );
+        vm.eval(&format!(
+            "globalThis.beforeUnloadCount=0; addEventListener('beforeunload',()=>{{beforeUnloadCount++; history.back();}}); {action}; true"
+        ))
+        .unwrap();
+        assert!(
+            vm.run_one_history_traversal_executor_turn(&loader)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            vm.eval("String(beforeUnloadCount)").unwrap(),
+            "0",
+            "{action}: an unresolved browser history target must not fire beforeunload"
+        );
+        let traversal = vm
+            .take_pending_top_level_history_traversal()
+            .expect("the browser must resolve the fallback destination");
+        assert_eq!(traversal.delta, delta);
+        assert!(
+            !traversal.beforeunload_checked,
+            "the browser must check beforeunload after resolving the target"
+        );
+        assert!(
+            !vm.run_one_history_traversal_executor_turn(&loader)
+                .await
+                .unwrap(),
+            "{action}: an out-of-range request must not create a beforeunload traversal loop"
+        );
+    }
+}
+
+#[tokio::test]
+async fn history_fallback_from_beforeunload_preserves_the_pending_location() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    for (action, delta) in [
+        ("history.back()", -1),
+        ("history.forward()", 1),
+        ("history.go(-100)", -100),
+    ] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://history-beforeunload.test/source",
+            &loader,
+        );
+        vm.eval(&format!(
+            "globalThis.beforeUnloadCount=0; addEventListener('beforeunload',()=>{{beforeUnloadCount++; {action};}}); location.href='/destination'; true"
+        ))
+        .unwrap();
+        assert_eq!(vm.eval("String(beforeUnloadCount)").unwrap(), "1");
+        assert!(vm.has_pending_location_navigation());
+        assert!(
+            vm.run_one_history_traversal_executor_turn(&loader)
+                .await
+                .unwrap()
+        );
+        assert_eq!(vm.eval("String(beforeUnloadCount)").unwrap(), "1");
+        assert!(
+            vm.has_pending_location_navigation(),
+            "{action}: an unresolved traversal must keep the pending destination"
+        );
+        let traversal = vm.take_pending_top_level_history_traversal().unwrap();
+        assert_eq!(traversal.delta, delta);
+        assert!(!traversal.beforeunload_checked);
+        assert_eq!(
+            vm.take_pending_location_navigation_with_seed()
+                .expect("the Location request must survive the traversal fallback")
+                .url
+                .path(),
+            "/destination"
+        );
+        assert!(
+            !vm.run_one_history_traversal_executor_turn(&loader)
+                .await
+                .unwrap()
+        );
+    }
+}
+
 const SETUP: &str = r#"((child, grandchild) => {
     const makeFrame = owner => {
         const doc = owner.document;
