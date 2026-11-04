@@ -203,6 +203,142 @@ async fn popup_navigation_uses_shared_redirect_interception() {
         .await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn unmatched_navigation_redirects_publish_each_request_before_its_response() {
+    tokio::task::LocalSet::new()
+        .run_until(unmatched_navigation_redirect_contract())
+        .await;
+}
+
+async fn unmatched_navigation_redirect_contract() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let middle_response = Arc::new(tokio::sync::Notify::new());
+    let gate = middle_response.clone();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let destination_hits = hits.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(|| async {
+                    ([(CONTENT_TYPE.as_str(), "text/html")],
+                     "<!doctype html><form method=post action=/start><input name=payload value=original></form>")
+                }))
+                .route("/start", any(|method: Method, body: bytes::Bytes| async move {
+                    assert_eq!(method, Method::POST);
+                    assert_eq!(body.as_ref(), b"payload=original");
+                    (StatusCode::TEMPORARY_REDIRECT, [("location", "/middle")])
+                }))
+                .route("/middle", any(move |method: Method, body: bytes::Bytes| {
+                    let gate = gate.clone();
+                    async move {
+                        assert_eq!(method, Method::POST);
+                        assert_eq!(body.as_ref(), b"payload=original");
+                        gate.notified().await;
+                        (StatusCode::FOUND, [("location", "/blocked")])
+                    }
+                }))
+                .route("/blocked", get(move || {
+                    let hits = destination_hits.clone();
+                    async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        ([(CONTENT_TYPE.as_str(), "text/html")], "<!doctype html><body>done</body>")
+                    }
+                })),
+        ).await.unwrap();
+    });
+    let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
+    with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+    enable_runtime_async(&mut ctx, "SID-1", 43_000).await;
+    ctx.process_async(
+        json!({"id":43_001,"method":"Fetch.enable","sessionId":"SID-1",
+        "params":{"patterns":[{"urlPattern":"*/blocked","resourceType":"Document"}]}}),
+    )
+    .await;
+    ctx.expect_result(43_001, json!({}), Some("SID-1"));
+    ctx.sent.clear();
+    ctx.process_async(
+        json!({"id":43_002,"method":"Runtime.evaluate","sessionId":"SID-1",
+        "params":{"expression":"document.querySelector('form').submit()"}}),
+    )
+    .await;
+    let middle_url = format!("http://{addr}/middle");
+    wait_until_scheduler_message(
+        &mut ctx,
+        "unmatched redirect request before held response",
+        |event| {
+            event["method"] == "Network.requestWillBeSent"
+                && event["params"]["request"]["url"] == middle_url
+        },
+    )
+    .await;
+    let middle = ctx
+        .sent
+        .iter()
+        .find(|event| {
+            event["method"] == "Network.requestWillBeSent"
+                && event["params"]["request"]["url"] == middle_url
+        })
+        .unwrap();
+    let network_id = middle["params"]["requestId"].clone();
+    assert_eq!(middle["params"]["request"]["method"], "POST");
+    assert_eq!(middle["params"]["request"]["postData"], "payload=original");
+    assert_eq!(
+        middle["params"]["request"]["headers"]["Content-Type"],
+        "application/x-www-form-urlencoded"
+    );
+    assert_eq!(middle["params"]["redirectResponse"]["status"], 307);
+    middle_response.notify_one();
+    let blocked_url = format!("http://{addr}/blocked");
+    let paused = wait_for_request_paused(
+        &mut ctx,
+        &blocked_url,
+        "matched redirect after method rewrite",
+    )
+    .await;
+    assert_eq!(paused["params"]["networkId"], network_id);
+    assert_eq!(paused["params"]["request"]["method"], "GET");
+    assert!(paused["params"]["request"].get("postData").is_none());
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    let requests = ctx
+        .sent
+        .iter()
+        .filter(|event| {
+            event["method"] == "Network.requestWillBeSent"
+                && event["params"]["requestId"] == network_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(requests.len(), 3, "one event per hop: {requests:?}");
+    assert_eq!(requests[0]["params"]["request"]["method"], "POST");
+    assert_eq!(requests[1]["params"]["request"]["url"], middle_url);
+    assert_eq!(requests[2]["params"]["request"]["method"], "GET");
+    assert_eq!(requests[2]["params"]["request"]["url"], blocked_url);
+    assert_eq!(requests[2]["params"]["redirectResponse"]["status"], 302);
+    assert!(requests[2]["params"]["request"].get("postData").is_none());
+    ctx.process_async(
+        json!({"id":43_003,"method":"Fetch.continueRequest","sessionId":"SID-1",
+        "params":{"requestId":paused["params"]["requestId"]}}),
+    )
+    .await;
+    ctx.expect_result(43_003, json!({}), Some("SID-1"));
+    wait_until_message(&mut ctx, "SID-1", "redirect chain completion", |event| {
+        event["method"] == "Network.loadingFinished" && event["params"]["requestId"] == network_id
+    })
+    .await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|event| event["method"] == "Network.requestWillBeSent"
+                && event["params"]["requestId"] == network_id)
+            .count(),
+        3
+    );
+    server.abort();
+}
+
 async fn service_worker_navigation_contract(stage: Option<&str>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
