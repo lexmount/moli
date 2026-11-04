@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use anyhow::Result;
 
 use super::ScriptVm;
@@ -207,6 +209,7 @@ pub(crate) fn string_code_generation_check_callback<'s>(
     source: v8::Local<'s, v8::Value>,
     is_code_like: bool,
 ) -> v8::ModifyCodeGenerationFromStringsResult<'s> {
+    let original_source = source;
     let worker_trusted_types_requirements =
         crate::worker::worker_trusted_types_for_script_requirements(scope);
     let (trusted_types_requirements, allow_trusted_types_eval, host_ptr) =
@@ -218,7 +221,7 @@ pub(crate) fn string_code_generation_check_callback<'s>(
             )
         } else {
             let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-                return code_generation_result(true, None);
+                return allowed_code_generation_result(scope, source, None);
             };
             if crate::context_bootstrap::consume_internal_javascript_url_eval(scope) {
                 return code_generation_result(true, None);
@@ -344,11 +347,107 @@ pub(crate) fn string_code_generation_check_callback<'s>(
                 }
                 None => None,
             };
-            return code_generation_result(true, replacement);
+            return allowed_code_generation_result(scope, original_source, replacement);
         }
         StringCodeGenerationPolicyAction::Block => false,
     };
-    code_generation_result(codegen_allowed, None)
+    if codegen_allowed {
+        allowed_code_generation_result(scope, original_source, None)
+    } else {
+        code_generation_result(false, None)
+    }
+}
+
+fn allowed_code_generation_result<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    original_source: v8::Local<'s, v8::Value>,
+    modified_source: Option<v8::Local<'s, v8::String>>,
+) -> v8::ModifyCodeGenerationFromStringsResult<'s> {
+    let original_string = v8::Local::<v8::String>::try_from(original_source).ok();
+    let Some(source) = modified_source.or(original_string) else {
+        return code_generation_result(true, modified_source);
+    };
+    let is_dynamic_function = original_string
+        .is_some_and(|source| is_dynamic_function_source(scope, source))
+        || is_dynamic_function_source(scope, source);
+    if !is_dynamic_function {
+        return code_generation_result(true, modified_source);
+    }
+
+    // V8's Function-constructor cache keys include the native-context closure
+    // but omit the active Script/Module. A cached function can consequently
+    // keep another script's dynamic-import base URL and fetch options.
+    let script_id = v8::StackTrace::current_stack_trace(scope, 1)
+        // V8's GetFrame does not bounds-check an empty trace, including when
+        // a host call or cross-origin boundary hides all JavaScript frames.
+        .filter(|trace| trace.get_frame_count() != 0)
+        .and_then(|trace| trace.get_frame(scope, 0))
+        .filter(|frame| frame.is_user_javascript())
+        .map(|frame| frame.get_script_id())
+        .filter(|id| *id != 0);
+    let origin = if let Some(script_id) = script_id {
+        format!("script-{script_id}")
+    } else {
+        // A host call or a security boundary can leave no visible JS frame.
+        // Give such compilations distinct keys rather than sharing provenance.
+        static NEXT_UNATTRIBUTED_COMPILATION: AtomicU64 = AtomicU64::new(1);
+        let Ok(id) = NEXT_UNATTRIBUTED_COMPILATION.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |id| id.checked_add(1),
+        ) else {
+            return code_generation_result(false, None);
+        };
+        format!("host-{id}")
+    };
+    // Keep the key outside the FunctionExpression: neither Function#toString
+    // nor parameter/body source positions change. Concat preserves UTF-16,
+    // including lone surrogates, without a lossy Rust string conversion.
+    // A line comment cannot close an invalid, unterminated block comment in
+    // a Trusted Types policy's replacement source.
+    let Some(suffix) = v8::String::new(scope, &format!("\n// moli-function-origin:{origin}"))
+    else {
+        return code_generation_result(false, None);
+    };
+    let Some(source) = v8::String::concat(scope, source, suffix) else {
+        return code_generation_result(false, None);
+    };
+    code_generation_result(true, Some(source))
+}
+
+fn is_dynamic_function_source(
+    scope: &v8::PinScope<'_, '_>,
+    source: v8::Local<'_, v8::String>,
+) -> bool {
+    if source.length() < 3 {
+        return false;
+    }
+    let mut prefix = [0_u16; 32];
+    source.write_v2(scope, 0, &mut prefix, v8::WriteFlags::empty());
+    let matches_prefix = [
+        "(function anonymous(",
+        "(function* anonymous(",
+        "(async function anonymous(",
+        "(async function* anonymous(",
+    ]
+    .into_iter()
+    .any(|candidate| {
+        prefix[..candidate.len()]
+            .iter()
+            .copied()
+            .eq(candidate.encode_utf16())
+    });
+    if !matches_prefix {
+        return false;
+    }
+    let mut suffix = [0_u16; 3];
+    source.write_v2(
+        scope,
+        (source.length() - suffix.len()) as u32,
+        &mut suffix,
+        v8::WriteFlags::empty(),
+    );
+    suffix == [u16::from(b'\n'), u16::from(b'}'), u16::from(b')')]
 }
 
 fn code_generation_result<'s>(
