@@ -217,8 +217,7 @@ pub(super) fn spawn_network_fetch(
         prepared
             .cache
             .parse::<RequestCacheMode>()
-            .unwrap_or_default()
-            .for_fetch_headers(&prepared.request_headers),
+            .unwrap_or_default(),
     )
     .with_fetch_priority_hint(prepared.priority)
     .with_fetch_referrer(&prepared.referrer)
