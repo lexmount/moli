@@ -599,6 +599,8 @@ impl JsContextHost {
             active_runtime_command_cause: None,
             active_inspector_dispatch: false,
             pending_top_level_navigation: None,
+            #[cfg(test)]
+            recorded_top_level_history_traversal: None,
             top_level_navigation_history: Default::default(),
             ordinary_page_turn_navigation_handoff_active: false,
             next_navigation_attempt_id: 1,

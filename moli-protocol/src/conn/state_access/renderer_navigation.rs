@@ -7,6 +7,14 @@ use crate::domains::page::{PreparedRendererNavigation, PreparedRendererNavigatio
 use anyhow::{Context as _, Result};
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn prepare_renderer_navigation_step(
+        self,
+        owner: CommandOwnerScope,
+        step: crate::domains::page::PageCommandTaskStep,
+    ) -> PreparedRendererNavigation {
+        PreparedRendererNavigation::prepare(self.connection, owner, step)
+    }
+
     pub(crate) fn prepare_renderer_navigation_owner_action(
         self,
         action: crate::conn::TopLevelNavigationOwnerAction,

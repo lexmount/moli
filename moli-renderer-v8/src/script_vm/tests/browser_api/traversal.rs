@@ -233,7 +233,7 @@ async fn top_level_history_back_delegates_to_the_browser_history_controller() {
 }
 
 #[tokio::test]
-async fn top_level_navigation_intents_keep_one_last_writer_state_after_traversal_tasks() {
+async fn top_level_history_fallback_preserves_location_until_browser_resolves_destination() {
     let url = "https://browser-owned-history.test/current";
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(url, &loader);
@@ -249,8 +249,13 @@ async fn top_level_navigation_intents_keep_one_last_writer_state_after_traversal
             .unwrap()
     );
     vm.eval("location.assign('/location-wins'); 'queued'")
-        .expect("location navigation should replace the history traversal intent");
-    assert!(vm.take_pending_top_level_history_traversal().is_none());
+        .expect("location navigation should retain the already-produced traversal request");
+    assert_eq!(
+        vm.take_pending_top_level_history_traversal()
+            .expect("already-produced browser traversal request")
+            .delta,
+        -1
+    );
     assert_eq!(
         vm.take_pending_location_navigation_with_seed()
             .expect("location navigation intent")
@@ -259,8 +264,8 @@ async fn top_level_navigation_intents_keep_one_last_writer_state_after_traversal
         "https://browser-owned-history.test/location-wins"
     );
 
-    vm.eval("location.assign('/history-loses-location'); history.forward(); 'queued'")
-        .expect("history traversal should replace the location navigation intent");
+    vm.eval("location.assign('/preserved-location'); history.forward(); 'queued'")
+        .expect("an unresolved traversal should preserve the location request");
     assert!(vm.has_pending_location_navigation());
     assert!(vm.take_pending_top_level_history_traversal().is_none());
     assert!(
@@ -268,12 +273,19 @@ async fn top_level_navigation_intents_keep_one_last_writer_state_after_traversal
             .await
             .unwrap()
     );
-    assert!(!vm.has_pending_location_navigation());
+    assert!(vm.has_pending_location_navigation());
     assert_eq!(
         vm.take_pending_top_level_history_traversal()
             .expect("history traversal intent")
             .delta,
         1
+    );
+    assert_eq!(
+        vm.take_pending_location_navigation_with_seed()
+            .expect("Location must survive until the browser resolves the traversal target")
+            .url
+            .path(),
+        "/preserved-location"
     );
 }
 

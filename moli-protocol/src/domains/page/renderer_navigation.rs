@@ -44,6 +44,7 @@ enum RendererNavigationWork {
         completion: InitialDocumentPageBuildWaiter,
     },
     Complete(CommandOutputPlan),
+    BeforeUnload(Box<super::navigation::PendingBeforeUnloadNavigationCommand>),
     Load(Box<BackgroundNavigationLoadJob>),
     Request(Box<PreparedInterceptedNavigationRequest>),
     SameDocument {
@@ -195,9 +196,7 @@ impl PreparedRendererNavigation {
         let step = match request {
             crate::conn::TopLevelNavigationRequest::History(traversal) => {
                 super::navigation::start_session_owner_history_traversal_from_renderer(
-                    conn,
-                    &owner,
-                    traversal.delta,
+                    conn, &owner, traversal,
                 )
             }
             crate::conn::TopLevelNavigationRequest::Location(navigation) => {
@@ -259,7 +258,7 @@ impl PreparedRendererNavigation {
         Some(Self::prepare(conn, owner, step))
     }
 
-    pub(super) fn prepare(
+    pub(crate) fn prepare(
         conn: &mut CdpConnection,
         owner: CommandOwnerScope,
         step: PageCommandTaskStep,
@@ -269,6 +268,9 @@ impl PreparedRendererNavigation {
         let work = match step {
             PageCommandTaskStep::Complete(plan) => RendererNavigationWork::Complete(plan),
             PageCommandTaskStep::Pending(pending) => match *pending.kind {
+                PendingPageCommandKind::BeforeUnloadNavigation(pending) => {
+                    RendererNavigationWork::BeforeUnload(pending)
+                }
                 PendingPageCommandKind::Navigate(pending) => {
                     source = Some(RendererNavigationSource::new(
                         conn,
@@ -319,7 +321,7 @@ impl PreparedRendererNavigation {
                     }
                 }
                 _ => unreachable!(
-                    "renderer top-level navigation starts only a load, request, or same-document operation"
+                    "renderer top-level navigation starts only an unload check, load, request, or same-document operation"
                 ),
             },
         };
@@ -353,6 +355,19 @@ impl PreparedRendererNavigation {
                     continue;
                 }
                 RendererNavigationWork::Complete(plan) => retain_background(context, plan),
+                RendererNavigationWork::BeforeUnload(pending) => {
+                    let completed = pending.wait().await;
+                    let prepared = context.with_state(driver, move |state, context| {
+                        state.prepare_before_unload_navigation(completed, context)
+                    })?;
+                    let step = prepared
+                        .run(driver, context, super::NavigationCommandOutput::Background)
+                        .await?;
+                    self = context.with_state(driver, move |state, _context| {
+                        state.prepare_renderer_navigation_step(self.owner, step)
+                    })?;
+                    continue;
+                }
                 RendererNavigationWork::Load(job) => {
                     let (response, _) = job.run(None).await;
                     self.source

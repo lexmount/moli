@@ -94,8 +94,6 @@ impl PendingLocationNavigation {
 
 pub(crate) enum PendingTopLevelNavigation {
     Location(Box<PendingLocationNavigation>),
-    #[cfg(test)]
-    HistoryTraversal(RendererPendingTopLevelHistoryTraversal),
 }
 
 impl JsContextHost {
@@ -433,16 +431,12 @@ impl JsContextHost {
     ) -> Option<crate::runtime::RendererDocumentLifecycleIdentity> {
         match self.pending_top_level_navigation.as_ref()? {
             PendingTopLevelNavigation::Location(pending) => pending.source_document,
-            #[cfg(test)]
-            PendingTopLevelNavigation::HistoryTraversal(_) => None,
         }
     }
 
     pub(crate) fn pending_location_navigation_kind(&self) -> Option<PendingLocationNavigationKind> {
         match self.pending_top_level_navigation.as_ref()? {
             PendingTopLevelNavigation::Location(pending) => Some(pending.kind()),
-            #[cfg(test)]
-            PendingTopLevelNavigation::HistoryTraversal(_) => None,
         }
     }
 
@@ -514,9 +508,20 @@ impl JsContextHost {
         }
     }
 
-    pub(crate) fn record_pending_top_level_history_traversal(&mut self, delta: i64) {
-        self.clear_pending_top_level_navigation();
-        let traversal = RendererPendingTopLevelHistoryTraversal { delta };
+    pub(crate) fn record_pending_top_level_history_traversal(
+        &mut self,
+        delta: i64,
+        beforeunload_checked: bool,
+    ) {
+        // An unresolved browser fallback can be out of range. It must not
+        // discard a Location request before the browser selects a target.
+        if beforeunload_checked {
+            self.clear_pending_top_level_navigation();
+        }
+        let traversal = RendererPendingTopLevelHistoryTraversal {
+            delta,
+            beforeunload_checked,
+        };
         if self.append_live_turn_owner_action(
             crate::runtime::RendererOwnerAction::TopLevelHistoryTraversal(traversal),
         ) {
@@ -524,8 +529,7 @@ impl JsContextHost {
         }
         #[cfg(test)]
         {
-            self.pending_top_level_navigation =
-                Some(PendingTopLevelNavigation::HistoryTraversal(traversal));
+            self.recorded_top_level_history_traversal = Some(traversal);
         }
         #[cfg(not(test))]
         panic!("a production history traversal must have a concrete renderer output sink");
@@ -535,18 +539,7 @@ impl JsContextHost {
     pub(crate) fn take_pending_top_level_history_traversal(
         &mut self,
     ) -> Option<RendererPendingTopLevelHistoryTraversal> {
-        if !matches!(
-            self.pending_top_level_navigation.as_ref(),
-            Some(PendingTopLevelNavigation::HistoryTraversal(_))
-        ) {
-            return None;
-        }
-        let Some(PendingTopLevelNavigation::HistoryTraversal(pending)) =
-            self.pending_top_level_navigation.take()
-        else {
-            unreachable!("pending top-level navigation kind changed without an intervening call");
-        };
-        Some(pending)
+        self.recorded_top_level_history_traversal.take()
     }
 
     pub(crate) fn clear_pending_top_level_navigation(&mut self) {

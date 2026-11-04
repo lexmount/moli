@@ -259,6 +259,9 @@ pub struct RendererPendingSameDocumentNavigation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RendererPendingTopLevelHistoryTraversal {
     pub delta: i64,
+    /// Known renderer destinations have already checked the outgoing tree;
+    /// unresolved browser-history fallbacks still need that check.
+    pub beforeunload_checked: bool,
 }
 
 /// A same-Document navigation captured together with the exact Document that
