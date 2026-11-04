@@ -548,6 +548,11 @@ impl DocumentRuntime {
             .unwrap_or("body")
             .to_owned();
         if context_mode == HtmlFragmentParserContextMode::RangeCreateContextualFragment
+            && self
+                .dom_host()
+                .node(document_handle)
+                .and_then(Node::as_document)
+                .is_some_and(|document| document.is_html_document())
             && context_namespace == "http://www.w3.org/1999/xhtml"
             && context_local_name.eq_ignore_ascii_case("html")
         {
