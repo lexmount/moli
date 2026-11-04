@@ -322,6 +322,20 @@ impl ProtocolWorkflowState<'_> {
             .prepare_navigation_load_error(Some(&token), &navigation, error)
     }
 
+    pub(crate) fn prepare_fetch_navigation_redirect(
+        self,
+        pending: super::PendingFetchNavigation,
+        executor: moli_core::network::NavigationInterception,
+        prior: moli_fetch::NetworkObservationJournal,
+    ) -> crate::domains::fetch::RedirectNavigation {
+        crate::domains::fetch::prepare_navigation_redirect(
+            self.connection,
+            pending,
+            executor,
+            prior,
+        )
+    }
+
     pub(crate) fn accept_fetch_navigation_response(
         self,
         pending: super::PendingFetchNavigation,

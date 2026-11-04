@@ -510,7 +510,7 @@ impl TargetNetworkAgentState {
             .record_fetch_pause_announced_request_id(request_id);
     }
 
-    pub(crate) fn replace_child_document_fetch_request_id(
+    pub(crate) fn replace_navigation_fetch_request_id(
         &mut self,
         network_id: String,
         session_id: Option<String>,
@@ -518,7 +518,7 @@ impl TargetNetworkAgentState {
     ) -> Option<String> {
         self.artifacts
             .subresource_network_artifacts
-            .replace_child_document_fetch_request_id(network_id, session_id, fetch_id)
+            .replace_navigation_fetch_request_id(network_id, session_id, fetch_id)
     }
 
     pub(crate) fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {
@@ -1935,7 +1935,7 @@ impl SubresourceNetworkArtifacts {
             .or_default();
     }
 
-    fn replace_child_document_fetch_request_id(
+    fn replace_navigation_fetch_request_id(
         &mut self,
         network_id: String,
         session_id: Option<String>,

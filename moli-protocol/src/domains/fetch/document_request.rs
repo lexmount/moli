@@ -1,13 +1,14 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::conn::{
     CdpConnection, NavigationLoadOutcome, PendingFetchNavigation,
     PendingStreamingDocumentResponseNavigation, PreparedCapturedNavigationResponse,
-    PreparedNavigationRequest, ProtocolWorkflowDriver,
+    ProtocolWorkflowDriver,
 };
 use crate::domains::{
     command_output::CommandOutputBuffer, command_output::CommandOutputPlan, network,
 };
+use moli_core::network::NavigationInterception;
 use moli_core::page::SubresourceAuthCredentials;
 use moli_fetch::{
     NetworkFetchResult, NetworkObservationJournal, RawResponse, StreamingRawResponse,
@@ -23,7 +24,8 @@ use super::{
 /// awaits; only interpreting the accepted response needs another state turn.
 pub(crate) struct PreparedInterceptedNavigationRequest {
     pending: PendingFetchNavigation,
-    request: Option<Result<PreparedNavigationRequest>>,
+    request: Option<Result<NavigationInterception>>,
+    renderer_runtime: Option<moli_core::runtime::RendererBrowserContextRuntime>,
     buffered: bool,
     handle_auth: bool,
     prior_journal: Option<NetworkObservationJournal>,
@@ -62,6 +64,11 @@ impl PreparedInterceptedNavigationRequest {
             &pending.navigation.requested_url,
         );
         let buffered = !navigation::navigation_response_stage_auth_can_stream(auth.as_ref());
+        let mut prior_journal = prior_journal;
+        let renderer_runtime = conn
+            .target_owner_identity_for_owner(&pending.navigation.owner)
+            .and_then(|(id, _)| conn.browser_context_by_id(&id))
+            .map(|context| context.renderer_runtime());
         let request = if auth.is_some() && !pending.auth_retry_budget.try_restart() {
             None
         } else if handle_auth && buffered && pending.intercept_response {
@@ -73,7 +80,24 @@ impl PreparedInterceptedNavigationRequest {
             .into()))
         } else {
             network::record_main_document_request_body(conn, &pending.navigation);
-            Some(
+            let prepared = if let Some((mut interception, journal)) = pending.interception.take() {
+                prior_journal = Some(navigation::merge_network_observations(
+                    prior_journal,
+                    journal,
+                ));
+                let request = interception.request_mut();
+                request.url = pending.navigation.requested_url.clone();
+                request.method = pending.navigation.request_method.clone();
+                request.request_headers = pending.navigation.request_headers.clone();
+                request.body = pending.navigation.clone_request_body_bytes();
+                *request = request
+                    .clone()
+                    .with_redirect_headers(pending.navigation.redirect_headers.clone());
+                if let Some(auth) = auth {
+                    request.set_auth(Some(auth.into()));
+                }
+                Ok(interception)
+            } else {
                 conn.prepare_navigation_request(
                     pending
                         .document_navigation_token
@@ -81,12 +105,26 @@ impl PreparedInterceptedNavigationRequest {
                         .expect("request token"),
                     &pending.navigation,
                     auth,
-                ),
-            )
+                )
+            };
+            Some(prepared.map(|mut prepared| {
+                let intercept = conn
+                    .target_fetch_subresource_interception_snapshot_for_owner(
+                        &pending.navigation.owner,
+                    )
+                    .is_some_and(|snapshot| {
+                        snapshot.has_request_stage_candidate(
+                            crate::automation::DevToolsNetworkResourceType::Document,
+                        )
+                    });
+                prepared.set_interception(intercept);
+                prepared
+            }))
         };
         Self {
             pending,
             request,
+            renderer_runtime,
             buffered,
             handle_auth,
             prior_journal,
@@ -95,43 +133,134 @@ impl PreparedInterceptedNavigationRequest {
     }
 
     pub(crate) async fn prepare(
-        self,
+        mut self,
         driver: &mut ProtocolWorkflowDriver,
     ) -> PreparedFetchNavigationResponse {
-        let Some(request) = self.request else {
+        let Some(request) = self.request.take() else {
             return PreparedFetchNavigationResponse::Result(Ok(
                 NavigationLoadOutcome::network_failure(
                     moli_fetch::AuthRetryBudget::ERROR_TEXT.to_owned(),
                 ),
             ));
         };
-        let response = match request {
-            Ok(request) if self.buffered => request
-                .wait_buffered()
-                .await
-                .map(FetchNavigationResponse::Captured),
-            Ok(request) => match request.wait().await {
-                Ok(response)
-                    if moli_web_mime::response_headers_indicate_attachment_download(
-                        &response.response().headers,
-                    ) || (self.handle_auth
-                        && matches!(response.response().status, 401 | 407)
-                        && extract_auth_challenge(&response.response().headers).is_some()) =>
+        let mut request = match request {
+            Ok(request) => request,
+            Err(error) => return PreparedFetchNavigationResponse::Result(Err(error)),
+        };
+        let response = loop {
+            let service_worker_response = if let Some(runtime) = &self.renderer_runtime {
+                match runtime
+                    .fetch_service_worker_main_resource_for_navigation(
+                        request.request(),
+                        request.resource_loader(),
+                    )
+                    .await
                 {
-                    let (response, journal) = response.into_parts_with_observation_journal();
-                    response
-                        .into_materialized_raw_response()
-                        .await
-                        .map(|response| {
-                            FetchNavigationResponse::Captured(
-                                NetworkFetchResult::with_observation_journal(response, journal),
+                    Ok(fetch) => {
+                        self.pending.reserved_service_worker_client = fetch.reserved_client;
+                        fetch.response
+                    }
+                    Err(error) => break Err(error),
+                }
+            } else {
+                None
+            };
+            let response = if self.buffered && service_worker_response.is_none() {
+                request
+                    .fetch_buffered()
+                    .await
+                    .with_context(|| format!("failed to fetch page `{}`", request.request().url))
+                    .map(FetchNavigationResponse::Captured)
+            } else {
+                let response = if let Some(response) = service_worker_response {
+                    request
+                        .resource_loader()
+                        .note_service_worker_response_ready()
+                        .and_then(|()| {
+                            moli_core::runtime::streaming_raw_response_from_navigation_response(
+                                response,
                             )
                         })
-                        .map_err(|error| error.context("failed to read page body from stream"))
+                        .map(NetworkFetchResult::without_request_observation)
+                } else {
+                    request.fetch_raw_stream().await
+                };
+                match response
+                    .with_context(|| format!("failed to fetch page `{}`", request.request().url))
+                {
+                    Ok(response)
+                        if moli_web_mime::response_headers_indicate_attachment_download(
+                            &response.response().headers,
+                        ) || (self.handle_auth
+                            && matches!(response.response().status, 401 | 407)
+                            && extract_auth_challenge(&response.response().headers).is_some()) =>
+                    {
+                        let (response, journal) = response.into_parts_with_observation_journal();
+                        response
+                            .into_materialized_raw_response()
+                            .await
+                            .map(|response| {
+                                FetchNavigationResponse::Captured(
+                                    NetworkFetchResult::with_observation_journal(response, journal),
+                                )
+                            })
+                            .map_err(|error| error.context("failed to read page body from stream"))
+                    }
+                    response => response.map(FetchNavigationResponse::Streaming),
                 }
-                response => response.map(FetchNavigationResponse::Streaming),
-            },
-            Err(error) => Err(error),
+            };
+            let head = match &response {
+                Ok(FetchNavigationResponse::Streaming(response)) => {
+                    Some(response.response().head())
+                }
+                Ok(FetchNavigationResponse::Captured(response)) => Some(response.response().head()),
+                Err(_) => None,
+            };
+            match head.as_ref().map(|head| request.follow_redirect(head)) {
+                Some(Ok(Some(_))) => {}
+                Some(Err(error)) => break Err(error),
+                _ => break response,
+            }
+            let journal = match response.expect("redirect has a response") {
+                FetchNavigationResponse::Streaming(response) => {
+                    response.into_parts_with_observation_journal().1
+                }
+                FetchNavigationResponse::Captured(response) => {
+                    response.into_parts_with_observation_journal().1
+                }
+            };
+            self.prior_journal = Some(navigation::merge_network_observations(
+                self.prior_journal.take(),
+                journal,
+            ));
+            let hop = request.request();
+            self.pending.navigation.requested_url = hop.url.clone();
+            self.pending.navigation.request_method = hop.method.clone();
+            self.pending.navigation.request_headers = hop.request_headers.clone();
+            self.pending.navigation.request_body_bytes = hop.body.clone();
+            self.pending.navigation.request_body = hop
+                .body
+                .as_ref()
+                .map(|body| String::from_utf8_lossy(body).into_owned());
+            self.pending.navigation.redirect_chain = hop.redirect_chain().to_vec();
+            self.pending.navigation.redirect_headers = None;
+            let pending = self.pending;
+            let executor = request.clone();
+            let prior = self.prior_journal.clone().unwrap_or_default();
+            let redirected = driver.with_state(move |state| {
+                state.prepare_fetch_navigation_redirect(pending, executor, prior)
+            });
+            match redirected {
+                Ok(RedirectNavigation::Continue(pending)) => self.pending = *pending,
+                Ok(RedirectNavigation::Paused(plan)) => {
+                    self.transferred.mark_transferred();
+                    return PreparedFetchNavigationResponse::Transferred(*plan);
+                }
+                Ok(RedirectNavigation::Superseded) => {
+                    return PreparedFetchNavigationResponse::Superseded;
+                }
+                Err(error) => return PreparedFetchNavigationResponse::Result(Err(error)),
+            }
         };
         let result = driver.with_state(move |state| {
             let result = state.accept_fetch_navigation_response(
@@ -219,7 +348,12 @@ pub(crate) fn accept_navigation_response(
                         ),
                         journal,
                         network::MainDocumentBodyProgressSource::default(),
-                    ),
+                    )
+                    .map(|response| {
+                        response.with_service_worker_client(
+                            pending.reserved_service_worker_client.take(),
+                        )
+                    }),
                 ));
             }
         }
@@ -248,7 +382,12 @@ pub(crate) fn accept_navigation_response(
                             network::MainDocumentBodyProgressSource::default(),
                             None,
                             Vec::new(),
-                        ),
+                        )
+                        .map(|response| {
+                            response.with_service_worker_client(
+                                pending.reserved_service_worker_client.take(),
+                            )
+                        }),
                     ));
                 };
                 let (response, network_observation_journal) =
@@ -257,6 +396,9 @@ pub(crate) fn accept_navigation_response(
                     conn,
                     sender,
                     PendingStreamingDocumentResponseNavigation {
+                        reserved_service_worker_client: pending
+                            .reserved_service_worker_client
+                            .take(),
                         document_navigation_token: pending
                             .document_navigation_token
                             .expect("request token"),
@@ -272,4 +414,104 @@ pub(crate) fn accept_navigation_response(
         }
     }
     PreparedFetchNavigationResponse::Transferred(output.into_plan())
+}
+
+pub(crate) enum RedirectNavigation {
+    Continue(Box<PendingFetchNavigation>),
+    Paused(Box<crate::domains::command_output::CommandOutputPlan>),
+    Superseded,
+}
+
+pub(crate) fn prepare_navigation_redirect(
+    conn: &mut CdpConnection,
+    mut pending: PendingFetchNavigation,
+    executor: moli_core::network::NavigationInterception,
+    prior: NetworkObservationJournal,
+) -> RedirectNavigation {
+    if !pending
+        .document_navigation_token
+        .as_ref()
+        .is_some_and(|token| {
+            conn.accepts_pending_document_navigation_for_owner(&pending.navigation.owner, token)
+        })
+    {
+        return RedirectNavigation::Superseded;
+    }
+    let Some((id, _)) =
+        conn.allocate_pending_subresource_fetch_request_ids_for_owner(&pending.navigation.owner)
+    else {
+        return RedirectNavigation::Superseded;
+    };
+    pending.fetch_request_id = id;
+    // The same selector and per-handler hop IDs serve root and child Documents.
+    let paused = super::prepare_navigation_request_pause(conn, &mut pending);
+    if !paused {
+        return RedirectNavigation::Continue(Box::new(pending));
+    }
+    pending.interception = Some((executor, prior));
+    let owner = pending.navigation.owner.clone();
+    let event = super::request_paused_background_event(
+        pending.interception_session_id.as_deref(),
+        &pending,
+    );
+    let mut plan = crate::domains::command_output::CommandOutputPlan::default();
+    append_redirect_request_events(conn, &mut plan, &mut pending);
+    if conn
+        .register_pending_fetch_navigation_request_for_owner(&owner, pending)
+        .is_none()
+    {
+        return RedirectNavigation::Superseded;
+    }
+    plan.push_background_event(event);
+    RedirectNavigation::Paused(Box::new(plan))
+}
+
+fn append_redirect_request_events(
+    conn: &CdpConnection,
+    plan: &mut crate::domains::command_output::CommandOutputPlan,
+    pending: &mut PendingFetchNavigation,
+) {
+    let nav = &pending.navigation;
+    let Some(network_id) = &nav.request_id else {
+        return;
+    };
+    let info = moli_core::page::PendingSubresourceFetchInfo {
+        internal_id: 0,
+        network_request_handle: None,
+        frame_id: Some(nav.frame_id.clone()),
+        document_url: nav.requested_url.clone(),
+        url: nav.requested_url.clone(),
+        websocket_socket_id: None,
+        method: nav.request_method.clone(),
+        request_headers: nav.request_headers.clone(),
+        request_body: nav.request_body.clone(),
+        request_body_bytes: nav.clone_request_body_bytes(),
+        resource_type: moli_core::page::SubresourceResourceType::Document,
+        request_cookie_report: pending.request_cookie_report.clone(),
+    };
+    for redirect in nav.redirect_chain.iter().skip(nav.announced_redirects) {
+        let mut info = info.clone();
+        info.url = redirect.to_url.clone();
+        let output = network::TargetSubresourceFetchPauseNetworkOutput::from_pending_fetch_info(
+            network_id.clone(),
+            nav.frame_id.clone(),
+            nav.loader_id.clone(),
+            crate::conn::monotonic_timestamp_seconds(),
+            nav.requested_url.clone(),
+            &info,
+        )
+        .with_child_document(Some(moli_core::page::ChildDocumentFetchRequest {
+            loader_id: nav.loader_id.clone(),
+            redirect: Some(redirect.clone().into()),
+        }));
+        for session in conn.network_event_session_ids_for_owner(&nav.owner) {
+            plan.extend_background_events(
+                network::fetch_subresource_initial_request_network_events(
+                    session.as_deref(),
+                    &output,
+                ),
+            );
+        }
+    }
+    pending.navigation.announced_redirects = pending.navigation.redirect_chain.len();
 }

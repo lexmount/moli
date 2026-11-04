@@ -1904,6 +1904,7 @@ fn materialized_navigation_test_state(
         request_id: Some(loader_id.to_owned()),
         loader_id: loader_id.to_owned(),
         request_announced: true,
+        announced_redirects: 0,
         requested_url: Url::parse(requested_url).unwrap(),
         request_method: "GET".to_owned(),
         request_body: None,

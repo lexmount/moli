@@ -1212,6 +1212,10 @@ async fn disable_clears_fetch_state() {
     bc.active_page_target_mut()
         .fetch_owner
         .register_pending_fetch_navigation_request(PendingFetchNavigation {
+            reserved_service_worker_client: None,
+            interception: None,
+            remaining_request_stages: Vec::new(),
+            redirected_request_id: None,
             auth_retry_budget: Default::default(),
             fetch_request_id: "INT-1".to_owned(),
             interception_session_id: Some("SID-1".to_owned()),
@@ -1235,6 +1239,7 @@ async fn disable_clears_fetch_state() {
                 request_id: Some("REQ-1".to_owned()),
                 loader_id: "LID-0000000001".to_owned(),
                 request_announced: false,
+                announced_redirects: 0,
                 requested_url: Url::parse("http://example.test/auth").unwrap(),
                 request_method: "POST".to_owned(),
                 request_body: Some("payload".to_owned()),
@@ -1282,6 +1287,7 @@ async fn disable_clears_fetch_state() {
                     request_id: Some("REQ-1".to_owned()),
                     loader_id: "LID-0000000001".to_owned(),
                     request_announced: false,
+                    announced_redirects: 0,
                     requested_url: Url::parse("http://example.test/auth").unwrap(),
                     request_method: "POST".to_owned(),
                     request_body: Some("payload".to_owned()),
@@ -1530,6 +1536,7 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                     request_id: Some("REQ-8".to_owned()),
                     loader_id: "LID-0000000001".to_owned(),
                     request_announced: false,
+                    announced_redirects: 0,
                     requested_url: Url::parse("http://example.test/auth").unwrap(),
                     request_method: "GET".to_owned(),
                     request_body: None,
@@ -1614,6 +1621,7 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                     request_id: Some("REQ-9".to_owned()),
                     loader_id: "LID-0000000001".to_owned(),
                     request_announced: false,
+                    announced_redirects: 0,
                     requested_url: Url::parse("http://example.test/auth").unwrap(),
                     request_method: "GET".to_owned(),
                     request_body: None,
@@ -1774,6 +1782,10 @@ fn extract_auth_challenge_preserves_quoted_commas_in_realm() {
 #[test]
 fn emit_auth_required_preserves_request_headers_and_post_data_shape() {
     let pending = PendingFetchNavigation {
+        reserved_service_worker_client: None,
+        interception: None,
+        remaining_request_stages: Vec::new(),
+        redirected_request_id: None,
         auth_retry_budget: Default::default(),
         fetch_request_id: "INT-11".to_owned(),
         interception_session_id: Some("SID-1".to_owned()),
@@ -1795,6 +1807,7 @@ fn emit_auth_required_preserves_request_headers_and_post_data_shape() {
             request_id: Some("REQ-11".to_owned()),
             loader_id: "LID-0000000001".to_owned(),
             request_announced: false,
+            announced_redirects: 0,
             requested_url: Url::parse("http://example.test/auth").unwrap(),
             request_method: "POST".to_owned(),
             request_body: Some("payload".to_owned()),
@@ -1867,6 +1880,7 @@ async fn untracked_fetch_actions_acknowledge_the_handler_and_abort_only_the_orig
             request_id: Some("REQ-retired".to_owned()),
             loader_id: "LID-retired".to_owned(),
             request_announced: false,
+            announced_redirects: 0,
             requested_url: Url::parse("https://retired.example/document").unwrap(),
             request_method: "GET".to_owned(),
             request_body: None,
@@ -1913,6 +1927,10 @@ async fn untracked_fetch_actions_acknowledge_the_handler_and_abort_only_the_orig
                 conn.register_pending_fetch_navigation_request_for_owner(
                     &owner,
                     PendingFetchNavigation {
+                        reserved_service_worker_client: None,
+                        interception: None,
+                        remaining_request_stages: Vec::new(),
+                        redirected_request_id: None,
                         auth_retry_budget: Default::default(),
                         fetch_request_id: "FETCH-retired".to_owned(),
                         interception_session_id: Some("SID-handler".to_owned()),

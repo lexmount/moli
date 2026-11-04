@@ -374,6 +374,7 @@ pub struct NavigationDispatchState {
     pub request_id: Option<String>,
     pub loader_id: String,
     pub request_announced: bool,
+    pub(crate) announced_redirects: usize,
     pub requested_url: Url,
     pub request_method: String,
     /// Text projection used by CDP request events and Fetch interception.

@@ -197,6 +197,10 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
         conn.register_pending_fetch_navigation_request_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-background"),
             PendingFetchNavigation {
+                reserved_service_worker_client: None,
+                interception: None,
+                remaining_request_stages: Vec::new(),
+                redirected_request_id: None,
                 auth_retry_budget: Default::default(),
                 fetch_request_id: "FETCH-background".to_owned(),
                 interception_session_id: Some("bidi-session-1".to_owned()),
@@ -216,6 +220,7 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
                     request_id: Some("NETWORK-background".to_owned()),
                     loader_id: "LOADER-background".to_owned(),
                     request_announced: false,
+                    announced_redirects: 0,
                     requested_url: url::Url::parse("https://example.test/background").unwrap(),
                     request_method: "GET".to_owned(),
                     request_body: None,

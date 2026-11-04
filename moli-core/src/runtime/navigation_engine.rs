@@ -74,28 +74,6 @@ pub enum CommittedDocumentResourceSource {
     Synthetic,
 }
 
-fn streaming_raw_response_from_navigation_response(
-    response: NavigationResponse,
-) -> Result<StreamingRawResponse> {
-    let head = response.head();
-    let body = response.clone_body_bytes();
-    let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
-    if !body.is_empty() {
-        body_tx
-            .send(body)
-            .map_err(|_| anyhow!("failed to enqueue service worker main resource body"))?;
-    }
-    drop(body_tx);
-    let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
-    let _ = completion_tx.send(Ok(()));
-    Ok(StreamingRawResponse::new_with_head(
-        head,
-        body_rx,
-        FetchCancelHandle::new(),
-        completion_rx,
-    ))
-}
-
 #[derive(Clone)]
 pub struct NavigationResourceStorageHandles {
     cookie_store: SharedBrowserCookieStore,
@@ -1207,10 +1185,13 @@ impl NavigationEngine {
             request.url.clone(),
             FetchCancelHandle::new(),
         )?;
-        navigation_loader
-            .fetch_with_network_metadata(request)
-            .await
-            .map(|result| result.map_response(NavigationResponse::from))
+        moli_renderer_v8::network::navigation::NavigationInterception::new(
+            navigation_loader,
+            request,
+        )
+        .fetch_text()
+        .await
+        .map(|result| result.map_response(NavigationResponse::from))
     }
 
     pub async fn fetch_navigation_response_with_storage_async(
@@ -1301,15 +1282,18 @@ impl NavigationEngine {
             let final_url = response.final_url.clone();
             return Ok(NavigationStreamingRawResponse {
                 fetch_result: NetworkFetchResult::without_request_observation(
-                    streaming_raw_response_from_navigation_response(response)?,
+                    super::streaming_raw_response_from_navigation_response(response)?,
                 ),
                 reserved_service_worker_client: reserved_client,
                 document_fetch_context_seed: navigation_loader.commit(final_url)?,
             });
         }
-        let fetch_result = navigation_loader
-            .fetch_raw_stream_with_network_metadata(request)
-            .await?;
+        let fetch_result = moli_renderer_v8::network::navigation::NavigationInterception::new(
+            navigation_loader.clone(),
+            request,
+        )
+        .fetch_raw_stream()
+        .await?;
         let final_url = fetch_result.response().final_url.clone();
         Ok(NavigationStreamingRawResponse {
             fetch_result,

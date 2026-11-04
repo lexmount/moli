@@ -10,6 +10,8 @@ mod document_navigation;
 mod document_request;
 mod helpers;
 mod navigation;
+mod navigation_interception;
+pub(crate) use navigation_interception::prepare_navigation_request_pause;
 mod params;
 mod patterns;
 mod state;
@@ -43,7 +45,8 @@ pub(crate) use crate::conn::PendingFetchAuthNavigation;
 #[cfg(test)]
 pub(crate) use crate::conn::PendingFetchNavigation;
 pub(crate) use document_request::{
-    FetchNavigationResponse, PreparedFetchNavigationResponse, accept_navigation_response,
+    FetchNavigationResponse, PreparedFetchNavigationResponse, RedirectNavigation,
+    accept_navigation_response, prepare_navigation_redirect,
 };
 #[cfg(test)]
 pub(crate) use helpers::encode_basic_auth;

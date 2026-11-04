@@ -207,19 +207,24 @@ impl JsContextHost {
         let fetch = ChildDocumentFetch {
             target,
             network_attribution,
-            navigation_url: target_url,
             network_info: None,
-            intercept_redirects: false,
             redirect: None,
-            request: child_document_load_request(bootstrap).map(|request| {
-                configure_child_document_navigation_request(
-                    request,
-                    &initiator_url,
-                    &browser_context,
-                )
-                .with_page_network_policy()
-                .with_network_partition_key(network_partition_key)
-            }),
+            request: child_document_load_request(bootstrap)
+                .map(|request| {
+                    configure_child_document_navigation_request(
+                        request,
+                        &initiator_url,
+                        &browser_context,
+                    )
+                    .with_page_network_policy()
+                    .with_network_partition_key(network_partition_key)
+                })
+                .map(|request| {
+                    crate::network::navigation::NavigationInterception::new(
+                        resource_loader.clone(),
+                        request,
+                    )
+                }),
             service_worker_client_id,
             browser_context_runtime,
             resource_loader,
@@ -801,9 +806,11 @@ impl JsContextHost {
         initiating_loader: &crate::network::context::DocumentResourceLoader,
         mut fetch: ChildDocumentFetch,
     ) -> Option<u64> {
-        fetch.intercept_redirects = false;
+        if let Some(request) = fetch.request.as_mut() {
+            request.set_interception(false);
+        }
         let Some(request) = fetch.request.as_ref().filter(|request| {
-            matches!(request.url.scheme(), "http" | "https")
+            matches!(request.request().url.scheme(), "http" | "https")
                 && self.should_intercept_subresource(SubresourceResourceType::Document)
         }) else {
             fetch.start();
@@ -827,16 +834,17 @@ impl JsContextHost {
             internal_id: 0,
             network_request_handle: None,
             frame_id: Some(fetch.network_attribution.frame_id().to_owned()),
-            document_url: request.url.clone(),
-            url: request.url.clone(),
+            document_url: request.request().url.clone(),
+            url: request.request().url.clone(),
             websocket_socket_id: None,
-            method: request.method.clone(),
-            request_headers: request.request_headers.clone(),
+            method: request.request().method.clone(),
+            request_headers: request.request().request_headers.clone(),
             request_body: request
+                .request()
                 .body
                 .as_ref()
                 .map(|body| String::from_utf8_lossy(body).into_owned()),
-            request_body_bytes: request.body.clone(),
+            request_body_bytes: request.request().body.clone(),
             resource_type: SubresourceResourceType::Document,
             request_cookie_report: None,
         };
@@ -862,12 +870,13 @@ impl JsContextHost {
         headers: moli_fetch::RequestHeaders,
         body: Option<bytes::Bytes>,
     ) {
-        if let Some(mut request) = fetch.request.take() {
+        if let Some(interception) = fetch.request.as_mut() {
+            let request = interception.request_mut();
             request.url = url;
             request.method = method;
             request.request_headers = headers;
             request.body = body;
-            request = request.with_redirect_headers(redirect_headers);
+            *request = request.clone().with_redirect_headers(redirect_headers);
             if let Some(info) = fetch.network_info.as_mut() {
                 info.url = request.url.clone();
                 info.method = request.method.clone();
@@ -878,7 +887,6 @@ impl JsContextHost {
                     .as_ref()
                     .map(|body| String::from_utf8_lossy(body).into_owned());
             }
-            fetch.request = Some(request);
         }
         // A superseded navigation has already settled without this request.
         if self
@@ -942,10 +950,8 @@ const UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP: &str =
 pub(crate) struct ChildDocumentFetch {
     target: ChildDocumentNavigationFetchTarget,
     network_attribution: ChildDocumentLoadNetworkAttribution,
-    request: Option<moli_fetch::Request>,
-    navigation_url: url::Url,
+    request: Option<crate::network::navigation::NavigationInterception>,
     network_info: Option<PendingSubresourceFetchInfo>,
-    intercept_redirects: bool,
     redirect: Option<crate::protocol_types::NavigationRedirect>,
     service_worker_client_id: Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     browser_context_runtime: crate::runtime::RendererBrowserContextRuntime,
@@ -959,7 +965,7 @@ impl std::fmt::Debug for ChildDocumentFetch {
         formatter
             .debug_struct("ChildDocumentFetch")
             .field("target", &self.target)
-            .field("navigation_url", &self.navigation_url)
+            .field("request", &self.request)
             .finish_non_exhaustive()
     }
 }
@@ -967,7 +973,9 @@ impl std::fmt::Debug for ChildDocumentFetch {
 impl ChildDocumentFetch {
     pub(crate) fn set_network_info(&mut self, info: PendingSubresourceFetchInfo) {
         self.network_info = Some(info);
-        self.intercept_redirects = true;
+        if let Some(request) = self.request.as_mut() {
+            request.set_interception(true);
+        }
     }
 
     pub(crate) fn take_request_metadata(
@@ -997,7 +1005,7 @@ impl ChildDocumentFetch {
                 .browser_context_runtime
                 .fetch_service_worker_child_main_resource_for_reserved_client(
                     client_id,
-                    &request,
+                    request.request(),
                     self.resource_loader.request_client(),
                     self.resource_loader.task_runner(),
                     self.completion_tx.clone(),
@@ -1011,14 +1019,8 @@ impl ChildDocumentFetch {
             let (head, body) = response.into_body();
             return self.accept_response(request, head, body);
         }
-        let transport_request = if self.intercept_redirects {
-            request.clone().with_single_hop()
-        } else {
-            request.clone()
-        };
-        let response = self
-            .resource_loader
-            .fetch_raw(transport_request)
+        let response = request
+            .fetch_raw()
             .await
             .map_err(|error| error.to_string())?;
         let (head, body) = response.into_body();
@@ -1027,58 +1029,23 @@ impl ChildDocumentFetch {
 
     fn accept_response(
         &mut self,
-        mut request: moli_fetch::Request,
+        mut request: crate::network::navigation::NavigationInterception,
         head: moli_fetch::ResponseHead,
         body: moli_fetch::ResponseBody,
     ) -> Result<Option<ChildDocumentLoadOutcome>, String> {
-        if self.intercept_redirects
-            && let Some(next_url) = crate::network_host::next_redirect_url(
-                &head.final_url,
-                head.status,
-                &head.headers,
-                request.redirect_count(),
-            )?
+        if let Some(redirect) = request
+            .follow_redirect(&head)
+            .map_err(|error| error.to_string())?
         {
-            if !matches!(next_url.scheme(), "http" | "https") {
-                return Err(format!(
-                    "child document redirect to unsupported URL {next_url}"
-                ));
-            }
-            let redirect = moli_fetch::RedirectInfo {
-                source: moli_fetch::RedirectSource::Network,
-                from_url: head.final_url.clone(),
-                to_url: next_url.clone(),
-                status: head.status,
-                headers: head.headers.clone(),
-                network_extra_info_available: false,
-                request_extra_info: None,
-                response_extra_info: None,
-                redirect_has_extra_info: false,
-                request_cookie_report: head.request_cookie_report,
-                cookie_set_reports: head.cookie_set_reports,
-                from_cache: head.from_cache,
-                negotiated_http_version: head.negotiated_http_version,
-            };
-            request.update_referrer_for_redirect(&head.final_url, &head.headers);
-            request
-                .follow_redirect(redirect.clone())
-                .map_err(|error| error.to_string())?;
-            self.resource_loader
-                .prepare_redirect()
-                .map_err(|error| error.to_string())?;
-            self.navigation_url = next_url;
             self.redirect = Some(redirect.into());
             self.request = Some(request);
             return Ok(None);
         }
-        let navigation_url = if !self.intercept_redirects && head.redirected {
-            head.final_url.clone()
-        } else {
-            self.navigation_url.clone()
-        };
+        let navigation_url = request.navigation_url(&head);
+        let request = request.request();
         child_document_load_outcome_from_response(
             request.url.as_str().to_owned(),
-            request.method,
+            request.method.clone(),
             request.request_headers.to_byte_strings(),
             head,
             body,
@@ -1300,11 +1267,12 @@ mod tests {
                     None,
                     "retired-loader".to_owned(),
                 ),
-                navigation_url: url.clone(),
                 network_info: None,
-                intercept_redirects: false,
                 redirect: None,
-                request: Some(moli_fetch::Request::get_with_url(url)),
+                request: Some(crate::network::navigation::NavigationInterception::new(
+                    resource_loader.clone(),
+                    moli_fetch::Request::get_with_url(url),
+                )),
                 service_worker_client_id: None,
                 browser_context_runtime: host.browser_context_runtime(),
                 resource_loader: resource_loader.clone(),

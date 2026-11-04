@@ -143,7 +143,7 @@ pub(super) fn navigation_response_stage_auth_can_stream(
 pub(super) fn pause_streaming_response_stage_navigation_into_buffer(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
-    pending: PendingFetchNavigation,
+    mut pending: PendingFetchNavigation,
     response: NetworkFetchResult<StreamingRawResponse>,
 ) {
     let response_head = response.response();
@@ -176,19 +176,23 @@ pub(super) fn pause_streaming_response_stage_navigation_into_buffer(
     // here would wait on the old document's debugger pause before we could even
     // publish Fetch.requestPaused. Continue/fulfill owns document replacement.
     let (response, network_observation_journal) = response.into_parts_with_observation_journal();
-    conn.register_pending_fetch_response_navigation_for_owner(
+    conn.register_pending_fetch_response_transfer_for_owner(
         &pending.navigation.owner,
         pending.fetch_request_id.clone(),
-        pending.document_navigation_token.clone(),
-        pending.navigation.clone(),
-        DocumentBodySource::StreamingRaw {
-            requested_url: pending.navigation.requested_url.clone(),
-            request_method: pending.navigation.request_method.clone(),
-            request_headers: pending.navigation.request_headers.clone(),
-            response,
-            network_observation_journal,
-            body_progress_source,
-        },
+        crate::conn::PausedDocumentTransfer::pending(
+            pending.fetch_request_id.clone(),
+            pending.document_navigation_token.clone(),
+            pending.navigation.clone(),
+            DocumentBodySource::StreamingRaw {
+                requested_url: pending.navigation.requested_url.clone(),
+                request_method: pending.navigation.request_method.clone(),
+                request_headers: pending.navigation.request_headers.clone(),
+                response,
+                network_observation_journal,
+                body_progress_source,
+            },
+        )
+        .with_service_worker_client(pending.reserved_service_worker_client.take()),
     );
     out.extend_background_events_after_messages([navigation_response_stage_request_paused_event(
         pending.interception_session_id.as_deref(),
@@ -244,7 +248,7 @@ pub(super) fn pause_data_url_response_stage_navigation_into_buffer(
 pub(super) fn pause_buffered_raw_response_stage_navigation_into_buffer(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
-    pending: PendingFetchNavigation,
+    mut pending: PendingFetchNavigation,
     response: NetworkFetchResult<RawResponse>,
 ) {
     let response_status = response.response().status;
@@ -252,18 +256,22 @@ pub(super) fn pause_buffered_raw_response_stage_navigation_into_buffer(
     let response_headers = response.response().headers.clone();
     let request_cookie_report = response.response().request_cookie_report.clone();
     let (response, network_observation_journal) = response.into_parts_with_observation_journal();
-    conn.register_pending_fetch_response_navigation_for_owner(
+    conn.register_pending_fetch_response_transfer_for_owner(
         &pending.navigation.owner,
         pending.fetch_request_id.clone(),
-        pending.document_navigation_token.clone(),
-        pending.navigation.clone(),
-        DocumentBodySource::BufferedRaw {
-            requested_url: pending.navigation.requested_url.clone(),
-            request_method: pending.navigation.request_method.clone(),
-            request_headers: pending.navigation.request_headers.clone(),
-            response,
-            network_observation_journal,
-        },
+        crate::conn::PausedDocumentTransfer::pending(
+            pending.fetch_request_id.clone(),
+            pending.document_navigation_token.clone(),
+            pending.navigation.clone(),
+            DocumentBodySource::BufferedRaw {
+                requested_url: pending.navigation.requested_url.clone(),
+                request_method: pending.navigation.request_method.clone(),
+                request_headers: pending.navigation.request_headers.clone(),
+                response,
+                network_observation_journal,
+            },
+        )
+        .with_service_worker_client(pending.reserved_service_worker_client.take()),
     );
     out.extend_background_events_after_messages([navigation_response_stage_request_paused_event(
         pending.interception_session_id.as_deref(),
@@ -274,6 +282,15 @@ pub(super) fn pause_buffered_raw_response_stage_navigation_into_buffer(
         response_status,
         &response_headers,
     )]);
+}
+
+pub(super) fn merge_network_observations(
+    prior: Option<NetworkObservationJournal>,
+    current: NetworkObservationJournal,
+) -> NetworkObservationJournal {
+    let mut journal = prior.unwrap_or_default();
+    journal.append(current);
+    journal
 }
 
 pub(super) fn append_prior_network_observations<R>(

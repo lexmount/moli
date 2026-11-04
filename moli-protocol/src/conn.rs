@@ -683,7 +683,7 @@ pub(crate) use runtime_load::{
     BackgroundNavigationLoadJob, CapturedPageReplacement, CommittedNavigationPage,
     CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
     InitialDocumentPageInstallResult, InitialDocumentPageOwner, PendingInitialDocumentPageBuild,
-    PreparedCapturedNavigationResponse, PreparedNavigationLoadError, PreparedNavigationRequest,
+    PreparedCapturedNavigationResponse, PreparedNavigationLoadError,
     PreparedStreamingNavigationResponse, ResponseCommitReady, StablePageNavigationCommitTarget,
 };
 use scheduler_hooks::CdpSchedulerHooks;
@@ -4271,3 +4271,5 @@ pub struct PermissionOverride {
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use state::TargetFetchSubresourceInterceptionSnapshot;

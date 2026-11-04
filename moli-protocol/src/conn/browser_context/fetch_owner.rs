@@ -576,25 +576,6 @@ impl CdpConnection {
             })
     }
 
-    pub(crate) fn register_pending_fetch_response_navigation_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        request_id: String,
-        document_navigation_token: Option<crate::conn::DocumentNavigationToken>,
-        navigation: crate::conn::NavigationDispatchState,
-        body: crate::conn::DocumentBodySource,
-    ) -> bool {
-        self.target_session_owner_mut_for_owner(owner)
-            .is_some_and(|mut owner| {
-                owner.register_pending_fetch_response_navigation(
-                    request_id,
-                    document_navigation_token,
-                    navigation,
-                    body,
-                )
-            })
-    }
-
     pub(crate) fn take_fetch_response_transfer_for_cancellation_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -1430,34 +1411,6 @@ impl TargetSessionOwnerMut<'_> {
         true
     }
 
-    fn register_pending_fetch_response_navigation(
-        &mut self,
-        request_id: String,
-        document_navigation_token: Option<crate::conn::DocumentNavigationToken>,
-        navigation: crate::conn::NavigationDispatchState,
-        body: crate::conn::DocumentBodySource,
-    ) -> bool {
-        if let Some(token) = document_navigation_token.as_ref()
-            && let crate::conn::DocumentBodySource::StreamingRaw { response, .. } = &body
-        {
-            // Navigation cancellation also covers a response already handed
-            // to a body reader or a continuation outside the Fetch owner.
-            self.runtime_slot_mut()
-                .page_slot_mut()
-                .add_document_navigation_cancellation(token, response.cancellation_handle());
-        }
-        let Some(mut owner) = self.pending_fetch_owner_mut() else {
-            return false;
-        };
-        owner.register_pending_fetch_response_navigation(
-            request_id,
-            document_navigation_token,
-            navigation,
-            body,
-        );
-        true
-    }
-
     fn take_fetch_response_transfer_for_cancellation(
         &mut self,
         request_id: &str,
@@ -1479,6 +1432,13 @@ impl TargetSessionOwnerMut<'_> {
         request_id: String,
         transfer: PausedDocumentTransfer,
     ) -> bool {
+        if let Some(token) = transfer.navigation_token()
+            && let Some(cancellation) = transfer.cancellation_handle()
+        {
+            self.runtime_slot_mut()
+                .page_slot_mut()
+                .add_document_navigation_cancellation(token, cancellation);
+        }
         let Some(mut owner) = self.pending_fetch_owner_mut() else {
             return false;
         };

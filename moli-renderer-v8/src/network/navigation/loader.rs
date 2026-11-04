@@ -277,6 +277,30 @@ impl NavigationResourceLoader {
         Ok(())
     }
 
+    pub async fn fetch_raw_with_network_metadata(
+        &self,
+        request: Request,
+    ) -> Result<NetworkFetchResult<RawResponse>> {
+        self.begin_fetch()?;
+        let result = self
+            .request_client
+            .fetch_raw_with_cancel_and_network_metadata(
+                request.with_page_network_policy(),
+                self.inner.cancel.clone(),
+            )
+            .await;
+        match result {
+            Ok(response) => {
+                self.finish_response_ready()?;
+                Ok(response)
+            }
+            Err(error) => {
+                self.finish_failed();
+                Err(error)
+            }
+        }
+    }
+
     pub async fn fetch_raw_stream(&self, request: Request) -> Result<StreamingRawResponse> {
         self.fetch_raw_stream_with_network_metadata(request)
             .await
@@ -288,16 +312,30 @@ impl NavigationResourceLoader {
         request: Request,
     ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
         self.begin_fetch()?;
+        let cancellation = if request.transport_follows_redirects() {
+            self.inner.cancel.clone()
+        } else {
+            self.inner.cancel.child_for_subrequest()
+        };
         match self
             .request_client
             .fetch_raw_stream_with_cancel_and_network_metadata(
                 request.with_page_network_policy(),
-                self.inner.cancel.clone(),
+                cancellation.clone(),
             )
             .await
         {
             Ok(response) => {
                 self.finish_response_ready()?;
+                if !matches!(response.response().status, 301 | 302 | 303 | 307 | 308)
+                    || !response
+                        .response()
+                        .headers
+                        .iter()
+                        .any(|(name, _)| name.eq_ignore_ascii_case("location"))
+                {
+                    self.inner.cancel.adopt_response_progress(&cancellation);
+                }
                 Ok(response)
             }
             Err(error) => {

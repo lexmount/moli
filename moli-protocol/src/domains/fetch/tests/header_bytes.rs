@@ -366,6 +366,34 @@ async fn navigation_header_override_expires_on_redirect_before_auth_retry() {
     )
     .await;
     ctx.expect_result(70302, json!({}), Some("SID-1"));
+    crate::testing::wait_until_scheduler_message(&mut ctx, "redirect request pause", |message| {
+        message["method"] == "Fetch.requestPaused"
+            && message["sessionId"] == "SID-1"
+            && message["params"]["request"]["url"] == format!("http://{addr}/protected")
+    })
+    .await;
+    let redirected = ctx.take_first_matching("redirect request pause", |message| {
+        message["method"] == "Fetch.requestPaused"
+            && message["params"]["request"]["url"] == format!("http://{addr}/protected")
+    });
+    assert_eq!(
+        redirected["params"]["request"]["url"],
+        format!("http://{addr}/protected")
+    );
+    assert_eq!(
+        redirected["params"]["redirectedRequestId"],
+        paused["params"]["requestId"]
+    );
+    assert_ne!(
+        redirected["params"]["requestId"],
+        paused["params"]["requestId"]
+    );
+    ctx.process_async(
+        json!({"id":70304,"sessionId":"SID-1","method":"Fetch.continueRequest",
+        "params":{"requestId":redirected["params"]["requestId"]}}),
+    )
+    .await;
+    ctx.expect_result(70304, json!({}), Some("SID-1"));
     wait_until_message(&mut ctx, "SID-1", "redirected navigation auth", |message| {
         message["method"] == "Fetch.authRequired"
     })

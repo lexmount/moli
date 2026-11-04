@@ -193,35 +193,17 @@ fn prepare_subresource_fetch_pause_sources(
         // including hops that do not match that handler's URL patterns.
         let mut child_fetch_ids = HashMap::new();
         if let Some(document) = child_document.as_ref() {
-            for (index, fetch_session_id) in fetch_snapshot
-                .fetch_session_ids(session_id)
-                .into_iter()
-                .enumerate()
-            {
-                let fetch_id = if index == 0 {
-                    request_id.clone()
-                } else {
-                    let Some((id, _)) =
-                        conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
-                    else {
-                        return network::NetworkPreparedOutputs::from_subresource_fetch_pauses_and_continuations(outputs, automatic);
-                    };
-                    id
-                };
-                let previous = conn
-                    .runtime_session_owner_slot_mut_for_owner(owner)
-                    .and_then(|slot| {
-                        slot.replace_child_document_fetch_request_id(
-                            network_request_id.clone(),
-                            fetch_session_id.clone(),
-                            fetch_id.clone(),
-                        )
-                    });
-                child_fetch_ids.insert(
-                    fetch_session_id,
-                    (fetch_id, previous.filter(|_| document.redirect.is_some())),
-                );
-            }
+            let Some(ids) = super::navigation_interception::navigation_hop_ids(
+                conn,
+                owner,
+                &fetch_snapshot,
+                &network_request_id,
+                &request_id,
+                document.redirect.is_some(),
+            ) else {
+                return network::NetworkPreparedOutputs::from_subresource_fetch_pauses_and_continuations(outputs, automatic);
+            };
+            child_fetch_ids = ids;
         }
         if request_stage_pause_sessions.is_empty() {
             if child_document.is_some() {

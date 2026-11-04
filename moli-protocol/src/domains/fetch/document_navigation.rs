@@ -498,17 +498,23 @@ pub(super) fn start_fulfill(
             response_code,
             response_headers,
             decoded_body,
-        } => conn.prepare_synthetic_navigation_response(
-            Some(&token),
-            &navigation,
-            navigation.requested_url.clone(),
-            response_code,
-            response_headers,
-            crate::conn::CapturedBody::from_optional_renderer_synthetic_response_body(decoded_body),
-            pending.request_cookie_report,
-            Default::default(),
-            network::MainDocumentBodyProgressSource::default(),
-        ),
+        } => {
+            let client = pending.reserved_service_worker_client;
+            conn.prepare_synthetic_navigation_response(
+                Some(&token),
+                &navigation,
+                navigation.requested_url.clone(),
+                response_code,
+                response_headers,
+                crate::conn::CapturedBody::from_optional_renderer_synthetic_response_body(
+                    decoded_body,
+                ),
+                pending.request_cookie_report,
+                Default::default(),
+                network::MainDocumentBodyProgressSource::default(),
+            )
+            .map(|response| response.with_service_worker_client(client))
+        }
         DocumentFulfillment::ResponseTransfer {
             transfer,
             response_code,

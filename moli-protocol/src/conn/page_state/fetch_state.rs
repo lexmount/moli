@@ -380,6 +380,7 @@ mod tests {
             request_id: Some("REQ-1".to_owned()),
             loader_id: "LID-0000000001".to_owned(),
             request_announced: false,
+            announced_redirects: 0,
             requested_url: url.clone(),
             request_method: "GET".to_owned(),
             request_body: None,

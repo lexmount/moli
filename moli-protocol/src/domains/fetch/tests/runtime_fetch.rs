@@ -176,3 +176,6 @@ mod runtime_subresources;
 mod session_interception;
 #[path = "runtime_fetch/worker_requests.rs"]
 mod worker_requests;
+
+#[path = "runtime_fetch/unified_navigation.rs"]
+mod unified_navigation;

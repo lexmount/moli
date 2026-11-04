@@ -681,6 +681,7 @@ async fn page_navigate_network_failure_commits_error_document() {
             request_id: Some(stale_request_id.to_owned()),
             loader_id: old_document_token.loader_id.clone(),
             request_announced: true,
+            announced_redirects: 0,
             requested_url: url::Url::parse("https://stale.example.test/old-body").unwrap(),
             request_method: "GET".to_owned(),
             request_body: None,

@@ -666,6 +666,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
             request_id: Some("REQ-1".to_owned()),
             loader_id: LOADER_ID.to_owned(),
             request_announced: true,
+            announced_redirects: 0,
             requested_url: url.clone(),
             request_method: "GET".to_owned(),
             request_body: None,

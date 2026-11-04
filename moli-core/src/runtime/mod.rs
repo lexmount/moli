@@ -1458,11 +1458,23 @@ fn external_raw_document_body_from_streaming_response_with_observer_and_progress
     body_stream
 }
 
-fn streaming_raw_response_from_navigation_response(
-    response: NavigationResponse,
+pub fn streaming_raw_response_from_navigation_response(
+    mut response: NavigationResponse,
 ) -> Result<StreamingRawResponse> {
     let head = response.head();
-    let body = response.clone_body_bytes();
+    let body = response.take_body_bytes();
+    streaming_raw_response_from_raw_response(moli_fetch::RawResponse::from_head_and_body(
+        head, body,
+    ))
+}
+
+pub fn streaming_raw_response_from_raw_response(
+    response: moli_fetch::RawResponse,
+) -> Result<StreamingRawResponse> {
+    let (head, body) = response.into_body();
+    let body = body
+        .try_into_materialized_bytes()
+        .map_err(|_| anyhow!("navigation response body must be materialized"))?;
     let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
     if !body.is_empty() {
         body_tx
