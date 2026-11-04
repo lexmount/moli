@@ -291,7 +291,7 @@ impl ProtocolWorkflowState<'_> {
 
     pub(crate) fn finish_fetch_cleanup_subresource(
         self,
-        completed: crate::domains::fetch::CompletedSubresourceFailure,
+        completed: crate::domains::fetch::CompletedSubresourceCleanup,
     ) -> Option<crate::domains::command_output::CommandOutputPlan> {
         completed.finish(self.connection)
     }

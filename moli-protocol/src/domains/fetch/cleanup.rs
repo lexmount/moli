@@ -35,7 +35,7 @@ pub(crate) struct PreparedFetchCleanup {
     access: ProtocolStateHandle,
     policy: Option<Result<PendingPageCommand>>,
     navigations: Vec<NavigationCleanup>,
-    subresources: Vec<PreparedSubresourceFailure>,
+    subresources: Vec<PreparedSubresourceCleanup>,
 }
 
 struct NavigationCleanup {
@@ -103,11 +103,24 @@ impl PreparedFetchCleanup {
             }
             _ => reason.to_string(),
         };
-        // Admit every native failure before releasing a Page. Dropping this
-        // command cannot leave a pause stranded in a removed Fetch handler.
+        let resume_child_navigations = matches!(
+            reason,
+            FetchCleanupReason::Disabled | FetchCleanupReason::Detached
+        );
+        // Removing an interceptor leaves a valid child navigation running.
+        // Actual Page/navigation retirement still owns transport cancellation.
         let subresources = subrequests
             .into_iter()
-            .map(|(_, pending)| CleanupSubresource::Request(pending))
+            .map(|(_, pending)| {
+                if resume_child_navigations
+                    && pending.owner_kind.drains_on_fetch_disable()
+                    && pending.resource_type == moli_core::page::SubresourceResourceType::Document
+                {
+                    CleanupSubresource::ContinueRequest(pending)
+                } else {
+                    CleanupSubresource::Request(pending)
+                }
+            })
             .chain(
                 subauths
                     .into_iter()
@@ -119,7 +132,7 @@ impl PreparedFetchCleanup {
                     .map(|(_, pending)| CleanupSubresource::Response(pending)),
             )
             .filter_map(|resource| {
-                admit_subresource_failure(conn, owner, resource, &subresource_error)
+                admit_subresource_cleanup(conn, owner, resource, &subresource_error)
             })
             .collect();
         let navigations = requests
@@ -288,25 +301,59 @@ impl CompletedFetchCleanup {}
 
 enum CleanupSubresource {
     Request(PendingSubresourceFetchRequest),
+    ContinueRequest(PendingSubresourceFetchRequest),
     Auth(PendingSubresourceFetchAuthRequest),
     Response(PendingSubresourceFetchResponseRequest),
 }
 
-struct PreparedSubresourceFailure {
+enum PreparedSubresourceCleanup {
+    Command(Box<PreparedSubresourceCommand>),
+    ChainedPause(Box<crate::conn::BackgroundProtocolEvent>),
+}
+
+struct PreparedSubresourceCommand {
     pending: PendingPageCommand,
     owner: CommandOwnerScope,
     binding: Option<TargetRootDocumentProtocolAttachmentIdentity>,
     resource: CleanupSubresource,
 }
 
-fn admit_subresource_failure(
+fn admit_subresource_cleanup(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     resource: CleanupSubresource,
     reason: &str,
-) -> Option<PreparedSubresourceFailure> {
+) -> Option<PreparedSubresourceCleanup> {
     use moli_core::RendererPageCommand;
+    let resource = match resource {
+        CleanupSubresource::ContinueRequest(request)
+            if request
+                .request_stage_pause_state()
+                .is_some_and(|chain| !chain.remaining_sessions.is_empty()) =>
+        {
+            let event =
+                super::subresource::next_chained_subresource_request_pause_event(conn, request)?;
+            return Some(PreparedSubresourceCleanup::ChainedPause(Box::new(event)));
+        }
+        resource => resource,
+    };
     let (target, command) = match &resource {
+        CleanupSubresource::ContinueRequest(request) => {
+            let (url, method, body, headers) =
+                request.accumulated_request_stage_continue_modifications();
+            (
+                request.document_command_target(),
+                RendererPageCommand::ContinuePendingSubresourceFetch {
+                    internal_id: request.internal_id,
+                    url,
+                    method,
+                    body,
+                    headers,
+                    intercept_response: false,
+                    handle_auth_requests: false,
+                },
+            )
+        }
         CleanupSubresource::Request(request) => {
             if let Some(continuation) = request.detached_parser_script_fetch_continuation() {
                 continuation.fail(reason.to_owned());
@@ -340,18 +387,33 @@ fn admit_subresource_failure(
     // retirement. The native Document guard prevents touching a replacement.
     let pending = target.start(command).ok()?;
     let binding = conn.target_root_document_output_identity_for_owner(owner, target.document());
-    Some(PreparedSubresourceFailure {
-        pending,
-        owner: owner.clone(),
-        binding,
-        resource,
-    })
+    Some(PreparedSubresourceCleanup::Command(Box::new(
+        PreparedSubresourceCommand {
+            pending,
+            owner: owner.clone(),
+            binding,
+            resource,
+        },
+    )))
 }
 
-impl PreparedSubresourceFailure {
+impl PreparedSubresourceCleanup {
+    async fn wait(self, driver: &mut ProtocolWorkflowDriver) -> Option<CommandOutputPlan> {
+        match self {
+            Self::Command(command) => command.wait(driver).await,
+            Self::ChainedPause(event) => {
+                let mut plan = CommandOutputPlan::default();
+                plan.push_background_event(*event);
+                Some(plan)
+            }
+        }
+    }
+}
+
+impl PreparedSubresourceCommand {
     async fn wait(self, driver: &mut ProtocolWorkflowDriver) -> Option<CommandOutputPlan> {
         let completed = self.pending.wait().await.ok()?;
-        let completed = CompletedSubresourceFailure {
+        let completed = CompletedSubresourceCleanup {
             binding: self.binding,
             owner: self.owner,
             resource: self.resource,
@@ -364,14 +426,14 @@ impl PreparedSubresourceFailure {
     }
 }
 
-pub(crate) struct CompletedSubresourceFailure {
+pub(crate) struct CompletedSubresourceCleanup {
     binding: Option<TargetRootDocumentProtocolAttachmentIdentity>,
     owner: CommandOwnerScope,
     resource: CleanupSubresource,
     completed: moli_core::page::CompletedPageCommand,
 }
 
-impl CompletedSubresourceFailure {
+impl CompletedSubresourceCleanup {
     pub(crate) fn finish(self, conn: &mut CdpConnection) -> Option<CommandOutputPlan> {
         let Self {
             binding,
@@ -380,12 +442,16 @@ impl CompletedSubresourceFailure {
             completed,
         } = self;
         let predecessor = completed.renderer_output_predecessor();
-        completed.into_unit_reply().ok()?;
+        if matches!(&resource, CleanupSubresource::ContinueRequest(_)) {
+            completed.into_subresource_continue_outcome().ok()?;
+        } else {
+            completed.into_unit_reply().ok()?;
+        }
         let mut plan = CommandOutputPlan::default();
         if let Some(predecessor) = predecessor {
             plan.set_renderer_output_predecessor(predecessor);
         }
-        // A unit ACK belongs to the admitted native turn, never to a replacement
+        // An ACK belongs to the admitted native turn, never to a replacement
         // Page's mutable snapshot or network correlation table.
         if binding
             .as_ref()
@@ -395,7 +461,7 @@ impl CompletedSubresourceFailure {
         }
         let mut events = Vec::new();
         match resource {
-            CleanupSubresource::Request(pending) => {
+            CleanupSubresource::Request(pending) | CleanupSubresource::ContinueRequest(pending) => {
                 activity::flush_post_subresource_fetch_request_activity_for_owner_background_events(
                     conn,
                     &mut events,
