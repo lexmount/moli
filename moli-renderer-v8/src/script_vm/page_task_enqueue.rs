@@ -26,6 +26,13 @@ use crate::v8_execution_watchdog::{
 const LIFECYCLE_EVENT_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
 
 impl ScriptVm {
+    pub(crate) fn timer_nesting_scope_for_task(&self) -> crate::timer_nesting::TimerNestingScope {
+        self.renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| {
+                crate::timer_nesting::TimerNestingScope::enter(isolate)
+            })
+    }
+
     fn dispatch_document_event_body(&mut self, event_type: &str) -> Result<()> {
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
@@ -101,6 +108,26 @@ impl ScriptVm {
         loader: &crate::network::ResourceRequestClient,
     ) -> Result<()> {
         self.perform_owner_lane_task_microtask_checkpoints()?;
+        self.finish_selected_page_callback_task_followup(loader)
+            .await
+    }
+
+    pub(crate) async fn finish_selected_page_timer_callback_task(
+        &mut self,
+        loader: &crate::network::ResourceRequestClient,
+        nesting_scope: crate::timer_nesting::TimerNestingScope,
+    ) -> Result<()> {
+        let checkpoint = self.perform_owner_lane_task_microtask_checkpoints();
+        drop(nesting_scope);
+        checkpoint?;
+        self.finish_selected_page_callback_task_followup(loader)
+            .await
+    }
+
+    async fn finish_selected_page_callback_task_followup(
+        &mut self,
+        loader: &crate::network::ResourceRequestClient,
+    ) -> Result<()> {
         self.sync_child_browsing_context_records();
         self.finish_host_task_turn(loader, false).await
     }
@@ -810,10 +837,13 @@ impl ScriptVm {
     /// bypassed.
     #[cfg(test)]
     pub(crate) fn run_next_timeout_for_test(&mut self) -> Result<HostTimeoutRunResult> {
+        let nesting_scope = self.timer_nesting_scope_for_task();
         let result = self
             .run_next_timeout_body(crate::page_task_queue::RendererPageTimerSelection::AnyReady)?;
         if result.consumed_heap_head() {
-            self.perform_owner_lane_task_microtask_checkpoints()?;
+            let checkpoint = self.perform_owner_lane_task_microtask_checkpoints();
+            drop(nesting_scope);
+            checkpoint?;
             self.sync_child_browsing_context_records();
         }
         Ok(result)

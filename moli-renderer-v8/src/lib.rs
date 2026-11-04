@@ -110,6 +110,7 @@ mod shared_worker_runtime;
 mod structured_clone;
 mod style_engine;
 mod text_codec;
+mod timer_nesting;
 mod tokio_blocking_budget;
 pub(crate) mod types;
 mod util;
