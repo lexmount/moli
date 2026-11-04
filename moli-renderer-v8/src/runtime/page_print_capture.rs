@@ -53,109 +53,76 @@ impl PageVm {
         self.validate_print_capture_context(job)?;
         self.apply_print_resource_completions(job)?;
 
-        loop {
-            self.start_queued_print_resources(job)?;
-            if job.entries.iter().any(|entry| {
-                matches!(
-                    entry.state,
-                    CaptureResourceState::Queued | CaptureResourceState::Pending
-                )
-            }) {
-                return Ok(PrintCaptureAdvance::Waiting);
-            }
-
-            // The barrier can dispatch page input. Revalidate afterwards,
-            // before accepting any fresh manifest or final capture geometry.
-            self.flush_page_action_window(moli_action_window::ActionBarrier::Explicit)?;
-            self.validate_print_capture_context(job)?;
-            let context = job
-                .context
-                .as_ref()
-                .expect("initialized print context")
-                .clone();
-            let discovery = self.vm_mut().discover_capture_layout_resources(
-                context.identity,
-                context.viewport,
-                context.environment_override,
-                &job.overlay,
-            )?;
-            let added = self.admit_print_resource_discovery(job, discovery)?;
-            if added {
-                ensure!(
-                    job.discovery_waves < MAX_CAPTURE_DISCOVERY_WAVES,
-                    "print resource manifest exceeded its discovery limit"
-                );
-                job.discovery_waves += 1;
-                continue;
-            }
-
-            ensure!(
-                Instant::now() < job.deadline(),
-                "print resource preparation timed out"
-            );
-            self.validate_print_capture_context(job)?;
-            let profile_started = moli_trace::cpu_profile_enabled().then(Instant::now);
-            let capture = job.request.paint_capture_request(context.surface)?;
-            let Some((snapshot, actual)) = self.vm_mut().paint_capture_layout_with_resources(
-                context.identity,
-                context.viewport,
-                LayoutFlushReason::Print,
-                capture,
-                context.environment_override,
-                &job.overlay,
-            )?
-            else {
-                return Ok(PrintCaptureAdvance::Complete(
-                    job.request.no_document_reply(),
-                ));
-            };
-            let actual_viewports = actual
-                .members
-                .iter()
-                .map(|member| (member.identity, member.viewport))
-                .collect::<Vec<_>>();
-            ensure!(
-                actual_viewports == job.current_member_viewports,
-                "print member viewports changed between discovery and final layout"
-            );
-            // A final pass is not allowed to encode dependencies that were
-            // never prepared. No callback or await separates this check from
-            // raster/encode; newly revealed inputs consume a remaining wave.
-            if self.admit_print_resource_discovery(job, actual)? {
-                ensure!(
-                    job.discovery_waves < MAX_CAPTURE_DISCOVERY_WAVES,
-                    "final print resource manifest exceeded its discovery limit"
-                );
-                job.discovery_waves += 1;
-                drop(snapshot);
-                continue;
-            }
-            self.validate_print_capture_context(job)?;
-            let layout_us = profile_started
-                .map(|started| started.elapsed().as_micros())
-                .unwrap_or_default();
-            let reply = match &job.request {
-                PrintCaptureRequest::Raster(request) => {
-                    let image = Self::encode_capture_snapshot(
-                        &snapshot,
-                        request.format,
-                        request.quality,
-                        request.optimize_for_speed,
-                        LayoutFlushReason::Print,
-                        layout_us,
-                        profile_started,
-                    )?;
-                    PrintCaptureReply::Raster(RendererCaptureScreenshotReply::Captured(image))
-                }
-                PrintCaptureRequest::Pdf(request) => PrintCaptureReply::Pdf(
-                    match moli_paint::pdf::pdf_snapshot(&snapshot, &request.options) {
-                        Ok(bytes) => RendererPrintToPdfReply::Printed(bytes),
-                        Err(error) => RendererPrintToPdfReply::Failed(error.to_string()),
-                    },
-                ),
-            };
-            return Ok(PrintCaptureAdvance::Complete(reply));
+        self.start_queued_print_resources(job)?;
+        if print_resources_pending(job) {
+            return Ok(PrintCaptureAdvance::Waiting);
         }
+
+        // Discover dependencies in the same pass that produces the output.
+        // No snapshot survives an await: a newly admitted resource requires
+        // fresh geometry, while ready or disabled resources need no replay.
+        self.flush_page_action_window(moli_action_window::ActionBarrier::Explicit)?;
+        self.validate_print_capture_context(job)?;
+        let context = job
+            .context
+            .as_ref()
+            .expect("initialized print context")
+            .clone();
+        let profile_started = moli_trace::cpu_profile_enabled().then(Instant::now);
+        let capture = job.request.paint_capture_request(context.surface)?;
+        let Some((snapshot, discovery)) = self.vm_mut().paint_capture_layout_with_resources(
+            context.identity,
+            context.viewport,
+            LayoutFlushReason::Print,
+            capture,
+            context.environment_override,
+            &job.overlay,
+        )?
+        else {
+            return Ok(PrintCaptureAdvance::Complete(
+                job.request.no_document_reply(),
+            ));
+        };
+        if self.admit_print_resource_discovery(job, discovery)? {
+            ensure!(
+                job.discovery_waves < MAX_CAPTURE_DISCOVERY_WAVES,
+                "print resource manifest exceeded its discovery limit"
+            );
+            job.discovery_waves += 1;
+            self.start_queued_print_resources(job)?;
+        }
+        if print_resources_pending(job) {
+            return Ok(PrintCaptureAdvance::Waiting);
+        }
+        ensure!(
+            Instant::now() < job.deadline(),
+            "print resource preparation timed out"
+        );
+        self.validate_print_capture_context(job)?;
+        let layout_us = profile_started
+            .map(|started| started.elapsed().as_micros())
+            .unwrap_or_default();
+        let reply = match &job.request {
+            PrintCaptureRequest::Raster(request) => {
+                let image = Self::encode_capture_snapshot(
+                    &snapshot,
+                    request.format,
+                    request.quality,
+                    request.optimize_for_speed,
+                    LayoutFlushReason::Print,
+                    layout_us,
+                    profile_started,
+                )?;
+                PrintCaptureReply::Raster(RendererCaptureScreenshotReply::Captured(image))
+            }
+            PrintCaptureRequest::Pdf(request) => PrintCaptureReply::Pdf(
+                match moli_paint::pdf::pdf_snapshot(&snapshot, &request.options) {
+                    Ok(bytes) => RendererPrintToPdfReply::Printed(bytes),
+                    Err(error) => RendererPrintToPdfReply::Failed(error.to_string()),
+                },
+            ),
+        };
+        Ok(PrintCaptureAdvance::Complete(reply))
     }
 
     fn current_print_capture_context(
@@ -274,12 +241,7 @@ impl PageVm {
         job: &mut PrintCaptureJob,
         discovery: CaptureLayoutDiscovery,
     ) -> Result<bool> {
-        let mut added = false;
-        job.current_member_viewports = discovery
-            .members
-            .iter()
-            .map(|member| (member.identity, member.viewport))
-            .collect();
+        let mut needs_resources = false;
         for member in discovery.members {
             ensure!(
                 self.vm().validate_capture_layout_identity(member.identity),
@@ -307,7 +269,7 @@ impl PageVm {
                     url,
                     font: Some(font.clone()),
                 };
-                added |= admit_print_resource_entry(job, spec, available)?;
+                needs_resources |= admit_print_resource_entry(job, spec, available)?;
             }
         }
         for image in discovery.css_images {
@@ -323,9 +285,9 @@ impl PageVm {
                 url,
                 font: None,
             };
-            added |= admit_print_resource_entry(job, spec, available)?;
+            needs_resources |= admit_print_resource_entry(job, spec, available)?;
         }
-        Ok(added)
+        Ok(needs_resources)
     }
 
     fn start_queued_print_resources(&mut self, job: &mut PrintCaptureJob) -> Result<()> {
@@ -391,6 +353,15 @@ impl PageVm {
     }
 }
 
+fn print_resources_pending(job: &PrintCaptureJob) -> bool {
+    job.entries.iter().any(|entry| {
+        matches!(
+            entry.state,
+            CaptureResourceState::Queued | CaptureResourceState::Pending
+        )
+    })
+}
+
 fn admit_print_resource_entry(
     job: &mut PrintCaptureJob,
     spec: CaptureResourceSpec,
@@ -418,5 +389,5 @@ fn admit_print_resource_entry(
             CaptureResourceState::Queued
         },
     });
-    Ok(true)
+    Ok(!available)
 }

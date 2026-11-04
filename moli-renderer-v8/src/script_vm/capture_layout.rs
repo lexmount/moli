@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use moli_layout::{
-    LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult, LayoutViewport,
-    PaintCaptureRequest, PaintSnapshot, PaintViewport,
+    LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult, PaintCaptureRequest,
+    PaintSnapshot, PaintViewport,
 };
 
 use super::ScriptVm;
@@ -27,19 +27,6 @@ impl ScriptVm {
             .borrow()
             .capture_layout_identity_for_document(identity.document)
             == Some(identity)
-    }
-
-    pub(crate) fn discover_capture_layout_resources(
-        &mut self,
-        expected: CaptureLayoutIdentity,
-        viewport: LayoutViewport,
-        environment: Option<StyloStyleEnvironment>,
-        overlay: &CaptureLayoutOverlay,
-    ) -> Result<CaptureLayoutDiscovery, LayoutError> {
-        let request = LayoutPassRequest::new(viewport, LayoutFlushReason::Print);
-        self.with_capture_layout_pass(expected, request, environment, overlay, |_| Ok(()))?
-            .map(|(_, discovery)| discovery)
-            .ok_or(LayoutError::NoLayoutRoot)
     }
 
     pub(crate) fn paint_capture_layout_with_resources(

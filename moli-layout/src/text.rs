@@ -879,6 +879,16 @@ struct RegisteredWebFont {
     membership: WebFontMembership,
 }
 
+impl PartialEq for RegisteredWebFont {
+    fn eq(&self, other: &Self) -> bool {
+        self.face == other.face
+            && self.source_key == other.source_key
+            && self.membership == other.membership
+            && (self.sfnt_bytes.id() == other.sfnt_bytes.id()
+                || self.sfnt_bytes.as_ref() == other.sfnt_bytes.as_ref())
+    }
+}
+
 impl RegisteredWebFont {
     fn priority(&self, slot: &str, order: &WebFontOrder) -> WebFontPriority {
         order.get(slot).copied().unwrap_or_else(|| {
@@ -1290,6 +1300,17 @@ impl DocumentLayoutServices {
             has_font_face_set_order: self.has_font_face_set_order,
             ..Self::with_system_font_policy(self.system_font_policy)
         }
+    }
+
+    /// Whether a temporary view can borrow this document's initialized text
+    /// contexts without changing font selection or resource registrations.
+    /// Include exact payloads, descriptors, memberships and priority order;
+    /// a family name or shared byte pointer alone is not sufficient.
+    pub fn has_same_font_selection(&self, other: &Self) -> bool {
+        self.system_font_policy == other.system_font_policy
+            && self.web_fonts == other.web_fonts
+            && self.web_font_order == other.web_font_order
+            && self.has_font_face_set_order == other.has_font_face_set_order
     }
 
     pub fn has_stylesheet_web_fonts(&self) -> bool {
