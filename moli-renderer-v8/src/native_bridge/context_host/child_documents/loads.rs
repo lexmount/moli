@@ -95,9 +95,7 @@ impl JsContextHost {
             .collect::<Vec<_>>();
         for load_id in pending_ids {
             if let Some(pending) = self.pending_child_document_navigations.remove(&load_id) {
-                if pending.paused_fetch.is_some() {
-                    pending.resource_loader.cancel();
-                }
+                pending.resource_loader.cancel();
                 if let Some(internal_id) = pending.paused_fetch {
                     self.abort_subresource_fetch(internal_id);
                 }
@@ -794,8 +792,8 @@ impl JsContextHost {
     }
 
     /// Starts a child navigation request, or holds it at CDP Fetch's request
-    /// stage and returns the pause id. A navigation that cannot be paused
-    /// proceeds as if Fetch were disabled.
+    /// stage and returns the pause id. Disabling Fetch leaves a valid
+    /// navigation running; losing its initiating owner cancels the navigation.
     fn start_child_document_fetch(
         &mut self,
         handle: DomHandle,
@@ -804,24 +802,25 @@ impl JsContextHost {
         mut fetch: ChildDocumentFetch,
     ) -> Option<u64> {
         fetch.intercept_redirects = false;
-        let pause = fetch
-            .request
-            .as_ref()
-            .filter(|request| {
-                matches!(request.url.scheme(), "http" | "https")
-                    && self.should_intercept_subresource(SubresourceResourceType::Document)
-            })
-            .and_then(|request| {
-                let dispatch_scope = self.owner_dispatch_scope_for_node(handle)?;
-                let load = initiating_loader.register_load(
-                    crate::network::loads::ResourceLoadKind::Document,
-                    crate::network::loads::ResourceLoadDisposition::Ordinary,
-                    None,
-                )?;
-                Some((request, dispatch_scope, load))
-            });
-        let Some((request, dispatch_scope, load)) = pause else {
+        let Some(request) = fetch.request.as_ref().filter(|request| {
+            matches!(request.url.scheme(), "http" | "https")
+                && self.should_intercept_subresource(SubresourceResourceType::Document)
+        }) else {
             fetch.start();
+            return None;
+        };
+        let Some(dispatch_scope) = self.owner_dispatch_scope_for_node(handle) else {
+            fetch.resource_loader.cancel();
+            fetch.finish(Err(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned()));
+            return None;
+        };
+        let Some(load) = initiating_loader.register_load(
+            crate::network::loads::ResourceLoadKind::Document,
+            crate::network::loads::ResourceLoadDisposition::Ordinary,
+            None,
+        ) else {
+            fetch.resource_loader.cancel();
+            fetch.finish(Err(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned()));
             return None;
         };
         let info = PendingSubresourceFetchInfo {
@@ -1245,6 +1244,97 @@ fn child_document_load_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn child_fetch_with_retired_owner_finishes_without_starting_transport() {
+        use crate::page_resource_completion::RendererPageResourceTerminal;
+        use crate::page_task_queue::{
+            PageTaskQueueTestHarness, RendererResourceCompletionTestHarness,
+        };
+        use crate::script_vm::ScriptVmDefaultWorldBootstrap;
+
+        let _runtime = crate::JsRuntime::initialize();
+        for missing_scope in [true, false] {
+            let url = url::Url::parse("https://retired-owner.test/child").unwrap();
+            let tasks = PageTaskQueueTestHarness::new();
+            let mut completions = RendererResourceCompletionTestHarness::new();
+            let dom = crate::dom::native::DomHost::from_dom(crate::dom::native::NativeDom::new(
+                url.clone(),
+            ));
+            let mut vm = ScriptVmDefaultWorldBootstrap::standalone_from_dom_host_with_resource_completion_sender_for_test(
+                dom,
+                tasks.owner_attached_runtime_page_task_sender_for_test(),
+                tasks.parser_boundary_sender(),
+                completions.sender(),
+            )
+            .unwrap()
+            .finish()
+            .unwrap();
+            vm.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Document));
+            let host = vm.context_host_weak_for_test().upgrade().unwrap();
+            let mut host = host.borrow_mut();
+            let initiating_owner = host.current_main_document_task_owner().unwrap();
+            let initiating_loader = host.current_main_document_resource_loader().unwrap();
+            let handle = if missing_scope {
+                crate::dom::native::NativeNodeId::new(1_000_000)
+            } else {
+                initiating_loader.begin_detach();
+                host.document_handle()
+            };
+            let target = ChildDocumentNavigationFetchTarget::for_test(
+                handle,
+                initiating_owner,
+                1,
+                crate::frame_owner_model::FrameRequestId(1),
+            );
+            let resource_loader =
+                crate::network::navigation::NavigationResourceLoader::new_for_child_document(
+                    initiating_loader.request_client().clone(),
+                    url.clone(),
+                    initiating_loader.task_runner(),
+                );
+            let fetch = ChildDocumentFetch {
+                target,
+                network_attribution: ChildDocumentLoadNetworkAttribution::new(
+                    "retired-child".to_owned(),
+                    None,
+                    "retired-loader".to_owned(),
+                ),
+                navigation_url: url.clone(),
+                network_info: None,
+                intercept_redirects: false,
+                redirect: None,
+                request: Some(moli_fetch::Request::get_with_url(url)),
+                service_worker_client_id: None,
+                browser_context_runtime: host.browser_context_runtime(),
+                resource_loader: resource_loader.clone(),
+                completion_tx: completions.sender(),
+                parent_character_set: "UTF-8".to_owned(),
+            };
+            assert_eq!(
+                host.start_child_document_fetch(
+                    handle,
+                    initiating_owner,
+                    &initiating_loader,
+                    fetch
+                ),
+                None
+            );
+            assert_eq!(
+                resource_loader.state(),
+                crate::network::navigation::NavigationResourceLoaderState::Cancelled
+            );
+            let Some(RendererPageResourceTerminal::ChildDocumentLoad { completion }) =
+                completions.pop_next_page_terminal()
+            else {
+                panic!("retired navigation must synchronously produce its failure terminal");
+            };
+            let (completed_target, _, result) = completion.into_application_parts();
+            assert_eq!(completed_target, target);
+            assert!(result.is_err());
+            assert!(!completions.has_ready_completion());
+        }
+    }
 
     #[test]
     fn loaded_child_document_retains_exact_network_response_body() {
