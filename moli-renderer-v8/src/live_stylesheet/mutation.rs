@@ -1193,6 +1193,7 @@ impl LiveStylesheet {
             .set(self.contents_revision.get().saturating_add(1));
         self.note_cascade_mutation();
         self.derived_state.clear_serialized_css_text();
+        self.derived_state.clear_keyframe_index();
         self.derived_state.clear_dependency_summary();
         self.font_face_cache.borrow_mut().take();
     }
