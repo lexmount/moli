@@ -32,6 +32,7 @@ mod devtools;
 use devtools::*;
 mod javascript_idle_admission;
 mod javascript_navigation_dispatch;
+mod large_array_buffers;
 mod open_streaming;
 mod redirect_chain;
 
