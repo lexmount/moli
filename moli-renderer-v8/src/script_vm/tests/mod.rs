@@ -2291,6 +2291,7 @@ mod svg_text_position_native_receivers;
 
 mod observer_receivers;
 mod offline_audio_float;
+mod performance_measurement_interfaces;
 mod post_parse;
 mod queue_microtask;
 
