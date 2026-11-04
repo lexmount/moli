@@ -319,6 +319,28 @@ impl JsContextHost {
         unsafe { &*self.runtime }.cross_origin_isolated()
     }
 
+    pub(crate) fn window_cross_origin_isolated(&self, owner: OwnerDispatchScope) -> bool {
+        use std::borrow::Cow;
+
+        let policy = match owner {
+            OwnerDispatchScope::Top => Cow::Borrowed(self.document_policy_container()),
+            OwnerDispatchScope::LightweightPopup(id) => {
+                let Some(policy) = self.lightweight_popup_policy_container(id) else {
+                    return false;
+                };
+                Cow::Borrowed(policy)
+            }
+            OwnerDispatchScope::Child(handle) => {
+                let Some(policy) = self.child_browsing_context_policy_container_snapshot(handle)
+                else {
+                    return false;
+                };
+                Cow::Owned(policy)
+            }
+        };
+        policy.cross_origin_isolated && policy.allows_cross_origin_isolation()
+    }
+
     pub(crate) fn check_top_document_subresource_csp<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
