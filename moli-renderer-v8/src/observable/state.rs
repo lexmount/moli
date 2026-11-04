@@ -52,13 +52,13 @@ struct ObservableInstance<'scope> {
     prototype: v8::Local<'scope, v8::Object>,
 }
 
-pub(super) fn new_event_observable<'s>(
+pub(super) fn new_native_observable<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    source: super::event_target::EventSource,
+    source: Option<super::event_target::EventSource>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let prototype = ensure_intrinsic_interface_prototype(scope, "Observable").ok()?;
     let object = ObservableInstance::new(prototype).bind(scope).ok()?;
-    register_observable(scope, object, Some(source));
+    register_observable(scope, object, source);
     Some(object)
 }
 
