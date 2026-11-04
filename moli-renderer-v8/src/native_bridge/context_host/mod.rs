@@ -625,6 +625,7 @@ pub(crate) enum PendingTextTrackLoadNetworkState {
     Pending(u64),
     Ready(String),
     FetchFailed,
+    PolicySkipped,
 }
 
 #[derive(Clone, Debug)]
@@ -682,7 +683,8 @@ impl PendingTextTrackLoadSequence {
             PendingTextTrackLoadNetworkState::Pending(internal_id) => Some(internal_id),
             PendingTextTrackLoadNetworkState::Unbound
             | PendingTextTrackLoadNetworkState::Ready(_)
-            | PendingTextTrackLoadNetworkState::FetchFailed => None,
+            | PendingTextTrackLoadNetworkState::FetchFailed
+            | PendingTextTrackLoadNetworkState::PolicySkipped => None,
         }
     }
 }

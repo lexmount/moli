@@ -38,9 +38,9 @@ pub(crate) enum RendererPageTextTrackLoadTaskKind {
     Start,
     /// Successful fetch/processing terminal queued by the networking source.
     NetworkTerminal,
-    /// URL/fetch/CORS/HTTP failure queued as an element task on the DOM-
+    /// URL/fetch/CORS/HTTP or WebVTT signature failure queued on the DOM-
     /// manipulation source.
-    FetchFailureTerminal,
+    FailureTerminal,
 }
 
 pub(crate) type RendererPageTextTrackLoadOwner = RendererPageWindowDocumentTaskOwner;
@@ -93,7 +93,7 @@ impl RendererPageTextTrackLoadSender {
                 .networking
                 .send(RendererPageNetworkingTask::TextTrackLoad(task))
                 .map_err(|_| RendererPageTextTrackLoadRouteClosed),
-            RendererPageTextTrackLoadTaskKind::FetchFailureTerminal => self
+            RendererPageTextTrackLoadTaskKind::FailureTerminal => self
                 .dom_manipulation
                 .send(RendererPageDomManipulationTask::TextTrackLoad(task))
                 .map_err(|_| RendererPageTextTrackLoadRouteClosed),
