@@ -2400,6 +2400,7 @@ mod file_reader_handlers;
 
 mod streams_sync_protocol;
 
+mod event_construction_worlds;
 mod performance_user_timing;
 
 mod rtc_encoded_frames;

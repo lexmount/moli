@@ -158,6 +158,23 @@ pub(crate) fn new_event_wrapper<'s>(
 /// identity stays intact. Foreign-Window callbacks retain their existing
 /// behavior: resolving an isolated world of another target Window requires an
 /// alias/world resolver that this path does not yet provide.
+fn construction_context_in_world<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    world: v8::Local<'s, v8::Context>,
+) -> Option<v8::Local<'s, v8::Context>> {
+    let creation = event.get_creation_context(scope)?;
+    if crate::native_bridge::identity::contexts_share_wrapper_world(creation, world) {
+        return Some(creation);
+    }
+    let host_ptr = crate::util::context_host_ptr_from_context_slot(creation)?;
+    let host = unsafe { &*host_ptr };
+    let identity = host.window_execution_context_identity_for_access_check(creation)?;
+    let (_, default) =
+        host.window_execution_context(scope, identity.owner(), identity.dispatch_scope())?;
+    crate::native_bridge::identity::contexts_share_wrapper_world(default, world).then_some(default)
+}
+
 pub(crate) fn event_callback_values<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Value>,
@@ -180,7 +197,12 @@ pub(crate) fn event_callback_values<'s>(
     let wrapper = if let Some(wrapper) = world_wrappers::get(scope, backing, context) {
         wrapper
     } else {
-        let scope = &mut v8::ContextScope::new(scope, context);
+        // Preserve the Event construction Window when projecting its native
+        // state into the listener's wrapper world. The dispatch target may
+        // have been adopted or belong to a different same-origin Window.
+        let construction =
+            construction_context_in_world(scope, backing, context).unwrap_or(context);
+        let scope = &mut v8::ContextScope::new(scope, construction);
         new_event_wrapper(scope, backing)?
     };
     Some((target.into(), wrapper))
