@@ -1743,3 +1743,75 @@ async fn service_worker_message_event_source_uses_service_worker_snapshot() {
     assert_eq!(completion.result, Ok(()));
     handle.terminate_and_join();
 }
+
+#[tokio::test]
+async fn service_worker_soft_reload_exposes_native_cache_mode_on_request_copies() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        self.addEventListener('fetch', event => {
+            const request = event.request;
+            event.respondWith(new Response(JSON.stringify([
+                request.cache, new Request(request).cache, request.clone().cache
+            ])));
+        });
+        "#,
+    );
+    use moli_fetch::{BrowserNavigationRequestKind as Kind, RequestCacheMode as Cache};
+    let mut event_id = 100;
+    for kind in [Kind::Navigate, Kind::Reload] {
+        for (cache, label) in [
+            (Cache::Default, "default"),
+            (Cache::Validate, "no-cache"),
+            (Cache::Bypass, "reload"),
+            (Cache::NoStore, "no-store"),
+        ] {
+            let url = url::Url::parse("https://example.test/app/document.html").unwrap();
+            let native = moli_fetch::Request::get_with_url(url.clone())
+                .with_request_mode(moli_fetch::RequestMode::Navigate)
+                .with_browser_navigation_kind(kind)
+                .with_cache_mode(cache);
+            let request = ServiceWorkerFetchRequest {
+                client_id: crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(
+                    7,
+                ),
+                resulting_client_id: None,
+                url,
+                method: "GET".to_owned(),
+                headers: Vec::new(),
+                body: None,
+                destination: ServiceWorkerRequestDestination::Document,
+                request_mode: moli_fetch::RequestMode::Navigate,
+                credentials_mode: moli_fetch::RequestCredentialsMode::Include,
+                redirect_mode: moli_fetch::RequestRedirectMode::Manual,
+                priority: None,
+                is_reload: kind == Kind::Reload,
+                metadata: crate::service_worker_runtime::service_worker_fetch_request_metadata(
+                    &native,
+                ),
+            };
+            let completion = dispatch_service_worker_fetch_event_with_request_for_test(
+                &mut handle,
+                event_id,
+                request,
+            )
+            .await;
+            event_id += 1;
+            let ServiceWorkerFetchResult::Response(response) = completion.result else {
+                panic!("expected service worker response for {kind:?} {cache:?}");
+            };
+            assert_eq!(response.status, 200);
+            let expected = if kind == Kind::Reload && cache == Cache::Default {
+                "no-cache"
+            } else {
+                label
+            };
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&response.body).unwrap(),
+                serde_json::json!([expected, expected, expected]),
+                "{kind:?} {cache:?}",
+            );
+        }
+    }
+    handle.terminate_and_join();
+}
