@@ -1,3 +1,15 @@
+use std::rc::Rc;
+
+/// Native event-loop deadline query for an IdleDeadline's creating realm.
+pub struct IdleDeadlineRuntime {
+    pub pending_work_deadline_ms:
+        for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>, f64) -> Option<f64>,
+}
+
+pub fn install_runtime(scope: &mut v8::PinScope<'_, '_>, runtime: IdleDeadlineRuntime) {
+    scope.get_current_context().set_slot(Rc::new(runtime));
+}
+
 use crate::interfaces as web_api_interfaces;
 use moli_v8_util::{get_private_value, throw_type_error};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -74,12 +86,19 @@ fn window_idle_deadline_time_remaining_callback<'s>(
         return;
     };
     let now_ms = moli_time::unix_epoch_millis();
+    let runtime = deadline
+        .get_creation_context(scope)
+        .and_then(|context| context.get_slot::<IdleDeadlineRuntime>());
+    let pending_work_deadline_ms =
+        runtime.and_then(|runtime| (runtime.pending_work_deadline_ms)(scope, deadline, now_ms));
     let time_origin_ms = get_private_value(scope, deadline, IDLE_DEADLINE_TIME_ORIGIN_SLOT)
         .and_then(|value| value.number_value(scope))
         .unwrap_or(0.0);
     let remaining_ms = get_private_value(scope, deadline, IDLE_DEADLINE_MS_SLOT)
         .and_then(|value| value.number_value(scope))
         .map_or(0.0, |deadline_ms| {
+            let deadline_ms =
+                pending_work_deadline_ms.map_or(deadline_ms, |pending| deadline_ms.min(pending));
             // Use the captured origin even if timeRemaining is borrowed from
             // another realm. Both timestamps must match performance.now()'s
             // relative clock and precision rather than the raw wall clock.
