@@ -1721,7 +1721,10 @@ fn aria_element_reference_attribute_getter_callback<'s>(
         return;
     };
     let slot = aria_element_reference_slot(&attribute);
-    if let Some(value) = get_private_value(scope, args.this(), &slot) {
+    let Some(backing) = super::node::node_backing_object(scope, args.this()) else {
+        return;
+    };
+    if let Some(value) = get_private_value(scope, backing, &slot) {
         rv.set(value);
         return;
     }
@@ -1742,7 +1745,10 @@ fn aria_element_reference_attribute_setter_callback<'s>(
         return;
     };
     let slot = aria_element_reference_slot(&attribute);
-    set_private_value(scope, args.this(), &slot, args.get(0));
+    let Some(backing) = super::node::node_backing_object(scope, args.this()) else {
+        return;
+    };
+    set_private_value(scope, backing, &slot, args.get(0));
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {

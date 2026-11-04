@@ -58,6 +58,7 @@ fn foreign_identity_arg_handle<'s>(
     runtime_ptr: *mut JsContextHost,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
+    let object = node_backing_object(scope, object)?;
     let value = get_private_value(scope, object, FOREIGN_IDENTITY_LIVE_HANDLE_SLOT)?;
     let big = v8::Local::<v8::BigInt>::try_from(value).ok()?;
     let (index, lossless) = big.u64_value();

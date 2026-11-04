@@ -109,6 +109,7 @@ pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
     element: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let element = canonical_detached_node_object(scope, element)?;
     let Ok(attr) = v8::Local::<v8::Object>::try_from(value) else {
         throw_dom_exception(
             scope,
@@ -258,6 +259,7 @@ pub(in crate::native_bridge::document) fn live_remove_attribute_node<'s>(
     element: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let element = canonical_detached_node_object(scope, element)?;
     let Ok(attr) = v8::Local::<v8::Object>::try_from(value) else {
         throw_dom_exception(
             scope,
@@ -332,6 +334,7 @@ pub(in crate::native_bridge::document) fn detached_native_set_attribute_node<'s>
     element: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let element = canonical_detached_node_object(scope, element)?;
     read_detached_native_attribute_snapshot(scope, element)?;
     let Ok(attr) = v8::Local::<v8::Object>::try_from(value) else {
         throw_dom_exception(
@@ -429,6 +432,7 @@ pub(in crate::native_bridge::document) fn detached_native_remove_attribute_node<
     element: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let element = canonical_detached_node_object(scope, element)?;
     read_detached_native_attribute_snapshot(scope, element)?;
     let Ok(attr) = v8::Local::<v8::Object>::try_from(value) else {
         throw_dom_exception(
@@ -776,6 +780,7 @@ pub(in crate::native_bridge::document) fn native_attr_object_from_snapshot<'s>(
     element: v8::Local<'s, v8::Object>,
     attribute: &DetachedNativeAttributeSnapshot,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let element = canonical_detached_node_object(scope, element)?;
     let cache = live_attr_cache_object(scope, element)?;
     let namespace_key =
         namespace_attr_cache_key(attribute.namespace_uri.as_deref(), &attribute.local_name);

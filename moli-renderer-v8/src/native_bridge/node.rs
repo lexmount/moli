@@ -226,7 +226,7 @@ fn detached_node_backing_object<'s>(
     Some(receiver)
 }
 
-pub(super) fn receiver_has_detached_state<'s>(
+pub(crate) fn receiver_has_detached_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {

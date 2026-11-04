@@ -490,7 +490,6 @@ fn adopt_live_node_as_detached_with_parent<'s>(
                 && allow_identity_replacement
                 && let Some(proxy) = generic_html_element_proxy(scope, node)
             {
-                mirror_detached_private_slots(scope, node, proxy);
                 node = proxy;
             }
             let preserve_custom_element_identity =
@@ -535,10 +534,6 @@ fn adopt_live_node_as_detached_with_parent<'s>(
                 if allow_identity_replacement
                     && let Some(proxy) = select_html_element_proxy(scope, node)
                 {
-                    mirror_detached_private_slots(scope, node, proxy);
-                    if let Some((_, handle)) = native_handle {
-                        define_detached_native_handle(scope, proxy, handle);
-                    }
                     node = proxy;
                 }
             }

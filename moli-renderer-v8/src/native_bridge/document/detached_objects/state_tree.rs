@@ -493,8 +493,9 @@ pub(crate) fn detached_native_object_for_handle<'s>(
             })
             .unwrap_or(wrapper)
     };
+    let backing = node_backing_object(scope, object)?;
     let value = v8::BigInt::new_from_u64(scope, handle.index() as u64);
-    set_private_value(scope, object, DETACHED_NATIVE_HANDLE_SLOT, value.into());
+    set_private_value(scope, backing, DETACHED_NATIVE_HANDLE_SLOT, value.into());
     Some(object)
 }
 
@@ -511,6 +512,17 @@ pub(crate) fn paired_detached_native_object_for_handle<'s>(
             .cached_handle_wrapper(scope, handle)
     }?;
     get_private_object(scope, wrapper, DOM_PARSER_FOREIGN_NODE_SLOT)
+}
+
+pub(in crate::native_bridge) fn canonical_detached_node_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let backing = node_backing_object(scope, node)?;
+    // This slot is an identity association, not a copy of native state. Keep
+    // it on the backing too so aliases need no realm or host lookup to find
+    // the canonical Proxy after adoption.
+    Some(get_private_object(scope, backing, DOM_PARSER_FOREIGN_NODE_SLOT).unwrap_or(backing))
 }
 
 fn detached_native_related_object<'s>(
@@ -663,8 +675,14 @@ pub(in crate::native_bridge) fn define_detached_native_handle(
     node: v8::Local<'_, v8::Object>,
     handle: DomHandle,
 ) {
+    let node = v8::Local::new(scope, node);
+    let Some(backing) = node_backing_object(scope, node) else {
+        return;
+    };
     let value = v8::BigInt::new_from_u64(scope, handle.index() as u64);
-    set_private_value(scope, node, DETACHED_NATIVE_HANDLE_SLOT, value.into());
+    set_private_value(scope, backing, DETACHED_NATIVE_HANDLE_SLOT, value.into());
+    // The handle lives only on the backing. The wrapper association must keep
+    // the factory's canonical JavaScript object, including a native Proxy.
     pair_detached_native_handle_with_wrapper(scope, node, handle);
 }
 
@@ -1080,11 +1098,15 @@ pub(in crate::native_bridge::document) fn write_detached_native_text_content_app
     )
 }
 
-fn pair_detached_native_handle_with_wrapper(
+pub(in crate::native_bridge::document) fn pair_detached_native_handle_with_wrapper(
     scope: &mut v8::PinScope<'_, '_>,
     node: v8::Local<'_, v8::Object>,
     handle: DomHandle,
 ) {
+    let node = v8::Local::new(scope, node);
+    let Some(node) = canonical_detached_node_object(scope, node) else {
+        return;
+    };
     let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
@@ -1431,5 +1453,7 @@ pub(in crate::native_bridge::document) fn define_detached_state<'s>(
     object: v8::Local<'s, v8::Object>,
     state: v8::Local<'s, v8::Object>,
 ) {
-    set_private_value(scope, object, DETACHED_STATE_SLOT, state.into());
+    if let Some(backing) = node_backing_object(scope, object) {
+        set_private_value(scope, backing, DETACHED_STATE_SLOT, state.into());
+    }
 }
