@@ -35,6 +35,12 @@ pub struct FetchClient {
 }
 
 impl FetchClientHandle {
+    /// Prepare resource-dependent request headers before interception or
+    /// network admission, after the caller has selected the resource kind.
+    pub fn prepare_request(&self, request: &mut Request) {
+        request.prepare_headers(&self.config);
+    }
+
     /// Creates native WebSockets on this client's HTTP owner and Multi. The
     /// capability does not keep the FetchClient owner alive; shutdown closes
     /// its WebSockets and makes future connection attempts fail.

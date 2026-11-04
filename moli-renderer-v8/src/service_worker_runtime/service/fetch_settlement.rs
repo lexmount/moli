@@ -728,7 +728,7 @@ fn matches_service_worker_respond_with_fetch_failure(message: &str) -> bool {
         || message.starts_with("failed to resolve redirect location `")
 }
 
-fn service_worker_fetch_browser_metadata(
+pub(super) fn service_worker_fetch_browser_metadata(
     resource_type: crate::types::SubresourceResourceType,
 ) -> moli_fetch::BrowserRequestMetadata {
     match resource_type {
