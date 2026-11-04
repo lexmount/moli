@@ -91,8 +91,8 @@ use super::{
     matching::service_worker_scope_matches_url,
     owner_wake::{ServiceWorkerRuntimeOwnerWake, ServiceWorkerRuntimeOwnerWakeSender},
     pending_clear::{
-        ServiceWorkerPendingClearAction, execute_pending_clear_locked,
-        pending_clear_phase_for_registration_locked, registration_ready_to_delete_locked,
+        execute_pending_clear_locked, pending_clear_phase_for_registration_locked,
+        registration_ready_to_delete_locked,
     },
     registration::{
         ServiceWorkerNavigationPreloadState, ServiceWorkerNavigationPreloadStateError,
@@ -591,6 +591,14 @@ fn lifecycle_notifications_for_registration_locked(
     if events.is_empty() {
         return Vec::new();
     }
+    registration_notifications_locked(state, registration_id, events)
+}
+
+fn registration_notifications_locked(
+    state: &ServiceWorkerRuntimeState,
+    registration_id: ServiceWorkerRegistrationId,
+    events: Vec<ServiceWorkerLifecycleClientEvent>,
+) -> Vec<ServiceWorkerLifecycleNotificationDelivery> {
     let Some(registration) = state.registrations.get(&registration_id) else {
         return Vec::new();
     };

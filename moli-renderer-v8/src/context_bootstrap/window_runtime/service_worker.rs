@@ -533,8 +533,6 @@ fn refresh_service_worker_container_registration_for_scope(
             service_worker_registration_snapshot_script_url(&snapshot),
             ServiceWorkerRegistrationPhase::Snapshot(&snapshot),
         );
-    } else {
-        service_worker_registration_clear_workers(scope, registration);
     }
 }
 
@@ -1289,39 +1287,20 @@ fn navigator_service_worker_unregister_callback<'s>(
     };
     let promise = resolver.get_promise(scope);
     let scope_url = service_worker_registration_scope_from_this(scope, args.this());
-    let active_worker = service_worker_registration_active_worker(scope, args.this());
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        settle_service_worker_unregister_completion(
-            scope,
-            resolver,
-            Some(args.this()),
-            active_worker,
-            false,
-        );
+        settle_service_worker_unregister_completion(scope, resolver, false);
         rv.set(promise.into());
         return;
     };
     let host = unsafe { &mut *host_ptr };
     let owner = service_worker_owner_scope_from_object(scope, args.this());
     let Some(request_context) = host.service_worker_window_request_context(owner) else {
-        settle_service_worker_unregister_completion(
-            scope,
-            resolver,
-            Some(args.this()),
-            active_worker,
-            false,
-        );
+        settle_service_worker_unregister_completion(scope, resolver, false);
         rv.set(promise.into());
         return;
     };
-    let (request_id, document_owner, completion_tx) = host
-        .register_pending_service_worker_unregister(
-            scope,
-            resolver,
-            args.this(),
-            active_worker,
-            request_context.owner(),
-        );
+    let (request_id, document_owner, completion_tx) =
+        host.register_pending_service_worker_unregister(scope, resolver, request_context.owner());
     let start = match scope_url.as_ref() {
         Some(scope_url) => host.unregister_service_worker_scope(
             &request_context,
@@ -1339,13 +1318,7 @@ fn navigator_service_worker_unregister_callback<'s>(
     };
     if let crate::service_worker_runtime::ServiceWorkerUnregisterStart::Completed(removed) = start {
         let _ = host.take_pending_service_worker_unregister(request_id);
-        settle_service_worker_unregister_completion(
-            scope,
-            resolver,
-            Some(args.this()),
-            active_worker,
-            removed,
-        );
+        settle_service_worker_unregister_completion(scope, resolver, removed);
     }
     rv.set(promise.into());
 }
@@ -2095,32 +2068,8 @@ fn service_worker_push_permission_state(scope: &mut v8::PinScope<'_, '_>) -> Str
 pub(crate) fn settle_service_worker_unregister_completion<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolver: v8::Local<'s, v8::PromiseResolver>,
-    registration: Option<v8::Local<'s, v8::Object>>,
-    active_worker: Option<v8::Local<'s, v8::Object>>,
     removed: bool,
 ) {
-    let retained_controller =
-        registration
-            .zip(active_worker)
-            .is_some_and(|(registration, active_worker)| {
-                let owner = service_worker_owner_scope_from_object(scope, registration);
-                let active_version_id =
-                    service_worker_worker_version_id_value(scope, active_worker);
-                context_host_ptr_from_global_bridge(scope)
-                    .and_then(|host_ptr| {
-                        unsafe { &*host_ptr }.service_worker_control_state_for_window_owner(owner)
-                    })
-                    .is_some_and(|state| state.active_version_id() == active_version_id)
-            });
-    if removed && !retained_controller {
-        if let Some(registration) = registration {
-            service_worker_registration_clear_workers(scope, registration);
-        }
-        if let Some(active_worker) = active_worker {
-            service_worker_worker_set_state(scope, active_worker, "redundant");
-            dispatch_service_worker_simple_event(scope, active_worker, "statechange");
-        }
-    }
     let _ = resolver.resolve(scope, v8::Boolean::new(scope, removed).into());
 }
 
@@ -3062,35 +3011,12 @@ fn remember_service_worker_registration_worker<'s>(
     array_push_value(scope, cache, worker.into());
 }
 
-fn service_worker_registration_active_worker<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    registration: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    registration
-        .get(scope, v8str(scope, "active").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-}
-
 fn service_worker_registration_hidden_worker<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     registration: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     object_own_hidden_value(scope, registration, SERVICE_WORKER_REGISTRATION_WORKER_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-}
-
-fn service_worker_registration_clear_workers<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    registration: v8::Local<'s, v8::Object>,
-) {
-    let null_value: v8::Local<'_, v8::Value> = v8::null(scope).into();
-    set_service_worker_registration_worker_values(
-        scope,
-        registration,
-        null_value,
-        null_value,
-        null_value,
-    );
 }
 
 fn set_service_worker_registration_worker_values<'s>(

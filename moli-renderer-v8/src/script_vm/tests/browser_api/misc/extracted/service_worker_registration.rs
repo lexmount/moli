@@ -1,6 +1,84 @@
 use super::*;
 
 #[tokio::test]
+async fn navigator_service_worker_unregister_keeps_old_clients_and_clears_old_objects_in_tasks() {
+    let worker = r#"
+        self.addEventListener('fetch', event => {
+          const isClient = new URL(event.request.url).pathname.endsWith('/client.html');
+          event.respondWith(new Response(isClient
+            ? "<script>parent.postMessage('controlled-ready', '*')</script>"
+            : 'controlled-fetch',
+            {headers: {'Content-Type': isClient ? 'text/html' : 'text/plain'}}));
+        });
+    "#;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for (path, status, content_type, body) in [
+            ("/controlled/sw.js", "200 OK", "text/javascript", worker),
+            (
+                "/controlled/invalid.js",
+                "404 Not Found",
+                "text/html",
+                "not found",
+            ),
+            ("/controlled/sw.js", "200 OK", "text/javascript", worker),
+        ] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_storage_bucket_partition_request_head(&mut stream)
+                .await
+                .unwrap();
+            assert_eq!(
+                request.lines().next().unwrap(),
+                format!("GET {path} HTTP/1.1")
+            );
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(include_str!("../../../service_worker_unregister.js"))
+        .unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(unregisteredReplacementProbe.phase === 'error' || \
+         (unregisteredReplacementProbe.phase === 'registered' && \
+          unregisteredReplacementProbe.oldRegistration.active === null && \
+          unregisteredReplacementProbe.events.length === 2))",
+        "true",
+    )
+    .await;
+    let observed = vm.eval(r#"
+        JSON.stringify({
+          error: unregisteredReplacementProbe.error || null,
+          flags: Object.values(unregisteredReplacementProbe.result),
+          events: unregisteredReplacementProbe.events,
+          oldSlotsCleared: unregisteredReplacementProbe.oldRegistration.installing === null &&
+            unregisteredReplacementProbe.oldRegistration.waiting === null &&
+            unregisteredReplacementProbe.oldRegistration.active === null,
+          oldWorkerState: unregisteredReplacementProbe.oldWorker.state,
+          replacementActivated: unregisteredReplacementProbe.replacement.active.state === 'activated'
+        })
+    "#).unwrap();
+    assert_eq!(
+        observed,
+        r#"{"error":null,"flags":[true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true],"events":["event:true","microtask:true"],"oldSlotsCleared":true,"oldWorkerState":"redundant","replacementActivated":true}"#
+    );
+    server
+        .await
+        .expect("both registrations must fetch a worker script");
+}
+
+#[tokio::test]
 async fn navigator_service_worker_register_applies_script_path_restriction() {
     let worker_body = r#"
         self.addEventListener("install", event => {
@@ -288,6 +366,7 @@ async fn navigator_service_worker_registration_lifecycle_attributes_reflect_acti
                   scope: "./"
                 });
                 const registration = await sw.ready;
+                globalThis.__serviceWorkerLifecycleRegistration = registration;
                 const newest = registration.active;
                 const log = [
                   [
@@ -310,7 +389,7 @@ async fn navigator_service_worker_registration_lifecycle_attributes_reflect_acti
                         active.state,
                         registration.installing === null,
                         registration.waiting === null,
-                        registration.active === null
+                        registration.active === active
                       ].join(":"));
                       if (active.state === "redundant") {
                         resolve();
@@ -323,7 +402,7 @@ async fn navigator_service_worker_registration_lifecycle_attributes_reflect_acti
                   "after-unregister",
                   registration.installing === null,
                   registration.waiting === null,
-                  registration.active === null
+                  registration.active === active
                 ].join(":"));
                 globalThis.__serviceWorkerLifecycleProbe = log.join("|");
               })().catch((error) => {
@@ -350,6 +429,16 @@ async fn navigator_service_worker_registration_lifecycle_attributes_reflect_acti
         result,
         r#""active:true:activated:true:true:true:function:function|redundant:redundant:true:true:true|after-unregister:true:true:true""#
     );
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(__serviceWorkerLifecycleRegistration.installing === null && \
+         __serviceWorkerLifecycleRegistration.waiting === null && \
+         __serviceWorkerLifecycleRegistration.active === null)",
+        "true",
+    )
+    .await;
     server
         .await
         .expect("service worker lifecycle script server should finish");
@@ -1217,10 +1306,11 @@ async fn navigator_service_worker_register_validates_urls_and_refreshes_cached_w
                 const first = await sw.register("././worker.js", { scope: "./scope/" });
                 const firstScriptURL = newest(first) && newest(first).scriptURL;
                 const unregistered = await first.unregister();
-                const cleared =
-                  first.installing === null && first.waiting === null && first.active === null;
                 const second = await sw.register("../app/worker.js", { scope: "./scope/" });
                 const secondScriptURL = newest(second) && newest(second).scriptURL;
+                // Clear Registration updates worker slots in later tasks.
+                const cleared =
+                  first.installing === null && first.waiting === null && first.active === null;
 
                 globalThis.__serviceWorkerRegistrationUrlProbe = JSON.stringify({
                   encodedSlash,

@@ -966,17 +966,32 @@ impl ServiceWorkerRuntimeService {
             } else {
                 Vec::new()
             };
+            // A Window may already hold this registration from getRegistration()
+            // while its script loads. Update that exact object before deleting
+            // the map entry; a different retired registration can share its scope.
+            let mut queue_progress = if failed_installing_version {
+                registration_notifications_locked(&state, registration_id, Vec::new())
+                    .into_iter()
+                    .map(|notification| LifecycleProgress::NotifyLifecycle(Box::new(notification)))
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
             if failed_installing_version {
                 state.record_target_destroyed(version_id);
                 state.versions.remove(&version_id);
             } else if let Some(run) = target_run {
                 state.record_target_stopped(version_id, run, "start_failed");
             }
-            let queue_progress =
-                self.advance_registration_job_queue_locked(&mut state, registration_id);
             if failed_installing_version {
-                prune_empty_registration_after_start_failure_locked(&mut state, registration_id);
+                queue_progress.extend(self.cleanup_failed_install_version_locked(
+                    &mut state,
+                    registration_id,
+                    version_id,
+                ));
             }
+            queue_progress
+                .extend(self.advance_registration_job_queue_locked(&mut state, registration_id));
             (
                 completion,
                 queue_progress,
@@ -1117,37 +1132,5 @@ fn registration_error_for_start_failure(
         ServiceWorkerVersionStartFailure::BootstrapChannelClosed => {
             ServiceWorkerRegistrationError::unknown(message)
         }
-    }
-}
-
-fn prune_empty_registration_after_start_failure_locked(
-    state: &mut ServiceWorkerRuntimeState,
-    registration_id: ServiceWorkerRegistrationId,
-) {
-    let should_remove = state
-        .registrations
-        .get(&registration_id)
-        .is_some_and(|registration| {
-            if registration.installing_version_id.is_some()
-                || registration.waiting_version_id.is_some()
-                || registration.active_version_id.is_some()
-                || registration.pending_unregistration
-                || !registration.pending_register_jobs.is_empty()
-                || !registration.controlled_client_ids.is_empty()
-            {
-                return false;
-            }
-            let registration_key = registration.key();
-            state
-                .job_coordinator
-                .queued_register_job_count(&registration_key)
-                == 0
-                && state
-                    .job_coordinator
-                    .queued_unregistration_job_count(&registration_key)
-                    == 0
-        });
-    if should_remove {
-        state.registrations.remove(&registration_id);
     }
 }

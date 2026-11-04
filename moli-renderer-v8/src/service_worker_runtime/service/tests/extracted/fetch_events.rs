@@ -582,7 +582,7 @@ fn pending_unregistration_waits_for_active_fetch_to_complete_before_delete() {
     assert_eq!(completion.result.err().as_deref(), Some("done"));
 }
 #[test]
-fn register_aborts_pending_unregistration_and_starts_update() {
+fn register_after_unregistration_starts_a_distinct_registration() {
     let service = new_service_worker_runtime_service();
     let registration_id = ServiceWorkerRegistrationId(1);
     let active_version_id = ServiceWorkerVersionId(1);
@@ -624,19 +624,26 @@ fn register_aborts_pending_unregistration_and_starts_update() {
     );
 
     let diagnostics = service.diagnostics_snapshot();
-    assert_eq!(diagnostics.registration_count, 1);
+    assert_eq!(diagnostics.registration_count, 2);
     assert_eq!(diagnostics.version_count, 2);
-    assert_eq!(diagnostics.pending_unregistration_count, 0);
+    assert_eq!(diagnostics.pending_unregistration_count, 1);
     assert_eq!(diagnostics.queued_register_job_count, 0);
     assert_eq!(diagnostics.starting_version_count, 1);
     assert_eq!(
         service
             .matching_registration_for_client(&document_url)
-            .expect("register should abort pending unregister and restore visibility")
+            .expect("register should create a visible replacement")
             .installing()
             .expect("different script should start installing immediately")
             .script_url(),
         &second_script_url
+    );
+    assert_ne!(
+        service
+            .matching_registration_for_client(&document_url)
+            .unwrap()
+            .registration_id(),
+        registration_id,
     );
     assert_eq!(
         service.matching_controller_for_fetch(
@@ -650,14 +657,14 @@ fn register_aborts_pending_unregistration_and_starts_update() {
     service.unregister_client(client_id);
     let diagnostics = service.diagnostics_snapshot();
     assert_eq!(diagnostics.registration_count, 1);
-    assert_eq!(diagnostics.version_count, 2);
+    assert_eq!(diagnostics.version_count, 1);
     assert_eq!(diagnostics.pending_unregistration_count, 0);
     assert_eq!(diagnostics.starting_version_count, 1);
 
     service.terminate_all_for_context_shutdown();
 }
 #[test]
-fn same_options_register_aborts_pending_unregistration_fast_path() {
+fn same_options_register_after_unregistration_installs_a_new_worker() {
     let service = new_service_worker_runtime_service();
     let registration_id = ServiceWorkerRegistrationId(1);
     let active_version_id = ServiceWorkerVersionId(1);
@@ -692,31 +699,31 @@ fn same_options_register_aborts_pending_unregistration_fast_path() {
         1,
         completion_queue.sender(),
     );
-    let completion = pop_register_completion(&mut completion_queue);
-    assert_eq!(completion.request_id, 33);
-    let snapshot = completion
-        .result
-        .expect("same-options register should resolve restored registration");
-    assert_eq!(snapshot.registration_id(), registration_id);
-    assert!(snapshot.installing().is_none());
-    assert_eq!(
+    assert!(!completion_queue.has_ready_task());
+    let snapshot = service
+        .matching_registration_for_client(&document_url)
+        .expect("same-options register should create a replacement");
+    assert_ne!(snapshot.registration_id(), registration_id);
+    assert!(snapshot.active().is_none());
+    assert_ne!(
         snapshot
-            .active()
-            .expect("active version should remain visible")
+            .installing()
+            .expect("a fresh worker starts installing")
             .version_id(),
         active_version_id
     );
     let diagnostics = service.diagnostics_snapshot();
-    assert_eq!(diagnostics.registration_count, 1);
-    assert_eq!(diagnostics.version_count, 1);
-    assert_eq!(diagnostics.pending_unregistration_count, 0);
+    assert_eq!(diagnostics.registration_count, 2);
+    assert_eq!(diagnostics.version_count, 2);
+    assert_eq!(diagnostics.pending_unregistration_count, 1);
     assert_eq!(diagnostics.queued_register_job_count, 0);
-    assert_eq!(diagnostics.starting_version_count, 0);
+    assert_eq!(diagnostics.starting_version_count, 1);
     assert!(
         service
             .matching_registration_for_client(&document_url)
             .is_some()
     );
+    service.terminate_all_for_context_shutdown();
 }
 #[test]
 fn resource_store_restores_no_fetch_handler_metadata_for_controlled_fetch() {
