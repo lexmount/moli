@@ -33,6 +33,10 @@ impl ScriptVm {
         if !self.prepared_script_is_live_for_execution(script) {
             return Ok(None);
         }
+        if script.kind != ScriptKind::ImportMap {
+            self.initialize_main_world_if_needed()
+                .map_err(|e| PreparedScriptExecutionError::from_message(e.to_string()))?;
+        }
         debug!(
             url = %script.url,
             mode = ?script.mode,
@@ -438,6 +442,8 @@ impl ScriptVm {
         script: &PreparedScript,
         body: PreparedScriptRunBody,
     ) -> std::result::Result<LoadedScriptExecutionOutcome, PreparedScriptExecutionError> {
+        self.initialize_main_world_if_needed()
+            .map_err(|e| PreparedScriptExecutionError::from_message(e.to_string()))?;
         match body {
             PreparedScriptRunBody::LoadedSource {
                 source,
@@ -483,6 +489,8 @@ impl ScriptVm {
         source: &str,
         source_bytes: Option<&[u8]>,
     ) -> std::result::Result<LoadedScriptExecutionOutcome, PreparedScriptExecutionError> {
+        self.initialize_main_world_if_needed()
+            .map_err(|e| PreparedScriptExecutionError::from_message(e.to_string()))?;
         let inline_source = if script.source_kind == ScriptSourceKind::Inline {
             let request = self.content_security_policy_script_element_request(script);
             let Some(source) =
@@ -663,6 +671,10 @@ impl ScriptVm {
         source: &str,
         request: ContentSecurityPolicyScriptElementRequest<'_>,
     ) -> Option<String> {
+        if let Err(error) = self.initialize_main_world_if_needed() {
+            self.record_runtime_warning(format_args!("main world initialization failed: {error}"));
+            return None;
+        }
         let context_host = self._context_host.clone();
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         self.renderer_document_isolate

@@ -445,17 +445,6 @@ impl InspectorOutbound {
         self.register_response_callback(callback);
     }
 
-    /// Publishes a synchronous non-V8 agent response through the terminal
-    /// destination selected when the frontend call was registered.
-    pub(in crate::script_vm) fn publish_frontend_response(
-        &self,
-        callback: RendererRuntimeInspectorResponseSender,
-        message: Value,
-    ) {
-        let callback = self.route_frontend_response(callback);
-        let _ = callback.send(message);
-    }
-
     pub(in crate::script_vm) fn route_frontend_response(
         &self,
         callback: RendererRuntimeInspectorResponseSender,

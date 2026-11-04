@@ -433,6 +433,7 @@ pub struct NavigationRuntimeConfig {
     subframe_loading_enabled: bool,
     layout_configuration: LayoutConfiguration,
     debugger_enabled: bool,
+    force_main_world_initialization: bool,
     /// Startup sources transported from BrowserConfig to protocol connections.
     /// The connection owns them before any engine is materialized; they are
     /// BrowserContext initialization policy, not NavigationEngine state.
@@ -469,6 +470,7 @@ impl NavigationRuntimeConfig {
             subframe_loading_enabled,
             layout_configuration,
             debugger_enabled: false,
+            force_main_world_initialization: false,
             document_start_scripts: Vec::new(),
         }
     }
@@ -504,6 +506,15 @@ impl NavigationRuntimeConfig {
 
     pub fn layout_configuration(&self) -> LayoutConfiguration {
         self.layout_configuration
+    }
+
+    pub fn force_main_world_initialization(&self) -> bool {
+        self.force_main_world_initialization
+    }
+
+    pub fn with_force_main_world_initialization(mut self, enabled: bool) -> Self {
+        self.force_main_world_initialization = enabled;
+        self
     }
 
     pub fn debugger_enabled(&self) -> bool {
@@ -545,6 +556,7 @@ impl From<&crate::config::BrowserConfig> for NavigationRuntimeConfig {
             config.layout_configuration(),
         )
         .with_debugger_enabled(config.debugger_enabled())
+        .with_force_main_world_initialization(config.force_main_world_initialization())
         .with_document_start_scripts(config.document_start_scripts().to_vec())
     }
 }
@@ -555,6 +567,7 @@ pub struct NavigationEngine {
     page_network_policy: PageNetworkPolicy,
     layout_configuration: LayoutConfiguration,
     debugger_enabled: bool,
+    force_main_world_initialization: bool,
     emulated_scrollbars_hidden: bool,
     js_runtime: JsRuntime,
     resource_runtime: Option<BrowserResourceRuntime>,
@@ -723,6 +736,7 @@ impl NavigationEngine {
             subframe_loading_enabled,
             layout_configuration,
             debugger_enabled,
+            force_main_world_initialization,
             // Protocol connections capture startup scripts before creating engines.
             document_start_scripts: _,
         } = config;
@@ -761,6 +775,7 @@ impl NavigationEngine {
             ),
             layout_configuration,
             debugger_enabled,
+            force_main_world_initialization,
             emulated_scrollbars_hidden: false,
             js_runtime,
             resource_runtime: Some(resource_runtime),
@@ -783,7 +798,10 @@ impl NavigationEngine {
                 subframe_loading_enabled,
                 renderer_owner_source.layout_configuration,
             )
-            .with_debugger_enabled(renderer_owner_source.debugger_enabled),
+            .with_debugger_enabled(renderer_owner_source.debugger_enabled)
+            .with_force_main_world_initialization(
+                renderer_owner_source.force_main_world_initialization,
+            ),
             renderer_owner_source,
         )
     }
@@ -798,6 +816,7 @@ impl NavigationEngine {
             subframe_loading_enabled,
             layout_configuration,
             debugger_enabled,
+            force_main_world_initialization,
             // Protocol connections capture startup scripts before creating engines.
             document_start_scripts: _,
         } = config;
@@ -818,6 +837,7 @@ impl NavigationEngine {
             ),
             layout_configuration,
             debugger_enabled,
+            force_main_world_initialization,
             emulated_scrollbars_hidden: false,
             js_runtime: renderer_owner_source.js_runtime.clone(),
             resource_runtime: Some(resource_runtime),
@@ -892,6 +912,11 @@ impl NavigationEngine {
             self.layout_configuration,
         )
         .with_debugger_enabled(self.debugger_enabled)
+        .with_force_main_world_initialization(self.force_main_world_initialization)
+    }
+
+    pub fn force_main_world_initialization(&self) -> bool {
+        self.force_main_world_initialization
     }
 
     pub fn debugger_enabled(&self) -> bool {
@@ -1720,6 +1745,7 @@ impl NavigationEngine {
                 document_settings: moli_page_types::DocumentSettings {
                     script_execution_disabled,
                     debugger_enabled: self.debugger_enabled,
+                    force_main_world_initialization: self.force_main_world_initialization,
                     scrollbars_hidden: self.emulated_scrollbars_hidden,
                     bypass_content_security_policy,
                     emulated_media,
@@ -1876,6 +1902,7 @@ impl NavigationEngine {
                     document_settings: moli_page_types::DocumentSettings {
                         script_execution_disabled,
                         debugger_enabled: self.debugger_enabled,
+                        force_main_world_initialization: self.force_main_world_initialization,
                         scrollbars_hidden: self.emulated_scrollbars_hidden,
                         bypass_content_security_policy,
                         emulated_media,
@@ -2011,6 +2038,7 @@ impl NavigationEngine {
                     document_settings: moli_page_types::DocumentSettings {
                         script_execution_disabled: options.script_execution_disabled,
                         debugger_enabled: self.debugger_enabled,
+                        force_main_world_initialization: self.force_main_world_initialization,
                         scrollbars_hidden: self.emulated_scrollbars_hidden,
                         bypass_content_security_policy: options.bypass_content_security_policy,
                         emulated_media: options.emulated_media,
@@ -2226,6 +2254,24 @@ mod tests {
 
         assert_eq!(engine.optional_resource_fetch_mask(), mask);
         assert!(!engine.image_fetch_enabled());
+    }
+
+    #[test]
+    fn force_main_world_policy_survives_materialization_and_shared_owner_config() {
+        let browser =
+            crate::config::BrowserConfig::default().with_force_main_world_initialization(true);
+        let config = NavigationRuntimeConfig::from(&browser);
+        assert!(config.force_main_world_initialization());
+        let engine = NavigationEngine::new_with_runtime_config(config);
+        assert!(engine.runtime_config().force_main_world_initialization());
+        let shared = NavigationEngine::new_with_fetch_config_and_shared_renderer_owner(
+            FetchConfig::default(),
+            &engine,
+            OptionalResourceFetchMask::NONE,
+            true,
+        )
+        .unwrap();
+        assert!(shared.runtime_config().force_main_world_initialization());
     }
 
     #[test]

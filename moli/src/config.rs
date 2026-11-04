@@ -98,6 +98,9 @@ impl AppConfig {
 }
 
 fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> {
+    config
+        .browser
+        .set_force_main_world_initialization(common.force_main_world_initialization);
     if common.scrollbars && !common.layout {
         bail!("--scrollbars requires --layout or MOLI_LAYOUT=true");
     }
@@ -351,6 +354,28 @@ mod tests {
     use crate::cli::{Cli, Commands};
     use clap::Parser;
     use std::path::Path;
+
+    #[test]
+    fn eager_main_world_is_explicit_for_fetch_and_serve() {
+        for command in ["fetch", "serve"] {
+            for eager in [false, true] {
+                let mut args = vec!["moli", command];
+                if eager {
+                    args.push("--force-main-world-initialization");
+                }
+                if command == "fetch" {
+                    args.push("https://example.test/");
+                }
+                let config = AppConfig::from_cli(&Cli::parse_from(args)).unwrap();
+                assert_eq!(config.browser.force_main_world_initialization(), eager);
+                assert_eq!(
+                    moli_core::runtime::NavigationRuntimeConfig::from(&config.browser)
+                        .force_main_world_initialization(),
+                    eager
+                );
+            }
+        }
+    }
 
     #[test]
     fn serve_debugger_pauses_are_opt_in() {

@@ -7,6 +7,12 @@ impl ScriptVm {
         policy: &crate::document_runtime::DocumentPolicyContainer,
         inherited: Option<&ScriptVmInitialDocumentEnvironment>,
     ) -> Result<crate::frame_owner_model::FrameDocumentLocalWindowTransition> {
+        // No WindowProxy or realm has been exposed, so there is no JS identity to retain.
+        if !self.main_world_is_initialized() {
+            return Ok(
+                crate::frame_owner_model::FrameDocumentLocalWindowTransition::ReplaceLocalWindow,
+            );
+        }
         // Serialized opaque origins are all "null". Compare the inherited
         // identity instead, so a shared opaque origin can reuse its Window
         // without treating independently sandboxed documents as same-origin.

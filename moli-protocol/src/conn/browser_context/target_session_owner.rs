@@ -217,10 +217,12 @@ impl TargetNavigationLoadInputs {
         &self,
         idle_override: Option<moli_page_types::EmulatedIdleOverride>,
         debugger_enabled: bool,
+        force_main_world_initialization: bool,
     ) -> moli_page_types::DocumentSettings {
         moli_page_types::DocumentSettings {
             script_execution_disabled: self.script_execution_disabled,
             debugger_enabled,
+            force_main_world_initialization,
             scrollbars_hidden: self.scrollbars_hidden,
             bypass_content_security_policy: self.bypass_content_security_policy,
             emulated_media: self.emulated_media.clone(),

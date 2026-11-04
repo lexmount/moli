@@ -21,6 +21,29 @@ const LOAD_START_INDEX: usize = 2;
 const LOAD_END_INDEX: usize = 3;
 const LIFECYCLE_TIMESTAMP_COUNT: usize = 4;
 
+pub(super) fn seed_deferred_lifecycle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    timestamps: [Option<f64>; 4],
+) {
+    if timestamps.iter().all(Option::is_none) {
+        return;
+    }
+    let array = v8::Array::new(scope, timestamps.len() as i32);
+    for (index, timestamp) in timestamps.into_iter().enumerate() {
+        if let Some(timestamp) = timestamp {
+            let number = v8::Number::new(scope, timestamp);
+            let _ = array.set_index(scope, index as u32, number.into());
+        }
+    }
+    set_private_value(
+        scope,
+        window,
+        WINDOW_PERFORMANCE_PENDING_LIFECYCLE_SLOT,
+        array.into(),
+    );
+}
+
 pub(in crate::context_bootstrap::performance_runtime) fn record_pending_dom_content_loaded_start(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> f64 {

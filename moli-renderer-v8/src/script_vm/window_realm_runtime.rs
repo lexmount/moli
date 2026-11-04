@@ -31,6 +31,20 @@ impl std::fmt::Debug for WindowRealmRuntimeState {
 }
 
 impl WindowRealmRuntime {
+    pub(super) fn uninitialized(
+        deferred_releases: RendererDeferredContextHostReleaseQueue,
+    ) -> Self {
+        Self {
+            state: None,
+            deferred_releases,
+            closed: false,
+        }
+    }
+
+    pub(super) fn is_initialized(&self) -> bool {
+        self.state.is_some()
+    }
+
     pub(super) fn new(
         scope: &mut v8::PinScope<'_, '_, ()>,
         context: v8::Local<'_, v8::Context>,
@@ -65,7 +79,9 @@ impl WindowRealmRuntime {
     }
 
     pub(super) fn release_bridge_ref(&mut self) {
-        self.state.as_mut().unwrap().bridge_ref.take();
+        if let Some(state) = self.state.as_mut() {
+            state.bridge_ref.take();
+        }
     }
 }
 
@@ -81,7 +97,7 @@ impl Deref for WindowRealmRuntime {
 
 impl Drop for WindowRealmRuntime {
     fn drop(&mut self) {
-        if !self.closed {
+        if !self.closed && self.state.is_some() {
             // A cache replacement or bootstrap error can occur during a V8
             // callback with the host already borrowed. Drop only queues the
             // record; cleanup runs after the outer entered-isolate operation.

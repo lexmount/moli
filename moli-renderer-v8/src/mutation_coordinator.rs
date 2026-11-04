@@ -3,7 +3,7 @@ use std::time::Instant;
 use crate::dom::native::{DomHost, DomMutationEffects, NativeNodeId, ScriptPrepareTriggerKind};
 
 mod notifications;
-pub(crate) use notifications::notify_dom_mutation;
+pub(crate) use notifications::{notify_dom_mutation, notify_native_dom_mutation};
 
 use super::{
     host::{HostEventTargetRegistry, HostScriptScheduler},

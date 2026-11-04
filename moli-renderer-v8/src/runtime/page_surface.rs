@@ -2292,7 +2292,7 @@ impl RendererRuntimeObservableSourceQueue {
     pub(crate) fn take_report_observable_output(
         &mut self,
         default_execution_context_id: Option<i64>,
-        default_context_token: RuntimeObservableContextToken,
+        default_context_token: Option<RuntimeObservableContextToken>,
     ) -> ScriptObservableOutput {
         let mut output = ScriptObservableOutput::default();
         let mut default_console_message_count = 0usize;
@@ -2317,7 +2317,7 @@ impl RendererRuntimeObservableSourceQueue {
             }
         }
         for event in &self.pending_console_events {
-            if event.context_token() != default_context_token {
+            if Some(event.context_token()) != default_context_token {
                 continue;
             }
             if default_console_message_count >= self.report_default_console_message_count {
@@ -2547,6 +2547,28 @@ mod page_diagnostics_snapshot_tests {
     }
 
     #[test]
+    fn lifecycle_errors_remain_reportable_before_a_script_context_exists() {
+        let mut queue = RendererRuntimeObservableSourceQueue::default();
+        queue.record_lifecycle_error("native resource failed".to_owned());
+        assert_eq!(
+            queue
+                .take_report_observable_output(None, None)
+                .into_items()
+                .collect::<Vec<_>>(),
+            vec![ScriptObservableOutputItem::LifecycleError(
+                "native resource failed".to_owned()
+            )],
+        );
+        assert_eq!(
+            queue
+                .take_report_observable_output(None, None)
+                .into_items()
+                .count(),
+            0
+        );
+    }
+
+    #[test]
     fn runtime_observable_source_queue_owns_lifecycle_errors() {
         let mut queue = RendererRuntimeObservableSourceQueue::default();
         queue.record_lifecycle_error("first failure".to_owned());
@@ -2574,8 +2596,10 @@ mod page_diagnostics_snapshot_tests {
             ],
         );
 
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output = queue.take_report_observable_output(
+            Some(5),
+            Some(RuntimeObservableContextToken::from_raw(50)),
+        );
         let report_items: Vec<_> = report_output.into_items().collect();
         assert_eq!(
             report_items,
@@ -2607,8 +2631,10 @@ mod page_diagnostics_snapshot_tests {
             ));
         queue.record_lifecycle_error("first failure".to_owned());
 
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output = queue.take_report_observable_output(
+            Some(5),
+            Some(RuntimeObservableContextToken::from_raw(50)),
+        );
         let report_items: Vec<_> = report_output.into_items().collect();
         assert_eq!(
             report_items,
@@ -2634,8 +2660,10 @@ mod page_diagnostics_snapshot_tests {
             ));
         queue.record_lifecycle_error("second failure".to_owned());
 
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output = queue.take_report_observable_output(
+            Some(5),
+            Some(RuntimeObservableContextToken::from_raw(50)),
+        );
         let report_items: Vec<_> = report_output.into_items().collect();
         assert_eq!(
             report_items,
@@ -2660,8 +2688,10 @@ mod page_diagnostics_snapshot_tests {
             ),
         );
 
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output = queue.take_report_observable_output(
+            Some(5),
+            Some(RuntimeObservableContextToken::from_raw(50)),
+        );
         let report_items: Vec<_> = report_output.into_items().collect();
         assert_eq!(
             report_items,
@@ -2683,8 +2713,10 @@ mod page_diagnostics_snapshot_tests {
             ]),
             Vec::new(),
         );
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output = queue.take_report_observable_output(
+            Some(5),
+            Some(RuntimeObservableContextToken::from_raw(50)),
+        );
         assert!(
             report_output.is_empty(),
             "pending default console output must not be reported again after it resolves into source items"

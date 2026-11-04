@@ -31,6 +31,7 @@ impl NavigationHistoryRealm {
 
 impl ScriptVm {
     pub(crate) fn reset_navigation_history(&mut self) -> Result<bool> {
+        self.initialize_main_world_if_needed()?;
         let realms = self.live_navigation_history_realms();
         let mut plans: Vec<(NavigationHistoryRealm, NavigationHistoryPrunePlan)> =
             Vec::with_capacity(realms.len());

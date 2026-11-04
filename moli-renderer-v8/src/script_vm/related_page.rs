@@ -102,6 +102,7 @@ impl ScriptVmPageRealmBootstrap {
     ) -> std::result::Result<ScriptVmDefaultWorldBootstrap, ScriptVmBootstrapError> {
         let Self {
             inherited_security_token: _,
+            initialize_main_world: _,
             resource_owner_id,
             promise_reject_dispatch,
             page_inspector,
@@ -186,6 +187,7 @@ impl ScriptVmPageRealmBootstrap {
             }
         };
         Ok(ScriptVmDefaultWorldBootstrap {
+            pending_main_world: None,
             resource_owner_id,
             promise_reject_dispatch,
             page_inspector,

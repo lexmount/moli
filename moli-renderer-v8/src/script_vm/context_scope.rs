@@ -101,6 +101,7 @@ impl ScriptVm {
         &mut self,
         op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
     ) -> Result<T> {
+        self.initialize_main_world_if_needed()?;
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         self.with_context_scope_by_ptr(context_ptr, op)
     }

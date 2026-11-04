@@ -2274,6 +2274,31 @@ impl ScriptVm {
         &mut self,
         ready: crate::document_runtime::ReadyConnectedStyleLoad,
     ) -> bool {
+        if !self.main_world_is_initialized() {
+            let host_ptr = (*self._context_host).as_ptr();
+            if ready.load_event_binding().is_some_and(|binding| {
+                !unsafe { &*host_ptr }.main_style_load_event_is_current(binding)
+            }) {
+                return false;
+            }
+            let has_handler = ["onload", "onerror"].into_iter().any(|name| {
+                self.document_runtime
+                    .dom_host()
+                    .get_attribute(ready.owner(), name)
+                    .is_some()
+            });
+            if !has_handler {
+                self.document_runtime
+                    .consume_pending_style_load(host_ptr, &ready);
+                return true;
+            }
+            if let Err(error) = self.initialize_main_world_if_needed() {
+                self.record_runtime_warning(format_args!(
+                    "style handler initialization failed: {error}"
+                ));
+                return false;
+            }
+        }
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
@@ -2294,6 +2319,9 @@ impl ScriptVm {
     }
 
     pub(crate) fn apply_pending_stylesheet_source_css_projections(&mut self) {
+        if !self.main_world_is_initialized() {
+            return;
+        }
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
@@ -2315,6 +2343,12 @@ impl ScriptVm {
         if clients.is_empty() {
             return;
         }
+        if let Err(error) = self.initialize_main_world_if_needed() {
+            self.record_runtime_warning(format_args!(
+                "stylesheet main world initialization failed: {error}"
+            ));
+            return;
+        }
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
@@ -2331,6 +2365,12 @@ impl ScriptVm {
     }
 
     pub(crate) fn dispatch_preload_like_link_error_event(&mut self, handle: DomHandle) -> bool {
+        if let Err(error) = self.initialize_main_world_if_needed() {
+            self.record_runtime_warning(format_args!(
+                "stylesheet main world initialization failed: {error}"
+            ));
+            return false;
+        }
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
@@ -2454,6 +2494,12 @@ impl ScriptVm {
             return;
         }
 
+        if let Err(error) = self.initialize_main_world_if_needed() {
+            self.record_runtime_warning(format_args!(
+                "CSP main world initialization failed: {error}"
+            ));
+            return;
+        }
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;

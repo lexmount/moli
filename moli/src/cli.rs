@@ -472,6 +472,10 @@ pub struct ServeArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Args)]
 pub struct CommonArgs {
+    /// Pre-create the main Window script context, including for scriptless documents.
+    #[arg(long)]
+    pub force_main_world_initialization: bool,
+
     #[arg(long)]
     pub insecure_disable_tls_host_verification: bool,
 

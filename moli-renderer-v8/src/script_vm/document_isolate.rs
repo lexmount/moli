@@ -178,6 +178,7 @@ impl Drop for RendererDocumentIsolateAccountingGuard {
 }
 
 pub(super) struct ScriptVmPageRealmBootstrap {
+    pub(super) initialize_main_world: bool,
     pub(super) inherited_security_token: Option<v8::Global<v8::Value>>,
     pub(super) resource_owner_id: ResourceOwnerId,
     pub(super) promise_reject_dispatch: PromiseRejectDispatchSlot,
@@ -218,7 +219,6 @@ pub(crate) struct RendererDocumentIsolateBootstrap {
     pub(super) renderer_document_isolate_teardown: RendererDocumentIsolateTeardown,
     pub(super) page_inspector: DocumentInspectorBinding,
     pub(super) renderer_page_script_environment: Option<RendererPageScriptEnvironment>,
-    pub(super) reuse_main_window_proxy: bool,
 }
 
 impl RendererDocumentIsolateBootstrap {
@@ -334,7 +334,6 @@ impl RendererPageScriptEnvironment {
                 RendererDocumentIsolateTeardown::owner_reserved_page(),
             page_inspector: DocumentInspectorBinding::new(isolate_backend),
             renderer_page_script_environment: None,
-            reuse_main_window_proxy: false,
         })
     }
 
@@ -579,7 +578,6 @@ impl RendererPageScriptEnvironment {
             page_inspector: DocumentInspectorBinding::new(isolate_backend)
                 .with_output_journal(self.output_journal()),
             renderer_page_script_environment: Some(self.clone()),
-            reuse_main_window_proxy: true,
         })
     }
 
@@ -591,6 +589,10 @@ impl RendererPageScriptEnvironment {
             .global_proxy
             .set(global_proxy)
             .map_err(|_| anyhow!("page script environment already retains its main WindowProxy"))
+    }
+
+    pub(super) fn has_main_window_proxy(&self) -> bool {
+        self.inner.global_proxy.get().is_some()
     }
 
     pub(super) fn with_main_window_proxy<T>(
@@ -605,6 +607,7 @@ impl RendererPageScriptEnvironment {
 }
 
 pub(crate) struct ScriptVmDefaultWorldBootstrap {
+    pub(super) pending_main_world: Option<Box<super::main_world::PendingMainWorld>>,
     pub(super) resource_owner_id: ResourceOwnerId,
     pub(super) promise_reject_dispatch: PromiseRejectDispatchSlot,
     pub(super) page_inspector: DocumentInspectorBinding,
@@ -770,7 +773,6 @@ impl RendererDocumentIsolateHandle {
             renderer_document_isolate_teardown,
             page_inspector: DocumentInspectorBinding::new(isolate_backend),
             renderer_page_script_environment: None,
-            reuse_main_window_proxy: false,
         })
     }
 
@@ -788,24 +790,9 @@ impl RendererDocumentIsolateHandle {
     }
 
     fn build_bridge_bindings(&self) -> Result<NativeBridgeBindings> {
-        let mut holder = self.inner.borrow_mut();
-        let RendererDocumentIsolateHolder {
-            isolate, bootstrap, ..
-        } = &mut *holder;
-        let isolate_ptr = unsafe { isolate.as_raw_isolate_ptr() };
-        with_entered_owned_isolate(isolate, |isolate| {
-            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
-            let scope = &mut scope.init();
-            let global_template = bootstrap.global_template(scope);
-            let cross_origin_window_global_template =
-                bootstrap.cross_origin_window_global_template(scope);
-            Ok(NativeBridgeBindings::build(
-                scope,
-                isolate_ptr,
-                global_template,
-                cross_origin_window_global_template,
-            ))
-        })
+        let holder = self.inner.borrow();
+        let isolate_ptr = unsafe { holder.isolate.as_raw_isolate_ptr() };
+        Ok(NativeBridgeBindings::deferred(isolate_ptr))
     }
 
     pub(super) fn with_renderer_document_isolate_and_inspector_mut<T>(
@@ -885,6 +872,10 @@ impl RendererDocumentIsolateHandle {
             isolate, bootstrap, ..
         } = &mut *holder;
         with_entered_owned_isolate(isolate, |isolate| {
+            {
+                let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+                bootstrap.initialize_if_needed(&mut scope.init())?;
+            }
             let result = op(isolate, &*bootstrap);
             self.deferred_context_host_releases
                 .drain_on_entered_isolate(isolate);
@@ -997,42 +988,8 @@ impl RendererDocumentIsolateHolder {
                 .environment_notifier(),
         );
         let isolate_ptr = unsafe { isolate.as_raw_isolate_ptr() };
-        let isolate_bootstrap;
-        let bridge_bindings;
-        {
-            let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
-            let scope = &mut scope.init();
-
-            let bootstrap_start = timing_enabled.then(std::time::Instant::now);
-            isolate_bootstrap = IsolateBootstrapCache::build(scope)?;
-            if timing_enabled {
-                tracing::info!(
-                    target: "moli_cdp_nav_timing",
-                    stage = "isolate_bootstrap_cache_build",
-                    elapsed_ms = bootstrap_start.unwrap().elapsed().as_secs_f64() * 1000.0,
-                    "IsolateBootstrapCache::build (246 constructor specs + global template)"
-                );
-            }
-
-            let bridge_start = timing_enabled.then(std::time::Instant::now);
-            let global_template = isolate_bootstrap.global_template(scope);
-            let cross_origin_window_global_template =
-                isolate_bootstrap.cross_origin_window_global_template(scope);
-            bridge_bindings = NativeBridgeBindings::build(
-                scope,
-                isolate_ptr,
-                global_template,
-                cross_origin_window_global_template,
-            );
-            if timing_enabled {
-                tracing::info!(
-                    target: "moli_cdp_nav_timing",
-                    stage = "native_bridge_bindings_build",
-                    elapsed_ms = bridge_start.unwrap().elapsed().as_secs_f64() * 1000.0,
-                    "NativeBridgeBindings::build"
-                );
-            }
-        }
+        let isolate_bootstrap = IsolateBootstrapCache::default();
+        let bridge_bindings = NativeBridgeBindings::deferred(isolate_ptr);
 
         let devtools_target_shutdown_registration = devtools_target_shutdown_registry
             .map(|registry| registry.register(inspector_backend.devtools_target()))
@@ -1143,22 +1100,27 @@ fn with_entered_owned_isolate<T>(
     op(isolate)
 }
 
+#[derive(Default)]
 pub(super) struct IsolateBootstrapCache {
-    pub(super) context_assets: ContextBootstrapAssets,
+    context_assets: Option<ContextBootstrapAssets>,
 }
 
 impl IsolateBootstrapCache {
-    pub(super) fn build(scope: &mut v8::PinScope<'_, '_, ()>) -> Result<Self> {
-        Ok(Self {
-            context_assets: ContextBootstrapAssets::build(scope)?,
-        })
+    fn initialize_if_needed(&mut self, scope: &mut v8::PinScope<'_, '_, ()>) -> Result<()> {
+        if self.context_assets.is_none() {
+            self.context_assets = Some(ContextBootstrapAssets::build(scope)?);
+        }
+        Ok(())
     }
 
     pub(super) fn global_template<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_, ()>,
     ) -> v8::Local<'s, v8::ObjectTemplate> {
-        self.context_assets.global_template(scope)
+        self.context_assets
+            .as_ref()
+            .expect("Context assets are initialized at realm entry")
+            .global_template(scope)
     }
 
     pub(super) fn cross_origin_window_global_template<'s>(
@@ -1166,6 +1128,8 @@ impl IsolateBootstrapCache {
         scope: &mut v8::PinScope<'s, '_, ()>,
     ) -> v8::Local<'s, v8::ObjectTemplate> {
         self.context_assets
+            .as_ref()
+            .expect("Context assets are initialized at realm entry")
             .cross_origin_window_global_template(scope)
     }
 }

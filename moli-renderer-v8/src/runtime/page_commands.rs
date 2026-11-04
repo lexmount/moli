@@ -336,14 +336,14 @@ impl PageVm {
                 );
                 Ok(RendererPageReply::Unit)
             }
-            RendererPageCommand::DefaultExecutionContextId => Ok(
-                RendererPageReply::OptionalExecutionContextId(self.default_execution_context_id()),
-            ),
-            RendererPageCommand::DefaultOrInitialExecutionContextId => Ok(
-                RendererPageReply::OptionalExecutionContextId(
-                    self.default_or_initial_execution_context_id(),
-                ),
-            ),
+            RendererPageCommand::DefaultExecutionContextId => {
+                self.vm_mut().initialize_main_world_if_needed()?;
+                Ok(RendererPageReply::OptionalExecutionContextId(self.default_execution_context_id()))
+            }
+            RendererPageCommand::DefaultOrInitialExecutionContextId => {
+                self.vm_mut().initialize_main_world_if_needed()?;
+                Ok(RendererPageReply::OptionalExecutionContextId(self.default_or_initial_execution_context_id()))
+            }
             RendererPageCommand::HasIsolatedWorldNamed { name, frame_id } => {
                 Ok(RendererPageReply::Bool(match frame_id {
                     Some(frame_id) => self.has_isolated_world_named_for_frame(&frame_id, &name),
@@ -369,9 +369,10 @@ impl PageVm {
             ) => Ok(RendererPageReply::OptionalExecutionContextId(
                 self.isolated_execution_context_id_for_inspector_context(execution_context_id),
             )),
-            RendererPageCommand::RuntimeRealmInventory => Ok(
-                RendererPageReply::RuntimeRealmInventory(self.runtime_realm_inventory()),
-            ),
+            RendererPageCommand::RuntimeRealmInventory => {
+                self.vm_mut().initialize_main_world_if_needed()?;
+                Ok(RendererPageReply::RuntimeRealmInventory(self.runtime_realm_inventory()))
+            }
             RendererPageCommand::LiveChildDefaultRuntimeRealmInventory => {
                 let realms = self.live_child_default_runtime_realm_inventory();
                 Ok(RendererPageReply::RuntimeRealmInventory(realms))

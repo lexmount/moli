@@ -384,12 +384,14 @@ impl PageVm {
         super::run_named_owner_local_task(
             local_executor,
             "selected Page task test executor local task channel closed",
-            async move {
+            // Keep the full task state on the heap, as the production owner
+            // queue does, instead of copying it through nested test futures.
+            Box::pin(async move {
                 page_vm_ref
                     .get_mut()
                     .apply_selected_page_scheduler_task(task, &loader)
                     .await
-            },
+            }),
         )
         .await
     }

@@ -28,6 +28,9 @@ impl ScriptVm {
     ) -> Option<InspectorWindowDispatchScope> {
         let execution_context_id = match target {
             InspectorWindowDispatchTarget::DefaultTop => {
+                if !self.main_world_is_initialized() {
+                    return None;
+                }
                 return Some(InspectorWindowDispatchScope {
                     context_ptr: &self.page_default_runtime.context as *const _,
                     child_handle: None,
@@ -66,6 +69,10 @@ impl ScriptVm {
         realm_id: FrameRealmId,
     ) -> Result<*const v8::Global<v8::Context>> {
         if realm_id.0 == 0 {
+            anyhow::ensure!(
+                self.main_world_is_initialized(),
+                "main world is not initialized"
+            );
             return Ok(&self.page_default_runtime.context as *const _);
         }
         self.child_frame_realm_context_ptr(realm_id)
@@ -1209,6 +1216,7 @@ impl ScriptVm {
         name: &str,
         grant_universal_access: bool,
     ) -> Result<i64> {
+        self.initialize_main_world_if_needed()?;
         self.publish_prebootstrapped_isolated_window_contexts()?;
         if let Some(execution_context_id) = self
             .page_isolated_world_contexts
@@ -1252,6 +1260,7 @@ impl ScriptVm {
         name: &str,
         grant_universal_access: bool,
     ) -> Result<i64> {
+        self.initialize_main_world_if_needed()?;
         self.publish_prebootstrapped_isolated_window_contexts()?;
         if let Some(execution_context_id) = self
             .page_isolated_world_contexts

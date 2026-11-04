@@ -65,6 +65,20 @@ async fn per_page_isolate_policy_uses_distinct_isolates_and_isolates_contexts() 
         2
     );
 
+    for page in [&first_page, &second_page] {
+        let heap = runtime_heap_usage_for_test(page).await;
+        assert_eq!(
+            heap["numberOfNativeContexts"], 0,
+            "a native-only Page keeps its own cold isolate"
+        );
+        assert!(
+            default_or_initial_execution_context_id_for_test(page)
+                .await
+                .expect("main world lookup must succeed")
+                .is_some(),
+            "explicit realm lookup initializes that Page only"
+        );
+    }
     let first_heap = runtime_heap_usage_for_test(&first_page).await;
     let second_heap = runtime_heap_usage_for_test(&second_page).await;
     let first_runtime = &first_heap["moli"]["runtime"];

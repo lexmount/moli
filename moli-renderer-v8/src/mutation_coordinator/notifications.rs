@@ -25,12 +25,37 @@ pub(crate) fn notify_dom_mutation(
     crate::native_bridge::document::detached_record_native_tree_mutations(
         scope, host_ptr, dom_host, effects,
     );
+    let timings = notify_native_dom_mutation(host_ptr, dom_host, effects);
+    crate::context_bootstrap::web_mcp::note_mutation(
+        scope,
+        unsafe { &mut *host_ptr },
+        dom_host,
+        effects,
+    );
+    let profile = moli_trace::cpu_profile_enabled();
+    let started = profile.then(Instant::now);
+    observer_runtime::queue_mutation_records(scope, host_ptr, dom_host, effects);
+    let observer_us = started
+        .map(|started| started.elapsed().as_micros())
+        .unwrap_or_default();
+    MutationNotificationTimings {
+        observer_us,
+        ..timings
+    }
+}
+
+/// Style and resource identity notifications do not require a Window realm.
+/// No wrappers, MutationObservers or WebMCP scripts exist before that realm.
+pub(crate) fn notify_native_dom_mutation(
+    host_ptr: *mut JsContextHost,
+    dom_host: &DomHost,
+    effects: &DomMutationEffects,
+) -> MutationNotificationTimings {
     let host = unsafe { &mut *host_ptr };
     if !effects.stylesheet_owners().changes().is_empty() {
         host.apply_stylesheet_owner_changes(effects.stylesheet_owners().changes());
     }
     host.note_app_manifest_link_mutation(dom_host, effects);
-    crate::context_bootstrap::web_mcp::note_mutation(scope, host, dom_host, effects);
 
     let profile = moli_trace::cpu_profile_enabled();
     let started = profile.then(Instant::now);
@@ -47,15 +72,10 @@ pub(crate) fn notify_dom_mutation(
         .map(|started| started.elapsed().as_micros())
         .unwrap_or_default();
 
-    let started = profile.then(Instant::now);
-    observer_runtime::queue_mutation_records(scope, host_ptr, dom_host, effects);
-    let observer_us = started
-        .map(|started| started.elapsed().as_micros())
-        .unwrap_or_default();
     MutationNotificationTimings {
         style_effect_count,
         style_effects_us,
         style_invalidation_us,
-        observer_us,
+        observer_us: 0,
     }
 }

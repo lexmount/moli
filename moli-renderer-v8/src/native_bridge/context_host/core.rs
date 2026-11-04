@@ -13,6 +13,17 @@ fn slotchange_microtask_callback(
 }
 
 impl JsContextHost {
+    pub(crate) fn initialize_native_bridge_bindings(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_, ()>,
+        global: v8::Local<'_, v8::ObjectTemplate>,
+        cross_origin: v8::Local<'_, v8::ObjectTemplate>,
+    ) {
+        self.bridge
+            .bindings
+            .initialize_if_needed(scope, global, cross_origin);
+    }
+
     pub(crate) fn mark_main_document_initial_empty(&mut self) {
         assert!(moli_url::is_about_blank(self.document_url()));
         self.initial_empty_main_document = true;
