@@ -211,7 +211,11 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
                     .get(&id)
                     .and_then(std::rc::Weak::upgrade)
             {
-                index.borrow_mut().deleted = created_in_upgrade;
+                let mut index = index.borrow_mut();
+                index.deleted = created_in_upgrade;
+                if !created_in_upgrade {
+                    index.info = Rc::clone(&index.origin);
+                }
             }
         }
     }
@@ -343,4 +347,145 @@ pub(in crate::context_bootstrap::indexed_db) fn clear_indexed_db_upgrade_transac
             mirror.borrow_mut().upgrade_metadata = None;
         }
     }
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn cached_indexed_db_object_store<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    name: &moli_indexeddb::IndexedDbName,
+) -> Option<v8::Local<'s, v8::Object>> {
+    // A transaction has one handle per live store, including borrowed method
+    // calls. The owner table and its wrappers remain weak and collectible.
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let table = table.borrow();
+    table.object_stores.iter().find_map(|(id, state)| {
+        let state = state.upgrade()?;
+        let state = state.borrow();
+        if state.deleted
+            || state.name() != name
+            || state.transaction.to_local(scope) != Some(transaction)
+        {
+            return None;
+        }
+        table.collectible_wrappers.get(id)?.to_local(scope)
+    })
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn cached_indexed_db_index<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    store: v8::Local<'s, v8::Object>,
+    name: &moli_indexeddb::IndexedDbName,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let table = indexed_db_runtime_state_table_for_object(scope, store);
+    let table = table.borrow();
+    table.indexes.iter().find_map(|(id, state)| {
+        let state = state.upgrade()?;
+        let state = state.borrow();
+        if state.deleted
+            || &state.info.name != name
+            || state.object_store.to_local(scope) != Some(store)
+        {
+            return None;
+        }
+        table.collectible_wrappers.get(id)?.to_local(scope)
+    })
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_index<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: v8::Local<'s, v8::Object>,
+    name: moli_indexeddb::IndexedDbName,
+) -> Result<(), IndexedDbError> {
+    let unavailable = || IndexedDbError::InvalidState("The index is unavailable.".into());
+    let state = index_native_state(scope, index).ok_or_else(unavailable)?;
+    let (store, old_name, identity) = {
+        let state = state.borrow();
+        (
+            state.object_store.to_local(scope).ok_or_else(unavailable)?,
+            state.info.name.clone(),
+            Rc::clone(&state.origin),
+        )
+    };
+    let transaction = indexed_db_object_store_transaction(scope, store).ok_or_else(unavailable)?;
+    if indexed_db_transaction_mode(scope, transaction) != Some(TransactionMode::VersionChange) {
+        return Err(IndexedDbError::InvalidState(
+            "The index requires a versionchange transaction.".into(),
+        ));
+    }
+    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
+        .unwrap_or(false)
+    {
+        return Err(IndexedDbError::TransactionInactive(
+            "The transaction is not active.".into(),
+        ));
+    }
+    if indexed_db_index_is_deleted(scope, index) {
+        return Err(unavailable());
+    }
+    if old_name == name {
+        return Ok(());
+    }
+    let database = indexed_db_object_store_database(scope, store).ok_or_else(unavailable)?;
+    let store_name = indexed_db_object_store_name(scope, store).ok_or_else(unavailable)?;
+    let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
+    let (candidate, info) = {
+        let mirror = mirror.borrow();
+        let metadata = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
+        let store = metadata.get(&store_name).ok_or_else(missing_mirror)?;
+        if store.index(&name).is_some() {
+            return Err(IndexedDbError::Constraint(
+                "The index name already exists.".into(),
+            ));
+        }
+        let store = store.with_renamed_index(&old_name, &name)?;
+        let info = store.shared_index(&name).ok_or_else(missing_mirror)?;
+        let candidate = edit_shared(metadata, |metadata| {
+            metadata.insert(store_name.clone(), store);
+        });
+        (candidate, info)
+    };
+    let handle =
+        transaction_handle_from_value(scope, transaction.into()).ok_or_else(unavailable)?;
+    let client = sql::indexed_db_request_sql_client(scope, transaction).ok_or_else(unavailable)?;
+    let context = transaction
+        .get_creation_context(scope)
+        .ok_or_else(unavailable)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    crate::context_bootstrap::indexed_db::schedule_schema_operation(
+        scope,
+        transaction,
+        client,
+        moli_indexeddb::sqlite::service::Command::RenameIndex {
+            transaction: handle,
+            store: store_name.clone(),
+            name: old_name,
+            new_name: name,
+        },
+        None,
+    )?;
+    mirror.borrow_mut().metadata = Some(candidate);
+    for table in indexed_db_handle_tables(scope, database) {
+        let indexes = table
+            .borrow()
+            .indexes
+            .values()
+            .filter_map(std::rc::Weak::upgrade)
+            .collect::<Vec<_>>();
+        for state in indexes {
+            let store = {
+                let state = state.borrow();
+                if state.deleted || !Rc::ptr_eq(&state.origin, &identity) {
+                    continue;
+                }
+                state.object_store.to_local(scope)
+            };
+            if store.is_some_and(|store| {
+                indexed_db_object_store_transaction(scope, store) == Some(transaction)
+            }) {
+                state.borrow_mut().info = Rc::clone(&info);
+            }
+        }
+    }
+    sync_indexed_db_store_handles(scope, database, &store_name);
+    Ok(())
 }

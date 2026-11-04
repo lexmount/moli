@@ -1,6 +1,9 @@
 use super::pipe_disturbed::run_probe;
 use super::*;
 
+#[path = "indexed_db_transaction/index_rename.rs"]
+mod index_rename;
+
 async fn assert_multi_entry_keys(scenario: &str) -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
@@ -189,7 +192,7 @@ async fn indexed_db_upgrade_metadata_tracks_handles_across_creation_realms() -> 
         assert_eq!(result["state"], "pass", "{target}: {result}");
         assert_eq!(
             result["checks"].as_array().unwrap().len(),
-            if target == "worker" { 46 } else { 47 },
+            if target == "worker" { 46 } else { 49 },
             "{target}: {result}"
         );
     }

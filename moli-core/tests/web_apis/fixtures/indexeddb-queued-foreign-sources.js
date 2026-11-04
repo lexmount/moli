@@ -26,7 +26,9 @@ async function foreignQueueProbe(prefix) {
         const waiting = db.transaction('s', 'readwrite'), waitingDone = done(waiting);
         const store = foreignRealm.IDBTransaction.prototype.objectStore.call(waiting, 's');
         const source = kind === 'store' ? store : foreignRealm.IDBObjectStore.prototype.index.call(store, 'i');
-        check(label + ' foreign wrapper realm', Object.getPrototypeOf(source) === foreignRealm[kind === 'store' ? 'IDBObjectStore' : 'IDBIndex'].prototype);
+        check(label + ' borrowed lookup keeps owner realm and identity',
+          Object.getPrototypeOf(source) === ownerRealm[kind === 'store' ? 'IDBObjectStore' : 'IDBIndex'].prototype &&
+          source === (kind === 'store' ? waiting.objectStore('s') : waiting.objectStore('s').index('i')));
         const query = [id], reads = [];
         const options = {get count() { reads.push('count'); return 1; }, get direction() { reads.push('direction'); return 'prev'; }, get query() { reads.push('query'); return query; }};
         const r = callerRealm[kind === 'store' ? 'IDBObjectStore' : 'IDBIndex'].prototype[method].call(source, options);

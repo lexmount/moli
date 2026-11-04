@@ -5,7 +5,7 @@ use moli_webapi_declare::WebApiObject;
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::IDBIndex, require_prototype, scope_lifetime = 'scope)]
 struct IdbIndexObjectDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
+    #[webapi(slot = crate::context_bootstrap::indexed_db::INDEX_NAME_FALLBACK_SLOT)]
     name: v8::Local<'scope, v8::String>,
     #[webapi(slot = SCHEMA_KEY_PATH_SLOT)]
     key_path: v8::Local<'scope, v8::Value>,
@@ -22,6 +22,11 @@ pub(in crate::context_bootstrap::indexed_db) fn create_index_object<'s>(
     store: v8::Local<'s, v8::Object>,
     info: &IndexInfo,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    if let Some(index) =
+        crate::context_bootstrap::indexed_db::cached_indexed_db_index(scope, store, &info.name)
+    {
+        return Some(index);
+    }
     let index = create_failed_index_object(scope, store, info)?;
     let storage_scope = indexed_db_typed_storage_scope(scope, store);
     let owner = indexed_db_typed_execution_owner(scope, store)

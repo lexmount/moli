@@ -62,7 +62,8 @@ impl IndexedDbMetadataSharingProbe {
         }
         self.stores.push(Rc::downgrade(&metadata.data));
         for info in metadata.indexes.values() {
-            self.index(info);
+            self.index(&info.info);
+            self.index(&info.origin);
         }
     }
 
@@ -122,16 +123,18 @@ pub(crate) fn indexed_db_metadata_sharing_probe_for_test<'s>(
                     Some((
                         index.object_store.to_local(scope)?,
                         index.info.clone(),
+                        index.origin.clone(),
                         Rc::downgrade(&state),
                     ))
                 })
                 .collect::<Vec<_>>()
         };
-        for (store, info, state) in indexes {
+        for (store, info, origin, state) in indexes {
             if indexed_db_object_store_database(scope, store) == Some(database) {
                 probe.index_handles += 1;
                 probe.index_states.push(state);
                 probe.index(&info);
+                probe.index(&origin);
             }
         }
     }

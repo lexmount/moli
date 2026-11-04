@@ -1,13 +1,13 @@
 globalThis.indexBuildProbe = async function (name = "idb-index-build") {
   const checks = globalThis.indexBuildChecks = [];
   const record = (label, pass, actual) => checks.push({ label, pass, actual });
-  const exercise = async (caseName, Realm, MethodRealm, StoreRealm = Realm) => {
+  const exercise = async (caseName, Realm, MethodRealm, LookupRealm = Realm) => {
   const name = caseName;
   const check = (label, pass, actual) => record(caseName + ':' + label, pass, actual);
   const same = (label, actual, expected) => check(label,
     JSON.stringify(actual) === JSON.stringify(expected), actual);
-  void Realm.indexedDB; void MethodRealm.indexedDB; void StoreRealm.indexedDB;
-  const getStore = (tx, name) => StoreRealm.IDBTransaction.prototype.objectStore.call(tx, name);
+  void Realm.indexedDB; void MethodRealm.indexedDB; void LookupRealm.indexedDB;
+  const getStore = (tx, name) => LookupRealm.IDBTransaction.prototype.objectStore.call(tx, name);
   const createStore = (db, name, options) => {
     const created = db.createObjectStore(name, options);
     return getStore(created.transaction, name);
@@ -78,7 +78,7 @@ globalThis.indexBuildProbe = async function (name = "idb-index-build") {
           };
           if (!persisted) records.forEach((value, i) => watch(store.put(value, i + 1), `put${i}`, true));
           index = createIndex(store, "unique", keyPath, { unique: true, multiEntry });
-          check(`${label}:returns-index`, index instanceof StoreRealm.IDBIndex && index.objectStore === store &&
+          check(`${label}:returns-index`, index instanceof Realm.IDBIndex && index.objectStore === store &&
             index.unique && index.multiEntry === multiEntry, index.name);
           check(`${label}:synchronous-metadata`, store.indexNames.contains("unique") && tx.error === null,
             Array.from(store.indexNames));
@@ -255,7 +255,7 @@ globalThis.indexBuildProbe = async function (name = "idb-index-build") {
     try {
       await exercise(name + '-foreign-method', globalThis, frame.contentWindow);
       await exercise(name + '-foreign-receiver', frame.contentWindow, globalThis);
-      await exercise(name + '-foreign-wrapper', globalThis, globalThis, frame.contentWindow);
+      await exercise(name + '-borrowed-lookup', globalThis, globalThis, frame.contentWindow);
     } finally { frame.remove(); }
   }
   return { state: checks.every(check => check.pass) ? 'pass' : 'fail', checks };
