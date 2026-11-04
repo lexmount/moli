@@ -4,7 +4,7 @@ use crate::conn::CommandWorkflowContext;
 impl ProtocolWorkflowState<'_> {
     pub(crate) fn prepare_deferred_load_emission(
         self,
-        completed: crate::domains::activity::DeferredMainDocumentLoadCompletionActivity,
+        completed: crate::domains::activity::MainDocumentPostLoadAction,
         context: &mut CommandWorkflowContext,
     ) -> Option<crate::conn::PreparedDownloadActivationDelivery> {
         let mut events = crate::domains::command_output::BackgroundProtocolEventBuffer::default();

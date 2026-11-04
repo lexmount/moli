@@ -195,7 +195,8 @@ struct RendererDocumentLifecycleProtocolState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RendererDocumentLoadBoundary {
+pub(crate) enum LoadPublicationState {
+    Stale,
     Pending,
     Reached,
     Interrupted,
@@ -1707,28 +1708,28 @@ impl TargetPageSlot {
             .push(publication);
     }
 
-    pub(crate) fn renderer_document_load_boundary(
+    pub(crate) fn main_document_load_publication_state(
         &self,
         expected: &CommittedRendererDocumentBinding,
-    ) -> RendererDocumentLoadBoundary {
-        let Some(current) = self.renderer_document_lifecycle.binding.as_ref() else {
-            return RendererDocumentLoadBoundary::Pending;
+    ) -> LoadPublicationState {
+        let Some(current) = self.renderer_document_lifecycle_binding() else {
+            return LoadPublicationState::Stale;
         };
         if !current.shares_document_owner_with(expected) {
-            return RendererDocumentLoadBoundary::Pending;
+            return LoadPublicationState::Stale;
         }
         if current.renderer_epoch != expected.renderer_epoch {
-            return RendererDocumentLoadBoundary::Interrupted;
+            return LoadPublicationState::Interrupted;
         }
         let Some(snapshot) = self.renderer_document_lifecycle.authoritative.snapshot else {
-            return RendererDocumentLoadBoundary::Pending;
+            return LoadPublicationState::Pending;
         };
         if snapshot.load.is_some() {
-            RendererDocumentLoadBoundary::Reached
+            LoadPublicationState::Reached
         } else if snapshot.terminated.is_some() {
-            RendererDocumentLoadBoundary::Interrupted
+            LoadPublicationState::Interrupted
         } else {
-            RendererDocumentLoadBoundary::Pending
+            LoadPublicationState::Pending
         }
     }
 

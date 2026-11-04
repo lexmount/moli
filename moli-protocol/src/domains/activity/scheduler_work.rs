@@ -12,9 +12,7 @@ use crate::{
     },
 };
 
-use super::{
-    main_document::DeferredMainDocumentLoadCompletionActivity, output_work::ProtocolOutputWork,
-};
+use super::{main_document::MainDocumentPostLoadAction, output_work::ProtocolOutputWork};
 
 /// Monotonic sequence assigned when protocol-owned scheduler work becomes
 /// durable.
@@ -88,7 +86,7 @@ pub(crate) struct RendererFencedProtocolOutput {
 enum ProtocolSchedulerWorkPayload {
     RendererFencedOutput(RendererFencedProtocolOutput),
     ProtocolObservation(ProtocolOutputWork),
-    MainDocumentLoadOwnerAction(Box<DeferredMainDocumentLoadCompletionActivity>),
+    MainDocumentLoadOwnerAction(Box<MainDocumentPostLoadAction>),
     BidiChannelOwnerAction(BidiChannelOwnerAction),
     TopLevelNavigationOwnerAction(TopLevelNavigationOwnerAction),
     PopupTargetNavigationOwnerAction(PopupTargetNavigationOwnerAction),
@@ -214,7 +212,7 @@ impl ProtocolSchedulerWork {
 
     pub(crate) fn main_document_load_owner_action(
         publish_sequence: ProtocolWorkPublishSequence,
-        completion: DeferredMainDocumentLoadCompletionActivity,
+        completion: MainDocumentPostLoadAction,
     ) -> Self {
         Self {
             publish_sequence,
@@ -546,9 +544,7 @@ impl ProtocolSchedulerWork {
 pub(crate) enum ReadyProtocolSchedulerWork {
     RendererFencedOutput(RendererFencedProtocolOutput),
     ProtocolObservation(ProtocolOutputWork),
-    MainDocumentLoadOwnerAction(
-        Box<super::main_document::DeferredMainDocumentLoadCompletionActivity>,
-    ),
+    MainDocumentLoadOwnerAction(Box<super::main_document::MainDocumentPostLoadAction>),
     BidiChannelOwnerAction(BidiChannelOwnerAction),
     TopLevelNavigationOwnerAction(TopLevelNavigationOwnerAction),
     PopupTargetNavigationOwnerAction(PopupTargetNavigationOwnerAction),

@@ -106,7 +106,7 @@ mod settings;
 mod site_data_manager_surface;
 mod state;
 pub(crate) use state::InitialDocumentPageBuildWaiter;
-pub(crate) use state::RendererDocumentLoadBoundary;
+pub(crate) use state::LoadPublicationState;
 mod state_access;
 pub(crate) use state::PendingPopupNavigation;
 pub(crate) use state_access::PreparedProtocolCommand;
@@ -2667,15 +2667,24 @@ impl CdpConnection {
         }
     }
 
-    pub(crate) fn enqueue_deferred_main_document_load_completion(
+    pub(crate) fn enqueue_main_document_load_publication(
         &mut self,
-        admission: crate::domains::activity::DeferredMainDocumentLoadCompletionAdmission,
+        navigation_activity: crate::domains::activity::MainDocumentNavigationActivity,
+        binding: Option<CommittedRendererDocumentBinding>,
+        pending_download: Option<moli_core::page::RendererPendingDownloadActivation>,
     ) -> Vec<BackgroundProtocolEvent> {
-        let owner = admission.owner_scope().clone();
+        let owner = navigation_activity.owner_scope().clone();
         let observation_id = self
             .scheduler_state
             .allocate_deferred_main_document_load_observation_id();
-        let publication = admission.into_publication(self, observation_id);
+        let renderer_page = self.renderer_page_residence_identity_for_owner(&owner);
+        let publication = crate::domains::activity::MainDocumentLoadPublication::new(
+            navigation_activity,
+            binding,
+            pending_download,
+            observation_id,
+            renderer_page,
+        );
         let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(&owner) else {
             return Vec::new();
         };
@@ -2694,28 +2703,25 @@ impl CdpConnection {
         let publications = slot.page_slot_mut().take_main_document_load_publications();
         let mut output = crate::domains::command_output::BackgroundProtocolEventBuffer::default();
         for publication in publications {
-            if !publication.is_still_current(self) {
-                continue;
-            }
-            let boundary = publication.boundary(self);
-            if boundary == RendererDocumentLoadBoundary::Pending {
-                if let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) {
-                    slot.page_slot_mut()
-                        .retain_main_document_load_publication(publication);
+            let run_post_load = match publication.state(self) {
+                LoadPublicationState::Stale => continue,
+                LoadPublicationState::Pending => {
+                    if let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) {
+                        slot.page_slot_mut()
+                            .retain_main_document_load_publication(publication);
+                    }
+                    continue;
                 }
-                continue;
-            }
-            let completion = publication.publish(
-                self,
-                boundary == RendererDocumentLoadBoundary::Reached,
-                &mut output,
-            );
+                LoadPublicationState::Reached => true,
+                LoadPublicationState::Interrupted => false,
+            };
+            let action = publication.publish(self, run_post_load, &mut output);
             let sequence = self
                 .scheduler_state
                 .allocate_protocol_work_publish_sequence();
             let work =
                 crate::domains::activity::ProtocolSchedulerWork::main_document_load_owner_action(
-                    sequence, completion,
+                    sequence, action,
                 );
             self.scheduler_state
                 .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
@@ -2723,25 +2729,16 @@ impl CdpConnection {
         output.into_events()
     }
 
-    pub(crate) fn renderer_document_load_publication_binding_for_owner(
+    pub(crate) fn main_document_load_publication_state_for_owner(
         &self,
         owner: &CommandOwnerScope,
-    ) -> Option<&CommittedRendererDocumentBinding> {
-        let slot = self
-            .runtime_session_owner_slot_for_owner(owner)?
-            .page_slot();
-        slot.renderer_document_lifecycle_binding()
-            .filter(|binding| Some(binding.page_attachment_id) == slot.page_attachment_id())
-    }
-
-    pub(crate) fn renderer_document_load_boundary_for_owner(
-        &self,
-        owner: &CommandOwnerScope,
-        binding: &CommittedRendererDocumentBinding,
-    ) -> RendererDocumentLoadBoundary {
+        binding: Option<&CommittedRendererDocumentBinding>,
+    ) -> LoadPublicationState {
         self.runtime_session_owner_slot_for_owner(owner)
-            .map_or(RendererDocumentLoadBoundary::Pending, |slot| {
-                slot.page_slot().renderer_document_load_boundary(binding)
+            .zip(binding)
+            .map_or(LoadPublicationState::Stale, |(slot, binding)| {
+                slot.page_slot()
+                    .main_document_load_publication_state(binding)
             })
     }
 
