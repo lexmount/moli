@@ -44,6 +44,22 @@ impl<'s> webidl::WebIdlConverter<'s> for ResolvedAbortSignal<'s> {
 }
 
 impl<'s> ResolvedAbortSignal<'s> {
+    /// Creates a signal in the current realm without consulting author-visible
+    /// constructors or maintaining another store for native algorithms.
+    pub(crate) fn new(scope: &mut v8::PinScope<'s, '_>) -> Option<Self> {
+        let signal = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+            crate::native_bridge::abort::create_signal(
+                scope,
+                unsafe { &mut *host_ptr },
+                false,
+                None,
+            )?
+        } else {
+            crate::worker::abort::new_worker_abort_signal(scope)?
+        };
+        Self::resolve(scope, signal)
+    }
+
     pub(crate) fn resolve(
         scope: &mut v8::PinScope<'s, '_>,
         signal: v8::Local<'s, v8::Object>,
