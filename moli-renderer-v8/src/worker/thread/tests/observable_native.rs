@@ -163,3 +163,19 @@ async fn worker_observable_take_until_preserves_conversion_notifier_order_sharin
     assert_eq!(result["failures"], serde_json::json!([]), "{result}");
     assert!(result["checks"].as_u64().unwrap() >= 154, "{result}");
 }
+
+#[tokio::test]
+async fn worker_observable_inspect_preserves_conversion_callbacks_cancellation_and_error_order() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "({}).then(value => {{ postMessage(value); close(); }});",
+            include_str!("../../../../tests/fixtures/observable-inspect.js")
+        ),
+        "https://observable-inspect.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    let result: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["checks"], 169, "{result}");
+}
