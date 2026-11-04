@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use moli_layout::{
-    LayoutError, LayoutFlushReason, LayoutFrameCoverage, LayoutPassRequest, LayoutPassResult,
-    PaintCaptureRequest, PaintSnapshot, PaintViewport,
+    LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult, PaintCaptureRequest,
+    PaintSnapshot, PaintViewport,
 };
 
 use super::ScriptVm;
@@ -40,8 +40,7 @@ impl ScriptVm {
     ) -> Result<Option<(PaintSnapshot, CaptureLayoutDiscovery)>, LayoutError> {
         self.with_capture_layout_pass(
             expected,
-            LayoutPassRequest::with_capture(viewport, reason, capture)
-                .with_frame_coverage(LayoutFrameCoverage::AllLayoutBoxes),
+            LayoutPassRequest::with_capture(viewport, reason, capture),
             environment,
             overlay,
             LayoutPassResult::take_paint_snapshot,
