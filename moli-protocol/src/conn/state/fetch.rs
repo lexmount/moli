@@ -4,14 +4,13 @@ use serde_json::{Value, json};
 use url::Url;
 
 use super::super::fetch_support::{
-    ClaimedSubresourceContinueRequest, CompletedDocumentBodyRead, DocumentBodySource,
-    InFlightSubresourceFetchRequest, PausedDocumentTransfer, PausedDocumentTransfers,
-    PendingDocumentBodyRead, PendingFetchAuthNavigation, PendingFetchNavigation,
-    PendingFetchResponseBodyStreamRead, PendingFetchResponseBodyStreamReadStart,
-    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchOwnerKind,
-    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
-    ResponseStageUrlMatchPolicy, fetch_subresource_interception_config_for_patterns,
-    matching_fetch_pattern,
+    ClaimedSubresourceContinueRequest, CompletedDocumentBodyRead, InFlightSubresourceFetchRequest,
+    PausedDocumentTransfer, PausedDocumentTransfers, PendingDocumentBodyRead,
+    PendingFetchAuthNavigation, PendingFetchNavigation, PendingFetchResponseBodyStreamRead,
+    PendingFetchResponseBodyStreamReadStart, PendingSubresourceFetchAuthRequest,
+    PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
+    PendingSubresourceFetchResponseRequest, ResponseStageUrlMatchPolicy,
+    fetch_subresource_interception_config_for_patterns, matching_fetch_pattern,
 };
 pub(super) use super::super::fetch_support::{
     FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter,
@@ -20,6 +19,8 @@ use super::DocumentNavigationToken;
 use super::navigation_outcome::NavigationDispatchState;
 use super::runtime_slot::TargetRuntimeSlot;
 use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
+#[cfg(test)]
+use crate::conn::DocumentBodySource;
 use moli_fetch::url_pattern_matches;
 
 #[derive(Debug, Default)]
@@ -293,6 +294,12 @@ impl TargetFetchState {
     }
 
     fn prune_request_stage_chains_for_session(&mut self, session_id: Option<&str>) {
+        for pending in self.pending_fetch_navigations.values_mut() {
+            pending.remaining_request_stages.retain(|stage| {
+                !stage.owner_kind.drains_on_fetch_disable()
+                    || stage.session_id.as_deref() != session_id
+            });
+        }
         for pending in self.pending_subresource_fetches.values_mut() {
             if let Some(chain) = pending.request_stage_chain.as_mut() {
                 chain.remaining_sessions.retain(|stage| {
@@ -561,6 +568,7 @@ impl TargetFetchState {
             .insert(request_id, pending);
     }
 
+    #[cfg(test)]
     pub(crate) fn register_pending_fetch_response_navigation(
         &mut self,
         request_id: String,
@@ -1726,6 +1734,19 @@ impl TargetFetchSubresourceInterceptionSnapshot {
         matching_auth_required_network_intercepts(&self.network_intercepts, url)
     }
 
+    pub(crate) fn has_request_stage_candidate(
+        &self,
+        resource_type: DevToolsNetworkResourceType,
+    ) -> bool {
+        self.enabled
+            && self.patterns.iter().any(|pattern| {
+                pattern.request_stage == FetchRequestStage::Request
+                    && pattern
+                        .resource_type_filter
+                        .is_none_or(|filter| filter.matches_resource_type(resource_type))
+            })
+    }
+
     pub(crate) fn has_response_stage_candidate(
         &self,
         resource_type: DevToolsNetworkResourceType,
@@ -1978,6 +1999,7 @@ impl TargetFetchOwner {
             .register_pending_fetch_auth_navigation(request_id, pending);
     }
 
+    #[cfg(test)]
     pub(crate) fn register_pending_fetch_response_navigation(
         &mut self,
         request_id: String,
@@ -2548,6 +2570,7 @@ mod tests {
                 request_id: Some(format!("NETWORK-{request_id}")),
                 loader_id: "LOADER-1".to_owned(),
                 request_announced: false,
+                announced_redirects: 0,
                 requested_url: test_url("auth-page"),
                 request_method: "GET".to_owned(),
                 request_body: None,

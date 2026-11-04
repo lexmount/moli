@@ -234,7 +234,7 @@ async fn prepared_navigation_request_freezes_policy_and_cancels_before_headers_o
     ctx.process_async(json!({"id": 11, "sessionId": "SID-1", "method": "Network.setExtraHTTPHeaders", "params": {"headers": {"X-Snapshot": "after"}}})).await;
     ctx.expect_result(11, json!({}), Some("SID-1"));
     let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        let (result, ()) = tokio::join!(job.wait(), async {
+        let (result, ()) = tokio::join!(job.fetch_raw_stream(), async {
             requested_rx.await.unwrap();
             ctx.with_fixture(|conn| {
                 conn.start_document_navigation_for_owner(&navigation.owner, "replacement".into())
@@ -269,7 +269,7 @@ async fn dropping_prepared_navigation_header_wait_cancels_its_transport() {
             .unwrap()
     });
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        let mut wait = Box::pin(job.wait());
+        let mut wait = Box::pin(job.fetch_raw_stream());
         tokio::select! {
             result = &mut wait => panic!("headers must stay held: {result:?}"),
             requested = requested_rx => requested.unwrap(),
@@ -580,6 +580,7 @@ pub(super) fn navigation_fixture() -> (
         request_id: Some("LID-test".to_owned()),
         loader_id: "LID-test".to_owned(),
         request_announced: true,
+        announced_redirects: 0,
         requested_url: Url::parse("https://original.example/document").unwrap(),
         request_method: "GET".to_owned(),
         request_body: None,
@@ -1014,14 +1015,14 @@ async fn offline_navigation_loaders_preserve_typed_error_causes_through_context(
     let buffered_error = async {
         let request =
             ctx.with_fixture(|conn| conn.prepare_navigation_request(&token, &navigation, None))?;
-        request.wait_buffered().await
+        request.fetch_buffered().await
     }
     .await
     .expect_err("offline response fetch must fail");
     let streaming_error = async {
         let request =
             ctx.with_fixture(|conn| conn.prepare_navigation_request(&token, &navigation, None))?;
-        request.wait().await
+        request.fetch_raw_stream().await
     }
     .await
     .expect_err("offline streaming response fetch must fail");
@@ -1038,7 +1039,7 @@ async fn offline_navigation_loaders_preserve_typed_error_causes_through_context(
                 }),
             )
         })?;
-        request.wait_buffered().await
+        request.fetch_buffered().await
     }
     .await
     .expect_err("offline authenticated response fetch must fail");

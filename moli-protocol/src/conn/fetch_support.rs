@@ -222,8 +222,16 @@ impl PendingSubresourceFetchOwnerKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PendingFetchNavigation {
+    pub(crate) reserved_service_worker_client:
+        Option<moli_core::runtime::RendererReservedServiceWorkerClient>,
+    pub(crate) interception: Option<(
+        moli_core::network::NavigationInterception,
+        moli_fetch::NetworkObservationJournal,
+    )>,
+    pub(crate) remaining_request_stages: Vec<PendingSubresourceFetchRequestStage>,
+    pub(crate) redirected_request_id: Option<String>,
     /// Authentication restart budget for this logical navigation, independent of pause IDs.
     pub(crate) auth_retry_budget: moli_fetch::AuthRetryBudget,
     pub fetch_request_id: String,
@@ -300,6 +308,7 @@ impl PendingFetchAuthNavigation {
 /// Protocol keeps navigation ownership even while a task exclusively reads the body.
 #[derive(Debug)]
 pub struct PausedDocumentTransfer {
+    reserved_service_worker_client: Option<moli_core::runtime::RendererReservedServiceWorkerClient>,
     fetch_request_id: String,
     document_navigation_token: Option<DocumentNavigationToken>,
     navigation: NavigationDispatchState,
@@ -510,6 +519,7 @@ impl PausedDocumentTransfers {
         self.transfers.insert(request_id, transfer);
     }
 
+    #[cfg(test)]
     pub(crate) fn register_pending_navigation(
         &mut self,
         request_id: String,
@@ -737,6 +747,8 @@ impl PendingDocumentBodyRead {
 }
 
 pub(crate) struct PendingStreamingDocumentResponseNavigation {
+    pub(crate) reserved_service_worker_client:
+        Option<moli_core::runtime::RendererReservedServiceWorkerClient>,
     pub(crate) document_navigation_token: DocumentNavigationToken,
     pub(crate) navigation: NavigationDispatchState,
     pub(crate) response: StreamingRawResponse,
@@ -745,6 +757,32 @@ pub(crate) struct PendingStreamingDocumentResponseNavigation {
 }
 
 impl PausedDocumentTransfer {
+    pub(crate) fn with_service_worker_client(
+        mut self,
+        client: Option<moli_core::runtime::RendererReservedServiceWorkerClient>,
+    ) -> Self {
+        self.reserved_service_worker_client = client;
+        self
+    }
+
+    pub(crate) fn cancellation_handle(&self) -> Option<moli_fetch::FetchCancelHandle> {
+        match &self.state {
+            PausedDocumentTransferState::Available(PausedDocumentBody::Pending(body)) => {
+                match body.as_ref() {
+                    DocumentBodySource::StreamingRaw { response, .. } => {
+                        Some(response.cancellation_handle())
+                    }
+                    _ => None,
+                }
+            }
+            PausedDocumentTransferState::Available(PausedDocumentBody::ActiveBodyStream {
+                stream,
+                ..
+            }) => Some(stream.response.cancellation_handle()),
+            PausedDocumentTransferState::Reading(reading) => reading.cancellation.clone(),
+        }
+    }
+
     pub(crate) fn navigation_token(&self) -> Option<&DocumentNavigationToken> {
         self.document_navigation_token.as_ref()
     }
@@ -757,7 +795,7 @@ impl PausedDocumentTransfer {
     // Otherwise the same owned preparation accepts captured or streaming bodies.
     #[allow(clippy::result_large_err)]
     pub(crate) fn prepare_response(
-        self,
+        mut self,
         conn: &mut CdpConnection,
         response_code: Option<u16>,
         response_headers: Vec<(String, Vec<u8>)>,
@@ -813,7 +851,12 @@ impl PausedDocumentTransfer {
                             body_progress_source,
                             response_code,
                             response_headers,
-                        ),
+                        )
+                        .map(|response| {
+                            response.with_service_worker_client(
+                                self.reserved_service_worker_client.take(),
+                            )
+                        }),
                     )),
                 );
             }
@@ -844,11 +887,17 @@ impl PausedDocumentTransfer {
                 progress,
             )
         };
-        Ok(crate::domains::fetch::PreparedFetchNavigationResponse::Captured(Box::new(response)))
+        Ok(
+            crate::domains::fetch::PreparedFetchNavigationResponse::Captured(Box::new(
+                response.map(|response| {
+                    response.with_service_worker_client(self.reserved_service_worker_client.take())
+                }),
+            )),
+        )
     }
 
     pub(crate) fn prepare_synthetic_response(
-        &self,
+        mut self,
         conn: &mut CdpConnection,
         response_code: u16,
         response_headers: Vec<(String, Vec<u8>)>,
@@ -883,6 +932,9 @@ impl PausedDocumentTransfer {
             NetworkObservationJournal::default(),
             body_progress_source,
         )
+        .map(|response| {
+            response.with_service_worker_client(self.reserved_service_worker_client.take())
+        })
     }
 
     pub(crate) fn into_navigation(
@@ -899,6 +951,7 @@ impl PausedDocumentTransfer {
         body: DocumentBodySource,
     ) -> Self {
         Self {
+            reserved_service_worker_client: None,
             fetch_request_id,
             document_navigation_token,
             navigation,
@@ -936,6 +989,7 @@ impl PausedDocumentTransfer {
         handle: String,
     ) -> Result<PendingFetchResponseOpenedBodyStream, Box<Self>> {
         let Self {
+            reserved_service_worker_client,
             fetch_request_id,
             document_navigation_token,
             navigation,
@@ -944,6 +998,7 @@ impl PausedDocumentTransfer {
         let PausedDocumentTransferState::Available(PausedDocumentBody::Pending(body)) = state
         else {
             return Err(Box::new(Self {
+                reserved_service_worker_client,
                 fetch_request_id,
                 document_navigation_token,
                 navigation,
@@ -985,6 +1040,7 @@ impl PausedDocumentTransfer {
             handle,
             buffered_body,
             transfer: Self {
+                reserved_service_worker_client,
                 fetch_request_id,
                 document_navigation_token,
                 navigation,
@@ -997,6 +1053,7 @@ impl PausedDocumentTransfer {
         self,
     ) -> Result<PendingStreamingDocumentResponseNavigation, Box<Self>> {
         let Self {
+            reserved_service_worker_client,
             fetch_request_id,
             document_navigation_token,
             navigation,
@@ -1009,6 +1066,7 @@ impl PausedDocumentTransfer {
             ) if matches!(body.as_ref(), DocumentBodySource::StreamingRaw { .. }) => (token, body),
             (document_navigation_token, state) => {
                 return Err(Box::new(Self {
+                    reserved_service_worker_client,
                     fetch_request_id,
                     document_navigation_token,
                     navigation,
@@ -1026,6 +1084,7 @@ impl PausedDocumentTransfer {
             unreachable!("the response was checked before transferring it")
         };
         Ok(PendingStreamingDocumentResponseNavigation {
+            reserved_service_worker_client,
             document_navigation_token,
             navigation,
             response,

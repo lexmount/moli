@@ -5,6 +5,7 @@ use super::*;
 /// A captured response's parser inputs and exact renderer reservation. Taking
 /// this value ends protocol state access; preparation owns all of its waits.
 pub(crate) struct PreparedCapturedNavigationResponse {
+    reserved_service_worker_client: Option<moli_core::runtime::RendererReservedServiceWorkerClient>,
     engine: NavigationEngine,
     page_reservation: Option<RendererDocumentPreparationTarget>,
     load_inputs: TargetNavigationLoadInputs,
@@ -45,6 +46,14 @@ impl PreparedNavigationLoadError {
 }
 
 impl PreparedCapturedNavigationResponse {
+    pub(crate) fn with_service_worker_client(
+        mut self,
+        client: Option<moli_core::runtime::RendererReservedServiceWorkerClient>,
+    ) -> Self {
+        self.reserved_service_worker_client = client;
+        self
+    }
+
     pub(crate) async fn run(mut self) -> Result<NavigationLoadOutcome> {
         if super::super::downloads::response_headers_indicate_download(&self.head.headers) {
             complete_auxiliary_download_response(&self.load_inputs, self.head.clone());
@@ -70,6 +79,34 @@ impl PreparedCapturedNavigationResponse {
                 self.network_observation_journal,
                 &self.body_progress_source,
             ));
+        }
+        if let Some(client) = self.reserved_service_worker_client.take() {
+            let body = self
+                .body
+                .process_in_worker(|body| body.materialize_bytes())
+                .await?;
+            let response = moli_core::runtime::streaming_raw_response_from_raw_response(
+                RawResponse::from_head_and_body(self.head, body),
+            )?;
+            return build_navigation_from_streaming_raw_response_with_engine_async(
+                &mut self.engine,
+                self.page_reservation
+                    .expect("a Document response must reserve its renderer Page"),
+                &self.load_inputs,
+                self.requested_url,
+                self.request_method,
+                self.request_headers,
+                response,
+                self.network_observation_journal,
+                None,
+                Vec::new(),
+                self.body_progress_source,
+                None,
+                Some(client),
+                CommittedDocumentResourceSource::Synthetic,
+                RendererReplyBoundary::Stage,
+            )
+            .await;
         }
         prepare_navigation_from_captured_raw_response_with_engine_async(
             &mut self.engine,
@@ -99,9 +136,34 @@ impl CdpConnection {
         navigation: &NavigationDispatchState,
         error: anyhow::Error,
     ) -> Result<PreparedNavigationLoadError> {
-        let Some(network_error) = error.downcast_ref::<NavigationNetworkError>() else {
-            return Err(error);
-        };
+        let (unreachable_url, request_method, request_headers, error_text) =
+            if let Some(network_error) = error.downcast_ref::<NavigationNetworkError>() {
+                (
+                    network_error.unreachable_url.clone(),
+                    network_error.request_method.clone(),
+                    network_error.request_headers.clone(),
+                    network_error.kind.error_text().to_owned(),
+                )
+            } else if !moli_fetch::is_fetch_cancelled(&error)
+                && let Some(failure) = error.downcast_ref::<NetworkFetchFailureContext>()
+            {
+                match failure.request_context() {
+                    Some(request) => (
+                        request.current_url().clone(),
+                        request.request_method().to_owned(),
+                        request.request_headers().clone(),
+                        failure.network_error_text().to_owned(),
+                    ),
+                    None => (
+                        navigation.requested_url.clone(),
+                        navigation.request_method.clone(),
+                        navigation.request_headers.clone(),
+                        failure.network_error_text().to_owned(),
+                    ),
+                }
+            } else {
+                return Err(error);
+            };
         let load_inputs = self.navigation_load_inputs_for_navigation(token, navigation)?;
         let engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
         let page_reservation =
@@ -110,10 +172,10 @@ impl CdpConnection {
             engine,
             page_reservation,
             load_inputs,
-            unreachable_url: network_error.unreachable_url.clone(),
-            request_method: network_error.request_method.clone(),
-            request_headers: network_error.request_headers.clone(),
-            error_text: network_error.kind.error_text().to_owned(),
+            unreachable_url,
+            request_method,
+            request_headers,
+            error_text,
         })
     }
 
@@ -201,6 +263,7 @@ impl CdpConnection {
                 && !response_status_has_no_content(head.status))
             .then(|| self.reserve_renderer_page_for_owner(owner, &load_inputs, &engine));
         PreparedCapturedNavigationResponse {
+            reserved_service_worker_client: None,
             engine,
             page_reservation,
             load_inputs,

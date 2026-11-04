@@ -403,6 +403,21 @@ fn start_devtools_continue_intercepted_request_command(
             pending.navigation.request_load_policy,
             None,
         );
+        if !pending.remaining_request_stages.is_empty() {
+            let stage = pending.remaining_request_stages.remove(0);
+            pending.fetch_request_id = stage.request_id;
+            pending.interception_session_id = stage.session_id;
+            pending.redirected_request_id = stage.redirected_request_id;
+            let event = super::request_paused_background_event(
+                pending.interception_session_id.as_deref(),
+                &pending,
+            );
+            let navigation_owner = pending.navigation.owner.clone();
+            conn.register_pending_fetch_navigation_request_for_owner(&navigation_owner, pending);
+            let mut plan = CommandOutputPlan::success();
+            plan.push_background_event(event);
+            return FetchCommandTaskStep::Complete(plan);
+        }
         let termination = super::navigation::NavigationTermination::new(
             conn,
             owner,
@@ -1560,6 +1575,7 @@ pub(super) fn continue_streaming_document_response_in_background(
     response_headers: Vec<(String, Vec<u8>)>,
 ) {
     let PendingStreamingDocumentResponseNavigation {
+        reserved_service_worker_client,
         document_navigation_token,
         navigation,
         response,
@@ -1575,7 +1591,7 @@ pub(super) fn continue_streaming_document_response_in_background(
         response_headers,
         body_progress_source,
     ) {
-        Ok(job) => job,
+        Ok(job) => job.with_service_worker_client(reserved_service_worker_client),
         Err(BackgroundNavigationClaimError::AlreadyClaimed) => return,
         Err(BackgroundNavigationClaimError::Stale) => {
             let _ = sender.send(page::BackgroundNavigationCompletion::new(

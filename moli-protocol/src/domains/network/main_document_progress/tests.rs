@@ -120,6 +120,7 @@ fn live_progress_source() -> (
     let (sender, receiver) = unbounded_channel();
     (
         MainDocumentLiveNetworkProgressSource {
+            announced_redirects: 0,
             sender: Some(sender),
             progress_queue: super::gate::MainDocumentProgressQueueHandle::from_source(
                 MainDocumentProgressSource::streaming(),
@@ -1604,6 +1605,7 @@ fn no_content_navigation_retains_response_metadata_with_live_progress() {
             request_id: Some("REQ-1".to_owned()),
             loader_id: "LOADER-1".to_owned(),
             request_announced: false,
+            announced_redirects: 0,
             requested_url: Url::parse("http://example.test/start").unwrap(),
             request_method: "GET".to_owned(),
             request_body: None,

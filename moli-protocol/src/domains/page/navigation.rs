@@ -2654,6 +2654,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         request_id: None,
         loader_id: document_loader_id.clone(),
         request_announced: false,
+        announced_redirects: 0,
         requested_url: requested_url.clone(),
         request_method: request_method.to_owned(),
         request_body: request_body
@@ -2699,6 +2700,10 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                 ));
             };
             pending_fetch_navigation = Some(PendingFetchNavigation {
+                reserved_service_worker_client: None,
+                interception: None,
+                remaining_request_stages: Vec::new(),
+                redirected_request_id: None,
                 auth_retry_budget: Default::default(),
                 fetch_request_id,
                 interception_session_id: preflight
@@ -2791,7 +2796,8 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     }
 
     if let Some(mut pending) = pending_fetch_navigation {
-        if fetch_request_stage == FetchRequestStage::Request {
+        let request_pause = fetch::prepare_navigation_request_pause(conn, &mut pending);
+        if fetch_request_stage == FetchRequestStage::Request && request_pause {
             pending.request_cookie_report = navigation_cookie_access_report_for_owner(
                 conn,
                 &pending.navigation.owner,
@@ -2810,14 +2816,13 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                 );
             }
             pending.navigation.request_announced = pending.navigation.request_id.is_some();
-            let _ = conn.register_pending_fetch_navigation_request_for_owner(
-                &pending.navigation.owner,
-                pending.clone(),
-            );
             out.push(fetch::request_paused_background_event(
                 pending.interception_session_id.as_deref(),
                 &pending,
             ));
+            let pending_owner = pending.navigation.owner.clone();
+            let _ =
+                conn.register_pending_fetch_navigation_request_for_owner(&pending_owner, pending);
             let mut output = CommandOutputBuffer::default();
             output.extend_background_events_after_messages(out);
             return NavigateCommandStart::CompleteImmediate(output.into_plan());
@@ -2840,6 +2845,14 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
             );
         }
         pending.navigation.request_announced = pending.navigation.request_id.is_some();
+        if let Some(sender) = conn.background_event_sender() {
+            // Retire the previous source and announce the request before
+            // waiting for headers. A held transport must not retain either
+            // the old Worker targets or this navigation's initial events.
+            for event in out.drain(..) {
+                let _ = sender.send(event);
+            }
+        }
         return NavigateCommandStart::PendingContinueWithoutRequestPause(Box::new(
             PendingContinueNavigationWithoutRequestPauseCommand {
                 prefix_events: out,

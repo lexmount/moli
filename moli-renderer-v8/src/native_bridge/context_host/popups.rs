@@ -2431,20 +2431,16 @@ impl JsContextHost {
                         task_resource_loader.note_external_response_ready()?;
                         response
                     }
-                    None => task_resource_loader
-                        .fetch(
+                    None => {
+                        crate::network::navigation::NavigationInterception::new(
+                            task_resource_loader.clone(),
                             request
                                 .with_request_origin(request_origin)
-                                .with_page_network_policy()
                                 .with_top_level_navigation_cookie_context(),
                         )
-                        .await
-                        .map(|response| {
-                            moli_fetch::RawResponse::from_head_and_body(
-                                response.head(),
-                                response.body_bytes().to_vec(),
-                            )
-                        })?,
+                        .fetch_raw()
+                        .await?
+                    }
                 };
                 let head = response.head();
                 if popup_document_response_should_ignore_navigation(response.status, &head.headers)

@@ -41,6 +41,7 @@ fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchS
         request_id: Some(format!("NETWORK-{fetch_request_id}")),
         loader_id: "LID-0000000001".to_owned(),
         request_announced: false,
+        announced_redirects: 0,
         requested_url: Url::parse("https://example.test/").unwrap(),
         request_method: "GET".to_owned(),
         request_body: None,
@@ -812,6 +813,10 @@ fn target_fetch_owner_reports_matching_auth_required_network_intercepts() {
 fn pending_navigation_rejects_generic_request_action_without_consuming_id() {
     let mut state = TargetFetchState::default();
     state.register_pending_fetch_navigation_request(PendingFetchNavigation {
+        reserved_service_worker_client: None,
+        interception: None,
+        remaining_request_stages: Vec::new(),
+        redirected_request_id: None,
         auth_retry_budget: Default::default(),
         fetch_request_id: "FETCH-NAV".to_owned(),
         interception_session_id: Some("SID-fetch".to_owned()),

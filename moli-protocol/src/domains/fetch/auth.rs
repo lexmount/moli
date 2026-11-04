@@ -51,6 +51,10 @@ pub(super) fn navigation_for_auth_retry(
     pending: crate::conn::PendingFetchAuthNavigation,
 ) -> PendingFetchNavigation {
     PendingFetchNavigation {
+        reserved_service_worker_client: None,
+        interception: None,
+        remaining_request_stages: Vec::new(),
+        redirected_request_id: None,
         auth_retry_budget: pending.auth_retry_budget,
         fetch_request_id: pending.response_stage_request_id,
         interception_session_id: pending.interception_session_id,
@@ -75,6 +79,10 @@ pub(super) fn canceled_auth_response(
     };
     (
         PendingFetchNavigation {
+            reserved_service_worker_client: None,
+            interception: None,
+            remaining_request_stages: Vec::new(),
+            redirected_request_id: None,
             auth_retry_budget: pending.auth_retry_budget,
             fetch_request_id: pending.response_stage_request_id,
             interception_session_id: pending.interception_session_id,

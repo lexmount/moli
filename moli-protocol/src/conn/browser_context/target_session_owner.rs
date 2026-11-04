@@ -1105,7 +1105,12 @@ impl<'a> TargetSessionOwnerMut<'a> {
                         .map(|_| FetchRequestStage::Response)
                 })
                 .or_else(|| {
-                    document_fetch_response_stage_candidate.then_some(FetchRequestStage::Response)
+                    (document_fetch_response_stage_candidate
+                        || (!is_data_url
+                            && fetch_snapshot.has_request_stage_candidate(
+                                DevToolsNetworkResourceType::Document,
+                            )))
+                    .then_some(FetchRequestStage::Response)
                 });
             let document_fetch_event_session_id = document_request_pause
                 .as_ref()

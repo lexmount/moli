@@ -903,52 +903,6 @@ struct BackgroundNavigationClaim {
     cancellation: FetchCancelHandle,
 }
 
-/// Transport inputs captured while the navigation owner is available. Waiting
-/// for response headers owns neither a connection nor a renderer Page.
-pub(crate) struct PreparedNavigationRequest {
-    client: moli_core::network::ResourceRequestClient,
-    request: Request,
-    cancellation: FetchCancelHandle,
-}
-
-struct CancelNavigationRequestOnDrop(Option<FetchCancelHandle>);
-
-impl Drop for CancelNavigationRequestOnDrop {
-    fn drop(&mut self) {
-        if let Some(cancellation) = self.0.take() {
-            cancellation.cancel();
-        }
-    }
-}
-
-impl PreparedNavigationRequest {
-    pub(crate) async fn wait(self) -> Result<NetworkFetchResult<StreamingRawResponse>> {
-        let mut cancellation = CancelNavigationRequestOnDrop(Some(self.cancellation.clone()));
-        let url = self.request.url.clone();
-        let response = self
-            .client
-            .fetch_raw_stream_with_cancel_and_network_metadata(self.request, self.cancellation)
-            .await
-            .with_context(|| format!("failed to fetch page `{url}`"));
-        if response.is_ok() {
-            // The streaming response now owns transport cancellation.
-            cancellation.0.take();
-        }
-        response
-    }
-
-    pub(crate) async fn wait_buffered(self) -> Result<NetworkFetchResult<RawResponse>> {
-        let _cancellation = CancelNavigationRequestOnDrop(Some(self.cancellation.clone()));
-        let url = self.request.url.clone();
-        // libcurl owns Digest's intermediate challenges. The exact navigation
-        // cancellation reaches that transport as well as this waiting future.
-        self.client
-            .fetch_raw_with_cancel_and_network_metadata(self.request, self.cancellation)
-            .await
-            .with_context(|| format!("failed to fetch page `{url}`"))
-    }
-}
-
 pub(crate) struct BackgroundNavigationLoadJob {
     engine: NavigationEngine,
     page_reservation: RendererDocumentPreparationTarget,
@@ -969,6 +923,7 @@ pub(crate) struct BackgroundNavigationLoadJob {
 }
 
 pub(crate) struct PreparedStreamingNavigationResponse {
+    reserved_service_worker_client: Option<moli_core::runtime::RendererReservedServiceWorkerClient>,
     engine: NavigationEngine,
     page_reservation: RendererDocumentPreparationTarget,
     load_inputs: TargetNavigationLoadInputs,
@@ -1284,6 +1239,14 @@ impl BackgroundNavigationLoadJob {
 }
 
 impl PreparedStreamingNavigationResponse {
+    pub(crate) fn with_service_worker_client(
+        mut self,
+        client: Option<moli_core::runtime::RendererReservedServiceWorkerClient>,
+    ) -> Self {
+        self.reserved_service_worker_client = client;
+        self
+    }
+
     pub(crate) async fn run(
         mut self,
         body_completion_sink: Option<BackgroundNavigationBodyCompletionSink>,
@@ -1307,7 +1270,7 @@ impl PreparedStreamingNavigationResponse {
             self.response_headers_override,
             self.body_progress_source,
             body_completion_sink,
-            None,
+            self.reserved_service_worker_client,
             CommittedDocumentResourceSource::Synthetic,
             self.reply_boundary,
         )
@@ -2717,6 +2680,7 @@ impl CdpConnection {
         let (response, network_observation_journal) =
             response.into_parts_with_observation_journal();
         Ok(PreparedStreamingNavigationResponse {
+            reserved_service_worker_client: None,
             engine,
             page_reservation,
             load_inputs,
@@ -2756,6 +2720,7 @@ impl CdpConnection {
         let page_reservation =
             self.reserve_renderer_page_for_owner(&navigation.owner, &load_inputs, &engine);
         Ok(PreparedStreamingNavigationResponse {
+            reserved_service_worker_client: None,
             engine,
             page_reservation,
             load_inputs,
@@ -3225,7 +3190,7 @@ impl CdpConnection {
         token: &DocumentNavigationToken,
         navigation: &NavigationDispatchState,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<PreparedNavigationRequest> {
+    ) -> Result<moli_core::network::NavigationInterception> {
         let load_inputs = self.navigation_load_inputs_for_navigation(Some(token), navigation)?;
         let cancellation = self
             .runtime_session_owner_slot_for_owner(&navigation.owner)
@@ -3243,11 +3208,15 @@ impl CdpConnection {
         let client = self
             .ensure_resource_request_client_for_navigation_load_inputs(&load_inputs)?
             .frozen_request_client();
-        Ok(PreparedNavigationRequest {
+        let loader = moli_core::network::NavigationResourceLoader::new_with_cancel_handle(
             client,
-            request,
+            request.url.clone(),
+            moli_core::network::RendererResourceTaskRunner::from_current_tokio()?,
             cancellation,
-        })
+        );
+        Ok(moli_core::network::NavigationInterception::new(
+            loader, request,
+        ))
     }
 
     async fn fetch_navigation_streaming_raw_response_with_load_inputs_async(
@@ -3271,8 +3240,13 @@ impl CdpConnection {
         let loader = self
             .ensure_resource_request_client_for_navigation_load_inputs(load_inputs)?
             .clone();
-        loader
-            .fetch_raw_stream_with_cancel_and_network_metadata(request, FetchCancelHandle::new())
+        let navigation = moli_core::network::NavigationResourceLoader::new(
+            loader,
+            request.url.clone(),
+            moli_core::network::RendererResourceTaskRunner::from_current_tokio()?,
+        );
+        moli_core::network::NavigationInterception::new(navigation, request)
+            .fetch_raw_stream()
             .await
             .with_context(|| format!("failed to fetch page `{raw_url}`"))
     }

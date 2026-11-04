@@ -119,6 +119,7 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
         request_id: Some("LOADER-target".to_owned()),
         loader_id: "LOADER-target".to_owned(),
         request_announced: true,
+        announced_redirects: 0,
         requested_url: requested_url.clone(),
         request_method: "GET".to_owned(),
         request_body: None,

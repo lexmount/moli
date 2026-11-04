@@ -441,6 +441,10 @@ impl TargetRuntimeSlot {
         target_id: String,
         loader_id: String,
     ) -> DocumentNavigationToken {
+        if let Some(previous) = self.current_document_loader_id().map(str::to_owned) {
+            self.network_agent
+                .clear_fetch_pause_announced_request_id(&previous);
+        }
         self.devtools_renderer_channel.reopen_after_target_crash();
         let token = self
             .page_slot
@@ -929,14 +933,14 @@ impl TargetRuntimeSlot {
             .record_fetch_pause_announced_request_id(request_id);
     }
 
-    pub(crate) fn replace_child_document_fetch_request_id(
+    pub(crate) fn replace_navigation_fetch_request_id(
         &mut self,
         network_id: String,
         session_id: Option<String>,
         fetch_id: String,
     ) -> Option<String> {
         self.network_agent
-            .replace_child_document_fetch_request_id(network_id, session_id, fetch_id)
+            .replace_navigation_fetch_request_id(network_id, session_id, fetch_id)
     }
 
     pub(crate) fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {
@@ -975,14 +979,22 @@ impl TargetRuntimeSlot {
         &mut self,
         token: &DocumentNavigationToken,
     ) -> bool {
-        self.page_slot
-            .commit_pending_document_navigation_if_matches(token)
+        let committed = self
+            .page_slot
+            .commit_pending_document_navigation_if_matches(token);
+        if committed {
+            self.network_agent
+                .clear_fetch_pause_announced_request_id(&token.loader_id);
+        }
+        committed
     }
 
     pub(crate) fn clear_pending_document_navigation_if_loader_matches(
         &mut self,
         loader_id: &str,
     ) -> bool {
+        self.network_agent
+            .clear_fetch_pause_announced_request_id(loader_id);
         self.page_slot
             .clear_pending_document_navigation_if_loader_matches(loader_id)
     }
