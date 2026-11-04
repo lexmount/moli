@@ -341,7 +341,7 @@ fn append_browser_navigation_headers(
     append_encoded_header_if_missing(
         outgoing,
         "Accept",
-        crate::default_accept_header("document").to_owned(),
+        crate::default_accept_header(crate::DefaultAcceptKind::Navigation).to_owned(),
     );
     append_encoded_header_if_missing(
         outgoing,
@@ -385,10 +385,10 @@ fn append_browser_subresource_headers(
     }
 
     let accept = crate::default_accept_header(match metadata {
-        BrowserRequestMetadata::Image => "image",
-        BrowserRequestMetadata::EventSource => "eventsource",
-        BrowserRequestMetadata::TextTrack => "track",
-        _ => "",
+        BrowserRequestMetadata::Image => crate::DefaultAcceptKind::Image,
+        BrowserRequestMetadata::EventSource => crate::DefaultAcceptKind::EventSource,
+        BrowserRequestMetadata::TextTrack => crate::DefaultAcceptKind::TextTrack,
+        _ => crate::DefaultAcceptKind::Other,
     });
     append_encoded_header_if_missing(outgoing, "Accept", accept.to_owned());
     append_encoded_header_if_missing(

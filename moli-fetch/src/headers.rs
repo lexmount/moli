@@ -2,17 +2,29 @@ use std::borrow::Cow;
 
 use moli_web_mime::request_header_content_type_essence;
 
-/// The browser's default Accept value before service-worker interception or
-/// network dispatch. `eventsource` is the internal EventSource loader kind.
-pub fn default_accept_header(destination: &str) -> &'static str {
-    match destination {
-        "document" | "iframe" => {
+/// Accept policy is distinct from Fetch's destination: EventSource has an
+/// empty destination but requires a dedicated media type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultAcceptKind {
+    Navigation,
+    Image,
+    EventSource,
+    TextTrack,
+    Other,
+}
+
+/// The browser's default Accept value before interception or network dispatch.
+pub fn default_accept_header(kind: DefaultAcceptKind) -> &'static str {
+    match kind {
+        DefaultAcceptKind::Navigation => {
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
         }
-        "image" => "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-        "eventsource" => "text/event-stream",
-        "track" => "text/vtt,*/*;q=0.1",
-        _ => "*/*",
+        DefaultAcceptKind::Image => {
+            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        }
+        DefaultAcceptKind::EventSource => "text/event-stream",
+        DefaultAcceptKind::TextTrack => "text/vtt,*/*;q=0.1",
+        DefaultAcceptKind::Other => "*/*",
     }
 }
 

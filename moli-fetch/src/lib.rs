@@ -49,8 +49,8 @@ pub use error::{
 };
 pub use fetch_url_list::FetchUrlList;
 pub use headers::{
-    cors_unsafe_request_header_names, default_accept_header, encode_redirect_location,
-    is_cors_safelisted_method, is_cors_safelisted_request_content_type,
+    DefaultAcceptKind, cors_unsafe_request_header_names, default_accept_header,
+    encode_redirect_location, is_cors_safelisted_method, is_cors_safelisted_request_content_type,
     is_cors_safelisted_request_header, is_cors_safelisted_request_range,
     is_cors_unsafe_request_header_byte, is_forbidden_request_header_name,
     is_forbidden_request_header_override_value, is_forbidden_response_header_name,

@@ -302,14 +302,24 @@ impl ServiceWorkerRuntimeService {
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("accept"))
         {
-            let destination = if fetch_job.network_context.resource_type
+            let kind = if fetch_job.network_context.resource_type
                 == crate::types::SubresourceResourceType::EventSource
             {
-                "eventsource"
+                moli_fetch::DefaultAcceptKind::EventSource
             } else {
-                request.destination.as_str()
+                match request.destination {
+                    ServiceWorkerRequestDestination::Document
+                    | ServiceWorkerRequestDestination::Iframe => {
+                        moli_fetch::DefaultAcceptKind::Navigation
+                    }
+                    ServiceWorkerRequestDestination::Image => moli_fetch::DefaultAcceptKind::Image,
+                    ServiceWorkerRequestDestination::Track => {
+                        moli_fetch::DefaultAcceptKind::TextTrack
+                    }
+                    _ => moli_fetch::DefaultAcceptKind::Other,
+                }
             };
-            let accept = moli_fetch::default_accept_header(destination);
+            let accept = moli_fetch::default_accept_header(kind);
             request
                 .headers
                 .push(("Accept".to_owned(), accept.to_owned()));
