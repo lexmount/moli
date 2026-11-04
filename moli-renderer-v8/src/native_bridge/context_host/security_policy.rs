@@ -338,7 +338,46 @@ impl JsContextHost {
                 Cow::Owned(policy)
             }
         };
-        policy.cross_origin_isolated && policy.allows_cross_origin_isolation()
+        if !policy.allows_cross_origin_isolation() {
+            return false;
+        }
+        if policy
+            .document_isolation_policy
+            .enables_cross_origin_isolation()
+        {
+            return policy.cross_origin_isolated;
+        }
+        let OwnerDispatchScope::Child(handle) = owner else {
+            return policy.cross_origin_isolated;
+        };
+        if !policy
+            .cross_origin_embedder_policy
+            .enables_cross_origin_isolation()
+        {
+            return false;
+        }
+        // COOP chooses the top-level group's mode. A COEP-only child joins it;
+        // a child's own COOP header cannot isolate an otherwise ordinary group.
+        let mut root = OwnerDispatchScope::Child(handle);
+        for _ in 0..=self.child_browsing_contexts.len() {
+            let OwnerDispatchScope::Child(frame) = root else {
+                break;
+            };
+            let Some(parent) = self.owner_dispatch_scope_for_node(frame) else {
+                return false;
+            };
+            if parent == root {
+                return false;
+            }
+            root = parent;
+        }
+        match Some(root) {
+            Some(OwnerDispatchScope::Top) => self.document_policy_container().coop_coep_isolation,
+            Some(OwnerDispatchScope::LightweightPopup(id)) => self
+                .lightweight_popup_policy_container(id)
+                .is_some_and(|root| root.coop_coep_isolation),
+            _ => false,
+        }
     }
 
     pub(crate) fn check_top_document_subresource_csp<'s>(

@@ -357,6 +357,7 @@ fn page_vm_env_for_navigation_bootstrap(
         crate::content_security_policy::ContentSecurityPolicyReportingEndpoints::default();
     env.document_policy_container.cross_origin_embedder_policy = Default::default();
     env.document_policy_container.cross_origin_isolated = false;
+    env.document_policy_container.coop_coep_isolation = false;
     env.document_policy_container.sandbox = Default::default();
     env.top_level_storage_key = None;
     env.navigation_bootstrap_entry = navigation_bootstrap_entry;

@@ -186,6 +186,7 @@ impl DocumentPolicyContainer {
                 crate::cross_origin_isolation::response_headers_enable_cross_origin_isolation(
                     final_url, headers,
                 ),
+            coop_coep_isolation: crate::cross_origin_isolation::response_headers_enable_coop_coep_isolation(final_url, headers),
             document_content_security_policies: response_content_security_policies.clone(),
             sandbox,
             response_content_security_policies,

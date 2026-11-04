@@ -637,6 +637,9 @@ pub(crate) struct DocumentPolicyContainer {
         crate::cross_origin_isolation::CrossOriginEmbedderPolicy,
     pub(crate) document_isolation_policy: crate::cross_origin_isolation::DocumentIsolationPolicy,
     pub(crate) cross_origin_isolated: bool,
+    /// The response requested a COOP+COEP isolated group. Keep this separate
+    /// from DIP, which can isolate a single Document in a nonisolated group.
+    pub(crate) coop_coep_isolation: bool,
     pub(crate) document_content_security_policies: Vec<ContentSecurityPolicy>,
     pub(crate) response_content_security_policies: Vec<ContentSecurityPolicy>,
     pub(crate) response_content_security_report_only_policies: Vec<ContentSecurityPolicy>,
