@@ -1690,6 +1690,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn exact_observer_identity_ignores_document_open_replacement_metadata() {
+        let (mut conn, mut binding, _) = connection_with_dcl_only_renderer_lifecycle();
+        binding.document_open_replacement_epoch = Some(binding.renderer_epoch);
+
+        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
+            &CommandOwnerScope::for_session("SID-nav"),
+            Some(&binding),
+            RendererDocumentLifecycleMilestone::Load,
+        );
+        assert_eq!(
+            observer.observation(),
+            RendererDocumentLifecycleObservation::Pending,
+            "replacement metadata must not change the identity of a Document epoch"
+        );
+    }
+
     #[tokio::test]
     async fn deferred_load_late_observer_preserves_document_open_load() {
         let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
@@ -1749,6 +1766,19 @@ mod tests {
         assert_eq!(
             observer.observation(),
             RendererDocumentLifecycleObservation::Interrupted
+        );
+        let mut foreign_binding = binding.clone();
+        foreign_binding.page_attachment_id =
+            crate::conn::TargetPageAttachmentId::from_raw_for_test(2);
+        assert_eq!(
+            conn.register_exact_renderer_document_lifecycle_observer_for_owner(
+                &owner,
+                Some(&foreign_binding),
+                RendererDocumentLifecycleMilestone::Load,
+            )
+            .observation(),
+            RendererDocumentLifecycleObservation::Superseded,
+            "another Page attachment must never inherit this replacement interruption"
         );
         conn.enqueue_deferred_main_document_load_completion(deferred_load_admission_for_test(
             binding,
