@@ -1128,8 +1128,7 @@ pub(crate) fn activate_handle_via_click(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     button: i32,
     buttons: i32,
 ) -> RendererInputDispatchOutcome {
@@ -1137,7 +1136,7 @@ pub(crate) fn activate_handle_via_click(
         scope,
         runtime_ptr,
         handle,
-        InputEventCoordinates::from_root(x, y),
+        coordinates,
         button,
         buttons,
         0,

@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 use moli_layout::{
     FrozenLayoutTree, GeometryProvider, LayoutAnswers, LayoutError, LayoutPassRequest,
@@ -510,6 +512,22 @@ impl JsContextHost {
                 .set(self.layout_snapshot_cache_misses.get().saturating_add(1));
             Err(LayoutError::NoLayoutSnapshot)
         }
+    }
+
+    /// Retains the published root snapshot across input callbacks without
+    /// traversing its boxes or initializing layout. The input command drops
+    /// its reference when dispatch completes, even if callbacks clear or
+    /// replace the published slot in the meantime.
+    pub(crate) fn retain_latest_layout_tree(&self) -> Option<Rc<FrozenLayoutTree<DomHandle>>> {
+        let document = self.document_handle();
+        let root = self
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document)?;
+        self.document_layout_state
+            .borrow()
+            .retain_latest_layout(document)
+            .filter(|tree| tree.source_root() == root)
     }
 
     /// Inspects the member tree for one exact Document in the single latest

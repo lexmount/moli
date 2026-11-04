@@ -431,8 +431,8 @@ pub(crate) struct InputEventCoordinates {
 
 impl InputEventCoordinates {
     pub(crate) fn from_root(x: f64, y: f64) -> Self {
-        // Moli's top-level window is at the screen origin. Frame transforms
-        // change client coordinates without changing this screen position.
+        // This input path uses top-level viewport coordinates as screen
+        // positions. Frame transforms change only the client coordinates.
         Self {
             screen_x: x,
             screen_y: y,
@@ -739,14 +739,12 @@ pub(crate) fn construct_wheel_event<'s>(
 pub(crate) fn construct_touch_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     target: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let point = TouchEventPoint {
         identifier: 0,
-        x,
-        y,
+        coordinates,
         target,
         is_target_touch: true,
     };
@@ -760,8 +758,7 @@ pub(crate) fn construct_touch_event<'s>(
 #[derive(Clone, Copy)]
 pub(crate) struct TouchEventPoint<'s> {
     pub identifier: i32,
-    pub x: f64,
-    pub y: f64,
+    pub coordinates: InputEventCoordinates,
     pub target: v8::Local<'s, v8::Object>,
     pub is_target_touch: bool,
 }
@@ -809,13 +806,12 @@ fn construct_touch<'s>(
     let touch_init = TouchInitDeclaration::new(
         point.identifier,
         point.target,
-        // moli's window sits at the screen origin, so screen == client coords.
-        point.x,
-        point.y,
-        point.x,
-        point.y,
-        point.x,
-        point.y,
+        point.coordinates.screen_x,
+        point.coordinates.screen_y,
+        point.coordinates.client_x,
+        point.coordinates.client_y,
+        point.coordinates.client_x,
+        point.coordinates.client_y,
     )
     .bind(scope)
     .ok()?;

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use moli_layout::{DocumentLayoutServices, FrozenLayoutTree, LayoutViewport};
 
@@ -207,6 +207,13 @@ impl DocumentLayoutState {
         root: DomHandle,
     ) -> Option<&FrozenLayoutTree<DomHandle>> {
         self.latest_layout.get_for_root(root)
+    }
+
+    pub(super) fn retain_latest_layout(
+        &self,
+        document: DomHandle,
+    ) -> Option<Rc<FrozenLayoutTree<DomHandle>>> {
+        self.latest_layout.retain(document)
     }
 
     pub(super) fn publish_latest_layout(
