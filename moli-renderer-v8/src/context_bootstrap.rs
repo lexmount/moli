@@ -116,6 +116,7 @@ mod navigator_runtime;
 mod platform_object_worlds;
 mod session_history;
 mod shared_event_targets;
+pub(crate) use shared_event_targets::resolve_event_target;
 #[cfg(test)]
 pub(crate) use shared_event_targets::{bind_dispatch_target, bind_shared_target};
 mod world_wrappers;
@@ -395,16 +396,15 @@ pub(crate) use self::media_cues::{
     set_text_track_cue_track, text_track_cue_id, text_track_cue_times, text_track_cue_track,
 };
 pub(crate) use self::media_queries::{
-    SimpleObjectEventListenerInspectorSnapshot, dispatch_media_query_list_change_events,
-    dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
+    ResolvedSimpleEventTarget, SimpleObjectEventListenerInspectorSnapshot,
+    dispatch_media_query_list_change_events, dispatch_simple_event_target_event,
+    dispatch_simple_event_target_event_collecting_errors,
     dispatch_simple_event_target_event_with_ancestors,
     dispatch_simple_event_target_event_with_checkpoint, initialize_simple_event_target,
-    install_simple_event_target_handlers, is_simple_event_target,
-    simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
-    simple_event_target_handler_getter_callback, simple_event_target_handler_setter_callback,
-    simple_event_target_inspector_listener_snapshots,
-    simple_event_target_remove_event_listener_callback, simple_object_event_listeners_snapshot,
-    simple_object_event_set_handler, simple_object_has_event_listeners,
+    install_simple_event_target_handlers, simple_event_target_handler_getter_callback,
+    simple_event_target_handler_setter_callback, simple_event_target_inspector_listener_snapshots,
+    simple_object_event_listeners_snapshot, simple_object_event_set_handler,
+    simple_object_has_event_listeners,
 };
 use self::message_ports::schedule_scope_callback;
 pub(crate) use self::message_ports::{

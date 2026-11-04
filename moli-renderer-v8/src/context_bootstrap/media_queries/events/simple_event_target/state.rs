@@ -19,9 +19,19 @@ impl<'s> SimpleEventListenerRegistry<'s> {
     }
 }
 
-pub(super) struct ResolvedSimpleEventTarget<'s> {
+pub(crate) struct ResolvedSimpleEventTarget<'s> {
     pub(super) identity: ResolvedEventTarget<'s>,
     pub(super) registry: SimpleEventListenerRegistry<'s>,
+}
+
+impl<'s> ResolvedSimpleEventTarget<'s> {
+    pub(crate) fn from_identity(
+        scope: &mut v8::PinScope<'s, '_>,
+        identity: ResolvedEventTarget<'s>,
+    ) -> Option<Self> {
+        let registry = SimpleEventListenerRegistry::from_owner(scope, identity.listener_owner)?;
+        Some(Self { identity, registry })
+    }
 }
 
 pub(crate) fn initialize_simple_event_target<'s>(
@@ -40,22 +50,12 @@ pub(crate) fn initialize_simple_event_target<'s>(
     }
 }
 
-pub(crate) fn is_simple_event_target<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    target: v8::Local<'s, v8::Object>,
-) -> bool {
-    resolve_simple_event_target(scope, target).is_some()
-}
-
 pub(super) fn resolve_simple_event_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
 ) -> Option<ResolvedSimpleEventTarget<'s>> {
-    // Resolve registered native Proxies only for the simple-target branch.
-    // DOM and Window targets keep their existing receiver resolution.
     let identity = resolve_event_target(scope, target)?;
-    let registry = SimpleEventListenerRegistry::from_owner(scope, identity.listener_owner)?;
-    Some(ResolvedSimpleEventTarget { identity, registry })
+    ResolvedSimpleEventTarget::from_identity(scope, identity)
 }
 
 pub(super) fn simple_object_event_listener_registry<'s>(

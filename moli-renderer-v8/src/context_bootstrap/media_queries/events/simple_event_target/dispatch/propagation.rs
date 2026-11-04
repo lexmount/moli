@@ -12,14 +12,30 @@ pub(crate) fn dispatch_simple_event_target_event_with_ancestors<'s>(
     event: v8::Local<'s, v8::Object>,
     ancestors: &[v8::Local<'s, v8::Object>],
 ) -> SimpleEventDispatchResult {
-    let can_invoke =
-        crate::context_bootstrap::event_target_dispatch::begin_dispatch(scope, target, event);
-    let path = std::iter::once(target)
-        .chain(ancestors.iter().copied())
-        .collect::<Vec<_>>();
+    let Some(target) = resolve_event_target(scope, target) else {
+        return SimpleEventDispatchResult {
+            uncanceled: true,
+            ..Default::default()
+        };
+    };
+    // Keep the registry owner alongside each path entry's logical target.
+    // Neither the source wrapper nor another target's registry can substitute
+    // for these identities when a native receiver has a fixed dispatch target.
+    let mut path = Vec::with_capacity(1 + ancestors.len());
+    path.push(target);
+    for ancestor in ancestors {
+        if let Some(ancestor) = resolve_event_target(scope, *ancestor) {
+            path.push(ancestor);
+        }
+    }
+    let can_invoke = crate::context_bootstrap::event_target_dispatch::begin_dispatch(
+        scope,
+        target.dispatch_target,
+        event,
+    );
     let values = path
         .iter()
-        .map(|target| (*target).into())
+        .map(|target| target.dispatch_target.into())
         .collect::<Vec<_>>();
     let composed_path = v8::Array::new_with_elements(scope, &values);
     set_event_composed_path(scope, event, composed_path);
@@ -38,7 +54,8 @@ pub(crate) fn dispatch_simple_event_target_event_with_ancestors<'s>(
                 if event_internal_bool_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT) {
                     break;
                 }
-                let current_target = path[index];
+                let target = &path[index];
+                let current_target = target.dispatch_target;
                 let backing = event_backing(scope, event);
                 let current_target_in_realm = backing
                     .get_creation_context(scope)
@@ -67,9 +84,6 @@ pub(crate) fn dispatch_simple_event_target_event_with_ancestors<'s>(
                     v8str(scope, "eventPhase").into(),
                     v8::Integer::new(scope, phase).into(),
                 );
-                let Some(target) = resolve_event_target(scope, current_target) else {
-                    continue;
-                };
                 let Some(registry) =
                     SimpleEventListenerRegistry::from_owner(scope, target.listener_owner)
                 else {
