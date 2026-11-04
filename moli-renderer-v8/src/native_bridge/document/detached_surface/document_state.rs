@@ -368,5 +368,8 @@ fn set_detached_document_domain_value<'s>(
     else {
         return false;
     };
-    unsafe { &mut *host_ptr }.set_document_domain_for_document_handle(document_handle, value)
+    matches!(
+        unsafe { &mut *host_ptr }.set_document_domain_for_document_handle(document_handle, value),
+        DocumentDomainSetOutcome::Applied | DocumentDomainSetOutcome::Ignored
+    )
 }

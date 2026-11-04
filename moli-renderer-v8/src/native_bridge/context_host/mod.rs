@@ -1,3 +1,4 @@
+pub(crate) use self::document_domain::DocumentDomainSetOutcome;
 use super::{bridge::NativeDomBridge, history_queue::HistoryQueueState};
 mod session_history;
 use crate::{
