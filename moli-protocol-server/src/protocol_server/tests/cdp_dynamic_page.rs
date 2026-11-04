@@ -8,6 +8,7 @@ mod blank_navigation_inheritance;
 mod browser_close;
 mod noopener_blank_inheritance;
 mod popup_navigation_referrer;
+mod service_worker_reload;
 mod target_opening;
 
 type TestCdpSocket =
