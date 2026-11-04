@@ -16,7 +16,7 @@ pub(super) fn cache_store_and_key_for_request(
     cookie_header: Option<&str>,
 ) -> Option<(HttpCacheStore, String)> {
     let cache_dir = config.http_cache_dir()?;
-    if !request.cache_mode().allows_http_cache()
+    if !request.effective_cache_mode().allows_http_cache()
         || !request.method.eq_ignore_ascii_case("GET")
         || request.body.is_some()
         || request.auth().is_some()

@@ -578,7 +578,7 @@ impl SharedMemoryResourceCache {
 }
 
 pub(in crate::network) fn script_text_request_is_memory_cacheable(request: &Request) -> bool {
-    request.cache_mode().allows_memory_cache_store()
+    request.effective_cache_mode().allows_memory_cache_store()
         // These entries retain a complete response including its redirect
         // history. A resumed fetch must assemble its own history in transport.
         && request.redirect_chain().is_empty()
@@ -662,7 +662,7 @@ fn raw_subresource_cache_resource_type_key(resource_type: RequestResourceType) -
 }
 
 fn raw_subresource_request_is_memory_cacheable(request: &Request) -> bool {
-    request.cache_mode().allows_memory_cache_store()
+    request.effective_cache_mode().allows_memory_cache_store()
         && request.redirect_chain().is_empty()
         && raw_subresource_memory_cacheable_resource_type(request)
         && request.method.eq_ignore_ascii_case("GET")

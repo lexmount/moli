@@ -4,6 +4,7 @@ use super::*;
 enum Transport {
     Raw,
     Html,
+    Buffered,
 }
 
 impl Transport {
@@ -11,6 +12,7 @@ impl Transport {
         let client = FetchClient::new(config, new_shared_browser_cookie_store());
         let result = match self {
             Self::Raw => client.fetch(request).await,
+            Self::Buffered => client.fetch(request.with_single_hop()).await,
             Self::Html => match client.fetch_html_stream(request).await {
                 Ok(response) => response.into_materialized_text_response().await,
                 Err(error) => Err(error),
@@ -36,7 +38,7 @@ fn header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
 
 #[tokio::test]
 async fn cache_modes_emit_wire_controls_and_preserve_author_fields() -> Result<()> {
-    for transport in [Transport::Raw, Transport::Html] {
+    for transport in [Transport::Raw, Transport::Html, Transport::Buffered] {
         for (label, control, pragma) in [
             ("default", None, None),
             ("no-cache", Some("max-age=0"), None),
@@ -68,7 +70,7 @@ async fn cache_modes_emit_wire_controls_and_preserve_author_fields() -> Result<(
 
 #[tokio::test]
 async fn conditional_fetch_headers_bypass_cache_without_replacing_stored_response() -> Result<()> {
-    for transport in [Transport::Raw, Transport::Html] {
+    for transport in [Transport::Raw, Transport::Html, Transport::Buffered] {
         for field in [
             "If-Modified-Since",
             "If-None-Match",
@@ -84,13 +86,11 @@ async fn conditional_fetch_headers_bypass_cache_without_replacing_stored_respons
                 cached("conditional", "max-age=600"),
             ]);
             let request = Request::get(&server.url())?;
-            transport.fetch(&config, request.clone()).await?;
+            Transport::Raw.fetch(&config, request.clone()).await?;
             let mut conditional = request.clone();
             conditional.request_headers = vec![(field.to_owned(), "author".to_owned())].into();
-            let mode = RequestCacheMode::Default.for_fetch_headers(&conditional.request_headers);
-            let response = transport
-                .fetch(&config, conditional.with_cache_mode(mode))
-                .await?;
+            assert_eq!(conditional.cache_mode(), RequestCacheMode::Default);
+            let response = transport.fetch(&config, conditional).await?;
             assert!(!response.from_cache, "{transport:?}, {field}");
             assert_eq!(response.body_bytes(), b"conditional");
             let retained = transport.fetch(&config, request).await?;

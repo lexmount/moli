@@ -881,9 +881,6 @@ impl RuntimeOwner {
         if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
             return Err((job.response_tx, error));
         }
-        if job.request.cache_mode() == crate::RequestCacheMode::OnlyIfCached {
-            return Err((job.response_tx, anyhow::Error::new(crate::FetchCacheMiss)));
-        }
         let request_cookie_report = if job.request.allows_credentials_for_url(&job.current_url) {
             match cookie_access_report_for_request(
                 &self.cookie_store,
@@ -904,6 +901,33 @@ impl RuntimeOwner {
             &job.request,
             &job.current_url,
         );
+        match load_cached_streaming_response_lookup(
+            &self.config,
+            &prepared_request.request,
+            &job.current_url,
+            cookie_header.as_deref(),
+        ) {
+            Ok(Some(cached)) if !cached_streaming_response_is_stale(&cached) => {
+                if prepared_request
+                    .response_policy
+                    .observe_response(&job.current_url, &cached.headers)
+                    == ClientHintResponseAction::RestartNavigation
+                {
+                    return Ok(JobOutcome::Retry(Box::new(job)));
+                }
+                job.response_progress.mark_response_started();
+                let response = match materialize_cached_response(cached, request_cookie_report) {
+                    Ok(response) => response,
+                    Err(error) => return Err((job.response_tx, error)),
+                };
+                return self.finish_buffered_response(job, response, None);
+            }
+            Ok(Some(_)) | Ok(None) => {}
+            Err(error) => return Err((job.response_tx, error)),
+        }
+        if job.request.effective_cache_mode() == crate::RequestCacheMode::OnlyIfCached {
+            return Err((job.response_tx, anyhow::Error::new(crate::FetchCacheMiss)));
+        }
         let mut easy = Easy2::new(FetchTransferHandler::new_buffered(ResponseCollector::new(
             Some(job.cancel_handle.clone()),
         )));
@@ -931,9 +955,8 @@ impl RuntimeOwner {
             &job.current_url,
             cookie_header.as_deref(),
             job.http_version,
-            // Buffered transfers are now the auth/compatibility fallback and
-            // do not participate in disk-cache validation. Cache IO stays on
-            // the streaming reader/writer paths.
+            // Buffered auth/compatibility transfers can reuse cache entries,
+            // but validation and cache writes stay on the streaming paths.
             None,
         )
         .with_context(|| anyhow!("failed to configure curl request for {}", job.current_url))
@@ -1082,7 +1105,7 @@ impl RuntimeOwner {
             Err(error) => return Err((Box::new(job), None, error)),
         }
 
-        if job.request.cache_mode() == crate::RequestCacheMode::OnlyIfCached {
+        if job.request.effective_cache_mode() == crate::RequestCacheMode::OnlyIfCached {
             return Err((
                 Box::new(job),
                 None,
@@ -1308,7 +1331,7 @@ impl RuntimeOwner {
             Err(error) => return Err((Box::new(job), None, error)),
         }
 
-        if job.request.cache_mode() == crate::RequestCacheMode::OnlyIfCached {
+        if job.request.effective_cache_mode() == crate::RequestCacheMode::OnlyIfCached {
             return Err((
                 Box::new(job),
                 None,
@@ -1614,6 +1637,15 @@ impl RuntimeOwner {
         response.cookie_set_reports = cookie_set_reports;
         response = response.with_network_request_extra_info(request_extra_info.clone());
 
+        self.finish_buffered_response(job, response, request_extra_info)
+    }
+
+    fn finish_buffered_response(
+        &self,
+        mut job: RuntimeJob,
+        mut response: RawResponse,
+        request_extra_info: Option<NetworkRequestExtraInfo>,
+    ) -> std::result::Result<JobOutcome, (RuntimeResponseTx, anyhow::Error)> {
         let next_url = match next_followed_redirect_url_from_parts(
             &job.request,
             &response.final_url,
@@ -3030,6 +3062,40 @@ fn complete_streaming_html_job(job: StreamingRuntimeJob, response: Response) {
         let _ = body_tx.send(body);
     }
     let _ = job.completion_tx.send(Ok(()));
+}
+
+fn materialize_cached_response(
+    cached: CachedStreamingResponseLookup,
+    request_cookie_report: Option<StoredCookieQueryReport>,
+) -> Result<RawResponse> {
+    let CachedStreamingResponseLookup {
+        metadata,
+        cache_state,
+        final_url,
+        status,
+        headers,
+        mut body,
+        ..
+    } = cached;
+    let mut bytes = Vec::new();
+    body.read_to_end(&mut bytes)
+        .context("failed to read cached buffered response body")?;
+    Ok(RawResponse::from_head_and_body(
+        ResponseHead {
+            final_url: Url::parse(&final_url).context("invalid cached response final url")?,
+            status,
+            status_text: metadata.status_text,
+            headers,
+            request_cookie_report,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: true,
+            cache_state,
+            negotiated_http_version: None,
+        },
+        bytes,
+    ))
 }
 
 fn complete_cached_streaming_html_job(
