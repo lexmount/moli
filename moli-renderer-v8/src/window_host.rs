@@ -38,11 +38,11 @@ use super::{
     },
     script_provenance::CompiledStringProvenance,
     util::{
-        context_host_from_global_bridge, context_host_ptr_from_global_bridge,
-        context_host_ptr_from_window_object, define_non_enumerable_static_bool_property,
-        get_private_value, script_base_url_from_continuation_data,
-        script_base_url_from_host_defined_options, set_private_value, throw_type_error, v8_string,
-        v8str,
+        context_host_from_global_bridge, context_host_ptr_from_context_slot,
+        context_host_ptr_from_global_bridge, context_host_ptr_from_window_object,
+        define_non_enumerable_static_bool_property, get_private_value,
+        script_base_url_from_continuation_data, script_base_url_from_host_defined_options,
+        set_private_value, throw_type_error, v8_string, v8str,
     },
     webidl,
 };
@@ -52,12 +52,11 @@ use crate::event_listener_args::{
 use crate::event_type::{EventType, EventTypeKey};
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use url::Url;
 
 const WINDOW_SCROLL_X_SLOT: &str = "__moliWindowScrollX";
 const WINDOW_SCROLL_Y_SLOT: &str = "__moliWindowScrollY";
-const IDLE_CALLBACK_BUDGET_MS: f64 = 50.0;
 const IDLE_DEADLINE_DID_TIMEOUT_SLOT: &str = "__moliIdleDeadlineDidTimeout";
 const IDLE_DEADLINE_MS_SLOT: &str = "__moliIdleDeadlineMs";
 const IDLE_DEADLINE_TIME_ORIGIN_SLOT: &str = "__moliIdleDeadlineTimeOrigin";
@@ -2166,13 +2165,8 @@ fn parse_timer_delay_ms<'s>(
 pub(crate) fn build_window_idle_deadline<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     did_timeout: bool,
+    deadline_ms: f64,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let now_ms = current_time_ms();
-    let deadline_ms = if did_timeout {
-        now_ms
-    } else {
-        now_ms + IDLE_CALLBACK_BUDGET_MS
-    };
     let time_origin_ms = current_performance_time_origin(scope);
     IdleDeadlineDeclaration::new(deadline_ms, time_origin_ms, did_timeout)
         .bind(scope)
@@ -2222,12 +2216,27 @@ fn window_idle_deadline_time_remaining_callback<'s>(
         return;
     };
     let now_ms = current_time_ms();
+    // HTML's computeDeadline is evaluated again on every call. Use the
+    // deadline object's event loop even when the method comes from another realm.
+    let pending_work_deadline_ms = deadline
+        .get_creation_context(scope)
+        .and_then(context_host_ptr_from_context_slot)
+        .and_then(|host_ptr| unsafe { &*host_ptr }.next_idle_period_work_deadline())
+        .map(|pending| {
+            now_ms
+                + pending
+                    .saturating_duration_since(Instant::now())
+                    .as_secs_f64()
+                    * 1000.0
+        });
     let time_origin_ms = get_private_value(scope, deadline, IDLE_DEADLINE_TIME_ORIGIN_SLOT)
         .and_then(|value| value.number_value(scope))
         .unwrap_or(0.0);
     let remaining_ms = get_private_value(scope, deadline, IDLE_DEADLINE_MS_SLOT)
         .and_then(|value| value.number_value(scope))
         .map_or(0.0, |deadline_ms| {
+            let deadline_ms =
+                pending_work_deadline_ms.map_or(deadline_ms, |pending| deadline_ms.min(pending));
             // Use the captured origin even if timeRemaining is borrowed from
             // another realm. Both timestamps must match performance.now()'s
             // relative clock and precision rather than the raw wall clock.

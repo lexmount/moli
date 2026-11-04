@@ -167,9 +167,9 @@ impl DocumentRuntime {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         binding: crate::native_bridge::WindowExecutionContextBinding,
-    ) {
+    ) -> std::time::Instant {
         self.timeouts
-            .queue_window_animation_frame_wake(scope, binding);
+            .queue_window_animation_frame_wake(scope, binding)
     }
 
     pub(crate) fn queue_window_idle_callback<'s>(
@@ -381,6 +381,10 @@ impl DocumentRuntime {
 
     pub(crate) fn next_timeout_deadline(&self) -> Option<std::time::Instant> {
         self.timeouts.next_deadline()
+    }
+
+    pub(crate) fn next_html_timer_deadline(&self) -> Option<std::time::Instant> {
+        self.timeouts.next_html_timer_deadline()
     }
 
     pub(crate) fn event_listener_callback_ids(

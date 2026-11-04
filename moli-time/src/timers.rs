@@ -324,9 +324,16 @@ impl<T> TimerScheduler<T> {
     }
 
     pub fn next_deadline(&self) -> Option<Instant> {
+        self.next_deadline_matching(|_| true)
+    }
+
+    pub fn next_deadline_matching<F>(&self, mut predicate: F) -> Option<Instant>
+    where
+        F: FnMut(&T) -> bool,
+    {
         self.pending
             .iter()
-            .filter(|timer| self.active.contains(&timer.id))
+            .filter(|timer| self.active.contains(&timer.id) && predicate(&timer.payload))
             .map(|timer| timer.run_at)
             .min()
     }
@@ -584,6 +591,31 @@ mod tests {
             .expect("kept timer should become ready");
         assert_eq!(ready.id, kept);
         scheduler.finish_running(ready.id);
+    }
+
+    #[test]
+    fn matching_deadline_includes_future_timers_and_excludes_cancelled_and_running_timers() {
+        let now = Instant::now();
+        let mut scheduler = TimerScheduler::default();
+        let cancelled = scheduler.schedule_after("selected", 1, now);
+        scheduler.schedule_after("other", 0, now);
+        scheduler.schedule_after("selected", 10, now);
+        scheduler.cancel(cancelled);
+        assert_eq!(scheduler.next_deadline(), Some(now));
+        assert_eq!(
+            scheduler.next_deadline_matching(|payload| *payload == "selected"),
+            Some(now + Duration::from_millis(10))
+        );
+        let running = scheduler
+            .take_next_ready_matching(now + Duration::from_millis(10), |payload| {
+                *payload == "selected"
+            })
+            .expect("selected timer should become runnable");
+        assert_eq!(
+            scheduler.next_deadline_matching(|payload| *payload == "selected"),
+            None
+        );
+        scheduler.finish_running(running.id);
     }
 
     #[test]

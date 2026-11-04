@@ -18,17 +18,19 @@ use crate::{
 
 use super::rendering_updates::PendingRenderingUpdatePayload;
 use std::collections::HashMap;
+use std::time::Instant;
 
 #[derive(Default)]
 pub(super) struct AnimationFrameState {
     providers: Vec<AnimationFrameProvider>,
+    last_render_opportunity: Option<Instant>,
 }
 
 struct AnimationFrameProvider {
     dispatch_scope: OwnerDispatchScope,
     owner: WindowExecutionContextOwner,
     next_handle: u32,
-    wake_pending: bool,
+    wake_deadline: Option<Instant>,
     focus_fixup_target: Option<WindowDocumentTaskTarget>,
     observer_target: Option<WindowDocumentTaskTarget>,
     svg_target: Option<WindowDocumentTaskTarget>,
@@ -37,6 +39,27 @@ struct AnimationFrameProvider {
 }
 
 impl AnimationFrameState {
+    fn next_render_deadline(&self) -> Option<Instant> {
+        self.providers
+            .iter()
+            .filter(|provider| {
+                !provider.callbacks.is_empty()
+                    || provider.focus_fixup_target.is_some()
+                    || provider.observer_target.is_some()
+                    || provider.svg_target.is_some()
+            })
+            .filter_map(|provider| {
+                // Keep the elapsed wake deadline until its rendering task is
+                // consumed. Pending rendering work cannot offer more idle time.
+                provider.wake_deadline.or_else(|| {
+                    self.last_render_opportunity.map(|last| {
+                        last + crate::host::HostTimeoutScheduler::ANIMATION_FRAME_INTERVAL
+                    })
+                })
+            })
+            .min()
+    }
+
     pub(super) fn retire_owner(&mut self, owner: WindowExecutionContextOwner) {
         self.providers.retain(|provider| provider.owner != owner);
         for provider in &mut self.providers {
@@ -81,7 +104,7 @@ impl AnimationFrameState {
                 dispatch_scope,
                 owner,
                 next_handle: 0,
-                wake_pending: false,
+                wake_deadline: None,
                 focus_fixup_target: None,
                 observer_target: None,
                 svg_target: None,
@@ -98,6 +121,13 @@ impl AnimationFrameState {
 }
 
 impl JsContextHost {
+    pub(crate) fn next_idle_period_work_deadline(&self) -> Option<Instant> {
+        self.next_html_timer_deadline()
+            .into_iter()
+            .chain(self.animation_frames.next_render_deadline())
+            .min()
+    }
+
     /// A rendering body can yield to author code several times. Revalidate
     /// its immutable Document target before resolving each later phase; the
     /// initial Page authorization alone cannot survive document.open().
@@ -177,7 +207,8 @@ impl JsContextHost {
         if self
             .animation_frames
             .ensure_provider(owner, dispatch_scope)
-            .wake_pending
+            .wake_deadline
+            .is_some()
         {
             return;
         }
@@ -187,11 +218,11 @@ impl JsContextHost {
             self.animation_frames.discard(owner);
             return;
         };
+        let deadline = self.queue_window_animation_frame_wake(scope, binding);
         self.animation_frames
             .provider_mut(owner)
             .expect("provider was inserted")
-            .wake_pending = true;
-        self.queue_window_animation_frame_wake(scope, binding);
+            .wake_deadline = Some(deadline);
     }
 
     pub(super) fn queue_svg_animation_rendering_wake(
@@ -237,8 +268,7 @@ impl JsContextHost {
         };
         provider.handles.push(handle);
         provider.callbacks.insert(handle, callback);
-        if !provider.wake_pending {
-            provider.wake_pending = true;
+        if provider.wake_deadline.is_none() {
             // The wake belongs to the Document's default Window realm; each
             // callback independently retains its own relevant/incumbent realms.
             let binding = self
@@ -248,7 +278,11 @@ impl JsContextHost {
                     binding.dispatch_scope(),
                 )
                 .unwrap_or(binding);
-            self.queue_window_animation_frame_wake(scope, binding);
+            let deadline = self.queue_window_animation_frame_wake(scope, binding);
+            self.animation_frames
+                .provider_mut(owner)
+                .expect("provider was inserted")
+                .wake_deadline = Some(deadline);
         }
         handle
     }
@@ -306,7 +340,7 @@ impl JsContextHost {
             && provider.observer_target.is_none()
             && provider.svg_target.is_none()
         {
-            provider.wake_pending = false;
+            provider.wake_deadline = None;
             provider.handles.clear();
             return;
         }
@@ -335,6 +369,7 @@ impl JsContextHost {
         let dispatch_scope = target.dispatch_scope();
         let previous_scope = dispatch_scope.enter(scope);
         let timestamp = dom_time_since_origin_millis(current_performance_time_origin(scope));
+        self.animation_frames.last_render_opportunity = Some(Instant::now());
         let mut invoked = false;
 
         // HTML flushes autofocus before taking the animation callback snapshot.
@@ -351,7 +386,7 @@ impl JsContextHost {
             .animation_frames
             .provider_mut(owner)
             .map(|provider| {
-                provider.wake_pending = false;
+                provider.wake_deadline = None;
                 provider.observer_target = None;
                 (
                     std::mem::take(&mut provider.handles),
