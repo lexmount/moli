@@ -1388,6 +1388,19 @@ impl TargetFetchSubresourceInterceptionSnapshot {
             .filter_map(|session_id| self.fetch_sessions.get_key_value(session_id))
     }
 
+    pub(crate) fn fetch_session_ids(
+        &self,
+        default_session_id: Option<&str>,
+    ) -> Vec<Option<String>> {
+        self.ordered_fetch_sessions()
+            .map(|(session_id, _)| {
+                session_id
+                    .clone()
+                    .or_else(|| default_session_id.map(str::to_owned))
+            })
+            .collect()
+    }
+
     pub(crate) fn event_session_id<'a>(
         &'a self,
         default_session_id: Option<&'a str>,
@@ -2580,12 +2593,14 @@ mod tests {
                     session_id: Some("SID-A".to_owned()),
                     owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
                     request_id: "FETCH-A-LATER".to_owned(),
+                    redirected_request_id: None,
                     blocked_intercepts: Vec::new(),
                 },
                 PendingSubresourceFetchRequestStage {
                     session_id: Some("SID-C".to_owned()),
                     owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
                     request_id: "FETCH-C-LATER".to_owned(),
+                    redirected_request_id: None,
                     blocked_intercepts: Vec::new(),
                 },
             ],
@@ -2752,12 +2767,14 @@ mod tests {
                         session_id: Some("SID-A".to_owned()),
                         owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
                         request_id: "FETCH-STAGE-SAME-SESSION".to_owned(),
+                        redirected_request_id: None,
                         blocked_intercepts: Vec::new(),
                     },
                     PendingSubresourceFetchRequestStage {
                         session_id: Some("SID-A".to_owned()),
                         owner_kind: PendingSubresourceFetchOwnerKind::NetworkOrBidi,
                         request_id: "NETWORK-STAGE-SAME-SESSION".to_owned(),
+                        redirected_request_id: None,
                         blocked_intercepts: Vec::new(),
                     },
                 ],

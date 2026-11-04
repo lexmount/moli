@@ -121,12 +121,26 @@ async fn evaluate_script(ctx: &mut TestContext, id: u64, expression: &str) {
 }
 
 async fn continue_child_document(ctx: &mut TestContext, id: u64, paused: &Value) {
+    let session_id = paused["sessionId"].as_str().expect("pause session id");
     ctx.process_async(json!({
-        "id": id, "method": "Fetch.continueRequest", "sessionId": "SID-1",
+        "id": id, "method": "Fetch.continueRequest", "sessionId": session_id,
         "params": {"requestId": paused["params"]["requestId"]}
     }))
     .await;
-    ctx.expect_result(id, json!({}), Some("SID-1"));
+    ctx.expect_result(id, json!({}), Some(session_id));
+}
+
+async fn child_document_pause_in_session(
+    ctx: &mut TestContext,
+    session_id: &str,
+    url: &str,
+) -> Value {
+    ctx.wait_for_scheduler_message("session's child Document pause", |message| {
+        message["method"] == "Fetch.requestPaused"
+            && message["sessionId"] == session_id
+            && message["params"]["request"]["url"] == url
+    })
+    .await
 }
 
 fn terminal_events<'a>(ctx: &'a TestContext, network_id: &str) -> Vec<&'a Value> {
@@ -139,6 +153,124 @@ fn terminal_events<'a>(ctx: &'a TestContext, network_id: &str) -> Vec<&'a Value>
             ) && message["params"]["requestId"] == network_id
         })
         .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_document_redirect_fetch_ids_remain_in_their_session() {
+    for both_match in [true, false] {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = Router::new()
+            .route(
+                "/page",
+                get(|| async {
+                    (
+                        [(CONTENT_TYPE.as_str(), "text/html")],
+                        "<!doctype html><iframe></iframe>",
+                    )
+                }),
+            )
+            .route(
+                "/redirect",
+                get(|| async { (axum::http::StatusCode::FOUND, [("location", "/child")]) }),
+            )
+            .route("/child", counted_html(&hits, "session child"));
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let mut ctx = TestContext::new();
+        with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_context
+                    .as_mut()
+                    .unwrap()
+                    .assign_attached_session_to_target("TID-1", "SID-child-other".to_owned())
+            );
+        });
+        ctx.sent.clear();
+        for (id, session, pattern) in [
+            (39_100, "SID-1", if both_match { "*" } else { "*/redirect" }),
+            (
+                39_101,
+                "SID-child-other",
+                if both_match { "*" } else { "*/child" },
+            ),
+        ] {
+            ctx.process_async(json!({
+                "id":id,"method":"Fetch.enable","sessionId":session,
+                "params":{"patterns":[{"resourceType":"Document","urlPattern":pattern}]}
+            }))
+            .await;
+            ctx.expect_result(id, json!({}), Some(session));
+        }
+        enable_runtime_async(&mut ctx, "SID-1", 39_102).await;
+        evaluate_script(
+            &mut ctx,
+            39_103,
+            "document.querySelector('iframe').src = '/redirect'",
+        )
+        .await;
+        let source_url = format!("http://{addr}/redirect");
+        let target_url = format!("http://{addr}/child");
+        let first = child_document_pause_in_session(&mut ctx, "SID-1", &source_url).await;
+        assert!(first["params"]["redirectedRequestId"].is_null());
+        let network_id = first["params"]["networkId"].as_str().unwrap().to_owned();
+        continue_child_document(&mut ctx, 39_104, &first).await;
+        let first_other = if both_match {
+            let paused =
+                child_document_pause_in_session(&mut ctx, "SID-child-other", &source_url).await;
+            assert!(paused["params"]["redirectedRequestId"].is_null());
+            assert_ne!(paused["params"]["requestId"], first["params"]["requestId"]);
+            continue_child_document(&mut ctx, 39_105, &paused).await;
+            Some(paused)
+        } else {
+            None
+        };
+        if both_match {
+            let next = child_document_pause_in_session(&mut ctx, "SID-1", &target_url).await;
+            assert_eq!(
+                next["params"]["redirectedRequestId"],
+                first["params"]["requestId"]
+            );
+            assert_eq!(next["params"]["networkId"], network_id);
+            continue_child_document(&mut ctx, 39_106, &next).await;
+        }
+        let next_other =
+            child_document_pause_in_session(&mut ctx, "SID-child-other", &target_url).await;
+        assert_eq!(next_other["params"]["networkId"], network_id);
+        let previous_other = &next_other["params"]["redirectedRequestId"];
+        assert!(
+            previous_other.is_string(),
+            "an unmatched previous hop still has an interception id"
+        );
+        assert_ne!(
+            previous_other, &first["params"]["requestId"],
+            "redirect links must not cross sessions"
+        );
+        if let Some(previous) = first_other {
+            assert_eq!(previous_other, &previous["params"]["requestId"]);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        continue_child_document(&mut ctx, 39_107, &next_other).await;
+        evaluate_until_value_async(
+            &mut ctx,
+            "SID-1",
+            39_108,
+            CHILD_BODY_EXPRESSION,
+            &json!("session child"),
+            "child after all session continuations",
+        )
+        .await;
+        wait_until_message(&mut ctx, "SID-1", "redirected child terminal", |message| {
+            message["method"] == "Network.loadingFinished"
+                && message["params"]["requestId"] == network_id
+        })
+        .await;
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(request_will_be_sent_count(&ctx, &network_id), 2);
+        assert_eq!(terminal_events(&ctx, &network_id).len(), 1);
+        server.abort();
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

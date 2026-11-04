@@ -932,10 +932,11 @@ impl TargetRuntimeSlot {
     pub(crate) fn replace_child_document_fetch_request_id(
         &mut self,
         network_id: String,
+        session_id: Option<String>,
         fetch_id: String,
     ) -> Option<String> {
         self.network_agent
-            .replace_child_document_fetch_request_id(network_id, fetch_id)
+            .replace_child_document_fetch_request_id(network_id, session_id, fetch_id)
     }
 
     pub(crate) fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {

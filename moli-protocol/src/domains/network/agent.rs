@@ -513,11 +513,12 @@ impl TargetNetworkAgentState {
     pub(crate) fn replace_child_document_fetch_request_id(
         &mut self,
         network_id: String,
+        session_id: Option<String>,
         fetch_id: String,
     ) -> Option<String> {
         self.artifacts
             .subresource_network_artifacts
-            .replace_child_document_fetch_request_id(network_id, fetch_id)
+            .replace_child_document_fetch_request_id(network_id, session_id, fetch_id)
     }
 
     pub(crate) fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {
@@ -1857,7 +1858,7 @@ struct SubresourceNetworkArtifacts {
     emitted_record_counts_by_session: HashMap<Option<String>, usize>,
     request_ids_by_handle: HashMap<SubresourceNetworkRequestHandle, String>,
     completed_request_ids: HashSet<String>,
-    fetch_pause_announced_request_ids: HashMap<String, Option<String>>,
+    fetch_pause_announced_request_ids: HashMap<String, HashMap<Option<String>, String>>,
 }
 
 impl SubresourceNetworkArtifacts {
@@ -1931,17 +1932,19 @@ impl SubresourceNetworkArtifacts {
     fn record_fetch_pause_announced_request_id(&mut self, request_id: String) {
         self.fetch_pause_announced_request_ids
             .entry(request_id)
-            .or_insert(None);
+            .or_default();
     }
 
     fn replace_child_document_fetch_request_id(
         &mut self,
         network_id: String,
+        session_id: Option<String>,
         fetch_id: String,
     ) -> Option<String> {
         self.fetch_pause_announced_request_ids
-            .insert(network_id, Some(fetch_id))
-            .flatten()
+            .entry(network_id)
+            .or_default()
+            .insert(session_id, fetch_id)
     }
 
     fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {
