@@ -262,12 +262,14 @@ use event_handlers::install_global_event_handler_template_bindings as install_gl
 pub(crate) use event_handlers::{
     EventAttributeHandlerScope, GlobalEventHandlerOwner, compile_event_attribute_handler_for_owner,
     event_handler_content_attribute_name, initialize_parser_inserted_body_window_event_handlers,
-    node_event_handler_getter_function, node_event_handler_setter_function,
+    is_native_document_event_handler, node_event_handler_getter_function,
+    node_event_handler_setter_function,
 };
 use event_handlers::{
     body_onerror_getter_function, body_onerror_setter_function, body_onload_getter_function,
     body_onload_setter_function, body_onmessageerror_getter_function,
-    body_onmessageerror_setter_function,
+    body_onmessageerror_setter_function, shadow_root_event_handler_getter_function,
+    shadow_root_event_handler_setter_function,
 };
 pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::construct_focus_event;

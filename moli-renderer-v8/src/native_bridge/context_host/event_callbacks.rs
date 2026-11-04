@@ -196,8 +196,23 @@ impl JsContextHost {
         event_type: &str,
         handler: Option<v8::Local<'s, v8::Function>>,
     ) {
+        self.set_registered_dom_event_handler_property(
+            scope,
+            target,
+            event_type,
+            handler.map(Into::into),
+        );
+    }
+
+    pub(crate) fn set_registered_dom_event_handler_property<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        target: crate::document_runtime::EventTargetHandle,
+        event_type: &str,
+        handler: Option<v8::Local<'s, v8::Object>>,
+    ) {
         let relevant_context = handler
-            .and_then(|handler| v8::Local::<v8::Object>::from(handler).get_creation_context(scope))
+            .and_then(|handler| handler.get_creation_context(scope))
             .unwrap_or_else(|| scope.get_current_context());
         let incumbent_context = scope
             .get_incumbent_context()
@@ -224,7 +239,7 @@ impl JsContextHost {
             scope,
             target,
             event_type,
-            handler,
+            handler.map(Into::into),
             target_context,
             target_context,
         );
@@ -235,12 +250,12 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         target: crate::document_runtime::EventTargetHandle,
         event_type: &str,
-        handler: Option<v8::Local<'s, v8::Function>>,
+        handler: Option<v8::Local<'s, v8::Object>>,
         relevant_context: v8::Local<'s, v8::Context>,
         incumbent_context: v8::Local<'s, v8::Context>,
     ) {
         let callback_id = handler.map(|handler| {
-            self.register_event_callback(scope, handler.into(), relevant_context, incumbent_context)
+            self.register_event_callback(scope, handler, relevant_context, incumbent_context)
         });
         if let Some(previous) = self.set_event_handler_property(target, event_type, callback_id) {
             self.release_event_callback(previous);

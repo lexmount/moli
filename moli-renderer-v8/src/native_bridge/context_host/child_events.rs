@@ -642,6 +642,7 @@ impl JsContextHost {
             EventTargetHandle::ChildWindow(ready.target),
             event,
             &arguments,
+            ready.registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty,
         );
         (true, returned)
     }
