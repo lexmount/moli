@@ -151,6 +151,29 @@
 //! workers, iterators, fallback events, and deserialization paths when adding a
 //! factory. Receiver identity does not replace resource or realm authorization.
 //!
+//! # Backing objects and JavaScript identity
+//!
+//! Native Proxy factories expose a canonical JavaScript wrapper, while
+//! `web_api_object_target` resolves its native backing without running traps.
+//! These identities serve different purposes:
+//!
+//! - JavaScript identity belongs to the canonical wrapper or Proxy. Preserve it
+//!   for returned arguments, cached objects, DOM relations and realm selection.
+//! - Native identity, handles, runtime pointers, delegates and private state
+//!   belong to the backing object. Resolve that object before reading or
+//!   writing private slots; a receiver brand check does not unwrap `this`.
+//! - DOM state belongs to the Rust DOM host. A wrapper is an access path to
+//!   that state, not another independent DOM snapshot.
+//!
+//! A Proxy must not receive mirrored private slots or participate in dual
+//! writes. Keeping the canonical wrapper in a native identity cache is a
+//! separate operation from initializing its backing. Do not remove that
+//! association when eliminating private-state copies. In particular, resolving
+//! a native receiver or argument must not replace the JavaScript argument that
+//! an API is required to return, or publish the backing as a new wrapper.
+//! Factories can initialize ordinary backing objects before branding, but
+//! author and revoked Proxies must never become a fallback state source.
+//!
 //! Identity alone grants neither serialization nor transfer capability.
 //! Structured-clone serializers route every identified object through their
 //! explicit codecs and reject unsupported types, including nested instances.
