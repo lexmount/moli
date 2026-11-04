@@ -32,7 +32,10 @@ impl WorkerIsolateState {
         shared_worker: bool,
         debugger_enabled: bool,
     ) -> Self {
-        let mut isolate = v8::Isolate::new(Default::default());
+        let mut isolate = v8::Isolate::new(
+            v8::CreateParams::default()
+                .array_buffer_allocator(moli_v8_init::new_array_buffer_allocator()),
+        );
         isolate.set_shared_array_buffer_constructor_enabled_callback(
             crate::context_bootstrap::shared_array_buffer_constructor_enabled_callback,
         );
