@@ -325,7 +325,18 @@ impl JsContextHost {
     }
 
     pub(crate) fn record_pending_top_level_history_traversal(&mut self, delta: i64) {
+        if self.pending_top_level_history_traversal {
+            return;
+        }
+        let has_known_destination = self
+            .session_histories
+            .get_mut(None)
+            .step_by_delta(delta)
+            .is_some();
         self.clear_pending_top_level_navigation();
+        // Unknown browser-owned destinations still delegate to the browser.
+        // An out-of-range request must not suppress a subsequent valid request.
+        self.pending_top_level_history_traversal = has_known_destination;
         let traversal = RendererPendingTopLevelHistoryTraversal { delta };
         if self.append_live_turn_owner_action(
             crate::runtime::RendererOwnerAction::TopLevelHistoryTraversal(traversal),
@@ -356,10 +367,12 @@ impl JsContextHost {
         else {
             unreachable!("pending top-level navigation kind changed without an intervening call");
         };
+        self.pending_top_level_history_traversal = false;
         Some(pending)
     }
 
     pub(crate) fn clear_pending_top_level_navigation(&mut self) {
+        self.pending_top_level_history_traversal = false;
         let pending = self.pending_top_level_navigation.take();
         let Some(PendingTopLevelNavigation::Location(pending)) = pending else {
             return;
