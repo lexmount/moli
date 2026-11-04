@@ -13,6 +13,7 @@ mod file_input;
 mod forms;
 mod json_response;
 mod misc;
+mod native_events;
 mod no_cors_redirect;
 mod receivers;
 mod reopen;
