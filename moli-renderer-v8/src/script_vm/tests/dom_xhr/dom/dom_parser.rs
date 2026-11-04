@@ -1,6 +1,89 @@
 use super::*;
 
 #[test]
+fn dom_parser_non_object_new_target_prototype_uses_new_target_realm_default() {
+    let mut vm = new_storage_test_vm("https://dom-parser-new-target.test/top.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const child = frame.contentWindow;
+
+  const TopBad = new Function();
+  TopBad.prototype = 7;
+  const ChildBad = new child.Function();
+  ChildBad.prototype = 7;
+
+  const BoundChild = Function.prototype.bind.call(new child.Function());
+  BoundChild.prototype = 7;
+  const BoundTop = child.Function.prototype.bind.call(new Function());
+  BoundTop.prototype = 7;
+
+  const ProxyChild = new Proxy(new child.Function(), {});
+  ProxyChild.prototype = 7;
+  const ProxyTop = new child.Proxy(new Function(), {});
+  ProxyTop.prototype = 7;
+
+  let getterCount = 0;
+  const GetterProxyChild = new Proxy(new child.Function(), {
+    get(target, property, receiver) {
+      if (property === 'prototype') {
+        getterCount += 1;
+        return 7;
+      }
+      return Reflect.get(target, property, receiver);
+    }
+  });
+
+  const check = (parser, expectedPrototype) =>
+    Object.getPrototypeOf(parser) === expectedPrototype;
+
+  return JSON.stringify({
+    directTop: check(
+      Reflect.construct(child.DOMParser, [], TopBad),
+      DOMParser.prototype
+    ),
+    directChild: check(
+      Reflect.construct(DOMParser, [], ChildBad),
+      child.DOMParser.prototype
+    ),
+    boundChild: check(
+      Reflect.construct(DOMParser, [], BoundChild),
+      child.DOMParser.prototype
+    ),
+    boundTop: check(
+      Reflect.construct(child.DOMParser, [], BoundTop),
+      DOMParser.prototype
+    ),
+    proxyChild: check(
+      Reflect.construct(DOMParser, [], ProxyChild),
+      child.DOMParser.prototype
+    ),
+    proxyTop: check(
+      Reflect.construct(child.DOMParser, [], ProxyTop),
+      DOMParser.prototype
+    ),
+    getterProxyChild: check(
+      Reflect.construct(DOMParser, [], GetterProxyChild),
+      child.DOMParser.prototype
+    ),
+    getterCount
+  });
+})()
+"#,
+        )
+        .expect("DOMParser NewTarget realm prototype fallback probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"directTop":true,"directChild":true,"boundChild":true,"boundTop":true,"proxyChild":true,"proxyTop":true,"getterProxyChild":true,"getterCount":1}"#
+    );
+}
+
+#[test]
 fn dom_parser_parse_from_string_parses_webidl_arguments() {
     let mut vm = new_storage_test_vm("https://dom-parser-webidl-args.test/");
 

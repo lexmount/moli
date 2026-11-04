@@ -14,7 +14,10 @@ use super::{
         build_detached_document_object_from_dom_host,
         build_detached_document_object_from_dom_host_with_content_type,
     },
-    util::{context_host_ptr_from_global_bridge, get_private_object, throw_type_error},
+    util::{
+        apply_webidl_constructor_prototype_fallback, context_host_ptr_from_global_bridge,
+        get_private_object, throw_type_error,
+    },
 };
 
 pub(crate) const DOM_PARSER_FOREIGN_NODE_SLOT: &str = "__moliDomParserForeignNode";
@@ -109,15 +112,16 @@ struct DomParserPrototypeMethodsDeclaration {
     parse_from_string: (),
 }
 
-pub(super) fn dom_parser_constructor_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn dom_parser_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if !args.is_construct_call() {
         throw_type_error(scope, "DOMParser constructor must be called with new");
         return;
     }
+    apply_webidl_constructor_prototype_fallback(scope, args.this(), args.new_target(), "DOMParser");
     rv.set(args.this().into());
 }
 
