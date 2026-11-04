@@ -901,6 +901,16 @@ impl PageScriptHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn layout_text_services_observability_for_test(&self) -> (bool, u64) {
+        let document = self.document_handle();
+        self.document_layout_state
+            .borrow_mut()
+            .with_services_for_document(document, document, |services, _| {
+                (services.is_initialized(), services.text_layout_passes())
+            })
+    }
+
+    #[cfg(test)]
     pub(crate) fn document_web_font_counts_for_test(&self) -> (usize, usize, usize) {
         self.document_layout_state.borrow().web_font_counts()
     }
