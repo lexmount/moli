@@ -27,6 +27,8 @@ Moli extensions:
   and Web IDL bindings.
 - `src/context_ext.cc` exposes global detachment and backup-incumbent-context
   support used by Moli's browsing-context lifecycle.
+- `src/function_ext.cc` exposes bound-function targets so Moli can resolve the
+  function realm through mixed bound-function and Proxy chains.
 - `src/inspector_context_ext.cc` and `src/inspector_session_ext.cc` expose the
   inspector context/session operations required by Moli's CDP implementation.
 - `src/module_ext.cc` exposes the synthetic-module export hook used to write
