@@ -10,10 +10,6 @@ use moli_core::page::{
 };
 use tokio::sync::watch;
 
-use super::document_lifecycle_observer::{
-    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObservationPublisher,
-    RendererDocumentLifecycleObserver,
-};
 use super::page_residence_token::{TargetPageResidencePublisher, TargetPageResidenceToken};
 use super::{NavigationRequestId, RendererPageResidenceIdentity, TargetPageAttachmentId};
 
@@ -178,8 +174,8 @@ impl CommittedRendererDocumentBinding {
     }
 
     // Replacement metadata can change without changing the owning Document
-    // or navigation, so it must not participate in observer identity.
-    fn shares_document_owner_with(&self, other: &Self) -> bool {
+    // or navigation, so it must not participate in output ownership identity.
+    pub(crate) fn shares_document_owner_with(&self, other: &Self) -> bool {
         self.renderer_frame == other.renderer_frame
             && self.renderer_document == other.renderer_document
             && self.navigation == other.navigation
@@ -195,6 +191,7 @@ struct RendererDocumentLifecycleProtocolState {
     authoritative: RendererDocumentLifecycleProtocolCursor,
     visible: RendererDocumentLifecycleProtocolCursor,
     load_visibility: RendererDocumentLoadVisibility,
+    load_publications: Vec<crate::domains::activity::MainDocumentLoadPublication>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -280,7 +277,6 @@ struct RegisteredRendererDocumentLifecycleWaiter {
     frame_id: String,
     loader_id: String,
     waiter: RendererDocumentLifecycleWaiter,
-    observer_publisher: Option<RendererDocumentLifecycleObservationPublisher>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -298,22 +294,6 @@ impl RendererDocumentLifecycleWaiterId {
             .checked_add(1)
             .expect("renderer Document lifecycle waiter id overflow");
         *self
-    }
-}
-
-fn lifecycle_observation_from_wait_outcome(
-    outcome: RendererDocumentLifecycleWaitOutcome,
-) -> RendererDocumentLifecycleObservation {
-    match outcome {
-        RendererDocumentLifecycleWaitOutcome::Pending => {
-            RendererDocumentLifecycleObservation::Pending
-        }
-        RendererDocumentLifecycleWaitOutcome::Reached(_) => {
-            RendererDocumentLifecycleObservation::Reached
-        }
-        RendererDocumentLifecycleWaitOutcome::Interrupted(_) => {
-            RendererDocumentLifecycleObservation::Interrupted
-        }
     }
 }
 
@@ -601,11 +581,6 @@ impl TargetPageSlot {
                 None => TargetPageAttachmentId::allocate(),
             }
         });
-        if self.loaded_page.is_some() || page.is_some() {
-            self.finish_renderer_document_lifecycle_observers(
-                RendererDocumentLifecycleObservation::Superseded,
-            );
-        }
         if page.is_some() {
             self.complete_initial_document_page_build();
             self.loaded_page_absence_reason = TargetPageAbsenceReason::NoTarget;
@@ -718,9 +693,6 @@ impl TargetPageSlot {
         let attachment_changed = self.page_attachment_id != Some(attachment_id);
         self.page_attachment_id = Some(attachment_id);
         if attachment_changed {
-            self.finish_renderer_document_lifecycle_observers(
-                RendererDocumentLifecycleObservation::Superseded,
-            );
             self.supersede_page_residence();
         }
     }
@@ -731,9 +703,6 @@ impl TargetPageSlot {
         loader_id: String,
     ) -> DocumentNavigationToken {
         self.replace_pending_renderer_page(None);
-        self.finish_renderer_document_lifecycle_observers(
-            RendererDocumentLifecycleObservation::Superseded,
-        );
         let token = DocumentNavigationToken {
             target_id,
             loader_id,
@@ -1161,9 +1130,6 @@ impl TargetPageSlot {
     }
 
     pub(crate) fn finish_existing_page_document_commit(&mut self) {
-        self.finish_renderer_document_lifecycle_observers(
-            RendererDocumentLifecycleObservation::Superseded,
-        );
         self.replace_pending_renderer_page(None);
     }
 
@@ -1322,9 +1288,6 @@ impl TargetPageSlot {
 
     pub(crate) fn clear_document_navigation_state(&mut self) {
         self.replace_pending_renderer_page(None);
-        self.finish_renderer_document_lifecycle_observers(
-            RendererDocumentLifecycleObservation::Unavailable,
-        );
         self.cancel_pending_document_navigation();
         self.committed_document_navigation = None;
         self.renderer_document_lifecycle = RendererDocumentLifecycleProtocolState::default();
@@ -1397,11 +1360,6 @@ impl TargetPageSlot {
             page_attachment_id,
             document_open_replacement_epoch: None,
         };
-        if self.renderer_document_lifecycle.binding.as_ref() != Some(&binding) {
-            self.finish_renderer_document_lifecycle_observers(
-                RendererDocumentLifecycleObservation::Superseded,
-            );
-        }
         tracing::trace!(
             target: "moli_renderer_document_lifecycle",
             renderer_document = ?active_document,
@@ -1418,6 +1376,7 @@ impl TargetPageSlot {
             authoritative: lifecycle_cursor,
             visible: lifecycle_cursor,
             load_visibility: RendererDocumentLoadVisibility::default(),
+            load_publications: Vec::new(),
         };
         self.root_post_load_observation = None;
         let events = self.ingest_renderer_document_lifecycle_events(initial_lifecycle_events);
@@ -1634,9 +1593,6 @@ impl TargetPageSlot {
                 continue;
             }
             if restarts_same_document {
-                self.finish_renderer_document_lifecycle_observers(
-                    RendererDocumentLifecycleObservation::Superseded,
-                );
                 self.renderer_document_lifecycle
                     .binding
                     .as_mut()
@@ -1657,27 +1613,7 @@ impl TargetPageSlot {
             }
             for registration in &mut self.renderer_document_lifecycle_waiters {
                 registration.waiter.observe(event);
-                let observation =
-                    lifecycle_observation_from_wait_outcome(registration.waiter.outcome());
-                if observation.is_terminal()
-                    && let Some(publisher) = registration.observer_publisher.as_ref()
-                {
-                    publisher.publish(observation);
-                }
             }
-            self.renderer_document_lifecycle_waiters
-                .retain(|registration| {
-                    registration
-                        .observer_publisher
-                        .as_ref()
-                        .is_none_or(|publisher| {
-                            publisher.has_observer()
-                                && !lifecycle_observation_from_wait_outcome(
-                                    registration.waiter.outcome(),
-                                )
-                                .is_terminal()
-                        })
-                });
             self.renderer_document_lifecycle
                 .authoritative
                 .observe(event);
@@ -1745,89 +1681,44 @@ impl TargetPageSlot {
                 frame_id: binding.frame_id.clone(),
                 loader_id: binding.loader_id.clone(),
                 waiter: RendererDocumentLifecycleWaiter::from_snapshot(snapshot, milestone),
-                observer_publisher: None,
             });
         Some((id, binding))
     }
 
-    pub(crate) fn register_exact_renderer_document_lifecycle_observer(
+    pub(crate) fn take_main_document_load_publications(
         &mut self,
-        expected_binding: &CommittedRendererDocumentBinding,
-        milestone: RendererDocumentLifecycleMilestone,
-    ) -> RendererDocumentLifecycleObserver {
-        let Some(binding) = self.renderer_document_lifecycle.binding.as_ref() else {
-            return RendererDocumentLifecycleObserver::resolved(
-                RendererDocumentLifecycleObservation::Unavailable,
-            );
-        };
-        let same_document_owner = binding.shares_document_owner_with(expected_binding);
-        if !same_document_owner || binding.renderer_epoch != expected_binding.renderer_epoch {
-            // A same-owner document.open() restart interrupts the old epoch.
-            // Release its deferred load boundary rather than discarding the
-            // replacement's queued events. A new owner is superseded.
-            let interrupted_by_replacement = same_document_owner
-                && binding.renderer_epoch.0 > expected_binding.renderer_epoch.0
-                && binding.document_open_replacement_epoch == Some(binding.renderer_epoch);
-            return RendererDocumentLifecycleObserver::resolved(if interrupted_by_replacement {
-                RendererDocumentLifecycleObservation::Interrupted
-            } else {
-                RendererDocumentLifecycleObservation::Superseded
-            });
-        }
-        let Some(snapshot) = self.renderer_document_lifecycle.authoritative.snapshot else {
-            return RendererDocumentLifecycleObserver::resolved(
-                RendererDocumentLifecycleObservation::Unavailable,
-            );
-        };
-        let waiter = RendererDocumentLifecycleWaiter::from_snapshot(snapshot, milestone);
-        let observation = lifecycle_observation_from_wait_outcome(waiter.outcome());
-        let (publisher, observer) = RendererDocumentLifecycleObserver::channel(observation);
-        if observation == RendererDocumentLifecycleObservation::Pending {
-            let id = self
-                .next_renderer_document_lifecycle_waiter_id
-                .allocate_next();
-            self.renderer_document_lifecycle_waiters
-                .retain(|registration| {
-                    registration
-                        .observer_publisher
-                        .as_ref()
-                        .is_none_or(RendererDocumentLifecycleObservationPublisher::has_observer)
-                });
-            self.renderer_document_lifecycle_waiters.push(
-                RegisteredRendererDocumentLifecycleWaiter {
-                    id,
-                    renderer_document: binding.renderer_document,
-                    renderer_epoch: binding.renderer_epoch,
-                    frame_id: binding.frame_id.clone(),
-                    loader_id: binding.loader_id.clone(),
-                    waiter,
-                    observer_publisher: Some(publisher),
-                },
-            );
-        }
-        observer
+    ) -> Vec<crate::domains::activity::MainDocumentLoadPublication> {
+        std::mem::take(&mut self.renderer_document_lifecycle.load_publications)
     }
 
-    fn finish_renderer_document_lifecycle_observers(
+    pub(crate) fn retain_main_document_load_publication(
         &mut self,
-        observation: RendererDocumentLifecycleObservation,
+        publication: crate::domains::activity::MainDocumentLoadPublication,
     ) {
-        assert!(
-            observation.is_terminal(),
-            "retiring lifecycle waiters requires a terminal observation"
-        );
-        self.renderer_document_lifecycle_waiters
-            .retain(|registration| {
-                let Some(publisher) = registration.observer_publisher.as_ref() else {
-                    // Polling DevTools wait keys own their explicit release
-                    // protocol. Preserve their reached/interrupted result
-                    // across a successor binding until that consumer reads
-                    // and releases the exact registration.
-                    return true;
-                };
-                publisher.publish(observation);
-                false
-            });
+        self.renderer_document_lifecycle
+            .load_publications
+            .push(publication);
+    }
+
+    pub(crate) fn renderer_document_load_boundary(
+        &self,
+        expected: &CommittedRendererDocumentBinding,
+    ) -> Option<bool> {
+        let current = self.renderer_document_lifecycle.binding.as_ref()?;
+        if !current.shares_document_owner_with(expected) {
+            return None;
+        }
+        if current.renderer_epoch != expected.renderer_epoch {
+            return Some(false);
+        }
+        let snapshot = self.renderer_document_lifecycle.authoritative.snapshot?;
+        if snapshot.load.is_some() {
+            Some(true)
+        } else if snapshot.terminated.is_some() {
+            Some(false)
+        } else {
+            None
+        }
     }
 
     pub(crate) fn renderer_document_lifecycle_waiter_outcome(

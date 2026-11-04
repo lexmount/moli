@@ -707,7 +707,6 @@ pub(crate) use state::{
     PendingBidiChannelListener, PendingInspectorAwait, PendingRendererCommandKey,
     PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,
     RendererCommandCorrelation, RendererCommandDescriptor, RendererCommandReplay,
-    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
     RendererMainDocumentCommitSeed, RendererPageResidenceIdentity,
     ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
     SiteDataClearOptions, TargetIdentityState, TargetInitialEmptyDocumentCreator, TargetOwnerState,
@@ -748,19 +747,8 @@ pub(crate) use top_level_navigation_work::{
     TopLevelNavigationOwnerAction, TopLevelNavigationRequest,
 };
 
-pub struct PendingDeferredMainDocumentLoadCompletion {
-    inner: crate::domains::activity::PendingDeferredMainDocumentLoadCompletionActivity,
-}
-
-pub struct CompletedDeferredMainDocumentLoadCompletion {
-    inner: crate::domains::activity::CompletedDeferredMainDocumentLoadCompletionActivity,
-}
-
-/// Stable identity of one exact deferred-load lifecycle observation.
-///
-/// The protocol owner allocates this identity before an adapter starts an
-/// asynchronous wait. CDP, BiDi, and Classic carry it through the typed
-/// completion instead of manufacturing adapter-local observation generations.
+/// Stable identity of one Document's load output boundary. It orders concrete
+/// output independently of DevTools lifecycle waits and post-load workflows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeferredMainDocumentLoadObservationId(u64);
 
@@ -838,45 +826,6 @@ impl IdleNavigationEngineReleaseResult {
             "loadedBrowserContextCount": self.loaded_browser_context_count,
             "liveTargetBrowserContextCount": self.live_target_browser_context_count,
         })
-    }
-}
-
-impl PendingDeferredMainDocumentLoadCompletion {
-    pub(crate) fn new(
-        inner: crate::domains::activity::PendingDeferredMainDocumentLoadCompletionActivity,
-    ) -> Self {
-        Self { inner }
-    }
-
-    pub fn session_id(&self) -> Option<&str> {
-        self.inner.session_id()
-    }
-
-    pub fn output_interest(&self) -> DeferredMainDocumentLoadCompletionOutputInterest {
-        DeferredMainDocumentLoadCompletionOutputInterest::new(
-            self.inner.renderer_page_residence_identity(),
-            self.inner.renderer_document_identity(),
-        )
-    }
-
-    pub fn observation_id(&self) -> DeferredMainDocumentLoadObservationId {
-        self.inner.observation_id()
-    }
-
-    pub async fn wait(self) -> CompletedDeferredMainDocumentLoadCompletion {
-        CompletedDeferredMainDocumentLoadCompletion {
-            inner: self.inner.wait().await,
-        }
-    }
-}
-
-impl CompletedDeferredMainDocumentLoadCompletion {
-    pub fn session_id(&self) -> Option<&str> {
-        self.inner.session_id()
-    }
-
-    pub fn observation_id(&self) -> DeferredMainDocumentLoadObservationId {
-        self.inner.observation_id()
     }
 }
 
@@ -2334,26 +2283,6 @@ impl CdpConnection {
         ))
     }
 
-    pub(crate) fn register_exact_renderer_document_lifecycle_observer_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        expected_binding: Option<&CommittedRendererDocumentBinding>,
-        milestone: moli_core::page::RendererDocumentLifecycleMilestone,
-    ) -> RendererDocumentLifecycleObserver {
-        let Some(expected_binding) = expected_binding else {
-            return RendererDocumentLifecycleObserver::resolved(
-                RendererDocumentLifecycleObservation::Unavailable,
-            );
-        };
-        let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) else {
-            return RendererDocumentLifecycleObserver::resolved(
-                RendererDocumentLifecycleObservation::Unavailable,
-            );
-        };
-        slot.page_slot_mut()
-            .register_exact_renderer_document_lifecycle_observer(expected_binding, milestone)
-    }
-
     pub(crate) fn renderer_document_lifecycle_visible_state_for_session_owner(
         &self,
         session_id: Option<&str>,
@@ -2740,27 +2669,73 @@ impl CdpConnection {
     pub(crate) fn enqueue_deferred_main_document_load_completion(
         &mut self,
         admission: crate::domains::activity::DeferredMainDocumentLoadCompletionAdmission,
-    ) {
-        if !admission.is_still_current_for_scheduler(self) {
-            tracing::debug!(
-                session_id = admission.session_id(),
-                "dropping obsolete deferred main-document load completion before enqueue"
-            );
-            return;
-        }
+    ) -> Vec<BackgroundProtocolEvent> {
+        let owner = admission.owner_scope().clone();
         let observation_id = self
             .scheduler_state
             .allocate_deferred_main_document_load_observation_id();
-        let completion = admission.bind_lifecycle_observer(self, observation_id);
-        let publish_sequence = self
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let work = crate::domains::activity::ProtocolSchedulerWork::main_document_load_owner_action(
-            publish_sequence,
-            completion,
-        );
-        self.scheduler_state
-            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
+        let publication = admission.into_publication(self, observation_id);
+        let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(&owner) else {
+            return Vec::new();
+        };
+        slot.page_slot_mut()
+            .retain_main_document_load_publication(publication);
+        self.publish_ready_main_document_load_output(&owner)
+    }
+
+    pub(crate) fn publish_ready_main_document_load_output(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) else {
+            return Vec::new();
+        };
+        let publications = slot.page_slot_mut().take_main_document_load_publications();
+        let mut output = crate::domains::command_output::BackgroundProtocolEventBuffer::default();
+        for publication in publications {
+            if !publication.is_still_current(self) {
+                continue;
+            }
+            let Some(reached_load) = publication.boundary(self) else {
+                if let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) {
+                    slot.page_slot_mut()
+                        .retain_main_document_load_publication(publication);
+                }
+                continue;
+            };
+            let completion = publication.publish(self, reached_load, &mut output);
+            let sequence = self
+                .scheduler_state
+                .allocate_protocol_work_publish_sequence();
+            let work =
+                crate::domains::activity::ProtocolSchedulerWork::main_document_load_owner_action(
+                    sequence, completion,
+                );
+            self.scheduler_state
+                .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
+        }
+        output.into_events()
+    }
+
+    pub(crate) fn renderer_document_load_publication_binding_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<&CommittedRendererDocumentBinding> {
+        let slot = self
+            .runtime_session_owner_slot_for_owner(owner)?
+            .page_slot();
+        slot.renderer_document_lifecycle_binding()
+            .filter(|binding| Some(binding.page_attachment_id) == slot.page_attachment_id())
+    }
+
+    pub(crate) fn renderer_document_load_boundary_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        binding: &CommittedRendererDocumentBinding,
+    ) -> Option<bool> {
+        self.runtime_session_owner_slot_for_owner(owner)?
+            .page_slot()
+            .renderer_document_load_boundary(binding)
     }
 
     /// Publishes a top-level navigation already moved into prepared output.

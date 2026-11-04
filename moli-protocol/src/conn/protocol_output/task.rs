@@ -290,7 +290,7 @@ impl CdpConnection {
                 let target_id = Some(completion.target_id().to_owned());
                 let workflow_access = access.clone();
                 let workflow = PreparedCommandWorkflow::new(move |mut context| async move {
-                    let completed = (*completion).start_scheduler_step().wait().await;
+                    let completed = *completion;
                     let mut driver = ProtocolWorkflowDriver::new(workflow_access);
                     let pending = match context.with_state(&mut driver, move |state, context| {
                         state.prepare_deferred_load_emission(completed, context)

@@ -659,17 +659,6 @@ async fn enable_non_blank_initial_url_loads_through_pending_navigation_path() {
     });
     let (messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
-    assert!(
-        scheduler_events.iter().any(|event| matches!(
-            event,
-            CdpSchedulerEvent::ProtocolWorkPublished { work }
-                if work.kind()
-                    == crate::domains::activity::ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
-                    && work.main_document_load_session_id()
-                        == Some("SID-PAGE-ENABLE-DATA")
-        )),
-        "Page.enable initial navigation should schedule load completion activity: {scheduler_events:?}"
-    );
     let response = messages
         .iter()
         .find(|message| message["id"] == json!(122))
@@ -693,6 +682,22 @@ async fn enable_non_blank_initial_url_loads_through_pending_navigation_path() {
             "Page.enable pending path should install the initial non-blank document"
         )
     });
+    ctx.sent.extend(messages);
+    ctx.route_direct_command_output_for_test(Vec::new(), scheduler_events)
+        .await;
+    let load = ctx
+        .wait_for_scheduler_message("initial navigation load", |message| {
+            message["method"] == "Page.loadEventFired"
+                && message["sessionId"] == "SID-PAGE-ENABLE-DATA"
+        })
+        .await;
+    assert!(load["params"]["timestamp"].as_f64().is_some());
+    assert!(
+        ctx.sent
+            .iter()
+            .all(|message| message["method"] != "Page.loadEventFired"),
+        "the initial navigation must publish Load exactly once"
+    );
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn enable_accepts_enable_file_chooser_opened_event_param() {

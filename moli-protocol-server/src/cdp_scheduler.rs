@@ -1428,30 +1428,6 @@ impl CdpScheduler {
         execution
             .protocol_output
             .append(foreground_navigation_network_barrier.route_output(output));
-        if execution.result.is_ok() && matches!(navigation_wait, Some(DevToolsNavigationWait::Load))
-        {
-            let output = self
-                .drain_deferred_main_document_load_completion_until_complete(
-                    receivers,
-                    &navigation_context,
-                )
-                .await;
-            let output = match output {
-                Ok(output) => output,
-                Err(failure) => {
-                    let (output, error) = failure.into_parts();
-                    execution.result = Err(error);
-                    output
-                }
-            };
-            execution
-                .protocol_output
-                .append(foreground_navigation_network_barrier.route_output(output));
-            let output = self.complete_ready_protocol_residences_after_command();
-            execution
-                .protocol_output
-                .append(foreground_navigation_network_barrier.route_output(output));
-        }
         if execution.result.is_ok()
             && validate_root_document_lifecycle
             && document_lifecycle_wait_key.is_none()
@@ -1472,14 +1448,10 @@ impl CdpScheduler {
                 });
         }
         if execution.result.is_ok()
-            && matches!(
-                navigation_lifecycle_milestone,
-                Some(RendererDocumentLifecycleMilestone::DomContentLoaded)
-            )
             && let Some(key) = document_lifecycle_wait_key.as_ref()
         {
             let output = self
-                .wait_for_document_lifecycle_observer(receivers, &navigation_context, key)
+                .wait_for_document_lifecycle(receivers, &navigation_context, key)
                 .await;
             let output = match output {
                 Ok(output) => output,
@@ -1489,6 +1461,27 @@ impl CdpScheduler {
                     output
                 }
             };
+            execution
+                .protocol_output
+                .append(foreground_navigation_network_barrier.route_output(output));
+        }
+        if execution.result.is_ok() && matches!(navigation_wait, Some(DevToolsNavigationWait::Load))
+        {
+            let output = self
+                .drain_main_document_post_load_work_until_complete(receivers, &navigation_context)
+                .await;
+            let output = match output {
+                Ok(output) => output,
+                Err(failure) => {
+                    let (output, error) = failure.into_parts();
+                    execution.result = Err(error);
+                    output
+                }
+            };
+            execution
+                .protocol_output
+                .append(foreground_navigation_network_barrier.route_output(output));
+            let output = self.complete_ready_protocol_residences_after_command();
             execution
                 .protocol_output
                 .append(foreground_navigation_network_barrier.route_output(output));
@@ -1612,7 +1605,7 @@ impl CdpScheduler {
         Ok(out)
     }
 
-    async fn wait_for_document_lifecycle_observer(
+    async fn wait_for_document_lifecycle(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
         context: &moli_protocol::automation::AutomationContext,
@@ -1631,6 +1624,29 @@ impl CdpScheduler {
                 })
                 .expect("live protocol actor state")
         {
+            // Waiting observes the journal; it must still let ready owner
+            // actions (including a script-requested navigation) progress.
+            // These actions no longer run beside a load-waiting workflow.
+            let ready = self.complete_ready_protocol_residences_for_external_load_wait();
+            let made_output = !ready.is_empty();
+            out.append(ready);
+            if made_output
+                || self
+                    .state
+                    .with_state(|state| {
+                        state.devtools_document_lifecycle_wait_state(context, key)
+                            != moli_protocol::DevToolsDocumentLifecycleWaitState::Pending
+                    })
+                    .expect("live protocol actor state")
+                || self
+                    .state
+                    .with_state(|state| {
+                        state.has_pending_javascript_dialog_for_devtools_context(context)
+                    })
+                    .expect("live protocol actor state")
+            {
+                continue;
+            }
             let Some(input) = receivers.recv_interleaved_input().await else {
                 return Err(RendererOutputTransportFailure::new(
                     out,
@@ -1889,7 +1905,7 @@ impl CdpScheduler {
             .await
     }
 
-    fn drain_deferred_main_document_load_completion_for_wait(
+    fn drain_main_document_post_load_work_for_wait(
         &mut self,
         context: &moli_protocol::automation::AutomationContext,
     ) -> ProtocolOutputSequence {
@@ -1901,7 +1917,7 @@ impl CdpScheduler {
                     state.has_inflight_background_navigation_for_devtools_context(context)
                 })
                 .expect("live protocol actor state")
-                || !self.front_protocol_residence_is_main_document_load_action_for_context(context)
+                || !self.front_protocol_residence_is_post_load_action_for_context(context)
             {
                 return out;
             }
@@ -1923,7 +1939,6 @@ impl CdpScheduler {
                             ProtocolSchedulerResidence::ProtocolWork { work, .. }
                                 if work.kind()
                                     == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
-                                    && work.is_ready()
                         )
                     })
             {
@@ -1936,7 +1951,7 @@ impl CdpScheduler {
         }
     }
 
-    async fn drain_deferred_main_document_load_completion_until_complete(
+    async fn drain_main_document_post_load_work_until_complete(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
         context: &moli_protocol::automation::AutomationContext,
@@ -1946,15 +1961,15 @@ impl CdpScheduler {
             out.append(self.drain_background_events_around_inflight_navigation(
                 &mut receivers.background_event_rx,
             ));
-            out.append(self.drain_deferred_main_document_load_completion_for_wait(context));
+            out.append(self.drain_main_document_post_load_work_for_wait(context));
             out.append(self.drain_background_events_around_inflight_navigation(
                 &mut receivers.background_event_rx,
             ));
-            if !self.has_deferred_main_document_load_completion_for_devtools_context(context) {
+            if !self.has_main_document_post_load_work_for_devtools_context(context) {
                 return Ok(out);
             }
             out.append(self.complete_ready_protocol_residences_for_external_load_wait());
-            if !self.has_deferred_main_document_load_completion_for_devtools_context(context) {
+            if !self.has_main_document_post_load_work_for_devtools_context(context) {
                 return Ok(out);
             }
             if self
@@ -1979,7 +1994,7 @@ impl CdpScheduler {
                 self.complete_interleaved_scheduler_input(receivers, input)
                     .await?,
             );
-            if !self.has_deferred_main_document_load_completion_for_devtools_context(context) {
+            if !self.has_main_document_post_load_work_for_devtools_context(context) {
                 return Ok(out);
             }
         }
@@ -2406,7 +2421,7 @@ impl CdpScheduler {
         self.apply_scheduler_events(events);
     }
 
-    fn front_protocol_residence_is_main_document_load_action_for_context(
+    fn front_protocol_residence_is_post_load_action_for_context(
         &self,
         context: &moli_protocol::automation::AutomationContext,
     ) -> bool {
@@ -2418,7 +2433,7 @@ impl CdpScheduler {
         )
     }
 
-    fn has_deferred_main_document_load_completion_for_devtools_context(
+    fn has_main_document_post_load_work_for_devtools_context(
         &self,
         context: &moli_protocol::automation::AutomationContext,
     ) -> bool {

@@ -126,6 +126,7 @@ pub(crate) use lifecycle::{
     emit_navigation_frame_stopped_loading_background_events,
     emit_navigation_lifecycle_init_background_events,
     emit_navigation_network_idle_background_events,
+    project_renderer_document_lifecycle_background_events,
 };
 pub(in crate::domains) use main_document_commit::{
     MainDocumentCommitPreparedOutput, append_renderer_main_document_commit_to_output_sink,

@@ -7,8 +7,7 @@ use crate::{
     automation::AutomationContext,
     conn::{
         BidiChannelOwnerAction, CdpConnection, DeferredMainDocumentLoadCompletionOutputAction,
-        DeferredMainDocumentLoadCompletionOutputInterest,
-        PendingDeferredMainDocumentLoadCompletion, PopupTargetActivationAction,
+        DeferredMainDocumentLoadCompletionOutputInterest, PopupTargetActivationAction,
         PopupTargetNavigationOwnerAction, TopLevelNavigationOwnerAction,
     },
 };
@@ -126,8 +125,7 @@ impl fmt::Debug for ProtocolSchedulerWork {
                     .field(
                         "renderer_document",
                         &completion.renderer_document_identity(),
-                    )
-                    .field("terminal", &completion.has_terminal_lifecycle_observation());
+                    );
             }
             ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(action) => {
                 debug
@@ -337,28 +335,6 @@ impl ProtocolSchedulerWork {
         }
     }
 
-    /// Reports whether this work can be completed without blocking its
-    /// scheduler.
-    ///
-    /// Protocol observations and already-materialized BiDi owner actions are
-    /// intrinsically ready. A main-document load action becomes ready only
-    /// when its exact lifecycle observer has published a typed terminal.
-    pub fn is_ready(&self) -> bool {
-        match &self.payload {
-            ProtocolSchedulerWorkPayload::RendererFencedOutput(_)
-            | ProtocolSchedulerWorkPayload::ProtocolObservation(_) => true,
-            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
-                completion.has_terminal_lifecycle_observation()
-            }
-            ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(_) => true,
-            ProtocolSchedulerWorkPayload::NavigationProtocolCompletion(_) => true,
-            ProtocolSchedulerWorkPayload::TopLevelNavigationOwnerAction(_) => true,
-            ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(_) => true,
-            ProtocolSchedulerWorkPayload::PopupTargetActivationAction(_) => true,
-            ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_) => true,
-        }
-    }
-
     /// Reports owner work that must complete inside the producing command's
     /// turn.
     ///
@@ -507,15 +483,6 @@ impl ProtocolSchedulerWork {
         Some(completion.observation_id())
     }
 
-    #[cfg(test)]
-    pub(crate) fn main_document_load_session_id(&self) -> Option<&str> {
-        let ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) = &self.payload
-        else {
-            return None;
-        };
-        completion.session_id()
-    }
-
     pub fn route_renderer_output_while_main_document_load_waits(
         &self,
         output: &RendererOutputTransportMessage,
@@ -535,24 +502,6 @@ impl ProtocolSchedulerWork {
         };
         conn.command_owner_scope_for_devtools_context(context)
             .is_some_and(|owner_scope| completion.owner_scope() == &owner_scope)
-    }
-
-    pub fn start_main_document_load_wait(self) -> PendingDeferredMainDocumentLoadCompletion {
-        match self.payload {
-            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
-                PendingDeferredMainDocumentLoadCompletion::new((*completion).start_scheduler_step())
-            }
-            ProtocolSchedulerWorkPayload::RendererFencedOutput(_)
-            | ProtocolSchedulerWorkPayload::ProtocolObservation(_)
-            | ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(_)
-            | ProtocolSchedulerWorkPayload::TopLevelNavigationOwnerAction(_)
-            | ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(_)
-            | ProtocolSchedulerWorkPayload::PopupTargetActivationAction(_)
-            | ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_)
-            | ProtocolSchedulerWorkPayload::NavigationProtocolCompletion(_) => {
-                panic!("only main-document load owner work can start a lifecycle wait")
-            }
-        }
     }
 
     #[cfg(feature = "test-support")]
