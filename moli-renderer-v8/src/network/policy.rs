@@ -476,7 +476,7 @@ impl PageNetworkPolicySnapshot {
             return Err(anyhow!(BLOCKED_BY_CLIENT_ERROR_TEXT));
         }
 
-        if self.cache_disabled {
+        if self.cache_disabled && request.cache_mode() != RequestCacheMode::NoStore {
             request = request.with_cache_mode(RequestCacheMode::Bypass);
         }
 
@@ -585,21 +585,33 @@ mod tests {
     }
 
     #[test]
-    fn cache_disabled_forces_page_requests_to_bypass_cache() {
+    fn cache_disabled_preserves_no_store_and_bypasses_other_modes() {
         let policy = PageNetworkPolicy::default();
         let before = policy.revision();
         policy.set_cache_disabled(true);
 
-        let request = policy
-            .snapshot()
-            .apply_to_request(
-                Request::get("https://example.test/cache")
-                    .unwrap()
-                    .with_page_network_policy(),
-            )
-            .unwrap();
-
-        assert_eq!(request.cache_mode(), RequestCacheMode::Bypass);
+        for mode in [
+            RequestCacheMode::Default,
+            RequestCacheMode::Validate,
+            RequestCacheMode::Bypass,
+            RequestCacheMode::NoStore,
+        ] {
+            let request = policy
+                .snapshot()
+                .apply_to_request(
+                    Request::get("https://example.test/cache")
+                        .unwrap()
+                        .with_cache_mode(mode)
+                        .with_page_network_policy(),
+                )
+                .unwrap();
+            let expected = if mode == RequestCacheMode::NoStore {
+                RequestCacheMode::NoStore
+            } else {
+                RequestCacheMode::Bypass
+            };
+            assert_eq!(request.cache_mode(), expected, "initial mode: {mode:?}");
+        }
         assert!(policy.cache_disabled());
         assert!(policy.revision() > before);
     }
