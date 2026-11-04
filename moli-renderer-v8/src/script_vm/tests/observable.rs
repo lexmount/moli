@@ -1,6 +1,308 @@
 use super::*;
 
 #[test]
+fn observable_subscription_abort_callbacks_do_not_root_discarded_graphs() {
+    let mut vm = new_storage_test_vm("https://observable-abort-callback-gc.test/");
+    vm.eval(include_str!(
+        "../../../tests/fixtures/observable-abort-callback-gc.js"
+    ))
+    .unwrap();
+    vm.renderer_document_isolate
+        .clone()
+        .with_entered_renderer_document_isolate(|isolate| {
+            isolate.clear_kept_objects();
+            isolate.low_memory_notification();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(Object.fromEntries(Object.entries(observableAbortCallbackGc.abandoned).map(([name, refs]) => [name, refs.every(ref => ref.deref() === undefined)])))")
+            .unwrap(),
+        r#"{"when":true,"nested":true,"first":true}"#
+    );
+}
+
+#[test]
+fn observable_subscription_abort_callbacks_survive_gc_and_release_finished_work() {
+    let mut vm = new_storage_test_vm("https://observable-live-abort-callback-gc.test/");
+    vm.eval(include_str!(
+        "../../../tests/fixtures/observable-abort-callback-gc.js"
+    ))
+    .unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify((() => {
+          const live = observableAbortCallbackGc.live;
+          live.target.target.dispatchEvent(new Event('tick'));
+          const target = live.signal.target.deref();
+          target.dispatchEvent(new Event('tick'));
+          live.signal.producer.complete();
+          target.dispatchEvent(new Event('tick'));
+          live.caller.controller.abort('caller');
+          const releasedSource = [live.weakSource.outer.deref() === undefined,
+            live.weakSource.signal.deref() === undefined];
+          live.weakSource.inner.deref().next(7);
+          return [live.target.events, live.signal.events, live.signal.teardowns,
+            live.signal.abortEvents, live.signal.signal.aborted,
+            live.complete.token.deref() === undefined, live.remove.token.deref() === undefined,
+            live.caller.teardowns, ...releasedSource];
+        })())"#
+        )
+        .unwrap(),
+        "[1,1,1,1,true,true,true,1,true,true]"
+    );
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval("JSON.stringify([...['target', 'inner', 'token'].map(key => observableAbortCallbackGc.live.signal[key].deref() === undefined), observableAbortCallbackGc.live.caller.inner.deref() === undefined, observableAbortCallbackGc.live.caller.reason === 'caller', observableAbortCallbackGc.live.weakSource.inner.deref() === undefined, observableAbortCallbackGc.live.weakSource.value === 7])")
+            .unwrap(),
+        "[true,true,true,true,true,true,true]"
+    );
+}
+
+#[test]
+fn observable_switch_map_does_not_accumulate_internal_signal_roots_or_registrations() {
+    let mut vm = new_storage_test_vm("https://observable-switch-map-signal-gc.test/");
+    let counts = |vm: &mut StandaloneScriptVmHarness| {
+        vm.with_default_context_scope(|_scope, host_ptr| {
+            Ok(
+                crate::native_bridge::abort::signal_registry_counts_for_test(unsafe {
+                    &mut *host_ptr
+                }),
+            )
+        })
+        .unwrap()
+    };
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    let initial = counts(&mut vm);
+    vm.eval("new Observable(s => { globalThis.signalGcProducer = s; }).switchMap(() => []).subscribe();").unwrap();
+    let active = counts(&mut vm);
+    for _ in 0..4 {
+        vm.eval("for (let i = 0; i < 256; i++) signalGcProducer.next(i);")
+            .unwrap();
+        collect(&mut vm);
+        assert_eq!(
+            counts(&mut vm),
+            active,
+            "completed inners must release signals and native dependency IDs"
+        );
+    }
+    vm.eval("signalGcProducer.complete(); delete globalThis.signalGcProducer;")
+        .unwrap();
+    collect(&mut vm);
+    assert_eq!(counts(&mut vm), initial);
+}
+
+#[test]
+fn observable_internal_signal_cycles_are_collectible() {
+    let mut vm = new_storage_test_vm("https://observable-signal-gc.test/");
+    vm.eval(include_str!(
+        "../../../tests/fixtures/observable-signal-gc.js"
+    ))
+    .unwrap();
+    vm.renderer_document_isolate
+        .clone()
+        .with_entered_renderer_document_isolate(|isolate| {
+            isolate.clear_kept_objects();
+            isolate.low_memory_notification();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        vm.eval("observableSignalGc.every(ref => ref.deref() === undefined)")
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
+fn observable_async_iterator_stays_cancellable_across_gc_and_is_released_after_abort() {
+    let mut vm = new_storage_test_vm("https://observable-iterator-gc.test/");
+    vm.eval(include_str!(
+        "../../../tests/fixtures/observable-iterator-gc.js"
+    ))
+    .unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval("observableIteratorGc.live.controller.abort('stop'); JSON.stringify([observableIteratorGc.live.closes, observableIteratorGc.abandoned.iterator.deref() === undefined])")
+            .unwrap(),
+        "[1,true]"
+    );
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval("observableIteratorGc.live.iterator.deref() === undefined")
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
+fn observable_abort_steps_keep_dom_listener_order_and_finish_after_iterator_close_errors() {
+    let mut vm = new_storage_test_vm("https://observable-abort-steps.test/");
+    let result = vm
+        .eval(&format!(
+            "JSON.stringify({})",
+            include_str!("../../../tests/fixtures/observable-abort-steps.js")
+        ))
+        .unwrap();
+    assert_eq!(result, r#"{"checks":10}"#);
+}
+
+#[test]
+fn observable_catch_preserves_recovery_order_conversion_reentrancy_and_cancellation() {
+    let mut vm = new_storage_test_vm("https://observable-catch.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.catchResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-catch.js")
+    ))
+    .expect("Observable.catch fixture should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&vm.eval("catchResult").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 130, "{result}");
+}
+
+#[test]
+fn observable_catch_preserves_result_conversion_callback_and_cancellation_realms() {
+    let mut vm = new_storage_test_vm("https://observable-catch-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable.catch realm");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.catchRealms = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-catch-realms.js")
+    ))
+    .expect("Observable.catch realms fixture should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&vm.eval("catchRealms").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["checks"], 35, "{result}");
+}
+
+#[test]
+fn observable_catch_releases_exhausted_sources_and_callbacks_while_tracing_recovery() {
+    let mut vm = new_storage_test_vm("https://observable-catch-gc.test/");
+    vm.eval(r#"
+function makeCatchSource() {
+  let subscriber;
+  return {source: new Observable(s => { subscriber = s; }), get subscriber() { return subscriber; }};
+}
+function makeCatchInner(entry) {
+  return new Observable(s => { entry.inner = new WeakRef(s); });
+}
+function makeCatcher(value) {
+  const token = {value};
+  return {token, callback: () => token.value};
+}
+globalThis.catchChains = [];
+for (const mode of ['abandoned', 'complete', 'source-abort', 'recover-complete', 'recover-error', 'recover-abort']) (() => {
+  const outer = makeCatchSource(), entry = {mode}, inner = makeCatchInner(entry), catcher = makeCatcher(inner);
+  const result = outer.source.catch(catcher.callback), controller = new AbortController();
+  const promise = result.toArray(mode.endsWith('abort') ? {signal: controller.signal} : undefined);
+  promise.catch(() => {}); outer.subscriber.next(1);
+  Object.assign(entry, {templates: [outer.source, result].map(v => new WeakRef(v)),
+    source: new WeakRef(outer.subscriber), innerTemplate: new WeakRef(inner),
+    callbacks: [catcher.callback, catcher.token].map(v => new WeakRef(v))});
+  if (mode !== 'abandoned') entry.promise = promise;
+  if (mode.endsWith('abort')) entry.controller = controller;
+  catchChains.push(entry);
+})();
+"#).unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(vm.eval(r#"JSON.stringify([
+catchChains.every(c => c.templates.every(r => r.deref() === undefined)),
+catchChains.every(c => [c.source, c.innerTemplate, ...c.callbacks].every(r => (r.deref() !== undefined) === (c.mode !== 'abandoned')))
+])"#).unwrap(), "[true,true]");
+    vm.eval(
+        r#"
+for (const c of catchChains.filter(c => c.promise)) {
+  c.promise.then(v => { c.outcome = v; }, e => { c.outcome = e; });
+  const source = c.source.deref();
+  if (c.mode === 'complete') source.complete();
+  else if (c.mode === 'source-abort') c.controller.abort(c.mode);
+  else { source.error('original'); c.inner.deref().next(2); }
+}
+"#,
+    )
+    .unwrap();
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([
+catchChains.every(c => c.source.deref() === undefined),
+catchChains.every(c => [c.innerTemplate, ...c.callbacks].every(r => r.deref() === undefined)),
+catchChains.filter(c => c.mode.startsWith('recover')).every(c => c.inner.deref() !== undefined),
+catchChains.find(c => c.mode === 'complete').outcome.join(',') === '1',
+catchChains.find(c => c.mode === 'source-abort').outcome === 'source-abort'
+])"#
+        )
+        .unwrap(),
+        "[true,true,true,true,true]"
+    );
+    vm.eval(
+        r#"
+for (const c of catchChains.filter(c => c.mode.startsWith('recover'))) {
+  const inner = c.inner.deref();
+  if (c.mode === 'recover-complete') inner.complete();
+  else if (c.mode === 'recover-error') inner.error(c.mode);
+  else c.controller.abort(c.mode);
+}
+"#,
+    )
+    .unwrap();
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([
+catchChains.filter(c => c.inner).every(c => c.inner.deref() === undefined),
+catchChains.find(c => c.mode === 'recover-complete').outcome.join(',') === '1,2',
+catchChains.find(c => c.mode === 'recover-error').outcome === 'recover-error',
+catchChains.find(c => c.mode === 'recover-abort').outcome === 'recover-abort'
+])"#
+        )
+        .unwrap(),
+        "[true,true,true,true]"
+    );
+}
+
+#[test]
 fn observable_switch_map_preserves_switch_order_conversion_reentrancy_and_cancellation() {
     let mut vm = new_storage_test_vm("https://observable-switch-map.test/");
     vm.eval(&format!(

@@ -177,7 +177,7 @@ pub(super) fn new_subscriber<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let prototype = ensure_intrinsic_interface_prototype(scope, "Subscriber").ok()?;
-    let signal = ResolvedAbortSignal::new(scope)?.value();
+    let signal = ResolvedAbortSignal::new_for_subscription(scope)?.value();
     SubscriberInstance::new(
         prototype,
         true,

@@ -1,6 +1,14 @@
 use super::*;
 
 impl JsContextHost {
+    pub(crate) fn track_subscription_abort_signal<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        signal: v8::Local<'s, v8::Object>,
+    ) -> bool {
+        self.bridge.abort.track_subscription_signal(scope, signal)
+    }
+
     pub(crate) fn is_abort_signal<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
