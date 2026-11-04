@@ -58,6 +58,7 @@ from .groups.network import (
     run_page_network_group,
     run_websocket_group,
 )
+from .groups.lazy_main_world import run_lazy_main_world_group
 from .groups.navigation_outcomes import run_navigation_outcomes_group
 from .groups.pdf import run_pdf_group
 from .groups.playwright_compat import run_playwright_compat_group
@@ -121,6 +122,12 @@ async def _await_group(group: SmokeGroup, awaitable: Awaitable[None]) -> None:
 
 
 RAW_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "lazy-main-world",
+        "Chromium-calibrated native DOM access before Runtime, first script/Inspector activation, preload ordering, and scriptless navigation/close.",
+        "raw",
+        run_lazy_main_world_group,
+    ),
     SmokeGroup(
         "scrollbar-visibility",
         "Moli fetch/serve scrollbar defaults, CLI/environment precedence, CDP emulation, frames, paint, and input.",
