@@ -31,6 +31,15 @@ async fn markdown_keeps_code_after_custom_element_upgrade() {
                 }
             }
         }
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = '<p>Plain document after shadow removal</p>';
+        "#).unwrap();
+        for strip_css in [false, true] {
+            assert_eq!(
+                page.render_page_dump(options(strip_css)),
+                "Plain document after shadow removal"
+            );
+        }
     }).await;
 }
 

@@ -19,12 +19,15 @@ let markdown = moli_html2md::Converter::new(moli_html2md::Options {
 
 ## DOM interface
 
-Implement `Dom` with a copyable node ID, four required borrowed queries and four
-optional hooks:
+Implement `Dom` with a copyable node ID, four required borrowed queries and
+optional traversal and presentation hooks:
 
 - `node_kind`: document/fragment, lowercase element tag, decoded text, or ignored node.
 - `first_child` and `next_sibling`: ordered traversal of a stable, acyclic tree.
 - `attribute`: decoded attribute value, borrowed from the DOM.
+- Optional `children`: an ordered child iterator. The default follows the sibling
+  queries; projected adapters can override it to resolve slot assignment once per
+  parent without building a sibling index.
 - Optional hooks: `control_value`, `has_block_layout`, `has_text_boundary`,
   and `may_have_fragment_links`.
 
