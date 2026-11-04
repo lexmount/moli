@@ -33,13 +33,13 @@ class WptCrossCaseConfigurationTests(WptCrossTestCase):
                 "http://127.0.0.1:8000/case.html",
             ],
         )
-    def test_harness_timeout_multiplier_uses_wpt_case_metadata(self) -> None:
+    def test_long_metadata_does_not_scale_authored_timer_delays(self) -> None:
         self.assertEqual(_harness_timeout_multiplier(WptCase("normal.html")), 1.0)
         self.assertEqual(
             _harness_timeout_multiplier(
                 WptCase("long.html", timeout_multiplier=LONG_TIMEOUT_MULTIPLIER)
             ),
-            LONG_TIMEOUT_MULTIPLIER,
+            1.0,
         )
     def test_lightpanda_cli_fetch_keeps_configured_timeout(self) -> None:
         command = _lightpanda_fetch(Path("/bin/lightpanda"), "http://127.0.0.1:8000/case.html", 30.0)

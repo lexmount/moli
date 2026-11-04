@@ -427,7 +427,7 @@ class WptCrossRunnerOrchestrationTests(WptCrossTestCase):
                 (
                     {
                         "normal.html": 1.0,
-                        "long.html": LONG_TIMEOUT_MULTIPLIER,
+                        "long.html": 1.0,
                         "html/semantics/scripting-1/the-script-element/module/dynamic-import/delay-load-event.html": 1.0,
                     },
                     1.0,
