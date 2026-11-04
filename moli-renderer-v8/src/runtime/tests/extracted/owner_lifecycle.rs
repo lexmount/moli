@@ -1,6 +1,97 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn owner_scheduler_waits_for_ready_timers_before_idle_callbacks() {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("default resource request client");
+    for variant in [
+        "ready",
+        "source",
+        "child-ready",
+        "expired",
+        "cancelled",
+        "future",
+    ] {
+        let (base_url, completed, release_response, server) =
+            spawn_owner_wake_gated_server_with_content_type(
+                "/idle-ready-timers-completed",
+                "ok",
+                "text/plain",
+            )
+            .await;
+        let mut page = create_test_html_page(
+            &runtime,
+            &loader,
+            url::Url::parse(&format!("{base_url}/page")).expect("page URL"),
+            "<!doctype html><body>idle timer admission</body>",
+        )
+        .await;
+        let expression = format!(
+            "{}\nsetTimeout(() => runIdleReadyTimerProbe({variant:?}, \
+             () => fetch('/idle-ready-timers-completed')), 50); 'scheduled'",
+            include_str!("../idle_ready_timers.js"),
+        );
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::EvaluateExpression {
+                expression,
+                await_promise: false,
+            })
+            .await
+            .expect("idle timer probe should schedule");
+        assert_eq!(
+            renderer_json_value(reply),
+            Some(serde_json::json!("scheduled"))
+        );
+        tokio::time::timeout(Duration::from_secs(2), completed)
+            .await
+            .expect("owner loop should finish idle probe without an observation command")
+            .expect("idle probe witness should remain open");
+        release_response.send(()).expect("release witness response");
+        server
+            .await
+            .expect("idle probe witness server should finish");
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::EvaluateExpression {
+                expression: "JSON.stringify(__idleReadyTimerProbe)".to_owned(),
+                await_promise: false,
+            })
+            .await
+            .expect("completed idle timer probe should evaluate");
+        let value = renderer_json_value(reply).expect("idle probe result");
+        let row: serde_json::Value = serde_json::from_str(value.as_str().expect("probe JSON"))
+            .expect("idle probe observations should parse");
+        page.close_async()
+            .await
+            .expect("idle probe page should close");
+        assert_eq!(row["done"], true, "{variant}: {row}");
+        assert_eq!(row["didTimeout"], variant == "expired", "{variant}: {row}");
+        assert_eq!(row["futureRan"], false, "{variant}: {row}");
+        match variant {
+            "ready" | "source" | "child-ready" => {
+                assert_eq!(
+                    row["order"],
+                    serde_json::json!(["timer", "idle"]),
+                    "{variant}: {row}"
+                );
+            }
+            "expired" => {
+                assert!(
+                    row["order"] == serde_json::json!(["timer", "idle"])
+                        || row["order"] == serde_json::json!(["idle", "timer"]),
+                    "expired idle callbacks remain ordinary runnable tasks: {row}"
+                );
+            }
+            _ => assert_eq!(
+                row["order"],
+                serde_json::json!(["idle"]),
+                "{variant}: {row}"
+            ),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn owner_loop_settles_device_sensor_permission_without_retry_command() {
     let runtime = JsRuntime::initialize();
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
