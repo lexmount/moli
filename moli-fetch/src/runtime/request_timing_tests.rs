@@ -79,7 +79,10 @@ fn prerequest_timing_survives_moves_and_reuse_without_verbose() -> Result<()> {
         cancel.begin_response_progress();
         let observer = FetchCancelHandle::new();
         observer.adopt_response_progress(&cancel);
-        easy.get_mut().buffered_mut().unwrap().begin_request(None);
+        easy.get_mut()
+            .buffered_mut()
+            .unwrap()
+            .begin_request(None, false);
         configure_network_observation(&mut easy, &request, None, false)?;
         install_debug_counter(&mut easy, &mut debug_calls);
         easy.url(request.url.as_str())?;

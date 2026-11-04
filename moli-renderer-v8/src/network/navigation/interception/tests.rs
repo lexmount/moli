@@ -102,3 +102,77 @@ async fn dropping_a_request_future_cancels_transport_while_its_navigation_owner_
     );
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn buffered_auth_redirect_does_not_wait_for_its_body_or_cancel_the_next_hop() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut first, _) = listener.accept().await.unwrap();
+        assert!(request_head(&mut first).await.starts_with("GET /redirect "));
+        first.write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Digest realm=\"navigation\", nonce=\"deadbeef\", qop=\"auth\", algorithm=MD5\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+        let authenticated = request_head(&mut first).await;
+        assert!(authenticated.starts_with("GET /redirect "));
+        assert!(
+            authenticated
+                .to_ascii_lowercase()
+                .contains("authorization: digest ")
+        );
+        first
+            .write_all(b"HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 1000000\r\n\r\n")
+            .await
+            .unwrap();
+        // Keep this response body open until the navigation reaches its next hop.
+        let (mut second, _) = listener.accept().await.unwrap();
+        assert!(request_head(&mut second).await.starts_with("GET /final "));
+        second
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            .await
+            .unwrap();
+    });
+    let owner = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let request = Request::get(&format!("http://{addr}/redirect")).unwrap();
+    let origin = moli_url::WebOrigin::from_url(&request.url);
+    let request = request
+        .with_request_origin(origin)
+        .with_auth(moli_fetch::RequestAuth {
+            target: moli_fetch::RequestAuthTarget::Server,
+            scheme: moli_fetch::RequestAuthScheme::Digest,
+            username: "user".to_owned(),
+            password: "password".to_owned(),
+        });
+    let loader = NavigationResourceLoader::new(
+        owner.handle(),
+        request.url.clone(),
+        RendererResourceTaskRunner::from_current_tokio().unwrap(),
+    );
+    let mut navigation = NavigationInterception::new(loader.clone(), request);
+    navigation.set_interception(true);
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        navigation.fetch_buffered(),
+    )
+    .await
+    .expect("an authenticated redirect must complete at its headers")
+    .unwrap();
+    assert_eq!(response.response().status, 302);
+    let redirect = navigation
+        .follow_redirect(&response.response().head())
+        .unwrap()
+        .unwrap();
+    assert_eq!(redirect.to_url.path(), "/final");
+    drop(response);
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        navigation.fetch_buffered(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(response.response().body_bytes(), b"ok");
+    assert_eq!(
+        loader.state(),
+        super::super::NavigationResourceLoaderState::ResponseReady
+    );
+    server.await.unwrap();
+}

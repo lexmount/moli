@@ -179,6 +179,51 @@ fn redirect_authorization_keeps_initial_scope_when_callers_update_request_url() 
 }
 
 #[tokio::test]
+async fn buffered_digest_redirects_preserve_manual_and_error_bodies() -> Result<()> {
+    for mode in [RequestRedirectMode::Manual, RequestRedirectMode::Error] {
+        let target = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("must not follow")]);
+        let source = ScriptedHttpServer::spawn(vec![
+            ScriptedResponse::status(401, "Unauthorized")
+                .with_header(
+                    "WWW-Authenticate",
+                    "Digest realm=\"redirect\", nonce=\"test-nonce\", qop=\"auth\"",
+                )
+                .with_body("authentication challenge"),
+            ScriptedResponse::status(302, "Found")
+                .with_header("Location", &target.url())
+                .with_body("redirect-body"),
+        ]);
+        let request = Request::get(&source.url())?
+            .with_redirect_mode(mode)
+            .with_auth(server_auth(RequestAuthScheme::Digest));
+        let requested_url = request.url.clone();
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let response = client.fetch_raw(request).await;
+        let requests = source.requests();
+        let target_hits = target.hits();
+        source.shutdown();
+        target.shutdown();
+
+        let response = response?;
+        assert_eq!(response.status, 302, "{mode:?}");
+        assert_eq!(response.body_bytes(), b"redirect-body", "{mode:?}");
+        assert_eq!(response.final_url, requested_url, "{mode:?}");
+        assert!(!response.redirected, "{mode:?}");
+        assert!(response.redirect_chain.is_empty(), "{mode:?}");
+        assert_eq!(target_hits, 0, "{mode:?}");
+        assert_eq!(requests.len(), 2, "{mode:?}: {requests:?}");
+        assert!(authorization_headers(&requests[0]).is_empty(), "{mode:?}");
+        assert!(
+            authorization_headers(&requests[1])
+                .iter()
+                .any(|header| header.starts_with("Digest ")),
+            "{mode:?}: the server must have received the Digest retry"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn redirect_authorization_digest_cannot_answer_foreign_challenge() -> Result<()> {
     let target = ScriptedHttpServer::spawn(vec![
         ScriptedResponse::status(401, "Unauthorized").with_header(
