@@ -984,3 +984,17 @@ async fn element_creation_options_convert_before_dom_validation_in_each_document
     assert_eq!(vm.eval("__uiEventResults.includePopup").unwrap(), "false");
     assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "3106");
 }
+
+#[test]
+fn xml_serializer_ordinary_xmlns_preserves_native_attribute_namespace_identity() {
+    let mut vm = new_storage_test_vm("https://ordinary-xmlns.test/");
+    let result = vm.eval(include_str!("ordinary_xmlns_identity.js")).unwrap();
+    assert_eq!(
+        result,
+        "true",
+        "{}",
+        vm.eval("JSON.stringify(__ordinaryXmlnsChecks.filter(row => !row.passed))")
+            .unwrap(),
+    );
+    assert_eq!(vm.eval("__ordinaryXmlnsChecks.length").unwrap(), "324");
+}

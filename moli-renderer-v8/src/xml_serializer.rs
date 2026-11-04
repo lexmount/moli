@@ -320,17 +320,13 @@ fn record_namespace_information(
     let mut local_default_namespace = None;
     let mut local_prefixes = HashMap::new();
     for attribute in element.attributes() {
-        if attribute.prefix().is_none()
-            && attribute.local_name() == "xmlns"
-            && matches!(attribute.namespace(), "" | XMLNS_NAMESPACE)
-        {
-            local_default_namespace = Some(attribute.value().to_owned());
-            continue;
-        }
         if attribute.namespace() != XMLNS_NAMESPACE {
             continue;
         }
+        // Only native XMLNS attributes declare namespaces; an ordinary
+        // attribute spelled xmlns must not change descendant bindings.
         let Some(attribute_prefix) = attribute.prefix() else {
+            local_default_namespace = Some(attribute.value().to_owned());
             continue;
         };
         if attribute_prefix.is_empty() {
@@ -360,18 +356,14 @@ fn serialize_native_attributes(
 ) {
     for attribute in element.attributes() {
         let attribute_namespace = attribute.namespace();
-        let is_default_namespace_declaration = attribute.prefix().is_none()
-            && attribute.local_name() == "xmlns"
-            && matches!(attribute_namespace, "" | XMLNS_NAMESPACE);
         let mut candidate_prefix = (!attribute_namespace.is_empty())
             .then(|| namespace_context.preferred_prefix(attribute_namespace, attribute.prefix()))
             .flatten();
 
-        if is_default_namespace_declaration && ignore_namespace_definition_attribute {
-            continue;
-        }
         if attribute_namespace == XMLNS_NAMESPACE {
-            if attribute.value() == XML_NAMESPACE {
+            if attribute.value() == XML_NAMESPACE
+                || (attribute.prefix().is_none() && ignore_namespace_definition_attribute)
+            {
                 continue;
             }
             if attribute.prefix().is_some() {
@@ -768,7 +760,7 @@ mod tests {
 
         assert_eq!(
             serialize_native_handle(&host, root),
-            "<root xmlns=\"u1\"><child xmlns=\"\"/><sibling/></root>"
+            "<root xmlns=\"u1\"><child xmlns=\"\" xmlns=\"FAIL\"/><sibling/></root>"
         );
 
         let empty = host.create_element_with_parts(None, None, "empty");
@@ -777,6 +769,36 @@ mod tests {
         assert_eq!(
             serialize_native_handle(&host, empty),
             "<empty xmlns:p=\"\"/>"
+        );
+    }
+
+    #[test]
+    fn ordinary_xmlns_does_not_set_the_inherited_native_namespace() {
+        let mut host = xml_host();
+        let root = host.create_element_with_parts(Some("urn:element"), Some("p"), "root");
+        let child = host.create_element_with_parts(None, None, "child");
+        assert!(host.set_attribute(root, "xmlns", "urn:ordinary"));
+        assert!(host.append_child(root, child));
+        assert_eq!(
+            serialize_native_handle(&host, root),
+            "<p:root xmlns:p=\"urn:element\" xmlns=\"urn:ordinary\"><child/></p:root>",
+        );
+
+        // A real default declaration sets the context for a null-namespace
+        // child, which therefore needs a generated namespace reset.
+        let declared = host.create_element_with_parts(Some("urn:element"), Some("p"), "root");
+        let declared_child = host.create_element_with_parts(None, None, "child");
+        assert!(host.set_attribute_ns(
+            declared,
+            Some(XMLNS_NAMESPACE),
+            None,
+            "xmlns",
+            "urn:declared",
+        ));
+        assert!(host.append_child(declared, declared_child));
+        assert_eq!(
+            serialize_native_handle(&host, declared),
+            "<p:root xmlns:p=\"urn:element\" xmlns=\"urn:declared\"><child xmlns=\"\"/></p:root>",
         );
     }
 }
