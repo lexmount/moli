@@ -297,37 +297,15 @@ impl ServiceWorkerRuntimeService {
             self.complete_fetch_with_failure(fetch_job, error.to_string());
             return Ok(());
         }
-        if !request
-            .headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("accept"))
-        {
-            let kind = if fetch_job.network_context.resource_type
-                == crate::types::SubresourceResourceType::EventSource
-            {
-                moli_fetch::DefaultAcceptKind::EventSource
-            } else {
-                match request.destination {
-                    ServiceWorkerRequestDestination::Document
-                    | ServiceWorkerRequestDestination::Iframe => {
-                        moli_fetch::DefaultAcceptKind::Navigation
-                    }
-                    ServiceWorkerRequestDestination::Image => moli_fetch::DefaultAcceptKind::Image,
-                    ServiceWorkerRequestDestination::Track => {
-                        moli_fetch::DefaultAcceptKind::TextTrack
-                    }
-                    _ => moli_fetch::DefaultAcceptKind::Other,
-                }
-            };
-            let accept = moli_fetch::default_accept_header(kind);
-            request
-                .headers
-                .push(("Accept".to_owned(), accept.to_owned()));
-            fetch_job
-                .request
-                .request_headers
-                .push(("Accept".to_owned(), accept.as_bytes().to_vec()));
-        }
+        fetch_job.request.browser_request_metadata = Some(
+            super::fetch_settlement::service_worker_fetch_browser_metadata(
+                fetch_job.network_context.resource_type,
+            ),
+        );
+        fetch_job
+            .request_client
+            .prepare_request(&mut fetch_job.request);
+        request.headers = fetch_job.request.request_headers.to_byte_strings();
         let (dispatch_event, start_launch, fallback_job) = {
             let mut state = self.inner.state.lock();
             let (document_url, storage_key) = match state.live_clients.get(&request.client_id) {

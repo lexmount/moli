@@ -47,6 +47,42 @@ fn header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
+#[tokio::test]
+async fn configured_accept_is_a_single_default_on_the_wire() -> Result<()> {
+    for configured in ["", "application/json"] {
+        let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("ok"); 3]);
+        let mut config = FetchConfig::default();
+        config.set_default_request_headers(vec![("aCcEpT".to_owned(), configured.to_owned())]);
+        let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+        for author in [None, Some(""), Some("application/custom")] {
+            let mut request = RequestKind::Fetch.request(&Url::parse(&server.url())?)?;
+            if let Some(value) = author {
+                request
+                    .request_headers
+                    .push(("AcCePt".to_owned(), value.as_bytes().to_vec()));
+            }
+            assert_eq!(client.fetch_raw(request).await?.status, 200);
+        }
+        let requests = server.requests();
+        server.shutdown();
+        assert_eq!(requests.len(), 3);
+        for (request, author) in requests
+            .iter()
+            .zip([None, Some(""), Some("application/custom")])
+        {
+            let values: Vec<_> = request
+                .lines()
+                .filter_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("accept").then(|| value.trim())
+                })
+                .collect();
+            assert_eq!(values, [author.unwrap_or(configured)], "{request}");
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn browser_metadata_requires_a_potentially_trustworthy_current_destination() -> Result<()> {
     let config = FetchConfig::default();

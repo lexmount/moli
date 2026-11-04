@@ -1070,6 +1070,10 @@ impl ResourceRequestClient {
         self.page_network_policy.set_cache_disabled(disabled);
     }
 
+    pub(crate) fn prepare_request(&self, request: &mut Request) {
+        self.resource_runtime.client().prepare_request(request);
+    }
+
     fn apply_network_policy(&self, mut request: Request) -> Result<Request> {
         request.browser_origin()?;
         if let Some(browser_site_context) = self.browser_site_context.as_deref() {

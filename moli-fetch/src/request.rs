@@ -784,6 +784,45 @@ impl Request {
         self.script_scheduler_priority
     }
 
+    /// Finalize Accept once the caller has selected the request's resource kind.
+    /// Repeated admission (including ServiceWorker fallback) preserves the
+    /// original value, including an explicitly empty header.
+    pub(crate) fn prepare_headers(&mut self, config: &FetchConfig) {
+        let has_accept = |headers: &crate::RequestHeaders| {
+            headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("accept"))
+        };
+        if !matches!(self.url.scheme(), "http" | "https") || has_accept(&self.request_headers) {
+            return;
+        }
+        self.request_headers.extend(
+            config
+                .default_request_headers()
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("accept"))
+                .map(|(name, value)| (name.clone(), value.as_bytes().to_vec())),
+        );
+        if has_accept(&self.request_headers) {
+            return;
+        }
+        let kind = if self.is_navigation_request() {
+            crate::DefaultAcceptKind::Navigation
+        } else {
+            match self.browser_request_metadata {
+                Some(BrowserRequestMetadata::Image) => crate::DefaultAcceptKind::Image,
+                Some(BrowserRequestMetadata::EventSource) => crate::DefaultAcceptKind::EventSource,
+                Some(BrowserRequestMetadata::TextTrack) => crate::DefaultAcceptKind::TextTrack,
+                Some(_) => crate::DefaultAcceptKind::Other,
+                None => return,
+            }
+        };
+        self.request_headers.push((
+            "Accept".to_owned(),
+            crate::default_accept_header(kind).as_bytes().to_vec(),
+        ));
+    }
+
     pub fn with_browser_request_metadata(mut self, metadata: BrowserRequestMetadata) -> Self {
         self.browser_request_metadata = Some(metadata);
         self

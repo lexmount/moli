@@ -230,6 +230,8 @@ fn outgoing_request_header_bytes_for_url(
     for (name, value) in config.default_request_headers() {
         if (!send_explicit_cookies && name.eq_ignore_ascii_case("cookie"))
             || (!send_authorization && name.eq_ignore_ascii_case("authorization"))
+            || (name.eq_ignore_ascii_case("accept")
+                && header_present(&request.request_headers, "accept"))
         {
             continue;
         }
