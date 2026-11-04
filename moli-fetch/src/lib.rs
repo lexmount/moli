@@ -10,6 +10,7 @@ mod cancellation;
 mod client;
 mod client_hints;
 mod config;
+mod connection_timing;
 mod cors;
 mod cross_origin_resource_policy;
 mod dns;
@@ -42,6 +43,7 @@ pub use blocking::{
 pub use cancellation::{FetchCancelHandle, FetchResponseTiming};
 pub use client::{FetchClient, FetchClientHandle};
 pub use config::FetchConfig;
+pub use connection_timing::{FetchConnectionTiming, FetchCurlTiming};
 pub use cors::validate_cors_response_for_origin;
 pub use cross_origin_resource_policy::CrossOriginResourcePolicy;
 pub use error::{
