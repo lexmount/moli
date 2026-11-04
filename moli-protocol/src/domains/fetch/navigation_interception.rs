@@ -5,6 +5,7 @@ use crate::conn::{
     CdpConnection, CommandOwnerScope, PendingFetchNavigation, PendingSubresourceFetchOwnerKind,
     PendingSubresourceFetchRequestStage, TargetFetchSubresourceInterceptionSnapshot,
 };
+use crate::domains::command_output::CommandOutputPlan;
 
 type NavigationHopIds = HashMap<Option<String>, (String, Option<String>)>;
 
@@ -104,4 +105,49 @@ pub(crate) fn prepare_navigation_request_pause(
     pending.redirected_request_id = stage.redirected_request_id;
     pending.remaining_request_stages = stages;
     true
+}
+
+pub(super) fn advance_navigation_request_stage(
+    conn: &CdpConnection,
+    pending: &mut PendingFetchNavigation,
+) -> bool {
+    let active_sessions = conn
+        .target_fetch_subresource_interception_snapshot_for_owner(&pending.navigation.owner)
+        .map(|snapshot| snapshot.fetch_session_ids(pending.navigation.owner.session_id()))
+        .unwrap_or_default();
+    pending.remaining_request_stages.retain(|stage| {
+        stage.owner_kind != PendingSubresourceFetchOwnerKind::Fetch
+            || active_sessions.contains(&stage.session_id)
+    });
+    if pending.remaining_request_stages.is_empty() {
+        return false;
+    }
+    let stage = pending.remaining_request_stages.remove(0);
+    pending.fetch_request_id = stage.request_id;
+    pending.interception_session_id = stage.session_id;
+    pending.redirected_request_id = stage.redirected_request_id;
+    true
+}
+
+pub(crate) fn resume_navigation_request(
+    conn: &mut CdpConnection,
+    mut pending: PendingFetchNavigation,
+) -> Option<CommandOutputPlan> {
+    let token = pending.document_navigation_token.as_ref()?;
+    if !conn.accepts_pending_document_navigation_for_owner(&pending.navigation.owner, token) {
+        return None;
+    }
+    let mut plan = CommandOutputPlan::default();
+    if advance_navigation_request_stage(conn, &mut pending) {
+        let event = super::request_paused_background_event(
+            pending.interception_session_id.as_deref(),
+            &pending,
+        );
+        let owner = pending.navigation.owner.clone();
+        conn.register_pending_fetch_navigation_request_for_owner(&owner, pending)?;
+        plan.push_background_event(event);
+    } else {
+        conn.resume_fetch_navigation_in_background(pending);
+    }
+    Some(plan)
 }

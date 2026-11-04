@@ -46,6 +46,7 @@ pub enum ProtocolSchedulerWorkKind {
     MainDocumentLoadOwnerAction,
     BidiChannelOwnerAction,
     TopLevelNavigationOwnerAction,
+    NavigationRequestContinuationOwnerAction,
     PopupTargetNavigationOwnerAction,
     PopupTargetActivationAction,
     PageTargetTerminationOwnerAction,
@@ -89,6 +90,10 @@ enum ProtocolSchedulerWorkPayload {
     MainDocumentLoadOwnerAction(Box<MainDocumentPostLoadAction>),
     BidiChannelOwnerAction(BidiChannelOwnerAction),
     TopLevelNavigationOwnerAction(TopLevelNavigationOwnerAction),
+    NavigationRequestContinuation(
+        Box<crate::domains::page::PreparedRendererNavigation>,
+        String,
+    ),
     PopupTargetNavigationOwnerAction(PopupTargetNavigationOwnerAction),
     PopupTargetActivationAction(PopupTargetActivationAction),
     PageTargetTerminationOwnerAction(crate::domains::page::PageTargetTerminationOwnerAction),
@@ -135,6 +140,9 @@ impl fmt::Debug for ProtocolSchedulerWork {
                     .field("session_id", &action.session_id())
                     .field("source_document", &action.source_document())
                     .field("url", &action.url());
+            }
+            ProtocolSchedulerWorkPayload::NavigationRequestContinuation(_, target_id) => {
+                debug.field("target_id", target_id);
             }
             ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action) => {
                 debug
@@ -245,6 +253,21 @@ impl ProtocolSchedulerWork {
         }
     }
 
+    pub(crate) fn navigation_request_continuation(
+        publish_sequence: ProtocolWorkPublishSequence,
+        navigation: crate::domains::page::PreparedRendererNavigation,
+        target_id: String,
+    ) -> Self {
+        Self {
+            publish_sequence,
+            renderer_output_source: None,
+            payload: ProtocolSchedulerWorkPayload::NavigationRequestContinuation(
+                Box::new(navigation),
+                target_id,
+            ),
+        }
+    }
+
     pub(crate) fn popup_target_navigation_owner_action(
         publish_sequence: ProtocolWorkPublishSequence,
         action: PopupTargetNavigationOwnerAction,
@@ -318,6 +341,9 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::TopLevelNavigationOwnerAction(_) => {
                 ProtocolSchedulerWorkKind::TopLevelNavigationOwnerAction
             }
+            ProtocolSchedulerWorkPayload::NavigationRequestContinuation(..) => {
+                ProtocolSchedulerWorkKind::NavigationRequestContinuationOwnerAction
+            }
             ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(_) => {
                 ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction
             }
@@ -351,6 +377,7 @@ impl ProtocolSchedulerWork {
             }
             ProtocolSchedulerWorkPayload::RendererFencedOutput(_)
             | ProtocolSchedulerWorkPayload::ProtocolObservation(_)
+            | ProtocolSchedulerWorkPayload::NavigationRequestContinuation(..)
             | ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(_)
             | ProtocolSchedulerWorkPayload::PopupTargetActivationAction(_)
             | ProtocolSchedulerWorkPayload::NavigationProtocolCompletion(_) => false,
@@ -377,6 +404,9 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::TopLevelNavigationOwnerAction(action) => {
                 action.target_id()
             }
+            ProtocolSchedulerWorkPayload::NavigationRequestContinuation(_, target_id) => {
+                Some(target_id)
+            }
             ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action) => {
                 Some(action.target_id())
             }
@@ -395,6 +425,7 @@ impl ProtocolSchedulerWork {
     pub fn navigation_dependency(&self) -> ProtocolNavigationDependency {
         match &self.payload {
             ProtocolSchedulerWorkPayload::TopLevelNavigationOwnerAction(_)
+            | ProtocolSchedulerWorkPayload::NavigationRequestContinuation(..)
             | ProtocolSchedulerWorkPayload::NavigationProtocolCompletion(_) => {
                 // A settled native commit must get past the old document's
                 // load residence: its final publication releases that very
@@ -547,6 +578,10 @@ pub(crate) enum ReadyProtocolSchedulerWork {
     MainDocumentLoadOwnerAction(Box<super::main_document::MainDocumentPostLoadAction>),
     BidiChannelOwnerAction(BidiChannelOwnerAction),
     TopLevelNavigationOwnerAction(TopLevelNavigationOwnerAction),
+    NavigationRequestContinuation(
+        Box<crate::domains::page::PreparedRendererNavigation>,
+        String,
+    ),
     PopupTargetNavigationOwnerAction(PopupTargetNavigationOwnerAction),
     PopupTargetActivationAction(PopupTargetActivationAction),
     PageTargetTerminationOwnerAction(crate::domains::page::PageTargetTerminationOwnerAction),
@@ -573,6 +608,9 @@ impl ProtocolSchedulerWork {
             }
             ProtocolSchedulerWorkPayload::TopLevelNavigationOwnerAction(action) => {
                 ReadyProtocolSchedulerWork::TopLevelNavigationOwnerAction(action)
+            }
+            ProtocolSchedulerWorkPayload::NavigationRequestContinuation(navigation, target_id) => {
+                ReadyProtocolSchedulerWork::NavigationRequestContinuation(navigation, target_id)
             }
             ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action) => {
                 ReadyProtocolSchedulerWork::PopupTargetNavigationOwnerAction(action)

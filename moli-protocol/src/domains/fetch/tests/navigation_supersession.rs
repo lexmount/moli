@@ -136,7 +136,7 @@ async fn disable_cleanup_reports_policy_failure_after_settling_its_navigation() 
 }
 
 #[tokio::test]
-async fn cancelled_disable_cleanup_settles_once_without_touching_a_successor_page() {
+async fn cancelled_stop_cleanup_settles_once_without_touching_a_successor_page() {
     tokio::task::LocalSet::new()
         .run_until(async {
             for before_wait in [false, true] {
@@ -164,7 +164,7 @@ async fn cancelled_disable_cleanup_settles_once_without_touching_a_successor_pag
                         &owner,
                         pending,
                         policy,
-                        crate::domains::fetch::cleanup::FetchCleanupReason::Disabled,
+                        crate::domains::fetch::cleanup::FetchCleanupReason::NavigationStopped,
                         false,
                     )
                 });

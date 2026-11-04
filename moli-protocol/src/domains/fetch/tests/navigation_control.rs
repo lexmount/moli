@@ -1261,7 +1261,7 @@ async fn intercepted_navigation_start_events_stay_before_network_pause_with_back
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn disable_aborts_paused_main_document_navigation() {
+async fn disable_resumes_paused_main_document_navigation() {
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -1314,17 +1314,20 @@ async fn disable_aborts_paused_main_document_navigation() {
     .await;
     ctx.expect_result(80, json!({}), Some("SID-1"));
 
-    let failed = ctx.take_one();
-    assert_eq!(failed["method"], "Network.loadingFailed");
-    assert_eq!(failed["params"]["requestId"], network_id);
-    assert_eq!(failed["params"]["errorText"], "Fetch interception disabled");
-
-    let navigate_error = ctx.take_one();
-    assert_eq!(navigate_error["id"], 79);
-    assert_eq!(navigate_error["error"]["code"], -32000);
-    assert_eq!(
-        navigate_error["error"]["message"],
-        "Fetch interception disabled"
+    wait_until_scheduler_message(&mut ctx, "main navigation after Fetch.disable", |event| {
+        event["method"] == "Network.loadingFinished" && event["params"]["requestId"] == network_id
+    })
+    .await;
+    ctx.expect_result(
+        79,
+        json!({"frameId":"TID-1","loaderId":LOADER_ID}),
+        Some("SID-1"),
+    );
+    assert!(
+        !ctx.sent
+            .iter()
+            .any(|event| event["method"] == "Network.loadingFailed"
+                && event["params"]["requestId"] == network_id)
     );
 
     server.abort();
