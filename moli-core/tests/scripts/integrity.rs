@@ -13,6 +13,9 @@ mod document_referrer_dispatch;
 #[path = "child_stylesheet_integrity.rs"]
 mod child_stylesheet_integrity;
 
+#[path = "module_csp.rs"]
+mod module_csp;
+
 const SCRIPT: &str = "globalThis.sriExecutions = (globalThis.sriExecutions || 0) + 1;";
 const INTEGRITY: &str = "sha384-T7tuz8k7Hz0eBaWUPKiAEECRmaKHLJ1eRz7NF4VdK1fN++IaKD3hEk0SETOP+8aJ";
 
@@ -146,6 +149,9 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
+        "/module-csp.html" | "/module-csp.text" | "/module-csp.json" | "/module-csp.css" => {
+            module_csp::fixture_response(path, query, cross)
+        }
         "/child-sri-frame.html"
         | "/child-sri-rejected.css"
         | "/child-sri-accepted.css"

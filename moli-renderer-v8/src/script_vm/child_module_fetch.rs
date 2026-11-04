@@ -390,6 +390,7 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
             Ok(fetched_source) => self.vm.module_graph_fetched_source_or_csp_error(
                 load_id,
                 fetched_source,
+                request.module_key().kind(),
                 request.fetch_metadata(),
             ),
             Err(error) => Err(ModuleLoadError::new(

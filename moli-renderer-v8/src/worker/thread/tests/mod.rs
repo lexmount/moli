@@ -7,6 +7,7 @@ mod indexed_db_gc;
 mod native_exception_data;
 
 mod event_target_prototype;
+mod module_csp;
 mod notification_init;
 mod request_init;
 mod text_codecs;

@@ -1851,6 +1851,18 @@ pub(super) enum WorkerModuleType {
 }
 
 impl WorkerModuleType {
+    pub(super) fn csp_resource_kind(
+        self,
+        script_kind: crate::content_security_policy::ContentSecurityPolicyResourceKind,
+    ) -> crate::content_security_policy::ContentSecurityPolicyResourceKind {
+        let kind = match self {
+            Self::JavaScriptOrWebAssembly => crate::module_runtime::ModuleKind::JavaScript,
+            Self::Json => crate::module_runtime::ModuleKind::Json,
+            Self::Text => crate::module_runtime::ModuleKind::Text,
+        };
+        crate::content_security_policy::module_csp_resource_kind(kind, script_kind)
+    }
+
     pub(super) fn response_kind(
         self,
         url: &Url,

@@ -1,7 +1,10 @@
 use super::*;
+use crate::content_security_policy::{
+    ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
+    ContentSecurityPolicyScriptElementRequest,
+};
 use crate::module_runtime::{
-    ModuleKind, ModuleLoadError, ModuleLoadStage, ModulePreloadJobRun,
-    NativeModuleSingleFetchRequest,
+    ModuleLoadError, ModuleLoadStage, ModulePreloadJobRun, NativeModuleSingleFetchRequest,
 };
 use crate::modulepreload::{
     ParserDiscoveredModulepreloadResult, invalid_modulepreload_as_value,
@@ -145,39 +148,41 @@ impl DocumentRuntime {
         let key = request.module_key().clone();
         let fetch_request = request.fetch_request();
         let mut csp_violations = Vec::new();
-        if matches!(key.kind(), ModuleKind::JavaScript | ModuleKind::WebAssembly) {
-            if let Some(violation) = self
-                .script_element_request_csp_report_only_violation_with_nonce(
-                    key.url(),
-                    fetch_request.nonce(),
-                )
-            {
-                csp_violations.push(violation);
-            }
-            if let Some(violation) = self
-                .script_element_request_csp_violation_with_nonce(key.url(), fetch_request.nonce())
-            {
-                let error = ModuleLoadError::new(
-                    ModuleLoadStage::Fetch,
-                    format!(
-                        "Refused to load module `{}` because it violates the document Content Security Policy directive `{}`",
-                        key.url(),
-                        violation.effective_directive
-                    ),
-                );
-                csp_violations.push(violation);
-                self.mark_native_module_failed(key, error.clone());
-                return Ok(MainDocumentModulepreloadFetchOutcome {
-                    job_run: Some(ModulePreloadJobRun::CompletedSynchronously),
-                    csp_violations,
-                    runtime_warning: Some(format!(
-                        "native modulepreload failed: {}",
-                        error.message()
-                    )),
-                });
-            }
+        let csp_request = ContentSecurityPolicyScriptElementRequest::parser_inserted_with_nonce(
+            fetch_request.nonce(),
+        );
+        if let Some(violation) = self.module_request_csp_violation(
+            key.url(),
+            key.kind(),
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            csp_request,
+            ContentSecurityPolicyDisposition::Report,
+        ) {
+            csp_violations.push(violation);
         }
-
+        if let Some(violation) = self.module_request_csp_violation(
+            key.url(),
+            key.kind(),
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            csp_request,
+            ContentSecurityPolicyDisposition::Enforce,
+        ) {
+            let error = ModuleLoadError::new(
+                ModuleLoadStage::Fetch,
+                format!(
+                    "Refused to load module `{}` because it violates the document Content Security Policy directive `{}`",
+                    key.url(),
+                    violation.effective_directive
+                ),
+            );
+            csp_violations.push(violation);
+            self.mark_native_module_failed(key, error.clone());
+            return Ok(MainDocumentModulepreloadFetchOutcome {
+                job_run: Some(ModulePreloadJobRun::CompletedSynchronously),
+                csp_violations,
+                runtime_warning: Some(format!("native modulepreload failed: {}", error.message())),
+            });
+        }
         let load_id = self.suspend_native_modulepreload_fetch(request);
         let loader = self
             .current_document_resource_loader()

@@ -530,6 +530,10 @@ impl DynamicModuleInflightFetch {
         self.request.fetch_metadata()
     }
 
+    pub(crate) fn kind(&self) -> super::ModuleKind {
+        self.request.kind()
+    }
+
     #[cfg(test)]
     pub(crate) fn request_for_test(&self) -> &NativeModuleGraphFetchRequest {
         &self.request
