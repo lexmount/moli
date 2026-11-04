@@ -1080,6 +1080,16 @@ impl ResourceRequestClient {
         self.resource_runtime.client().prepare_request(request);
     }
 
+    pub(crate) fn prepare_service_worker_request(&self, request: &mut Request) {
+        // Controlled fetch reconstructs requests without the full network-policy
+        // opt-in. Apply headers before defaults, while allowing offline workers
+        // to serve cached or synthetic responses.
+        self.page_network_policy
+            .snapshot()
+            .apply_request_headers(request);
+        self.prepare_request(request);
+    }
+
     fn apply_network_policy(&self, mut request: Request) -> Result<Request> {
         request.browser_origin()?;
         if let Some(browser_site_context) = self.browser_site_context.as_deref() {

@@ -434,6 +434,17 @@ impl PageNetworkPolicySnapshot {
             .any(|pattern| url_pattern_matches(pattern, url.as_str()))
     }
 
+    /// Merge headers without enforcing network availability or resource policy.
+    /// Existing request fields, including empty values, take precedence.
+    pub(crate) fn apply_request_headers(&self, request: &mut Request) {
+        if !self.extra_http_headers.is_empty() {
+            request.request_headers = merge_page_network_policy_headers(
+                &self.extra_http_headers,
+                &request.request_headers,
+            );
+        }
+    }
+
     pub(crate) fn apply_to_request(&self, mut request: Request) -> Result<Request> {
         // Worker fetch/XHR enforce their loading policy at the API boundary,
         // but still inherit the identity captured by their resource lease.
@@ -465,12 +476,7 @@ impl PageNetworkPolicySnapshot {
             request = request.with_cache_mode(RequestCacheMode::Bypass);
         }
 
-        if !self.extra_http_headers.is_empty() {
-            request.request_headers = merge_page_network_policy_headers(
-                &self.extra_http_headers,
-                &request.request_headers,
-            );
-        }
+        self.apply_request_headers(&mut request);
         Ok(request)
     }
 }

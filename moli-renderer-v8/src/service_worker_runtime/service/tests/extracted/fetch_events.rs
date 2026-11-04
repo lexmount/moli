@@ -131,14 +131,14 @@ fn controlled_fetch_inserts_accept_before_queuing_and_preserves_author_values() 
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn controlled_fetch_fallback_preserves_single_accept_on_the_wire() {
+async fn controlled_fetch_fallback_matches_page_accept_on_the_wire() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
         let mut requests = Vec::new();
-        for _ in 0..9 {
+        for _ in 0..54 {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = Vec::new();
             while !request.ends_with(b"\r\n\r\n") {
@@ -157,13 +157,27 @@ async fn controlled_fetch_fallback_preserves_single_accept_on_the_wire() {
         requests
     });
     let mut expected = Vec::new();
-    for configured in [None, Some(""), Some("application/json")] {
+    for (configured, page) in [None, Some(""), Some("application/json")]
+        .into_iter()
+        .flat_map(|configured| {
+            [None, Some(""), Some("application/custom")].map(|page| (configured, page))
+        })
+    {
         let mut config = moli_fetch::FetchConfig::default();
         if let Some(value) = configured {
             config.set_default_request_headers(vec![("aCcEpT".to_owned(), value.to_owned())]);
         }
         let client = ResourceRequestClient::new(&config).unwrap();
-        for author in [None, Some(""), Some("application/custom")] {
+        if let Some(value) = page {
+            client.set_extra_http_headers(
+                &vec![
+                    ("aCcEpT".to_owned(), value.to_owned()),
+                    ("X-Page-Policy".to_owned(), "enabled".to_owned()),
+                ]
+                .into(),
+            );
+        }
+        for author in [None, Some(""), Some("application/author")] {
             let service = new_service_worker_runtime_service();
             let registration_id = ServiceWorkerRegistrationId(1);
             let version_id = ServiceWorkerVersionId(1);
@@ -190,6 +204,7 @@ async fn controlled_fetch_fallback_preserves_single_accept_on_the_wire() {
                 host: new_loading_test_host(version_id, &run),
             };
             let mut request = test_fetch_request(client_id, request_url.clone());
+            request.destination = ServiceWorkerRequestDestination::Style;
             if let Some(value) = author {
                 request
                     .headers
@@ -208,8 +223,24 @@ async fn controlled_fetch_fallback_preserves_single_accept_on_the_wire() {
                 moli_fetch::FetchCancelHandle::new(),
             );
             job.request_client = client.handle();
+            job.destination = request.destination;
+            job.network_context.resource_type = crate::types::SubresourceResourceType::Stylesheet;
+            job.request = job
+                .request
+                .with_resource_type(moli_fetch::RequestResourceType::CssStyleSheet)
+                .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Style)
+                .with_cache_mode(moli_fetch::RequestCacheMode::NoStore);
             job.request.request_headers =
                 moli_fetch::RequestHeaders::from_byte_strings(&request.headers).unwrap();
+            // The direct path opts into the complete policy. Controlled fetch
+            // reconstructs a native request without this flag at admission.
+            let direct = job.request.clone().with_page_network_policy();
+            let response =
+                tokio::time::timeout(std::time::Duration::from_secs(15), client.fetch_raw(direct))
+                    .await
+                    .expect("direct request deadline")
+                    .unwrap();
+            assert_eq!(response.status, 200);
             assert!(service.dispatch_controlled_fetch_job(job, request).is_ok());
             let job = {
                 let mut state = service.inner.state.lock();
@@ -226,9 +257,22 @@ async fn controlled_fetch_fallback_preserves_single_accept_on_the_wire() {
                     .filter(|(name, _)| name.eq_ignore_ascii_case("accept"))
                     .map(|(_, value)| value.as_str())
                     .collect();
-                let value = author.or(configured).unwrap_or("*/*");
-                assert_eq!(observed, [value]);
-                expected.push(value.to_owned());
+                let value = author.or(page).or(configured).unwrap_or("*/*");
+                assert_eq!(
+                    observed,
+                    [value],
+                    "configured={configured:?}, page={page:?}, author={author:?}"
+                );
+                let page_headers: Vec<_> = event
+                    .request
+                    .headers
+                    .iter()
+                    .filter(|(name, _)| name.eq_ignore_ascii_case("x-page-policy"))
+                    .map(|(_, value)| value.as_str())
+                    .collect();
+                assert_eq!(page_headers, page.map(|_| "enabled").as_slice());
+                expected.push((value.to_owned(), page.is_some()));
+                expected.push((value.to_owned(), page.is_some()));
                 state.pending_fetch_jobs.remove(&event.event_id).unwrap()
             };
             let fallback = super::super::super::fetch_settlement::service_worker_network_fallback_request_for_job(&job);
@@ -244,7 +288,7 @@ async fn controlled_fetch_fallback_preserves_single_accept_on_the_wire() {
     }
     let requests = server.await.unwrap();
     assert_eq!(requests.len(), expected.len());
-    for (request, expected) in requests.iter().zip(expected.iter()) {
+    for (request, (accept, page)) in requests.iter().zip(expected.iter()) {
         let values: Vec<_> = request
             .lines()
             .filter_map(|line| {
@@ -252,7 +296,108 @@ async fn controlled_fetch_fallback_preserves_single_accept_on_the_wire() {
                 name.eq_ignore_ascii_case("accept").then(|| value.trim())
             })
             .collect();
-        assert_eq!(values, [expected.as_str()], "{request}");
+        assert_eq!(values, [accept.as_str()], "{request}");
+        let page_headers: Vec<_> = request
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("x-page-policy")
+                    .then(|| value.trim())
+            })
+            .collect();
+        let expected_page_headers: &[&str] = if *page { &["enabled"] } else { &[] };
+        assert_eq!(page_headers, expected_page_headers, "{request}");
+    }
+}
+
+#[test]
+fn controlled_fetch_prepares_page_headers_while_offline_or_blocked() {
+    for offline in [true, false] {
+        let service = new_service_worker_runtime_service();
+        let version_id = ServiceWorkerVersionId(1);
+        let document_url = url("https://example.test/app/page.html");
+        let request_url = url("https://example.test/app/style.css");
+        let client = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        client.set_extra_http_headers(
+            &vec![("Accept".to_owned(), "application/custom".to_owned())].into(),
+        );
+        if offline {
+            client.set_network_offline(true);
+        } else {
+            client.set_blocked_url_patterns(&[request_url.to_string()]);
+        }
+        insert_registered_version(
+            &service,
+            ServiceWorkerRegistrationId(1),
+            version_id,
+            url("https://example.test/app/worker.js"),
+            url("https://example.test/app/"),
+            [document_url.clone()],
+        );
+        let client_id = client_id_for_document(&service, &document_url);
+        let run = exact_version_run(&service, version_id);
+        service
+            .inner
+            .state
+            .lock()
+            .versions
+            .get_mut(&version_id)
+            .unwrap()
+            .running_state = ServiceWorkerVersionRunningState::Starting {
+            host: new_loading_test_host(version_id, &run),
+        };
+        let mut request = test_fetch_request(client_id, request_url.clone());
+        request.destination = ServiceWorkerRequestDestination::Style;
+        let mut queue = async_subresource_completion_queue();
+        let mut job = test_fetch_job(
+            &service,
+            9,
+            version_id,
+            &run,
+            client_id,
+            document_url,
+            request_url,
+            queue.sender(),
+            moli_fetch::FetchCancelHandle::new(),
+        );
+        job.request_client = client.handle();
+        job.destination = request.destination;
+        job.network_context.resource_type = crate::types::SubresourceResourceType::Stylesheet;
+        assert!(service.dispatch_controlled_fetch_job(job, request).is_ok());
+
+        let (event_id, owner) = {
+            let mut state = service.inner.state.lock();
+            let version = state.versions.get_mut(&version_id).unwrap();
+            let Some(ServiceWorkerPendingStartEvent::Fetch(event)) =
+                version.pending_start_events.pop_front()
+            else {
+                panic!("network restrictions must not suppress the fetch event");
+            };
+            let observed: Vec<_> = event
+                .request
+                .headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("accept"))
+                .map(|(_, value)| value.as_str())
+                .collect();
+            assert_eq!(observed, ["application/custom"]);
+            (event.event_id, event.owner)
+        };
+        service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
+            event_id,
+            owner,
+            result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: vec![("content-type".to_owned(), b"text/css".to_vec())],
+                body: b"body { color: green; }".to_vec(),
+                final_url: None,
+                response_type: "default".to_owned(),
+                redirected: false,
+            }),
+        });
+        let completion = pop_async_subresource_completion(&mut queue);
+        assert!(completion.result.is_ok(), "synthetic response must succeed");
     }
 }
 
