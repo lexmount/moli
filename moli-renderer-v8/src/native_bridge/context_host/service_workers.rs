@@ -92,8 +92,6 @@ pub(crate) struct PendingServiceWorkerUnregister {
     pub(crate) owner: ServiceWorkerWindowOwner,
     pub(crate) context: v8::Global<v8::Context>,
     pub(crate) resolver: v8::Global<v8::PromiseResolver>,
-    pub(crate) registration: v8::Global<v8::Object>,
-    pub(crate) active_worker: Option<v8::Global<v8::Object>>,
 }
 
 pub(crate) struct ServiceWorkerRegistrationWatcher {
@@ -579,8 +577,6 @@ impl PageScriptHost {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         resolver: v8::Local<'_, v8::PromiseResolver>,
-        registration: v8::Local<'_, v8::Object>,
-        active_worker: Option<v8::Local<'_, v8::Object>>,
         owner: ServiceWorkerWindowOwner,
     ) -> (
         u64,
@@ -594,8 +590,6 @@ impl PageScriptHost {
                 owner,
                 context: v8::Global::new(scope, scope.get_current_context()),
                 resolver: v8::Global::new(scope, resolver),
-                registration: v8::Global::new(scope, registration),
-                active_worker: active_worker.map(|worker| v8::Global::new(scope, worker)),
             },
         );
         tracing::debug!(
@@ -960,7 +954,10 @@ impl PageScriptHost {
                     watcher.owner == owner
                         && watcher.scope_url == scope_url
                         && watcher.storage_key == storage_key
-                        && !watcher.registration.is_empty()
+                        && watcher
+                            .registration
+                            .to_local(scope)
+                            .is_some_and(|existing| existing.strict_equals(registration.into()))
                 })
         {
             watcher.registration = v8::Weak::new(scope, registration);
