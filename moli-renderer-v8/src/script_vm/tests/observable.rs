@@ -1,6 +1,109 @@
 use super::*;
 
 #[test]
+fn observable_finally_preserves_teardown_order_sharing_and_reentrant_cancellation() {
+    let mut vm = new_storage_test_vm("https://observable-finally.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.finallyResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-finally.js")
+    ))
+    .expect("Observable.finally fixture should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("finallyResult").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 120, "{result}");
+}
+
+#[test]
+fn observable_finally_preserves_result_conversion_callback_and_exception_realms() {
+    let mut vm = new_storage_test_vm("https://observable-finally-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable.finally realm");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.finallyRealms = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-finally-realms.js")
+    ))
+    .expect("Observable.finally realms fixture should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("finallyRealms").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["checks"], 36, "{result}");
+}
+
+#[test]
+fn observable_finally_traces_pending_teardowns_and_releases_closed_or_abandoned_graphs() {
+    let mut vm = new_storage_test_vm("https://observable-finally-gc.test/");
+    vm.eval(r#"
+globalThis.gcFinallyCalls = 0;
+function makeFinallyCallback() {
+  const token = {};
+  return {token, callback: () => { gcFinallyCalls++; return token; }};
+}
+function makeFinallySource() {
+  let subscriber;
+  return {source: new Observable(s => { subscriber = s; }), get subscriber() { return subscriber; }};
+}
+globalThis.finallyChains = [];
+for (const mode of ['abandoned', 'complete', 'error', 'abort']) (() => {
+  const input = makeFinallySource(), finalizer = makeFinallyCallback();
+  const result = input.source.finally(finalizer.callback), ac = new AbortController();
+  const promise = result.toArray(mode === 'abort' ? {signal: ac.signal} : undefined);
+  promise.catch(() => {}); input.subscriber.next(1);
+  const entry = {mode, templates: [input.source, result].map(v => new WeakRef(v)),
+    subscriber: new WeakRef(input.subscriber), finalizer: [finalizer.callback, finalizer.token].map(v => new WeakRef(v))};
+  if (mode !== 'abandoned') entry.promise = promise;
+  if (mode === 'abort') entry.controller = ac;
+  finallyChains.push(entry);
+})();
+"#).unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(vm.eval(r#"JSON.stringify([
+finallyChains.every(c => c.templates.every(ref => ref.deref() === undefined)),
+finallyChains.every(c => (c.subscriber.deref() !== undefined) === (c.mode !== 'abandoned')),
+finallyChains.every(c => c.finalizer.every(ref => (ref.deref() !== undefined) === (c.mode !== 'abandoned'))),
+gcFinallyCalls === 0
+])"#).unwrap(), "[true,true,true,true]");
+    vm.eval(r#"
+for (const c of finallyChains.filter(c => c.promise)) {
+  c.promise.then(values => { c.correct = c.mode === 'complete' && JSON.stringify(values) === '[1,2]'; }, error => { c.correct = error === c.mode; });
+  const source = c.subscriber.deref(); source.next(2);
+  if (c.mode === 'complete') source.complete();
+  else if (c.mode === 'error') source.error('error');
+  else c.controller.abort('abort');
+  c.closedSubscriber = source;
+}
+"#).unwrap();
+    assert_eq!(vm.eval("gcFinallyCalls === 3 && finallyChains.filter(c => c.promise).every(c => c.correct && !c.closedSubscriber.active)").unwrap(), "true");
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval("finallyChains.every(c => c.finalizer.every(ref => ref.deref() === undefined))")
+            .unwrap(),
+        "true"
+    );
+    vm.eval(r#"
+globalThis.preabortedFinallySubscribers = [];
+globalThis.preabortedFinallyRefs = (() => {
+  const finalizer = makeFinallyCallback();
+  new Observable(s => preabortedFinallySubscribers.push(s)).finally(finalizer.callback).subscribe({}, {signal: AbortSignal.abort('pre-aborted')});
+  return [new WeakRef(finalizer.callback), new WeakRef(finalizer.token)];
+})();
+"#).unwrap();
+    collect(&mut vm);
+    assert_eq!(vm.eval("gcFinallyCalls === 4 && preabortedFinallySubscribers.length === 1 && preabortedFinallySubscribers.every(s => !s.active && s.signal.reason === 'pre-aborted') && preabortedFinallyRefs.every(ref => ref.deref() === undefined)").unwrap(), "true");
+}
+
+#[test]
 fn observable_inspect_preserves_conversion_callbacks_cancellation_and_error_order() {
     let mut vm = new_storage_test_vm("https://observable-inspect.test/");
     vm.eval(&format!(
