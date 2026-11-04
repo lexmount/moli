@@ -510,14 +510,14 @@ def _case_timeout(base_seconds: float, case: WptCase) -> float:
 
 
 def _harness_timeout_multiplier(case: WptCase) -> float:
-    """Preserve WPT's own normal/long timeout semantics.
+    """Keep authored timer delays independent of normal/long metadata.
 
-    The benchmark's outer case deadline is transport and cleanup headroom. It
-    must not stretch testharness.js timers, or a test that should report a WPT
-    timeout can keep an engine busy until the outer deadline instead.
+    testharness.js already selects its native harness deadline from the META
+    timeout value. Reusing that value as timeout_multiplier also rescales
+    step_timeout() delays and multiplies the long harness deadline a second time.
     """
 
-    return max(1.0, case.timeout_multiplier)
+    return 1.0
 
 
 def _is_layout_profile(profile: str) -> bool:
