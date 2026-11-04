@@ -2,18 +2,16 @@ use super::{
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT as WINDOW_CHILD_CONTEXT_HANDLE_SLOT,
     context_bootstrap::DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
     context_bootstrap::PERFORMANCE_TIME_ORIGIN_SLOT,
+    context_bootstrap::ResolvedSimpleEventTarget,
     context_bootstrap::current_performance_time_origin,
     context_bootstrap::dom_time_since_origin_millis,
     context_bootstrap::event_initialized,
     context_bootstrap::event_is_dispatching,
     context_bootstrap::event_is_mouse_event,
     context_bootstrap::increment_performance_event_count,
-    context_bootstrap::is_simple_event_target,
     context_bootstrap::mark_event_trusted,
     context_bootstrap::performance_slot_number,
-    context_bootstrap::simple_event_target_add_event_listener_callback,
-    context_bootstrap::simple_event_target_dispatch_event_callback,
-    context_bootstrap::simple_event_target_remove_event_listener_callback,
+    context_bootstrap::resolve_event_target,
     context_bootstrap::trusted_script_string_or_type_error,
     document_runtime::{DocumentContentSecurityPolicyViolation, DomHandle, EventTargetHandle},
     native_bridge::{
@@ -220,10 +218,14 @@ struct IdleDeadlinePrototypeDeclaration {
 pub(super) fn event_target_add_event_listener_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if is_simple_event_target(scope, args.this()) {
-        simple_event_target_add_event_listener_callback(scope, args, rv);
+    let Some(identity) = resolve_event_target(scope, args.this()) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    if let Some(target) = ResolvedSimpleEventTarget::from_identity(scope, identity) {
+        target.add_event_listener(scope, &args);
         return;
     }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -246,7 +248,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     {
         return;
     }
-    let child_window_target = child_window_handle(scope, args.this());
+    let child_window_target = child_window_handle(scope, identity.listener_owner);
     let target = if let Some(handle) = child_window_target {
         let Some(target) = host.current_child_window_event_target(handle) else {
             // Detachment clears the Window's listeners and execution context,
@@ -255,7 +257,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
         };
         Some(EventTargetHandle::ChildWindow(target))
     } else {
-        event_target_handle_from_this(scope, &args, host_ptr, host)
+        event_target_handle_from_receiver(scope, identity.listener_owner, host_ptr, host)
     };
     let Some(target) = target else {
         throw_type_error(scope, "Illegal invocation");
@@ -286,7 +288,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     {
         define_non_enumerable_static_bool_property(
             scope,
-            args.this(),
+            identity.listener_owner,
             DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
             true,
         );
@@ -342,10 +344,14 @@ fn default_passive_value(
 pub(super) fn event_target_remove_event_listener_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if is_simple_event_target(scope, args.this()) {
-        simple_event_target_remove_event_listener_callback(scope, args, rv);
+    let Some(identity) = resolve_event_target(scope, args.this()) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    if let Some(target) = ResolvedSimpleEventTarget::from_identity(scope, identity) {
+        target.remove_event_listener(scope, &args);
         return;
     }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -361,14 +367,14 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
         return;
     };
     let capture = call.options.capture;
-    let target = if let Some(handle) = child_window_handle(scope, args.this()) {
+    let target = if let Some(handle) = child_window_handle(scope, identity.listener_owner) {
         let Some(target) = host.current_child_window_event_target(handle) else {
             // The listeners were already removed when this Window detached.
             return;
         };
         Some(EventTargetHandle::ChildWindow(target))
     } else {
-        event_target_handle_from_this(scope, &args, host_ptr, host)
+        event_target_handle_from_receiver(scope, identity.listener_owner, host_ptr, host)
     };
     let Some(target) = target else {
         if crate::context_bootstrap::is_window_receiver(scope, args.this()) {
@@ -396,8 +402,12 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         crate::context_bootstrap::dispatch_indexed_db_event_callback(scope, args, rv);
         return;
     }
-    if is_simple_event_target(scope, args.this()) {
-        simple_event_target_dispatch_event_callback(scope, args, rv);
+    let Some(identity) = resolve_event_target(scope, args.this()) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    if let Some(target) = ResolvedSimpleEventTarget::from_identity(scope, identity) {
+        target.dispatch_event(scope, &args, &mut rv);
         return;
     }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -405,9 +415,9 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let child_window_target = child_window_handle(scope, args.this());
+    let child_window_target = child_window_handle(scope, identity.listener_owner);
     let target = if child_window_target.is_none() {
-        event_target_handle_from_this(scope, &args, host_ptr, host)
+        event_target_handle_from_receiver(scope, identity.listener_owner, host_ptr, host)
     } else {
         None
     };
@@ -2074,13 +2084,15 @@ fn dom_handle_from_marker_value(
         .map(|value| crate::document_runtime::DomHandle::new(value as usize))
 }
 
-fn event_target_handle_from_this<'s>(
+// The public operation resolves native aliases once. DOM/Window keep their
+// existing handle identity and dispatcher; object-backed fixed dispatch targets
+// do not replace a DOM propagation target or its per-listener retargeting.
+fn event_target_handle_from_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
+    this: v8::Local<'s, v8::Object>,
     host_ptr: *mut JsContextHost,
     host: &JsContextHost,
 ) -> Option<EventTargetHandle> {
-    let this = args.this();
     let global = scope.get_current_context().global(scope);
     if this.strict_equals(global.into()) {
         return Some(EventTargetHandle::Window);

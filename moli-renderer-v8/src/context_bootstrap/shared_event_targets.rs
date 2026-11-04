@@ -20,13 +20,15 @@ const HANDLERS: [(&str, &str); 5] = [
     ("ondispose", "dispose"),
 ];
 
-pub(super) struct ResolvedEventTarget<'s> {
-    pub(super) listener_owner: v8::Local<'s, v8::Object>,
+#[derive(Clone, Copy)]
+pub(crate) struct ResolvedEventTarget<'s> {
+    pub(crate) listener_owner: v8::Local<'s, v8::Object>,
     // EventHandler values belong to the native receiver's wrapper, even when
     // its listener registry is shared with wrappers from other worlds.
     pub(super) handler_owner: v8::Local<'s, v8::Object>,
     // A logical target: realm projection and DOM retargeting remain separate.
     pub(super) dispatch_target: v8::Local<'s, v8::Object>,
+    shared: bool,
 }
 
 fn native_target<'s>(
@@ -40,16 +42,18 @@ fn native_target<'s>(
     }
 }
 
-pub(super) fn resolve_event_target<'s>(
+pub(crate) fn resolve_event_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<ResolvedEventTarget<'s>> {
     let handler_owner = native_target(scope, receiver)?;
+    let owner = get_private_object(scope, handler_owner, OWNER);
     Some(ResolvedEventTarget {
-        listener_owner: get_private_object(scope, handler_owner, OWNER).unwrap_or(handler_owner),
+        listener_owner: owner.unwrap_or(handler_owner),
         handler_owner,
         dispatch_target: get_private_object(scope, handler_owner, DISPATCH_TARGET)
             .unwrap_or(receiver),
+        shared: owner.is_some(),
     })
 }
 
@@ -69,10 +73,7 @@ pub(super) fn is_shared_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(target) = native_target(scope, target) else {
-        return false;
-    };
-    get_private_object(scope, target, OWNER).is_some()
+    resolve_event_target(scope, target).is_some_and(|target| target.shared)
 }
 
 pub(super) fn shared_target_owner<'s>(
@@ -81,8 +82,7 @@ pub(super) fn shared_target_owner<'s>(
 ) -> v8::Local<'s, v8::Object> {
     // Native aliases share the backing registry while dispatch keeps the
     // original wrapper for callback this and Event.target.
-    let target = native_target(scope, target).unwrap_or(target);
-    get_private_object(scope, target, OWNER).unwrap_or(target)
+    resolve_event_target(scope, target).map_or(target, |target| target.listener_owner)
 }
 
 /// Share listener storage and register the wrapper for realm projection.
@@ -124,12 +124,16 @@ pub(super) fn target_in_realm<'s>(
         return node;
     }
     let receiver = target;
-    let target = native_target(scope, target).unwrap_or(target);
-    let Some(owner) = get_private_object(scope, target, OWNER) else {
+    let Some(identity) = resolve_event_target(scope, target) else {
+        return receiver;
+    };
+    if !identity.shared {
         // Ordinary native aliases retain their own public identity. Shared
         // platform objects instead project the native receiver's world wrapper.
         return receiver;
-    };
+    }
+    let target = identity.handler_owner;
+    let owner = identity.listener_owner;
     if crate::web_api_interfaces::AbortSignal::is_instance(scope, owner) {
         return super::platform_object_worlds::in_realm(scope, owner.into(), context)
             .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
