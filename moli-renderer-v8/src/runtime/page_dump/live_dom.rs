@@ -46,21 +46,24 @@ impl LiveDom<'_> {
         if !self.has_shadow_roots {
             return None;
         }
+        let dom = self.host.dom();
+        let element = dom.node(node)?.as_element()?;
+        let shadow_root = self.host.shadow_root_handle(node);
+        if shadow_root.is_none() && !element.is_html_element("slot") {
+            return None;
+        }
         if let Some(children) = self.projection.borrow().children.get(&node) {
             return Some(Rc::clone(children));
         }
-        let dom = self.host.dom();
-        let (children, suppressed) = if let Some(root) = self.host.shadow_root_handle(node) {
+        let (children, suppressed) = if let Some(root) = shadow_root {
             (dom.child_ids(root).collect::<Vec<_>>(), None)
-        } else if self.host.is_html_element_named(node, "slot") {
+        } else {
             let assigned = self.host.assigned_nodes_for_slot_with_options(node, false);
             if assigned.is_empty() {
                 (dom.child_ids(node).collect(), None)
             } else {
                 (assigned, Some(node))
             }
-        } else {
-            return None;
         };
         let children: Rc<[NativeNodeId]> = children.into();
         let mut cache = self.projection.borrow_mut();
@@ -128,8 +131,22 @@ impl MarkdownSource for LiveDom<'_> {
     }
 
     fn parent_node(&self, node: NativeNodeId) -> Option<NativeNodeId> {
+        let native_parent = self.host.dom().parent_node(node)?;
         if !self.has_shadow_roots {
-            return self.host.dom().parent_node(node);
+            return Some(native_parent);
+        }
+        // Ordinary edges retain their native parent even when another subtree
+        // contains shadow content. Cache only relationships at tree boundaries.
+        let projected_parent = self.host.dom().node(native_parent).is_some_and(|parent| {
+            if let Some(element) = parent.as_element() {
+                element.is_html_element("slot")
+                    || self.host.shadow_root_handle(native_parent).is_some()
+            } else {
+                parent.is_document_fragment() && self.host.is_shadow_root(native_parent)
+            }
+        });
+        if !projected_parent {
+            return Some(native_parent);
         }
         if let Some(parent) = self.projection.borrow().parents.get(&node) {
             return *parent;
@@ -223,6 +240,10 @@ mod tests {
             let mut host = DomHost::from_dom(NativeDom::new_html(
                 url::Url::parse("https://example.test/").unwrap(),
             ));
+            let ordinary = host.create_element("p");
+            assert!(host.append_child(host.document_handle(), ordinary));
+            let ordinary_text = host.create_text_node("ordinary content");
+            assert!(host.append_child(ordinary, ordinary_text));
             let element = host.create_element("div");
             assert!(host.append_child(host.document_handle(), element));
             let mut init = ShadowRootInit::new("closed");
