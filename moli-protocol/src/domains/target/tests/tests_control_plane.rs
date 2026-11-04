@@ -787,7 +787,7 @@ async fn detach_from_inactive_context_cleans_exact_session_without_activating_co
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn detach_from_target_aborts_paused_request_stage_navigation() {
+async fn detach_from_target_resumes_paused_request_stage_navigation() {
     async fn page() -> impl axum::response::IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -828,6 +828,23 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(40, json!({}), Some(&session_id));
 
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target(
+                    target_id.as_str(),
+                    "SID-detach-observer".to_owned()
+                )
+        );
+    });
+    for (id, method) in [(38_400, "Network.enable"), (38_401, "Page.enable")] {
+        ctx.process_async(json!({"id": id, "method": method, "sessionId": "SID-detach-observer"}))
+            .await;
+        ctx.expect_result(id, json!({}), Some("SID-detach-observer"));
+    }
+
     ctx.navigate_with_page_events(json!({
         "id": 41,
         "method": "Page.navigate",
@@ -847,29 +864,6 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     }))
     .await;
     ctx.expect_result(42, json!({}), None);
-
-    let failed = ctx
-        .sent
-        .iter()
-        .find(|message| {
-            message["method"] == json!("Network.loadingFailed")
-                && message["params"]["requestId"] == network_id
-        })
-        .cloned()
-        .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], json!(session_id));
-    assert_eq!(failed["params"]["requestId"], network_id);
-    assert_eq!(failed["params"]["errorText"], "Target detached");
-
-    let error = ctx
-        .sent
-        .iter()
-        .find(|message| message["id"] == json!(41))
-        .cloned()
-        .expect("navigation error response");
-    assert_eq!(error["id"], 41);
-    assert_eq!(error["error"]["code"], -32000);
-    assert_eq!(error["error"]["message"], "Target detached");
 
     let detached = ctx
         .sent
@@ -900,6 +894,30 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
                 .primary_network_events_enabled()
         );
     });
+
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "navigation after initiating session detach",
+        |event| {
+            event["method"] == "Network.loadingFinished"
+                && event["params"]["requestId"] == network_id
+                && event["sessionId"] == "SID-detach-observer"
+        },
+    )
+    .await;
+    crate::testing::wait_until_frame_stopped_loading(&mut ctx, target_id.as_str()).await;
+    let html = ctx.serialize_fixture_document(None).await.unwrap();
+    assert!(html.contains("detach-target"), "{html}");
+    assert!(
+        !ctx.sent
+            .iter()
+            .any(|event| event["method"] == "Network.loadingFailed"
+                && event["params"]["requestId"] == network_id)
+    );
+    assert!(
+        !ctx.sent.iter().any(|event| event["id"] == 41),
+        "the detached initiating session no longer needs a navigation reply"
+    );
 
     server.abort();
 }

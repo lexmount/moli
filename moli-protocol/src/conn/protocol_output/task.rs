@@ -226,6 +226,7 @@ impl PendingProtocolSchedulerWork {
                 | ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
                 | ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction
                 | ProtocolSchedulerWorkKind::TopLevelNavigationOwnerAction
+                | ProtocolSchedulerWorkKind::NavigationRequestContinuationOwnerAction
                 | ProtocolSchedulerWorkKind::PopupTargetActivationAction
                 | ProtocolSchedulerWorkKind::BidiChannelOwnerAction
                 | ProtocolSchedulerWorkKind::NavigationProtocolCompletionOwnerAction
@@ -360,6 +361,21 @@ impl CdpConnection {
             }
             ReadyProtocolSchedulerWork::NavigationProtocolCompletion(work) => {
                 Some(PendingProtocolWork::Navigation(work))
+            }
+            ReadyProtocolSchedulerWork::NavigationRequestContinuation(prepared, target_id) => {
+                let access = access.clone();
+                let workflow = PreparedCommandWorkflow::new(move |mut context| async move {
+                    if let Err(error) = prepared
+                        .run(&mut ProtocolWorkflowDriver::new(access), &mut context)
+                        .await
+                    {
+                        tracing::warn!(?error, "resumed Fetch navigation failed");
+                    }
+                    context.complete(crate::domains::command_output::CommandOutputPlan::default())
+                });
+                Some(PendingProtocolWork::Workflow(
+                    super::workflow::PendingProtocolWorkflow::prepare(workflow, Some(target_id)),
+                ))
             }
             ReadyProtocolSchedulerWork::PageTargetTerminationOwnerAction(action) => {
                 TargetTermination::prepare(self, action).map(PendingProtocolWork::Termination)

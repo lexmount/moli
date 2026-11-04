@@ -35,6 +35,10 @@ pub(crate) struct PreparedFetchCleanup {
     access: ProtocolStateHandle,
     policy: Option<Result<PendingPageCommand>>,
     navigations: Vec<NavigationCleanup>,
+    resumptions: Vec<(
+        crate::conn::PendingFetchNavigation,
+        Option<NavigationTermination>,
+    )>,
     subresources: Vec<PreparedSubresourceCleanup>,
 }
 
@@ -103,16 +107,16 @@ impl PreparedFetchCleanup {
             }
             _ => reason.to_string(),
         };
-        let resume_child_navigations = matches!(
+        let resume_navigations = matches!(
             reason,
             FetchCleanupReason::Disabled | FetchCleanupReason::Detached
         );
-        // Removing an interceptor leaves a valid child navigation running.
+        // Removing an interceptor leaves a valid navigation running.
         // Actual Page/navigation retirement still owns transport cancellation.
         let subresources = subrequests
             .into_iter()
             .map(|(_, pending)| {
-                if resume_child_navigations
+                if resume_navigations
                     && pending.owner_kind.drains_on_fetch_disable()
                     && pending.resource_type == moli_core::page::SubresourceResourceType::Document
                 {
@@ -135,6 +139,47 @@ impl PreparedFetchCleanup {
                 admit_subresource_cleanup(conn, owner, resource, &subresource_error)
             })
             .collect();
+        let mut resumptions = Vec::new();
+        let resume_requests = resume_navigations && !policy.as_ref().is_some_and(Result::is_err);
+        let requests = requests
+            .into_iter()
+            .filter_map(|mut pending| {
+                if resume_requests && pending.document_navigation_token.is_some() {
+                    if matches!(reason, FetchCleanupReason::Detached)
+                        && pending.navigation.owner == *owner
+                        && let Some((browser_context_id, Some(target_id))) =
+                            conn.target_owner_identity_for_owner(owner)
+                    {
+                        // The request belongs to the target after its initiating
+                        // DevTools session leaves. That session no longer needs
+                        // a Page.navigate reply, but other listeners still do.
+                        pending.navigation.session_id = conn
+                            .page_event_session_ids_for_owner(owner)
+                            .into_iter()
+                            .flatten()
+                            .find(|session| Some(session.as_str()) != owner.session_id());
+                        pending.navigation.navigate_id = None;
+                        pending.navigation.owner = CommandOwnerScope::for_route(
+                            crate::conn::CdpSessionRoute::PageTarget {
+                                browser_context_id,
+                                target_id,
+                                session_key: moli_page_types::DevToolsSessionKey::Primary,
+                            },
+                        );
+                    }
+                    let termination = NavigationTermination::new(
+                        conn,
+                        &pending.navigation.owner,
+                        pending.document_navigation_token.as_ref(),
+                        &pending.navigation,
+                    );
+                    resumptions.push((pending, termination));
+                    None
+                } else {
+                    Some(pending)
+                }
+            })
+            .collect::<Vec<_>>();
         let navigations = requests
             .into_iter()
             .map(|pending| (pending.document_navigation_token, pending.navigation))
@@ -194,6 +239,7 @@ impl PreparedFetchCleanup {
             access: conn.protocol_state_access(),
             policy,
             navigations,
+            resumptions,
             subresources,
         }
     }
@@ -276,6 +322,23 @@ impl PreparedFetchCleanup {
         driver: &mut ProtocolWorkflowDriver,
         mut output: FetchCleanupOutput,
     ) -> FetchCleanupOutput {
+        for (pending, mut termination) in self.resumptions {
+            if output.error.is_none() {
+                match driver.with_state(move |state| state.resume_fetch_navigation_request(pending))
+                {
+                    Ok(Some(plan)) => {
+                        output.plan.extend(plan);
+                        if let Some(termination) = termination.as_mut() {
+                            termination.disarm();
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        output.error.get_or_insert(error);
+                    }
+                }
+            }
+        }
         for navigation in self.navigations {
             output.plan.extend(navigation.plan);
             output.terminations.extend(navigation.termination);

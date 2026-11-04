@@ -1,4 +1,5 @@
 use super::*;
+mod navigation_disable;
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsAddNetworkInterceptCommand,
     DevToolsContinueInterceptedRequestCommand, DevToolsContinueInterceptedResponseCommand,

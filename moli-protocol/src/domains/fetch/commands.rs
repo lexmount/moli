@@ -403,11 +403,7 @@ fn start_devtools_continue_intercepted_request_command(
             pending.navigation.request_load_policy,
             None,
         );
-        if !pending.remaining_request_stages.is_empty() {
-            let stage = pending.remaining_request_stages.remove(0);
-            pending.fetch_request_id = stage.request_id;
-            pending.interception_session_id = stage.session_id;
-            pending.redirected_request_id = stage.redirected_request_id;
+        if super::navigation_interception::advance_navigation_request_stage(conn, &mut pending) {
             let event = super::request_paused_background_event(
                 pending.interception_session_id.as_deref(),
                 &pending,

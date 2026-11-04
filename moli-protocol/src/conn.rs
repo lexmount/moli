@@ -2760,6 +2760,23 @@ impl CdpConnection {
         self.publish_top_level_navigation_owner_action(action);
     }
 
+    pub(crate) fn resume_fetch_navigation_in_background(
+        &mut self,
+        pending: PendingFetchNavigation,
+    ) {
+        let target_id = pending.navigation.frame_id.clone();
+        let prepared =
+            crate::domains::page::PreparedRendererNavigation::prepare_fetch_request(self, pending);
+        let sequence = self
+            .scheduler_state
+            .allocate_protocol_work_publish_sequence();
+        let work = crate::domains::activity::ProtocolSchedulerWork::navigation_request_continuation(
+            sequence, prepared, target_id,
+        );
+        self.scheduler_state
+            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
+    }
+
     pub(crate) fn publish_top_level_navigation_owner_action(
         &mut self,
         action: TopLevelNavigationOwnerAction,

@@ -296,6 +296,13 @@ impl ProtocolWorkflowState<'_> {
         completed.finish(self.connection)
     }
 
+    pub(crate) fn resume_fetch_navigation_request(
+        self,
+        pending: super::PendingFetchNavigation,
+    ) -> Option<crate::domains::command_output::CommandOutputPlan> {
+        crate::domains::fetch::resume_navigation_request(self.connection, pending)
+    }
+
     pub(crate) fn start_navigation_renderer_replay(
         self,
         replay: super::state::SessionRendererCallReplay,

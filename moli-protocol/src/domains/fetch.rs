@@ -11,7 +11,9 @@ mod document_request;
 mod helpers;
 mod navigation;
 mod navigation_interception;
-pub(crate) use navigation_interception::prepare_navigation_request_pause;
+pub(crate) use navigation_interception::{
+    prepare_navigation_request_pause, resume_navigation_request,
+};
 mod params;
 mod patterns;
 mod state;

@@ -276,30 +276,9 @@ impl PreparedRendererNavigation {
                 }
                 PendingPageCommandKind::ContinueNavigationWithoutRequestPause(pending) => {
                     prefix.extend_background_events(pending.prefix_events);
-                    let navigation = RendererNavigationSource::new(
-                        conn,
-                        pending
-                            .pending
-                            .document_navigation_token
-                            .as_ref()
-                            .expect("renderer request owns its navigation token")
-                            .clone(),
-                        pending.pending.navigation.clone(),
-                    );
-                    let transfer = navigation
-                        .termination
-                        .as_ref()
-                        .map(NavigationTermination::response_transfer)
-                        .unwrap_or_default();
-                    let request = PreparedInterceptedNavigationRequest::new(
-                        conn,
-                        pending.pending,
-                        None,
-                        None,
-                        transfer,
-                    );
-                    source = Some(navigation);
-                    RendererNavigationWork::Request(Box::new(request))
+                    let mut prepared = Self::prepare_fetch_request(conn, pending.pending);
+                    prepared.prefix = prefix;
+                    return prepared;
                 }
                 PendingPageCommandKind::SameDocumentNavigate(pending) => {
                     let binding = conn
@@ -324,6 +303,35 @@ impl PreparedRendererNavigation {
             source,
             owner,
             prefix,
+        }
+    }
+
+    pub(crate) fn prepare_fetch_request(
+        conn: &mut CdpConnection,
+        pending: crate::conn::PendingFetchNavigation,
+    ) -> Self {
+        let owner = pending.navigation.owner.clone();
+        let navigation = RendererNavigationSource::new(
+            conn,
+            pending
+                .document_navigation_token
+                .as_ref()
+                .expect("request token")
+                .clone(),
+            pending.navigation.clone(),
+        );
+        let transfer = navigation
+            .termination
+            .as_ref()
+            .map(NavigationTermination::response_transfer)
+            .unwrap_or_default();
+        let request =
+            PreparedInterceptedNavigationRequest::new(conn, pending, None, None, transfer);
+        Self {
+            work: RendererNavigationWork::Request(Box::new(request)),
+            source: Some(navigation),
+            owner,
+            prefix: CommandOutputPlan::default(),
         }
     }
 
