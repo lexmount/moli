@@ -41,7 +41,7 @@ pub(crate) use interrupt::{dispatch_inspector_io_owner_wake, dispatch_inspector_
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken, V8InspectorSessionState};
 use serde_json::json;
 use std::{
-    cell::{Cell, RefCell, UnsafeCell},
+    cell::{Cell, OnceCell, RefCell, UnsafeCell},
     collections::HashMap,
     rc::{Rc, Weak},
     sync::atomic::{AtomicI64, Ordering},
@@ -76,6 +76,7 @@ struct RendererInspectorSessionExecutorLocal {
     route_id: RendererInspectorSessionExecutorRouteId,
     page_targets: RendererInspectorPageTargets,
     isolate_environment_ingress: Option<RendererInspectorIoIngress>,
+    output_journal: RefCell<Option<crate::runtime::RendererTurnOutputJournal>>,
     sessions: RefCell<HashMap<(i32, DevToolsSessionKey), RendererInspectorSessionRoute>>,
     interrupt_sessions: RefCell<
         HashMap<(RendererDevToolsAgentToken, DevToolsSessionKey), RendererInspectorSessionRoute>,
@@ -142,6 +143,7 @@ impl RendererInspectorSessionExecutorLocal {
             route_id,
             page_targets,
             isolate_environment_ingress,
+            output_journal: RefCell::new(None),
             sessions: RefCell::new(HashMap::new()),
             interrupt_sessions: RefCell::new(HashMap::new()),
         });
@@ -452,12 +454,43 @@ impl RendererInspectorSessionExecutorLocal {
         );
     }
 
+    fn publish_native_response(
+        &self,
+        agent: RendererDevToolsAgentToken,
+        session: DevToolsSessionKey,
+        response: RendererRuntimeInspectorResponseSender,
+        message: serde_json::Value,
+    ) {
+        let response = if response.response_delivery()
+            == moli_page_types::RendererInspectorResponseDelivery::SessionSink
+        {
+            let journal = self
+                .output_journal
+                .borrow()
+                .clone()
+                .expect("native frontend response has a Page output journal");
+            let attachment = response
+                .renderer_agent_attachment_id()
+                .expect("native frontend response has an attachment");
+            response.route_to_devtools_session_output(
+                crate::runtime::RendererDevToolsSessionOutputHost::new(
+                    agent, session, attachment, journal,
+                ),
+            )
+        } else {
+            response
+        };
+        let _ = response.send(message);
+    }
+
     fn dispatch_io_command_to_session(
         &self,
         mut command: RendererInspectorIoCommand,
         session: Option<RendererInspectorSessionRoute>,
     ) {
         let mut first_dispatch = self.target.io_ref().first_dispatch_guard(&mut command);
+        let agent_token = command.agent_token;
+        let session_key = command.ticket().session().clone();
         match command.kind() {
             RendererDevToolsIoCommandKind::Performance => {
                 let RendererDevToolsIoCommandPayload::PerformanceGetMetrics { result, response } =
@@ -466,13 +499,10 @@ impl RendererInspectorSessionExecutorLocal {
                     unreachable!("Performance IO command kind must carry a Performance payload")
                 };
                 if let Some(response) = response {
-                    let Some(session) = session else {
-                        drop(response);
-                        first_dispatch.reject("Inspector session is not available");
-                        return;
-                    };
                     let call_id = response.call_id();
-                    session.outbound.publish_frontend_response(
+                    self.publish_native_response(
+                        agent_token,
+                        session_key,
                         response,
                         json!({ "id": call_id, "result": result }),
                     );
@@ -489,26 +519,40 @@ impl RendererInspectorSessionExecutorLocal {
                 else {
                     unreachable!("Emulation IO command kind must carry an Emulation payload")
                 };
-                if response.is_some() && session.is_none() {
-                    drop(response);
-                    first_dispatch.reject("Inspector session is not available");
-                    return;
-                }
                 control.set_disabled(disabled);
                 if let Some(response) = response {
                     let call_id = response.call_id();
-                    session
-                        .expect("a checked frontend Emulation command must have a session")
-                        .outbound
-                        .publish_frontend_response(
-                            response,
-                            json!({ "id": call_id, "result": {} }),
-                        );
+                    self.publish_native_response(
+                        agent_token,
+                        session_key,
+                        response,
+                        json!({ "id": call_id, "result": {} }),
+                    );
                 }
                 first_dispatch.release();
                 return;
             }
             RendererDevToolsIoCommandKind::Inspector => {}
+        }
+        if session.is_none()
+            && !self
+                .page_targets
+                .has_default_context_for_executor(self.route_id)
+            && serde_json::from_str::<serde_json::Value>(command.raw_json())
+                .ok()
+                .is_some_and(|message| message["method"] == "Runtime.terminateExecution")
+        {
+            if let Some(response) = command.take_response() {
+                let call_id = response.call_id();
+                self.publish_native_response(
+                    agent_token,
+                    session_key,
+                    response,
+                    json!({ "id": call_id, "result": {} }),
+                );
+            }
+            first_dispatch.release();
+            return;
         }
         let Some(session) = session else {
             drop(command.take_response());
@@ -735,7 +779,8 @@ impl std::fmt::Debug for RendererInspectorIsolateBackendHandle {
 
 pub(in crate::script_vm) struct RendererInspectorIsolateBackend {
     identity: Rc<RendererInspectorIsolateBackendIdentity>,
-    inspector: v8::inspector::V8Inspector,
+    inspector: OnceCell<v8::inspector::V8Inspector>,
+    isolate_ptr: v8::UnsafeRawIsolatePtr,
     pub(super) context_registry: DocumentInspectorContextRegistry,
     unique_id_state: Rc<RendererInspectorClientUniqueIdState>,
     target: RendererDevToolsTargetHandle,
@@ -745,6 +790,23 @@ pub(in crate::script_vm) struct RendererInspectorIsolateBackend {
 }
 
 impl RendererInspectorIsolateBackend {
+    fn inspector(&self) -> &v8::inspector::V8Inspector {
+        self.inspector.get_or_init(|| {
+            let client =
+                v8::inspector::V8InspectorClient::new(Box::new(RendererInspectorClient::new(
+                    self.isolate_ptr,
+                    self.context_registry.clone(),
+                    self.unique_id_state.clone(),
+                    self.page_targets.clone(),
+                )));
+            let mut isolate_ptr = self.isolate_ptr;
+            // Backend operations are owner-lane-only and run while this exact
+            // isolate is entered; the holder outlives the deferred Inspector.
+            let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut isolate_ptr) };
+            v8::inspector::V8Inspector::create(isolate, client)
+        })
+    }
+
     pub(in crate::script_vm) fn new(isolate: &mut v8::Isolate) -> Self {
         let isolate_ptr = unsafe { isolate.as_raw_isolate_ptr() };
         let context_registry = DocumentInspectorContextRegistry::default();
@@ -763,7 +825,7 @@ impl RendererInspectorIsolateBackend {
             )),
         );
         let target = RendererDevToolsTargetHandle::new(pause_bridge, main_ingress, io_ingress);
-        let page_targets = RendererInspectorPageTargets::default();
+        let page_targets = RendererInspectorPageTargets::new(context_registry.clone());
         let session_executor = RendererInspectorSessionExecutorLocal::new(
             isolate_ptr,
             target.clone(),
@@ -771,13 +833,6 @@ impl RendererInspectorIsolateBackend {
             page_targets.clone(),
             None,
         );
-        let inspector_client =
-            v8::inspector::V8InspectorClient::new(Box::new(RendererInspectorClient::new(
-                isolate_ptr,
-                context_registry.clone(),
-                unique_id_state.clone(),
-                page_targets.clone(),
-            )));
         let identity = Rc::new(RendererInspectorIsolateBackendIdentity);
         assert!(
             isolate.set_slot(identity.clone()),
@@ -785,7 +840,8 @@ impl RendererInspectorIsolateBackend {
         );
         Self {
             identity,
-            inspector: v8::inspector::V8Inspector::create(isolate, inspector_client),
+            inspector: OnceCell::new(),
+            isolate_ptr,
             context_registry,
             unique_id_state,
             target,
@@ -826,7 +882,7 @@ impl RendererInspectorIsolateBackend {
         channel: v8::inspector::Channel,
         state: &[u8],
     ) -> v8::inspector::V8InspectorSession {
-        self.inspector.connect(
+        self.inspector().connect(
             context_group_id.get(),
             channel,
             v8::inspector::StringView::from(state),
@@ -850,7 +906,7 @@ impl RendererInspectorIsolateBackend {
             );
         }
         self.unique_id_state.capture_context_unique_id(|| {
-            self.inspector.context_created(
+            self.inspector().context_created(
                 context,
                 context_group_id.get(),
                 v8::inspector::StringView::from(name),
@@ -861,11 +917,11 @@ impl RendererInspectorIsolateBackend {
     }
 
     pub(in crate::script_vm) fn context_destroyed<'s>(&self, context: v8::Local<'s, v8::Context>) {
-        self.inspector.context_destroyed(context);
+        self.inspector().context_destroyed(context);
     }
 
     fn reset_context_group(&self, context_group_id: DocumentInspectorContextGroupId) {
-        self.inspector.reset_context_group(context_group_id.get());
+        self.inspector().reset_context_group(context_group_id.get());
     }
 
     pub(super) fn default_context_destroyed<'s>(
@@ -882,7 +938,7 @@ impl RendererInspectorIsolateBackend {
             self.context_registry
                 .remove_default_context_if_owned_by(context_group_id, registration_id);
         }
-        self.inspector.context_destroyed(context);
+        self.inspector().context_destroyed(context);
     }
 
     pub(super) fn detach_default_context_if_same(

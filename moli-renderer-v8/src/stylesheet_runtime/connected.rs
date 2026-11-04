@@ -1564,6 +1564,17 @@ impl DocumentRuntime {
     ) -> bool {
         self.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
         let handle = ready.owner();
+        let load_succeeded = self.consume_pending_style_load(host_ptr, &ready);
+        self.dispatch_style_or_link_load_event(scope, host_ptr, handle, load_succeeded);
+        true
+    }
+
+    /// Complete native load bookkeeping even when no script realm or event listener exists.
+    pub(crate) fn consume_pending_style_load(
+        &mut self,
+        host_ptr: *mut JsContextHost,
+        ready: &ReadyConnectedStyleLoad,
+    ) -> bool {
         let native_modulepreload = match ready.operation() {
             ReadyConnectedStyleLoadOperation::Connected(operation) => {
                 self.stylesheet_lifecycle
@@ -1584,11 +1595,9 @@ impl DocumentRuntime {
                 Some(client)
             }
         };
-        let load_succeeded = native_modulepreload
+        native_modulepreload
             .and_then(|client| self.native_modulepreload_style_result(host_ptr, client))
-            .unwrap_or_else(|| ready.successful());
-        self.dispatch_style_or_link_load_event(scope, host_ptr, handle, load_succeeded);
-        true
+            .unwrap_or_else(|| ready.successful())
     }
 
     pub(crate) fn dispatch_preload_like_link_error_event(

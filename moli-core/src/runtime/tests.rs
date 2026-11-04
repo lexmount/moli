@@ -195,92 +195,104 @@ async fn resolve_runtime_object_for_backend_node_id(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn page_creation_diagnostics_include_default_runtime_context_event() -> Result<()> {
+async fn page_creation_diagnostics_only_report_materialized_runtime_contexts() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
     let page_url: Url = server.url("/runtime-context-diagnostics").parse()?;
-    let html = "<!doctype html><html><body>ok</body></html>".to_owned();
-    let create_page_request = renderer_owner.build_create_html_page_request(
-        page_url.clone(),
-        None,
-        false,
-        0,
-        200,
-        vec![],
-        &browser.resource_request_client(),
-        moli_renderer_v8::RendererWebStorageHandles::new(
-            browser.partition.web_storage_store(),
-            browser.partition.session_storage_store(),
-        ),
-        page_url.clone(),
-        html,
-        vec![],
-        vec![],
-        vec![],
-        Default::default(),
-        false,
-        Vec::new(),
-        false,
-        None,
-        super::PageVmInitStage::Load,
-    );
-
-    let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
-        .await?;
-    let (handle, page_state, diagnostics, artifacts, pending_download) =
-        renderer_owner.materialize_page_created_reply_parts(reply)?;
-    assert!(pending_download.is_none());
-    let _page = Page::from_attached_handle(handle, page_state);
-
-    let default_context = diagnostics
-        .initial_runtime_realms
-        .iter()
-        .find(|realm| realm.is_default && realm.context_type == "default")
-        .context("page creation should report the default runtime context")?;
-    assert!(default_context.context_id > 0);
-    assert_eq!(default_context.name, page_url.as_str());
-    assert!(
-        default_context
-            .realm_id
-            .as_deref()
-            .is_some_and(|id| !id.is_empty()),
-        "page creation should expose the native V8 realm id"
-    );
-    assert_eq!(
-        artifacts.active_document.page_id,
-        artifacts.lifecycle_snapshot.frame.page_id
-    );
-    assert_eq!(artifacts.active_epoch, artifacts.lifecycle_snapshot.epoch);
-    assert_eq!(
-        artifacts
-            .initial_lifecycle_events
-            .iter()
-            .map(|event| event.kind)
-            .collect::<Vec<_>>(),
-        vec![
-            crate::page::RendererDocumentLifecycleEventKind::Started {
-                reason: crate::page::RendererLifecycleStartReason::InitialDocument,
-            },
-            crate::page::RendererDocumentLifecycleEventKind::Milestone(
-                crate::page::RendererDocumentLifecycleMilestone::DomContentLoaded,
+    for eager in [false, true] {
+        let html = "<!doctype html><html><body>ok</body></html>".to_owned();
+        let mut create_page_request = renderer_owner.build_create_html_page_request(
+            page_url.clone(),
+            None,
+            false,
+            0,
+            200,
+            vec![],
+            &browser.resource_request_client(),
+            moli_renderer_v8::RendererWebStorageHandles::new(
+                browser.partition.web_storage_store(),
+                browser.partition.session_storage_store(),
             ),
-            crate::page::RendererDocumentLifecycleEventKind::Milestone(
-                crate::page::RendererDocumentLifecycleMilestone::Load,
-            ),
-        ]
-    );
-    assert!(artifacts.lifecycle_snapshot.dom_content_loaded.is_some());
-    assert!(artifacts.lifecycle_snapshot.load.is_some());
-    assert!(
-        artifacts
-            .initial_lifecycle_events
-            .windows(2)
-            .all(|events| events[0].sequence < events[1].sequence
-                && events[0].timestamp_micros <= events[1].timestamp_micros)
-    );
+            page_url.clone(),
+            html,
+            vec![],
+            vec![],
+            vec![],
+            Default::default(),
+            false,
+            Vec::new(),
+            false,
+            None,
+            super::PageVmInitStage::Load,
+        );
 
+        create_page_request
+            .document_settings
+            .force_main_world_initialization = eager;
+
+        let reply = renderer_owner
+            .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+            .await?;
+        let (handle, page_state, diagnostics, artifacts, pending_download) =
+            renderer_owner.materialize_page_created_reply_parts(reply)?;
+        assert!(pending_download.is_none());
+        let _page = Page::from_attached_handle(handle, page_state);
+
+        if eager {
+            let default_context = diagnostics
+                .initial_runtime_realms
+                .iter()
+                .find(|realm| realm.is_default && realm.context_type == "default")
+                .context("page creation should report the default runtime context")?;
+            assert!(default_context.context_id > 0);
+            assert_eq!(default_context.name, page_url.as_str());
+            assert!(
+                default_context
+                    .realm_id
+                    .as_deref()
+                    .is_some_and(|id| !id.is_empty()),
+                "page creation should expose the native V8 realm id"
+            );
+        } else {
+            assert!(
+                diagnostics.initial_runtime_realms.is_empty(),
+                "native-only creation must not publish an execution context"
+            );
+        }
+        assert_eq!(
+            artifacts.active_document.page_id,
+            artifacts.lifecycle_snapshot.frame.page_id
+        );
+        assert_eq!(artifacts.active_epoch, artifacts.lifecycle_snapshot.epoch);
+        assert_eq!(
+            artifacts
+                .initial_lifecycle_events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                crate::page::RendererDocumentLifecycleEventKind::Started {
+                    reason: crate::page::RendererLifecycleStartReason::InitialDocument,
+                },
+                crate::page::RendererDocumentLifecycleEventKind::Milestone(
+                    crate::page::RendererDocumentLifecycleMilestone::DomContentLoaded,
+                ),
+                crate::page::RendererDocumentLifecycleEventKind::Milestone(
+                    crate::page::RendererDocumentLifecycleMilestone::Load,
+                ),
+            ]
+        );
+        assert!(artifacts.lifecycle_snapshot.dom_content_loaded.is_some());
+        assert!(artifacts.lifecycle_snapshot.load.is_some());
+        assert!(
+            artifacts
+                .initial_lifecycle_events
+                .windows(2)
+                .all(|events| events[0].sequence < events[1].sequence
+                    && events[0].timestamp_micros <= events[1].timestamp_micros)
+        );
+    }
     server.shutdown().await;
     Ok(())
 }

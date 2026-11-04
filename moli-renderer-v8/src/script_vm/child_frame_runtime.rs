@@ -618,6 +618,14 @@ impl ScriptVm {
         &mut self,
         effects: DomMutationEffects,
     ) -> Result<()> {
+        if !self.main_world_is_initialized() {
+            self.document_runtime
+                .apply_parser_mutation_effects_without_window_realm(
+                    (*self._context_host).as_ptr(),
+                    &effects,
+                );
+            return Ok(());
+        }
         self.with_default_context_scope(|scope, host_ptr| {
             unsafe { &mut *host_ptr }
                 .apply_parser_stream_mutation_effects_to_live_dom_host(scope, host_ptr, effects);
@@ -629,6 +637,18 @@ impl ScriptVm {
         &mut self,
         mutation: crate::parser::ParserDomMutation,
     ) -> Result<()> {
+        if !self.main_world_is_initialized()
+            && !self
+                .document_runtime
+                .parser_mutation_needs_window_realm(&mutation)
+        {
+            self.document_runtime
+                .apply_parser_dom_mutation_without_window_realm(
+                    (*self._context_host).as_ptr(),
+                    mutation,
+                );
+            return Ok(());
+        }
         self.with_default_context_scope(|scope, host_ptr| {
             unsafe { &mut *host_ptr }
                 .apply_parser_dom_mutation_to_live_dom_host(scope, host_ptr, mutation);
@@ -640,10 +660,11 @@ impl ScriptVm {
         &mut self,
         handles: &[NativeNodeId],
     ) -> Result<()> {
-        self.with_default_context_scope(|_scope, host_ptr| {
-            custom_elements::apply_parser_created_null_registry_associations(host_ptr, handles);
-            Ok(())
-        })
+        custom_elements::apply_parser_created_null_registry_associations(
+            (*self._context_host).as_ptr(),
+            handles,
+        );
+        Ok(())
     }
 
     pub(crate) fn construct_parser_custom_element_handoff(
@@ -659,6 +680,9 @@ impl ScriptVm {
     }
 
     pub(crate) fn flush_parser_custom_element_handoff_replacements(&mut self) -> Result<()> {
+        if !self.main_world_is_initialized() {
+            return Ok(());
+        }
         self.with_default_context_scope(|scope, host_ptr| {
             custom_elements::flush_parser_custom_element_handoff_replacements(scope, host_ptr);
             Ok(())
@@ -669,6 +693,10 @@ impl ScriptVm {
         &mut self,
         position: moli_session_history::SessionHistoryPosition,
     ) {
+        if let Some(pending) = self.pending_main_world.as_mut() {
+            pending.history_position = Some(position);
+            return;
+        }
         let _ = self.with_default_context_scope(|scope, _runtime_ptr| {
             crate::context_bootstrap::install_session_history_position(scope, position);
             Ok(())
@@ -679,6 +707,10 @@ impl ScriptVm {
         &mut self,
         entry_seed: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     ) {
+        if let Some(pending) = self.pending_main_world.as_mut() {
+            pending.history_entry = entry_seed;
+            return;
+        }
         let Some(entry_seed) = entry_seed else {
             return;
         };
@@ -693,6 +725,22 @@ impl ScriptVm {
         url: &url::Url,
         position: moli_session_history::SessionHistoryPosition,
     ) -> Result<Option<crate::native_bridge::NavigationHistoryEntrySeed>> {
+        if let Some(pending) = self.pending_main_world.as_ref() {
+            // No author realm has mutated History. Preserve the native seed
+            // without materializing the outgoing Window during commit.
+            return Ok(pending.history_entry.as_ref().and_then(|seed| {
+                crate::context_bootstrap::inherited_history_seed_for_browser_commit(
+                    seed.entries.clone(),
+                    seed.current_index,
+                    seed.entries
+                        .iter()
+                        .find(|entry| entry.history_index == seed.current_index)
+                        .map_or(0, |entry| entry.index),
+                    url,
+                    position,
+                )
+            }));
+        }
         self.with_default_context_scope(|scope, _| {
             Ok(
                 crate::context_bootstrap::capture_inherited_history_for_browser_commit(

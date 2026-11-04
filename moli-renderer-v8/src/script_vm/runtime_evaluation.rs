@@ -87,6 +87,9 @@ impl ScriptVm {
         code_generation_policy: RuntimeEvaluateCodeGenerationPolicy,
         result_mode: RuntimeEvaluateResultMode,
     ) -> Result<RuntimeEvaluateOutcome> {
+        if execution_context_id.is_none() {
+            self.initialize_main_world_if_needed()?;
+        }
         self.validate_runtime_evaluate_context(execution_context_id)?;
         let call_id = self.next_internal_runtime_evaluate_call_id()?;
         let mut params = serde_json::Map::new();

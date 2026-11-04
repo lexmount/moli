@@ -2389,6 +2389,76 @@ async fn completed_raw_body_for_replacement_test(source: &[u8]) -> ExternalRawDo
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn lazy_navigation_reservation_observes_first_script_before_commit() {
+    for activate_source in [false, true] {
+        let runtime = JsRuntime::initialize();
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let mut page = create_test_html_page(
+            &runtime,
+            &loader,
+            url::Url::parse("https://example.test/replacement/lazy-source").unwrap(),
+            "<!doctype html><p>source</p>",
+        )
+        .await;
+        let before = runtime_heap_usage_for_test(&page).await;
+        assert_eq!(
+            before["moli"]["runtime"]["inspectorContextRegistrationCount"],
+            0
+        );
+        let body =
+            completed_raw_body_for_replacement_test(b"<!doctype html><p>replacement</p>").await;
+        let prepared = prepare_live_response_for_test(
+            &runtime,
+            &page,
+            &loader,
+            url::Url::parse("https://example.test/replacement/lazy-destination").unwrap(),
+            "text/html",
+            body,
+        )
+        .await;
+        let source_proxy = if activate_source {
+            page.run_async_command(RendererPageCommand::EvaluateExpression {
+                expression: "globalThis.sourceOnly = true".to_owned(),
+                await_promise: false,
+            })
+            .await
+            .unwrap();
+            runtime_heap_usage_for_test(&page).await["moli"]["runtime"]["mainWindowProxyIdentityHash"].clone()
+        } else {
+            serde_json::Value::Null
+        };
+        let permit = prepared.issue_commit_permit();
+        let replacement = prepared.commit_page_replacement(permit).await.unwrap();
+        page.adopt_document_replacement(replacement).unwrap();
+        if let Some(continuation) = page.take_committed_document_post_response_continuation() {
+            continuation.release();
+        }
+        let after = runtime_heap_usage_for_test(&page).await;
+        assert_eq!(
+            after["moli"]["runtime"]["inspectorContextRegistrationCount"],
+            u64::from(activate_source),
+            "{after}"
+        );
+        assert_eq!(
+            after["moli"]["runtime"]["mainWindowProxyIdentityHash"],
+            source_proxy
+        );
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::EvaluateExpression {
+                expression: "typeof sourceOnly".to_owned(),
+                await_promise: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            renderer_json_value(reply),
+            Some(serde_json::json!("undefined"))
+        );
+        page.close_async().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn live_page_replacement_commits_into_the_same_page_and_window_proxy() {
     let runtime = JsRuntime::initialize();
     let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
@@ -2398,7 +2468,7 @@ async fn live_page_replacement_commits_into_the_same_page_and_window_proxy() {
         &runtime,
         &loader,
         url::Url::parse("https://example.test/replacement/initial").unwrap(),
-        "<!doctype html><p>original</p>",
+        "<!doctype html><p>original</p><script>void 0</script>",
     )
     .await;
     let testing = RendererPageTestingHandle::new_for_testing(&page);

@@ -24,7 +24,75 @@ struct NativeBridgeGlobalDeclaration<'scope> {
     bridge: v8::Local<'scope, v8::Object>,
 }
 
+/// Native Page ownership does not require V8 wrapper templates. The first
+/// Window bootstrap initializes these while its isolate is entered.
 pub(crate) struct NativeBridgeBindings {
+    isolate_ptr: v8::UnsafeRawIsolatePtr,
+    templates: Option<NativeBridgeTemplates>,
+}
+
+impl NativeBridgeBindings {
+    pub(crate) fn deferred(isolate_ptr: v8::UnsafeRawIsolatePtr) -> Self {
+        Self {
+            isolate_ptr,
+            templates: None,
+        }
+    }
+
+    pub(crate) fn build(
+        scope: &mut v8::PinScope<'_, '_, ()>,
+        isolate_ptr: v8::UnsafeRawIsolatePtr,
+        global: v8::Local<'_, v8::ObjectTemplate>,
+        cross_origin: v8::Local<'_, v8::ObjectTemplate>,
+    ) -> Self {
+        Self {
+            isolate_ptr,
+            templates: Some(NativeBridgeTemplates::build(
+                scope,
+                isolate_ptr,
+                global,
+                cross_origin,
+            )),
+        }
+    }
+
+    pub(crate) fn initialize_if_needed(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_, ()>,
+        global: v8::Local<'_, v8::ObjectTemplate>,
+        cross_origin: v8::Local<'_, v8::ObjectTemplate>,
+    ) {
+        if self.templates.is_none() {
+            *self = Self::build(scope, self.isolate_ptr, global, cross_origin);
+        }
+    }
+
+    pub(crate) fn build_peer_in_scope(&self, scope: &mut v8::PinScope<'_, '_>) -> Self {
+        Self {
+            isolate_ptr: self.isolate_ptr,
+            templates: Some(std::ops::Deref::deref(self).build_peer_in_scope(scope)),
+        }
+    }
+}
+
+impl std::ops::Deref for NativeBridgeBindings {
+    type Target = NativeBridgeTemplates;
+    fn deref(&self) -> &Self::Target {
+        self.templates
+            .as_ref()
+            .expect("Window bindings must be initialized before creating JS wrappers")
+    }
+}
+
+impl std::ops::DerefMut for NativeBridgeBindings {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.templates
+            .as_mut()
+            .expect("Window bindings must be initialized before creating JS wrappers")
+    }
+}
+
+pub(crate) struct NativeBridgeTemplates {
     isolate_ptr: v8::UnsafeRawIsolatePtr,
     window_global_template: v8::Global<v8::ObjectTemplate>,
     cross_origin_window_global_template: v8::Global<v8::ObjectTemplate>,
@@ -47,7 +115,7 @@ fn open_object_template<'a>(
     template: &'a v8::Global<v8::ObjectTemplate>,
 ) -> &'a v8::ObjectTemplate {
     let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(isolate_ptr) };
-    // SAFETY: every template in NativeBridgeBindings belongs to this isolate,
+    // SAFETY: every template in NativeBridgeTemplates belongs to this isolate,
     // and these references are only exposed while its renderer thread owns and
     // has entered the isolate. The returned reference cannot outlive `template`.
     unsafe { template.open(isolate) }
@@ -101,7 +169,7 @@ fn prototype_name_for_handle(host_ptr: *mut JsContextHost, handle: &BridgeHandle
     }
 }
 
-impl NativeBridgeBindings {
+impl NativeBridgeTemplates {
     pub(crate) fn build_peer_in_scope(&self, scope: &mut v8::PinScope<'_, '_>) -> Self {
         let window_template = v8::Local::new(scope, &self.window_global_template);
         let cross_origin_template =

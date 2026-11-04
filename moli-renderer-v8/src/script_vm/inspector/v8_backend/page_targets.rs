@@ -4,11 +4,33 @@ use super::*;
 /// pause state and output route. A context group selects that Page's executor.
 #[derive(Clone, Default)]
 pub(super) struct RendererInspectorPageTargets {
+    context_registry: DocumentInspectorContextRegistry,
     groups: Rc<RefCell<HashMap<i32, Weak<RendererInspectorSessionExecutorLocal>>>>,
     paused: Rc<RefCell<Option<Weak<RendererInspectorSessionExecutorLocal>>>>,
 }
 
 impl RendererInspectorPageTargets {
+    pub(super) fn new(context_registry: DocumentInspectorContextRegistry) -> Self {
+        Self {
+            context_registry,
+            ..Default::default()
+        }
+    }
+
+    pub(super) fn has_default_context_for_executor(
+        &self,
+        route: RendererInspectorSessionExecutorRouteId,
+    ) -> bool {
+        self.groups.borrow().iter().any(|(group, executor)| {
+            executor
+                .upgrade()
+                .is_some_and(|executor| executor.route_id == route)
+                && self
+                    .context_registry
+                    .has_default_context(DocumentInspectorContextGroupId::from_raw(*group))
+        })
+    }
+
     pub(super) fn bind_group(
         &self,
         group: DocumentInspectorContextGroupId,
@@ -65,6 +87,15 @@ impl Drop for InspectorPagePauseGuard {
 }
 
 impl RendererInspectorIsolateBackendHandle {
+    pub(in crate::script_vm) fn bind_native_output_journal(
+        &self,
+        journal: crate::runtime::RendererTurnOutputJournal,
+    ) {
+        if let Some(executor) = &self.endpoint.session_executor {
+            *executor.output_journal.borrow_mut() = Some(journal);
+        }
+    }
+
     /// Allocate an independent Page endpoint while retaining the shared V8
     /// Inspector. Document replacements clone the existing handle instead.
     pub(crate) fn new_page_handle(&self, isolate: &mut v8::Isolate) -> anyhow::Result<Self> {

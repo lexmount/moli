@@ -12,6 +12,7 @@ use moli_dom::native::{Element, Node, NodeType};
 use super::*;
 
 mod details;
+mod scriptless_parser;
 mod tree;
 
 #[cfg(test)]
@@ -1790,9 +1791,31 @@ pub(super) fn finish_runtime_mutation_effects(
     }
     runtime.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
     if changed && !stylesheet_owner_changes.is_empty() {
+        let mut prime_result =
+            runtime.prime_stylesheet_owner_runtime_changes(host_ptr, &stylesheet_owner_changes);
+        crate::native_bridge::document::apply_stylesheet_owner_css_projections(
+            scope,
+            unsafe { &*host_ptr },
+            &stylesheet_owner_changes,
+        );
+        let completed_clients = prime_result.take_completed_stylesheet_clients();
+        runtime.settle_stylesheet_link_clients_in_current_scope(scope, host_ptr, completed_clients);
+        runtime
+            .pending_connected_style_load_prime_result
+            .extend(prime_result);
+    }
+    changed
+}
+
+impl DocumentRuntime {
+    pub(super) fn prime_stylesheet_owner_runtime_changes(
+        &mut self,
+        host_ptr: *mut JsContextHost,
+        stylesheet_owner_changes: &[crate::dom::native::DomStylesheetOwnerChange],
+    ) -> ConnectedStyleLoadPrimeResult {
         let mut prime_result = ConnectedStyleLoadPrimeResult::default();
         let prepared_owner_changes =
-            runtime.prepare_stylesheet_owner_runtime_changes(&stylesheet_owner_changes);
+            self.prepare_stylesheet_owner_runtime_changes(stylesheet_owner_changes);
         let (canceled_load_event_bindings, prepared_owner_changes) =
             prepared_owner_changes.into_parts();
         for binding in canceled_load_event_bindings {
@@ -1812,7 +1835,7 @@ pub(super) fn finish_runtime_mutation_effects(
                     .install_cached_linked_stylesheet_for_owner(owner, url);
             }
             let inline_source = unsafe { &*host_ptr }.owner_style_sheet_processing_source(owner);
-            let prepared_loads = runtime.prepare_connected_style_loads(owner, false);
+            let prepared_loads = self.prepare_connected_style_loads(owner, false);
             for prepared_load in prepared_loads {
                 // A native DOM callback already owns this exact live host.
                 // Commit touches only FrameOwnerStore and never dereferences
@@ -1827,7 +1850,7 @@ pub(super) fn finish_runtime_mutation_effects(
                     continue;
                 };
                 debug_assert_eq!(prepared_load.owner(), owner);
-                prime_result.extend(runtime.apply_prepared_connected_style_load(
+                prime_result.extend(self.apply_prepared_connected_style_load(
                     prepared_load,
                     inline_source.clone(),
                     event_admission,
@@ -1835,18 +1858,8 @@ pub(super) fn finish_runtime_mutation_effects(
                 ));
             }
         }
-        crate::native_bridge::document::apply_stylesheet_owner_css_projections(
-            scope,
-            unsafe { &*host_ptr },
-            &stylesheet_owner_changes,
-        );
-        let completed_clients = prime_result.take_completed_stylesheet_clients();
-        runtime.settle_stylesheet_link_clients_in_current_scope(scope, host_ptr, completed_clients);
-        runtime
-            .pending_connected_style_load_prime_result
-            .extend(prime_result);
+        prime_result
     }
-    changed
 }
 
 pub(super) fn finish_runtime_script_start_candidate(

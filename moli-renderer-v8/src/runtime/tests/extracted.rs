@@ -4,6 +4,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 mod input_dispatch;
+mod lazy_main_world;
 mod navigation_streaming;
 mod owner_lifecycle;
 mod page_lifecycle_isolation;

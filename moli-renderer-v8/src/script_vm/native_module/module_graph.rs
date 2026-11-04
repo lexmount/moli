@@ -10,6 +10,12 @@ impl ScriptVm {
         source_url: &Url,
         fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
+        self.initialize_main_world_if_needed().map_err(|error| {
+            ModuleLoadError::new(
+                ModuleLoadStage::Compile,
+                format!("main world initialization failed: {error}"),
+            )
+        })?;
         let context_ptr = self.native_module_default_context_ptr();
         self.compile_native_module_record_in_context(
             context_ptr,

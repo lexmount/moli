@@ -427,8 +427,8 @@ pub(crate) use self::navigation_events::dispatch_srcdoc_navigation_navigate_even
 pub(crate) use self::navigation_mutation::apply_local_window_location_navigation;
 pub(crate) use self::navigation_restore::{
     capture_inherited_history_for_browser_commit, commit_navigation_history_for_document,
-    install_navigation_bootstrap_entry, install_navigation_bootstrap_entry_for_holder,
-    install_navigation_entry_view_for_holder,
+    inherited_history_seed_for_browser_commit, install_navigation_bootstrap_entry,
+    install_navigation_bootstrap_entry_for_holder, install_navigation_entry_view_for_holder,
 };
 pub(crate) use self::navigation_traversal::queue_top_level_history_traversal_by_delta;
 pub(crate) use self::navigator_runtime::install_worker_navigator_runtime_state;
@@ -444,8 +444,9 @@ pub(crate) use self::notification_runtime::{
     notification_options_payload,
 };
 pub(crate) use self::performance_runtime::{
-    ResourcePerformanceEntry, bind_window_performance_seed, current_performance_time_origin,
-    increment_performance_event_count, record_performance_dom_content_loaded_event_end,
+    ResourcePerformanceEntry, bind_deferred_main_world_performance, bind_window_performance_seed,
+    current_performance_time_origin, increment_performance_event_count,
+    record_performance_dom_content_loaded_event_end,
     record_performance_dom_content_loaded_event_start, record_performance_load_event_end,
     record_performance_load_event_start, record_resource_performance_entry,
     run_resource_timing_buffer_full_task,

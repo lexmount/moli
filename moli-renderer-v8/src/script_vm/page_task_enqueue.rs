@@ -27,6 +27,9 @@ const LIFECYCLE_EVENT_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
 
 impl ScriptVm {
     fn dispatch_document_event_body(&mut self, event_type: &str) -> Result<()> {
+        if !self.main_world_is_initialized() {
+            return Ok(());
+        }
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
@@ -45,6 +48,9 @@ impl ScriptVm {
     }
 
     pub(super) fn perform_owner_lane_task_microtask_checkpoints(&mut self) -> Result<()> {
+        if !self.main_world_is_initialized() {
+            return Ok(());
+        }
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
@@ -116,6 +122,12 @@ impl ScriptVm {
         &mut self,
         event_type: &str,
     ) -> Result<()> {
+        if let Some(pending) = self.pending_main_world.as_mut() {
+            if event_type == "DOMContentLoaded" {
+                pending.performance.record(0);
+            }
+            return Ok(());
+        }
         let watchdog = self
             .renderer_document_isolate
             .with_renderer_document_isolate_mut(|isolate| {
@@ -157,6 +169,12 @@ impl ScriptVm {
     /// Publish the event-end timing that is intentionally observable only
     /// after the owning lifecycle task's checkpoint.
     pub(super) fn record_document_lifecycle_event_end(&mut self, event_type: &str) {
+        if let Some(pending) = self.pending_main_world.as_mut() {
+            if event_type == "DOMContentLoaded" {
+                pending.performance.record(1);
+            }
+            return;
+        }
         if event_type == "DOMContentLoaded" {
             let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
             self.renderer_document_isolate
@@ -197,6 +215,24 @@ impl ScriptVm {
     }
 
     pub(super) fn queue_current_main_document_image_load_events(&mut self) -> Result<()> {
+        if !self.main_world_is_initialized() {
+            let has_resources = self
+                .document_runtime
+                .dom_host()
+                .dom()
+                .nodes()
+                .iter()
+                .any(|node| {
+                    node.is_connected()
+                        && node
+                            .as_element()
+                            .is_some_and(|element| element.is_image_resource_element())
+                });
+            if !has_resources {
+                return Ok(());
+            }
+            self.initialize_main_world_if_needed()?;
+        }
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
@@ -214,6 +250,26 @@ impl ScriptVm {
     }
 
     pub(super) fn queue_current_main_document_media_loads(&mut self) -> Result<()> {
+        if !self.main_world_is_initialized() {
+            let has_resources = self
+                .document_runtime
+                .dom_host()
+                .dom()
+                .nodes()
+                .iter()
+                .any(|node| {
+                    node.is_connected()
+                        && node.as_element().is_some_and(|element| {
+                            element.is_html_element("audio")
+                                || element.is_html_element("video")
+                                || element.is_html_element("track")
+                        })
+                });
+            if !has_resources {
+                return Ok(());
+            }
+            self.initialize_main_world_if_needed()?;
+        }
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
@@ -233,6 +289,11 @@ impl ScriptVm {
     /// Dispatch the Window `load` body without crossing the load-to-pageshow
     /// lifecycle checkpoint.
     pub(super) fn dispatch_window_load_event_body(&mut self) -> Result<()> {
+        self.initialize_main_world_for_window_handler()?;
+        if let Some(pending) = self.pending_main_world.as_mut() {
+            pending.performance.record(2);
+            return Ok(());
+        }
         let timing_enabled = moli_trace::cdp_nav_timing_enabled();
         let task_started = timing_enabled.then(Instant::now);
         self.prune_stale_child_default_execution_contexts();
@@ -332,6 +393,10 @@ impl ScriptVm {
     /// checkpoint. This method deliberately does not perform the final task-end
     /// checkpoint after pageshow.
     pub(super) fn dispatch_window_pageshow_event_body(&mut self) -> Result<()> {
+        if let Some(pending) = self.pending_main_world.as_mut() {
+            pending.performance.record(3);
+            return Ok(());
+        }
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;

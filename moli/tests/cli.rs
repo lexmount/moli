@@ -115,6 +115,7 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
             wait_response_json_regex: None,
             timeout: 25_000,
             common: CommonArgs {
+                force_main_world_initialization: false,
                 insecure_disable_tls_host_verification: false,
                 ca_cert: None,
                 client_cert: None,

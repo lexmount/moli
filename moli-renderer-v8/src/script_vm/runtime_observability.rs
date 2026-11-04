@@ -3,6 +3,9 @@ use super::*;
 impl ScriptVm {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn snapshot_globals(&mut self) -> Result<Option<BTreeMap<String, JsValueSnapshot>>> {
+        if !self.main_world_is_initialized() {
+            return Ok(Some(BTreeMap::new()));
+        }
         let baseline_json = serde_json::to_string(&self.baseline_globals)
             .context("failed to encode baseline globals for script snapshot")?;
         let snapshot_source = format!(
@@ -123,7 +126,8 @@ impl ScriptVm {
             .runtime_observable_source_queue
             .take_report_observable_output(
                 self.runtime_observable_default_execution_context_id(),
-                self.page_default_runtime.runtime_observable_context_token,
+                self.main_world_is_initialized()
+                    .then(|| self.page_default_runtime.runtime_observable_context_token),
             ))
     }
 
@@ -152,6 +156,9 @@ impl ScriptVm {
     }
 
     pub(super) fn page_runtime_observable_contexts(&self) -> Vec<PageRuntimeObservableContext> {
+        if !self.main_world_is_initialized() {
+            return Vec::new();
+        }
         let mut contexts = vec![PageRuntimeObservableContext {
             execution_context_id: self.runtime_observable_default_execution_context_id(),
             context_token: self.page_default_runtime.runtime_observable_context_token,
@@ -391,14 +398,18 @@ impl ScriptVm {
         let document = self.document_runtime.snapshot_document();
         let dom = moli_dom_memory_counters(&document);
         let main_window_proxy_identity_hash = self
-            .renderer_document_isolate
-            .with_entered_renderer_document_isolate(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_runtime.context);
-                Ok(context.global(scope).get_identity_hash().get())
+            .main_world_is_initialized()
+            .then(|| {
+                self.renderer_document_isolate
+                    .with_entered_renderer_document_isolate(|isolate| {
+                        let scope = pin!(v8::HandleScope::new(isolate));
+                        let scope = &mut scope.init();
+                        let context = v8::Local::new(scope, &self.page_default_runtime.context);
+                        Ok(context.global(scope).get_identity_hash().get())
+                    })
+                    .ok()
             })
-            .ok();
+            .flatten();
         let host = self._context_host.borrow();
         RendererMoliMemoryDiagnostics {
             scope: RendererMoliMemoryScopeDiagnostics {

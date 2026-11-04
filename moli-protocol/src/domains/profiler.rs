@@ -362,7 +362,11 @@ mod tests {
     #[tokio::test]
     async fn profiler_disable_does_not_restore_an_active_profiler_agent() {
         let mut ctx = TestContext::new();
-        with_loaded_document_async(&mut ctx, "<!doctype html><body>before</body>").await;
+        with_loaded_document_async(
+            &mut ctx,
+            "<!doctype html><body>before</body><script>void 0</script>",
+        )
+        .await;
         let baseline_count = active_page_renderer_inspector_session_count(&mut ctx).await;
 
         let enable = process_and_take_response(

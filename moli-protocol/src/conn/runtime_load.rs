@@ -1852,8 +1852,19 @@ impl CdpConnection {
                     .runtime_config()
                     .debugger_enabled()
             });
-        let document_settings =
-            load_inputs.document_settings_snapshot(idle_override, debugger_enabled);
+        let force_main_world_initialization = self
+            .page_navigation_engine_for_load_inputs(&load_inputs)
+            .map(NavigationEngine::force_main_world_initialization)
+            .unwrap_or_else(|| {
+                self.standalone_navigation_engine
+                    .runtime_config()
+                    .force_main_world_initialization()
+            });
+        let document_settings = load_inputs.document_settings_snapshot(
+            idle_override,
+            debugger_enabled,
+            force_main_world_initialization,
+        );
         // The renderer runtime is shared by the BrowserContext, but each Page
         // target owns its NavigationEngine and may have a different transport
         // identity. Resolve through that target's engine at the commit

@@ -1792,7 +1792,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         &mut ctx,
         "BID-detach-inspector",
         "TID-detach-inspector",
-        "<!doctype html><body>detach inspector</body>",
+        "<!doctype html><body>detach inspector</body><script>void 0</script>",
     )
     .await;
     {

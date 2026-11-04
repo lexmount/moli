@@ -355,6 +355,8 @@ impl ScriptVm {
                 .deferred_page_tasks_mut()
                 .enter_scope();
         }
+        self.initialize_main_world_if_needed()
+            .map_err(|error| error.to_string())?;
         self.renderer_document_isolate
             .with_renderer_document_isolate_mut(|isolate| -> std::result::Result<(), String> {
                 let scope = pin!(v8::HandleScope::new(isolate));
@@ -598,6 +600,9 @@ impl ScriptVm {
         &mut self,
         script_url: Option<&Url>,
     ) -> anyhow::Result<()> {
+        if !self.main_world_is_initialized() {
+            return Ok(());
+        }
         self.renderer_document_isolate
             .with_renderer_document_isolate_mut(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));

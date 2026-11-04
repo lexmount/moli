@@ -23,6 +23,15 @@ impl<'vm> ChildHostLoadOwner<'vm> {
 
     pub(crate) fn resync_child_browsing_contexts(&mut self) {
         let context_host = self.vm._context_host.clone();
+        if !self.vm.main_world_is_initialized()
+            && context_host
+                .borrow()
+                .dom_host()
+                .child_browsing_context_host_candidate_handles()
+                .is_empty()
+        {
+            return;
+        }
         let Ok(ready_work) = self.vm.with_default_context_scope(move |scope, _host_ptr| {
             let ready_work = context_host
                 .borrow_mut()

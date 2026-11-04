@@ -38,6 +38,7 @@ impl ScriptVm {
         &mut self,
         violation: &DocumentContentSecurityPolicyViolation,
     ) -> Result<()> {
+        self.initialize_main_world_if_needed()?;
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));

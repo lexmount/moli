@@ -25,6 +25,17 @@ const WINDOW_PERFORMANCE_TIME_ORIGIN_SEED_SLOT: &str = "__moliWindowPerformanceT
 const WINDOW_PERFORMANCE_NAVIGATION_TYPE_SEED_SLOT: &str =
     "__moliWindowPerformanceNavigationTypeSeed";
 
+pub(crate) fn bind_deferred_main_world_performance<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    origin: f64,
+    timestamps: [Option<f64>; 4],
+) -> Result<()> {
+    bind_window_performance_seed(scope, window, "navigate", origin)?;
+    pending::seed_deferred_lifecycle(scope, window, timestamps);
+    Ok(())
+}
+
 pub(crate) fn bind_window_performance_seed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,

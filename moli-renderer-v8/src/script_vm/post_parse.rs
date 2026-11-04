@@ -164,6 +164,12 @@ impl ScriptVmContextBootstrap {
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         let global_template = isolate_bootstrap.global_template(scope);
+        let cross_origin = isolate_bootstrap.cross_origin_window_global_template(scope);
+        context_host.borrow_mut().initialize_native_bridge_bindings(
+            scope,
+            global_template,
+            cross_origin,
+        );
         Self::new_in_scope(
             scope,
             global_template,
