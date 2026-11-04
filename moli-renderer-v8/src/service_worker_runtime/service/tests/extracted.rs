@@ -4,6 +4,7 @@ use super::*;
 mod clients;
 mod fetch_events;
 mod functional_events;
+mod network_fallback_policy;
 mod registration_jobs;
 mod runtime_owners;
 mod script_updates_and_storage;

@@ -70,9 +70,12 @@ fn fetch_request_for_job(job: &ServiceWorkerFetchJob) -> ServiceWorkerFetchReque
 pub(super) fn service_worker_network_fallback_request_for_job(
     job: &ServiceWorkerFetchJob,
 ) -> moli_fetch::Request {
+    // A worker may serve a response while offline or blocked. Enforce Page
+    // policy on the captured request only when falling back to the network.
     let mut request = job
         .request
         .clone()
+        .with_page_network_policy()
         .with_use_cors_preflight(job.metadata.use_cors_preflight)
         .with_browser_request_metadata(service_worker_fetch_browser_metadata(
             job.network_context.resource_type,
