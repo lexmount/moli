@@ -870,6 +870,7 @@ impl RuntimeOwner {
         &self,
         mut job: RuntimeJob,
     ) -> std::result::Result<JobOutcome, (RuntimeResponseTx, anyhow::Error)> {
+        job.request.prepare_headers(&self.config);
         job.response_progress = job.cancel_handle.begin_response_progress();
         if job.cancel_handle.is_cancelled() {
             return Err((
@@ -1018,6 +1019,7 @@ impl RuntimeOwner {
             anyhow::Error,
         ),
     > {
+        job.request.prepare_headers(&self.config);
         job.response_progress = job.cancel_handle.begin_response_progress();
         if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
             return Err((Box::new(job), None, error));
@@ -1224,6 +1226,7 @@ impl RuntimeOwner {
             anyhow::Error,
         ),
     > {
+        job.request.prepare_headers(&self.config);
         job.response_progress = job.cancel_handle.begin_response_progress();
         if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
             return Err((Box::new(job), None, error));

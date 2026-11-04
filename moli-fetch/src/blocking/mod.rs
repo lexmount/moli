@@ -169,7 +169,13 @@ pub(crate) fn outgoing_request_headers_for_url(
     request_url: &Url,
     cookie_header: Option<&str>,
 ) -> Vec<(String, String)> {
-    outgoing_request_header_bytes_for_url(config, request, request_url, cookie_header)
+    // Cache/diagnostic previews can precede admission. Reuse its preparation
+    // contract; admitted requests keep the borrowed, allocation-free path.
+    let mut prepared = std::borrow::Cow::Borrowed(request);
+    if !header_present(&request.request_headers, "accept") {
+        prepared.to_mut().prepare_headers(config);
+    }
+    outgoing_request_header_bytes_for_url(config, &prepared, request_url, cookie_header)
         .to_byte_strings()
 }
 
@@ -361,11 +367,6 @@ fn append_browser_navigation_headers(
 
     append_encoded_header_if_missing(
         outgoing,
-        "Accept",
-        crate::default_accept_header(crate::DefaultAcceptKind::Navigation).to_owned(),
-    );
-    append_encoded_header_if_missing(
-        outgoing,
         "Accept-Language",
         request
             .browser_identity(config)
@@ -405,13 +406,6 @@ fn append_browser_subresource_headers(
         return;
     }
 
-    let accept = crate::default_accept_header(match metadata {
-        BrowserRequestMetadata::Image => crate::DefaultAcceptKind::Image,
-        BrowserRequestMetadata::EventSource => crate::DefaultAcceptKind::EventSource,
-        BrowserRequestMetadata::TextTrack => crate::DefaultAcceptKind::TextTrack,
-        _ => crate::DefaultAcceptKind::Other,
-    });
-    append_encoded_header_if_missing(outgoing, "Accept", accept.to_owned());
     append_encoded_header_if_missing(
         outgoing,
         "Accept-Language",

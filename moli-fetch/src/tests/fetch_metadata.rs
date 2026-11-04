@@ -47,6 +47,196 @@ fn header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
+#[test]
+fn request_preparation_waits_for_resource_kind_and_is_idempotent() -> Result<()> {
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    let target = Url::parse("https://example.test/image")?;
+    let request = Request::new_browser("GET", target.clone(), None, Vec::new(), (&target).into());
+    assert!(
+        request.request_headers.is_empty(),
+        "the constructor cannot know the final resource kind"
+    );
+    let mut request = request
+        .with_request_mode(RequestMode::NoCors)
+        .with_browser_request_metadata(BrowserRequestMetadata::Image);
+    client.prepare_request(&mut request);
+    let once = request.request_headers.clone();
+    client.prepare_request(&mut request);
+    assert_eq!(request.request_headers, once);
+    assert_eq!(
+        request.request_headers.to_byte_strings(),
+        [(
+            "Accept".to_owned(),
+            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8".to_owned()
+        )]
+    );
+
+    let explicit = crate::RequestHeaders::from_bytes(vec![
+        ("aCcEpT".to_owned(), vec![0xff]),
+        ("ACCEPT".to_owned(), Vec::new()),
+    ]);
+    request.request_headers = explicit.clone();
+    client.prepare_request(&mut request);
+    client.prepare_request(&mut request);
+    assert_eq!(
+        request.request_headers, explicit,
+        "intentional author fields and HTTP bytes survive preparation"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_accept_is_prepared_for_every_transport() -> Result<()> {
+    let cases = [
+        (
+            Some(BrowserRequestMetadata::TextModule),
+            RequestMode::Cors,
+            "*/*",
+        ),
+        (
+            None,
+            RequestMode::Navigate,
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        ),
+        (
+            Some(BrowserRequestMetadata::Image),
+            RequestMode::Cors,
+            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        ),
+        (
+            Some(BrowserRequestMetadata::EventSource),
+            RequestMode::Cors,
+            "text/event-stream",
+        ),
+        (
+            Some(BrowserRequestMetadata::TextTrack),
+            RequestMode::Cors,
+            "text/vtt,*/*;q=0.1",
+        ),
+        (
+            Some(BrowserRequestMetadata::Fetch),
+            RequestMode::Cors,
+            "*/*",
+        ),
+        (
+            Some(BrowserRequestMetadata::Style),
+            RequestMode::Cors,
+            "*/*",
+        ),
+        (
+            Some(BrowserRequestMetadata::JsonModule),
+            RequestMode::Cors,
+            "*/*",
+        ),
+    ];
+    let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("ok"); cases.len() * 4]);
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    let target = Url::parse(&server.url())?;
+    let mut expected = Vec::new();
+    for (metadata, request_mode, accept) in cases {
+        for mode in ["buffered", "html", "raw", "callback"] {
+            let mut request =
+                Request::new_browser("GET", target.clone(), None, Vec::new(), (&target).into());
+            request = request.with_request_mode(request_mode);
+            if let Some(metadata) = metadata {
+                request = request.with_browser_request_metadata(metadata);
+            }
+            let status = match mode {
+                "buffered" => client.fetch(request.with_single_hop()).await?.status,
+                "html" => {
+                    client
+                        .fetch_html_stream(request)
+                        .await?
+                        .into_materialized_text_response()
+                        .await?
+                        .status
+                }
+                "raw" => {
+                    client
+                        .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
+                        .await?
+                        .into_materialized_raw_response()
+                        .await?
+                        .status
+                }
+                "callback" => {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    client.fetch_with_cancel_callback(
+                        request,
+                        FetchCancelHandle::new(),
+                        move |response| {
+                            let _ = tx.send(response);
+                        },
+                    )?;
+                    rx.await??.status
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(status, 200, "{metadata:?}: {mode}");
+            expected.push(accept);
+        }
+    }
+    let requests = server.requests();
+    server.shutdown();
+    assert_eq!(requests.len(), expected.len());
+    for (request, expected) in requests.iter().zip(expected) {
+        let values: Vec<_> = request
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("accept").then(|| value.trim())
+            })
+            .collect();
+        assert_eq!(values, [expected], "{request}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn accept_is_prepared_after_redirect_restores_interception_headers() -> Result<()> {
+    for configured in [None, Some("application/json")] {
+        let server = ScriptedHttpServer::spawn(vec![
+            ScriptedResponse::status(302, "Found").with_header("Location", "/final"),
+            ScriptedResponse::ok("ok"),
+        ]);
+        let mut config = FetchConfig::default();
+        if let Some(value) = configured {
+            config.set_default_request_headers(vec![("aCcEpT".to_owned(), value.to_owned())]);
+        }
+        let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+        let target = Url::parse(&server.url())?;
+        let request = Request::new_browser(
+            "GET",
+            target.clone(),
+            None,
+            vec![("Accept".to_owned(), "application/override".to_owned())],
+            (&target).into(),
+        )
+        .with_request_mode(RequestMode::Cors)
+        .with_browser_request_metadata(BrowserRequestMetadata::Image)
+        .with_redirect_headers(Some(crate::RequestHeaders::default()));
+        assert_eq!(client.fetch_raw(request).await?.status, 200);
+        let requests = server.requests();
+        server.shutdown();
+        assert_eq!(requests.len(), 2);
+        for (request, expected) in requests.iter().zip([
+            "application/override",
+            configured
+                .unwrap_or("image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"),
+        ]) {
+            let values: Vec<_> = request
+                .lines()
+                .filter_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("accept").then(|| value.trim())
+                })
+                .collect();
+            assert_eq!(values, [expected], "{request}");
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn configured_accept_is_a_single_default_on_the_wire() -> Result<()> {
     for configured in ["", "application/json"] {

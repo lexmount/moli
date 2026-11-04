@@ -305,8 +305,11 @@ impl ResourceRequestClient {
 
     pub(crate) async fn fetch_cacheable_script_text_stream(
         &self,
-        request: Request,
+        mut request: Request,
     ) -> Result<Response> {
+        request
+            .browser_request_metadata
+            .get_or_insert(moli_fetch::BrowserRequestMetadata::Script);
         let request = self.apply_network_policy(request)?;
         if let Some(result) = local_text_response(&request) {
             return result;
@@ -464,13 +467,16 @@ impl ResourceRequestClient {
 
     fn fetch_cacheable_script_text_callback_inner<F>(
         &self,
-        request: Request,
+        mut request: Request,
         resource_load: loads::ResourceLoadLease,
         callback: F,
     ) -> Result<()>
     where
         F: FnOnce(Result<Response>) + Send + 'static,
     {
+        request
+            .browser_request_metadata
+            .get_or_insert(moli_fetch::BrowserRequestMetadata::Script);
         let request = self.apply_network_policy(request)?;
         if let Some(result) = local_text_response(&request) {
             let task_runner = resource_load.task_runner();
@@ -1086,11 +1092,12 @@ impl ResourceRequestClient {
             }
             request = request.with_browser_site_context(browser_site_context);
         }
-        let request = self
+        let mut request = self
             .page_network_policy
             .snapshot()
             .apply_to_request(request)?;
         request.validate_request_mode_for_url(&request.url)?;
+        self.prepare_request(&mut request);
         Ok(request)
     }
 }
