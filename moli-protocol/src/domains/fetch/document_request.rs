@@ -445,7 +445,24 @@ pub(crate) fn prepare_navigation_redirect(
     pending.fetch_request_id = id;
     // The same selector and per-handler hop IDs serve root and child Documents.
     let paused = super::prepare_navigation_request_pause(conn, &mut pending);
+    let mut plan = crate::domains::command_output::CommandOutputPlan::default();
+    // Freeze this hop's method, headers and body before another redirect can
+    // change them, even when no Fetch handler pauses this request.
+    append_redirect_request_events(conn, &mut plan, &mut pending);
     if !paused {
+        if let Some(sender) = conn.background_event_sender() {
+            // Initial navigation output uses this same channel. Preserve its
+            // FIFO before publishing subsequent redirect requests and pauses.
+            for event in plan.into_background_events(None, None) {
+                let _ = sender.send(event);
+            }
+        } else {
+            conn.publish_renderer_fenced_protocol_output_after(
+                plan.into_background_events(None, None),
+                Vec::new(),
+                Some(pending.navigation.frame_id.clone()),
+            );
+        }
         return RedirectNavigation::Continue(Box::new(pending));
     }
     pending.interception = Some((executor, prior));
@@ -454,8 +471,6 @@ pub(crate) fn prepare_navigation_redirect(
         pending.interception_session_id.as_deref(),
         &pending,
     );
-    let mut plan = crate::domains::command_output::CommandOutputPlan::default();
-    append_redirect_request_events(conn, &mut plan, &mut pending);
     if conn
         .register_pending_fetch_navigation_request_for_owner(&owner, pending)
         .is_none()
@@ -463,6 +478,12 @@ pub(crate) fn prepare_navigation_redirect(
         return RedirectNavigation::Superseded;
     }
     plan.push_background_event(event);
+    if let Some(sender) = conn.background_event_sender() {
+        for event in plan.into_background_events(None, None) {
+            let _ = sender.send(event);
+        }
+        plan = crate::domains::command_output::CommandOutputPlan::default();
+    }
     RedirectNavigation::Paused(Box::new(plan))
 }
 
