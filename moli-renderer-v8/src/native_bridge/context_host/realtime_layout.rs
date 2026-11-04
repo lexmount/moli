@@ -378,7 +378,8 @@ impl JsContextHost {
         // Native invalidation/geometry only: no input dispatch, callbacks,
         // network admission, or nested event-loop checkpoint at this boundary.
         self.prepare_current_screen_styles(&inputs);
-        let request = LayoutPassRequest::new(inputs.viewport, reason);
+        let request = LayoutPassRequest::new(inputs.viewport, reason)
+            .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes);
         let document = self.document_handle();
         let mut publication = self.prepare_current_screen_publication(document, inputs);
         let pass = self

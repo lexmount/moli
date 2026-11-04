@@ -245,6 +245,13 @@ impl ScriptVm {
             let mut publication =
                 context_host.prepare_layout_publication(document, request.viewport, publication)?;
             let publishes_layout = publication.publishes_screen();
+            // Complete geometry is a screen-publication requirement. Transient
+            // output keeps its requested coverage and bounded paint recursion.
+            let request = if publishes_layout && context_host.layout_policy().is_realtime() {
+                request.with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
+            } else {
+                request
+            };
             let result = context_host
                 .build_layout_pass_for_document_in_environment(
                     document,
