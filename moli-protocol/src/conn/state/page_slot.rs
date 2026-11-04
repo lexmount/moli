@@ -176,6 +176,17 @@ impl CommittedRendererDocumentBinding {
             epoch: self.renderer_epoch,
         }
     }
+
+    // Replacement metadata can change without changing the owning Document
+    // or navigation, so it must not participate in observer identity.
+    fn shares_document_owner_with(&self, other: &Self) -> bool {
+        self.renderer_frame == other.renderer_frame
+            && self.renderer_document == other.renderer_document
+            && self.navigation == other.navigation
+            && self.frame_id == other.frame_id
+            && self.loader_id == other.loader_id
+            && self.page_attachment_id == other.page_attachment_id
+    }
 }
 
 #[derive(Debug, Default)]
@@ -1749,20 +1760,15 @@ impl TargetPageSlot {
                 RendererDocumentLifecycleObservation::Unavailable,
             );
         };
-        if binding != expected_binding {
-            // document.open() interrupts the old exact epoch without replacing
-            // its navigation. Late observers must see the same interruption
-            // as observers already registered when the restart happened, so
-            // settling the old load boundary preserves the new epoch's output.
-            let document_reopened = binding.renderer_frame == expected_binding.renderer_frame
-                && binding.renderer_document == expected_binding.renderer_document
-                && binding.page_attachment_id == expected_binding.page_attachment_id
-                && binding.navigation == expected_binding.navigation
-                && binding.frame_id == expected_binding.frame_id
-                && binding.loader_id == expected_binding.loader_id
+        let same_document_owner = binding.shares_document_owner_with(expected_binding);
+        if !same_document_owner || binding.renderer_epoch != expected_binding.renderer_epoch {
+            // A same-owner document.open() restart interrupts the old epoch.
+            // Release its deferred load boundary rather than discarding the
+            // replacement's queued events. A new owner is superseded.
+            let interrupted_by_replacement = same_document_owner
                 && binding.renderer_epoch.0 > expected_binding.renderer_epoch.0
                 && binding.document_open_replacement_epoch == Some(binding.renderer_epoch);
-            return RendererDocumentLifecycleObserver::resolved(if document_reopened {
+            return RendererDocumentLifecycleObserver::resolved(if interrupted_by_replacement {
                 RendererDocumentLifecycleObservation::Interrupted
             } else {
                 RendererDocumentLifecycleObservation::Superseded
