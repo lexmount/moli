@@ -89,7 +89,7 @@ impl SelfSignedCertificate {
         )?;
         let mut random = [0_u8; 32];
         crate::fill_secure_random(&mut random).map_err(|_| CertificateError)?;
-        let common_name = data_encoding::HEXLOWER.encode(&random[..16]);
+        let common_name = crate::hex_lower(&random[..16]);
         random[16] |= 1;
         let serial = BigNum::from_slice(&random[16..])?.to_asn1_integer()?;
         let mut name = X509NameBuilder::new()?;

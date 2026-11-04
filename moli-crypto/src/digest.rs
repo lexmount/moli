@@ -67,7 +67,7 @@ pub fn sha256_digest(data: impl AsRef<[u8]>) -> [u8; 32] {
 }
 
 pub fn sha256_hex(data: impl AsRef<[u8]>) -> String {
-    data_encoding::HEXLOWER.encode(&sha256_digest(data))
+    crate::hex_lower(&sha256_digest(data))
 }
 
 fn digest_array<const N: usize>(digest: digest::Digest) -> [u8; N] {
