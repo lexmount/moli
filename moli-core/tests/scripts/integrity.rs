@@ -365,6 +365,14 @@ fn fixture_response(
             "Content-Type: text/html\r\n".to_owned(),
             "<!doctype html><body><script>globalThis.sriExecutions=0</script><script src='/sw-default.js?parser'></script>".to_owned(),
         ),
+        "/module-destination" => {
+            let (mime, body) = if request.sec_fetch_dest.as_deref() == Some("script") {
+                ("application/javascript", "globalThis.destinationExecutions = (globalThis.destinationExecutions || 0) + 1; export default 'script value';")
+            } else {
+                ("text/plain", "text module body")
+            };
+            ("200 OK", format!("Content-Type: {mime}\r\nCache-Control: max-age=600\r\nVary: Sec-Fetch-Dest\r\n"), body.to_owned())
+        }
         "/page.html" | "/parser.html" | "/cookie-page.html" | "/csp-page.html" => {
             let mut html = "<!doctype html><body><script>globalThis.sriEvents = {}; globalThis.sriExecutions = 0;</script>".to_owned();
             if path == "/csp-page.html" {
@@ -1187,3 +1195,6 @@ async fn service_worker_redirect_preserves_worker_response_filter() -> Result<()
 
 #[path = "text_network.rs"]
 mod text_modules;
+
+#[path = "module_cache.rs"]
+mod module_cache;

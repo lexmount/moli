@@ -140,6 +140,28 @@ pub enum BrowserRequestMetadata {
     Xhr,
 }
 
+impl BrowserRequestMetadata {
+    /// Fetch destination token used in browser request headers and cache keys.
+    pub const fn fetch_destination(self) -> &'static str {
+        match self {
+            Self::Audio => "audio",
+            Self::AudioWorklet => "audioworklet",
+            Self::Font => "font",
+            Self::Image => "image",
+            Self::JsonModule => "json",
+            Self::TextModule => "text",
+            Self::Manifest => "manifest",
+            Self::Script => "script",
+            Self::SharedWorker => "sharedworker",
+            Self::Worker => "worker",
+            Self::Style | Self::StyleModule => "style",
+            Self::TextTrack => "track",
+            Self::Video => "video",
+            Self::Beacon | Self::EventSource | Self::Fetch | Self::Ping | Self::Xhr => "empty",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum BrowserNavigationRequestKind {
     #[default]
