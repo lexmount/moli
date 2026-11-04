@@ -60,6 +60,7 @@ impl ScriptVm {
                     .continue_child_document_fetch(
                         internal_id,
                         *fetch,
+                        redirect_headers,
                         url.unwrap_or_else(|| info.url.clone()),
                         method.unwrap_or_else(|| info.method.clone()),
                         headers.unwrap_or_else(|| info.request_headers.clone()),
@@ -934,24 +935,7 @@ impl ScriptVm {
         } = pending;
         let pending = match continuation {
             PendingSubresourceContinuation::ChildDocument(fetch) => {
-                let request_body_bytes = info.request_body_bytes.clone();
-                let request_handle = info.network_request_handle;
-                let network_record = with_pending_subresource_record_identity(
-                    crate::types::SubresourceNetworkRecord::failure(
-                        info.frame_id,
-                        info.document_url,
-                        info.url,
-                        info.method,
-                        info.request_headers,
-                        info.request_body,
-                        info.resource_type,
-                        error_text.clone(),
-                    ),
-                    request_body_bytes,
-                    request_handle,
-                );
                 let mut host = self._context_host.borrow_mut();
-                host.record_subresource_network(network_record);
                 host.fail_child_document_fetch(internal_id, *fetch, error_text);
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
             }

@@ -70,7 +70,7 @@ pub enum RendererOwnerAction {
         info: Box<PendingSubresourceFetchInfo>,
         /// Set for a child frame navigation, whose Network request id is the
         /// loader id of the Document it creates.
-        document_loader_id: Option<String>,
+        child_document: Option<Box<crate::protocol_types::ChildDocumentFetchRequest>>,
     },
     SubresourceContinue {
         source_document: RendererDocumentLifecycleIdentity,

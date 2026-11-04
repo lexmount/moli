@@ -11,10 +11,15 @@ use crate::conn::PendingSubresourceFetchRequest;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TargetSubresourceFetchPauseOutput {
     network_output: TargetSubresourceFetchPauseNetworkOutput,
-    fetch_event_session_id: Option<String>,
-    fetch_request_id: String,
-    pending_fetch_request: PendingSubresourceFetchRequest,
-    fetch_payload: Value,
+    fetch: Option<TargetSubresourceFetchPause>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TargetSubresourceFetchPause {
+    pub(crate) session_id: Option<String>,
+    pub(crate) request_id: String,
+    pub(crate) pending: PendingSubresourceFetchRequest,
+    pub(crate) payload: Value,
 }
 
 impl TargetSubresourceFetchPauseOutput {
@@ -27,10 +32,19 @@ impl TargetSubresourceFetchPauseOutput {
     ) -> Self {
         Self {
             network_output,
-            fetch_event_session_id,
-            fetch_request_id,
-            pending_fetch_request,
-            fetch_payload,
+            fetch: Some(TargetSubresourceFetchPause {
+                session_id: fetch_event_session_id,
+                request_id: fetch_request_id,
+                pending: pending_fetch_request,
+                payload: fetch_payload,
+            }),
+        }
+    }
+
+    pub(crate) fn network_only(network_output: TargetSubresourceFetchPauseNetworkOutput) -> Self {
+        Self {
+            network_output,
+            fetch: None,
         }
     }
 
@@ -38,20 +52,8 @@ impl TargetSubresourceFetchPauseOutput {
         &self.network_output
     }
 
-    pub(crate) fn into_fetch_event_parts(
-        self,
-    ) -> (
-        Option<String>,
-        String,
-        PendingSubresourceFetchRequest,
-        Value,
-    ) {
-        (
-            self.fetch_event_session_id,
-            self.fetch_request_id,
-            self.pending_fetch_request,
-            self.fetch_payload,
-        )
+    pub(crate) fn into_fetch_event_parts(self) -> Option<TargetSubresourceFetchPause> {
+        self.fetch
     }
 }
 
@@ -72,6 +74,7 @@ pub(crate) struct TargetSubresourceFetchPauseNetworkOutput {
     request_cookie_report: Option<StoredCookieQueryReport>,
     blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
     fetch_request_id: Option<String>,
+    child_document: Option<moli_core::page::ChildDocumentFetchRequest>,
 }
 
 impl TargetSubresourceFetchPauseNetworkOutput {
@@ -99,7 +102,20 @@ impl TargetSubresourceFetchPauseNetworkOutput {
             request_cookie_report: info.request_cookie_report.clone(),
             blocked_intercepts: Vec::new(),
             fetch_request_id: None,
+            child_document: None,
         }
+    }
+
+    pub(crate) fn with_child_document(
+        mut self,
+        child_document: Option<moli_core::page::ChildDocumentFetchRequest>,
+    ) -> Self {
+        self.child_document = child_document;
+        self
+    }
+
+    pub(crate) fn child_document(&self) -> Option<&moli_core::page::ChildDocumentFetchRequest> {
+        self.child_document.as_ref()
     }
 
     pub(crate) fn with_blocked_intercepts(
@@ -117,6 +133,10 @@ impl TargetSubresourceFetchPauseNetworkOutput {
 
     pub(crate) fn network_request_id(&self) -> &str {
         &self.network_request_id
+    }
+
+    pub(crate) fn request_handle(&self) -> Option<SubresourceNetworkRequestHandle> {
+        self.request_handle
     }
 
     pub(crate) fn frame_id(&self) -> &str {

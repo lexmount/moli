@@ -54,7 +54,7 @@ struct PendingSubresourceFetchPauseSource {
     detached_parser_script_fetch_continuation: Option<DetachedParserScriptFetchContinuation>,
     /// A child frame navigation keeps Chromium's document identity: its
     /// Network request id is the loader id of the Document it creates.
-    document_loader_id: Option<String>,
+    child_document: Option<moli_core::page::ChildDocumentFetchRequest>,
 }
 
 pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
@@ -62,7 +62,7 @@ pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
     owner: &CommandOwnerScope,
     source_document: moli_core::RendererDocumentLifecycleIdentity,
     info: moli_core::page::PendingSubresourceFetchInfo,
-    document_loader_id: Option<String>,
+    child_document: Option<moli_core::page::ChildDocumentFetchRequest>,
     page_source: Option<(
         crate::conn::TargetPageResidenceIdentity,
         crate::conn::RendererPageResidenceIdentity,
@@ -98,7 +98,7 @@ pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
         vec![PendingSubresourceFetchPauseSource {
             info,
             detached_parser_script_fetch_continuation: None,
-            document_loader_id,
+            child_document,
         }],
     )
 }
@@ -125,7 +125,7 @@ pub(crate) fn detached_parser_script_fetch_pause_prepared_outputs_for_renderer_r
         vec![PendingSubresourceFetchPauseSource {
             info,
             detached_parser_script_fetch_continuation: Some(continuation),
-            document_loader_id: None,
+            child_document: None,
         }],
     )
 }
@@ -166,15 +166,15 @@ fn prepare_subresource_fetch_pause_sources(
         let PendingSubresourceFetchPauseSource {
             info,
             detached_parser_script_fetch_continuation,
-            document_loader_id,
+            child_document,
         } = source;
         let Some((request_id, network_request_id)) =
             conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
         else {
             return network::NetworkPreparedOutputs::from_subresource_fetch_pauses_and_continuations(outputs, automatic);
         };
-        let (network_request_id, request_loader_id) = match document_loader_id {
-            Some(document_loader_id) => (document_loader_id.clone(), document_loader_id),
+        let (network_request_id, request_loader_id) = match &child_document {
+            Some(document) => (document.loader_id.clone(), document.loader_id.clone()),
             None => (network_request_id, loader_id.clone()),
         };
         let document_url = document_url
@@ -188,6 +188,22 @@ fn prepare_subresource_fetch_pause_sources(
             &info.url,
         );
         if request_stage_pause_sessions.is_empty() {
+            if child_document.is_some() {
+                let network_output =
+                    network::TargetSubresourceFetchPauseNetworkOutput::from_pending_fetch_info(
+                        network_request_id.clone(),
+                        frame_id.clone(),
+                        request_loader_id.clone(),
+                        monotonic_timestamp_seconds(),
+                        document_url.clone(),
+                        &info,
+                    )
+                    .with_fetch_request_id(request_id.clone())
+                    .with_child_document(child_document.clone());
+                outputs.push(network::TargetSubresourceFetchPauseOutput::network_only(
+                    network_output,
+                ));
+            }
             if let Some(continuation) = detached_parser_script_fetch_continuation {
                 continuation.continue_request(None);
                 continue;
@@ -371,7 +387,8 @@ fn prepare_subresource_fetch_pause_sources(
                 &info,
             )
             .with_blocked_intercepts(blocked_intercepts)
-            .with_fetch_request_id(request_id.clone());
+            .with_fetch_request_id(request_id.clone())
+            .with_child_document(child_document);
         let payload = subresource_request_paused_payload(
             &request_id,
             &pending,
@@ -403,6 +420,25 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
 ) {
     for output in outputs {
         let network_request_id = output.network_output().network_request_id().to_owned();
+        let mut redirected_request_id = None;
+        if let Some(document) = output.network_output().child_document()
+            && let Some(fetch_id) = output.network_output().fetch_request_id()
+            && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
+        {
+            if let Some(handle) = output.network_output().request_handle() {
+                slot.record_subresource_request_id_for_handle_if_absent(
+                    handle,
+                    network_request_id.clone(),
+                );
+            }
+            let previous = slot.replace_child_document_fetch_request_id(
+                network_request_id.clone(),
+                fetch_id.to_owned(),
+            );
+            if document.redirect.is_some() {
+                redirected_request_id = previous;
+            }
+        }
         if !network_session_ids.is_empty() {
             // A request is already observable at the Fetch pause. Its body
             // must be readable before the intercepted transport is resumed.
@@ -423,7 +459,17 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
                 )
             })
             .collect::<Vec<_>>();
-        let (event_session_id, request_id, mut pending, payload) = output.into_fetch_event_parts();
+        let Some(fetch) = output.into_fetch_event_parts() else {
+            out.extend(network_events);
+            continue;
+        };
+        let event_session_id = fetch.session_id;
+        let request_id = fetch.request_id;
+        let mut pending = fetch.pending;
+        let mut payload = fetch.payload;
+        if let Some(previous) = redirected_request_id {
+            payload["redirectedRequestId"] = json!(previous);
+        }
         let pending_owner_session_id = event_session_id
             .as_deref()
             .filter(|session_id| conn.session_route(Some(session_id)).is_some())
@@ -511,7 +557,12 @@ fn subresource_request_paused_event(
         network_id: Some(DevToolsRequestId::from(pending.network_request_id.as_str())),
         auth_challenge: None,
     };
-    let payload = network::fetch_request_paused_params(&network_event);
+    let mut payload = network::fetch_request_paused_params(&network_event);
+    // This linkage belongs to Fetch's interception ids, rather than the
+    // shared Network request id used by the protocol-neutral event.
+    if let Some(redirected_request_id) = event_payload.get("redirectedRequestId") {
+        payload["redirectedRequestId"] = redirected_request_id.clone();
+    }
     BackgroundProtocolEvent::immediate_automation_event(
         build_event("Fetch.requestPaused", payload, session_id),
         AutomationEvent::RequestPaused(network_event),

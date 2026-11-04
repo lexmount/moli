@@ -1,3 +1,5 @@
+pub(crate) use async_fetch::next_redirect_url;
+
 mod async_fetch;
 mod beacon;
 mod bindings;

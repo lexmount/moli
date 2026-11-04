@@ -1539,7 +1539,8 @@ pub(super) struct LoadedChildDocument {
 #[derive(Debug)]
 pub(super) enum ChildDocumentLoadOutcome {
     Loaded(Box<LoadedChildDocument>),
-    IgnoredNavigation,
+    IgnoredNavigation(Box<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>),
+    Redirect(Box<crate::native_bridge::ChildDocumentFetch>),
 }
 
 /// Immutable frame/protocol attribution captured before a child-document
@@ -1586,6 +1587,7 @@ pub(super) struct ChildDocumentLoadCompletion {
     target: crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
     network_attribution: ChildDocumentLoadNetworkAttribution,
     result: std::result::Result<ChildDocumentLoadOutcome, String>,
+    network_failure: Option<SubresourceNetworkRecord>,
 }
 
 impl ChildDocumentLoadCompletion {
@@ -1598,6 +1600,23 @@ impl ChildDocumentLoadCompletion {
             target,
             network_attribution,
             result,
+            network_failure: None,
+        }
+    }
+
+    pub(super) fn with_network_failure(mut self, record: Option<SubresourceNetworkRecord>) -> Self {
+        self.network_failure = record;
+        self
+    }
+
+    pub(super) fn network_failure(&self) -> Option<&SubresourceNetworkRecord> {
+        self.network_failure.as_ref()
+    }
+
+    pub(super) fn redirected_fetch(&self) -> Option<&crate::native_bridge::ChildDocumentFetch> {
+        match &self.result {
+            Ok(ChildDocumentLoadOutcome::Redirect(fetch)) => Some(fetch),
+            _ => None,
         }
     }
 
@@ -1619,7 +1638,8 @@ impl ChildDocumentLoadCompletion {
     ) -> Option<&crate::protocol_types::ChildFrameDocumentNetworkSnapshot> {
         match &self.result {
             Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => loaded.document_network.as_ref(),
-            Ok(ChildDocumentLoadOutcome::IgnoredNavigation) | Err(_) => None,
+            Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => Some(network),
+            Ok(ChildDocumentLoadOutcome::Redirect(_)) | Err(_) => None,
         }
     }
 
