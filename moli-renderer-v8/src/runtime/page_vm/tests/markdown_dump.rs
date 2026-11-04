@@ -3,6 +3,8 @@ use crate::runtime::page_surface::{
     RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
 };
 
+mod shadow_dom;
+
 fn options(strip_css: bool) -> RendererPageDumpOptions {
     RendererPageDumpOptions {
         format: RendererPageDumpFormat::Markdown,
