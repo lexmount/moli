@@ -423,7 +423,7 @@ impl PageScriptHost {
         }
         self.build_layout_pass_for_document_with_resources(
             expected.document,
-            request.with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes),
+            request,
             environment_override,
             None,
             Some(resources),
@@ -438,11 +438,6 @@ impl PageScriptHost {
         working_sets: Option<&mut crate::layout_renderer::NativeLayoutWorkingSetPass>,
         capture: Option<crate::capture_layout_resources::CaptureLayoutPass<'_>>,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
-        let request = if self.layout_policy.is_realtime() {
-            request.with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
-        } else {
-            request
-        };
         let Some(root) = self
             .dom_host()
             .dom()
