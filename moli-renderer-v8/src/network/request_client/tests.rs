@@ -1413,6 +1413,82 @@ async fn compatibility_raw_fetch_uses_streaming_disk_cache_for_safe_gets() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn prepared_accept_preserves_image_cache_and_partitions_representations() -> Result<()> {
+    let image_accept = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let target = Url::parse(&format!("http://{}/image", listener.local_addr()?))?;
+    let server = tokio::spawn(async move {
+        for (index, expected) in [image_accept, "application/custom", ""]
+            .into_iter()
+            .enumerate()
+        {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            while !bytes.ends_with(b"\r\n\r\n") {
+                let mut chunk = [0_u8; 4096];
+                let read = stream.read(&mut chunk).await.unwrap();
+                assert_ne!(read, 0, "request headers must finish");
+                bytes.extend_from_slice(&chunk[..read]);
+                assert!(bytes.len() < 65536, "bounded request headers");
+            }
+            let request = String::from_utf8(bytes).unwrap();
+            let values: Vec<_> = request
+                .lines()
+                .filter_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("accept").then(|| value.trim())
+                })
+                .collect();
+            assert_eq!(values, [expected], "{request}");
+            let body = format!("body{index}");
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nCache-Control: max-age=60\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(head.as_bytes()).await.unwrap();
+            stream.write_all(body.as_bytes()).await.unwrap();
+        }
+    });
+    let loader = ResourceRequestClient::new(&FetchConfig::default())?;
+    for (accept, cached, body) in [
+        (None, false, "body0"),
+        (Some(image_accept), true, "body0"),
+        (Some("application/custom"), false, "body1"),
+        (Some("application/custom"), true, "body1"),
+        (Some(""), false, "body2"),
+        (Some(""), true, "body2"),
+    ] {
+        let headers = accept
+            .map(|value| {
+                vec![(
+                    if cached { "aCcEpT" } else { "Accept" }.to_owned(),
+                    value.to_owned(),
+                )]
+            })
+            .unwrap_or_default();
+        let mut request =
+            Request::new_browser("GET", target.clone(), None, headers, (&target).into())
+                .with_request_mode(moli_fetch::RequestMode::NoCors)
+                .with_browser_request_metadata(BrowserRequestMetadata::Image)
+                .with_resource_type(RequestResourceType::Image)
+                .with_page_network_policy();
+        // ServiceWorker fallback already admits a prepared request; ordinary
+        // resource dispatch must retain the same cache eligibility and key.
+        loader.prepare_request(&mut request);
+        let response = timeout(
+            Duration::from_secs(15),
+            loader.fetch_raw_stream_with_cancel(request, FetchCancelHandle::new()),
+        )
+        .await??;
+        assert_eq!(response.from_cache, cached, "Accept={accept:?}");
+        let response = response.into_materialized_raw_response().await?;
+        assert_eq!(response.body_bytes(), body.as_bytes());
+    }
+    server.await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn image_raw_stream_uses_shared_memory_resource_cache_without_http_cache_dir() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;

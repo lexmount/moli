@@ -67,6 +67,7 @@ pub(in crate::network) struct RawSubresourceCacheKey {
     request_mode: String,
     network_partition_key: Option<String>,
     cookie_context: String,
+    accept_header_values: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -642,6 +643,12 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
         request_mode: request.request_mode.as_ref().to_owned(),
         network_partition_key: request.network_partition_key().map(str::to_owned),
         cookie_context: format!("{:?}", request.cookie_context),
+        accept_header_values: request
+            .request_headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("accept"))
+            .map(|(_, value)| value.clone())
+            .collect(),
     })
 }
 
@@ -697,21 +704,21 @@ fn raw_subresource_memory_cacheable_resource_type(request: &Request) -> bool {
 }
 
 fn raw_subresource_memory_cacheable_headers(request: &Request) -> bool {
-    request.request_headers.is_empty()
-        || request.browser_request_metadata().is_some_and(|metadata| {
-            matches!(
-                metadata,
-                BrowserRequestMetadata::Fetch
-                    | BrowserRequestMetadata::JsonModule
-                    | BrowserRequestMetadata::TextModule
-                    | BrowserRequestMetadata::Manifest
-                    | BrowserRequestMetadata::StyleModule
-                    | BrowserRequestMetadata::Xhr
-            ) && request
-                .request_headers
-                .iter()
-                .all(|(name, _)| browser_cache_ignored_request_header(name))
-        })
+    let allow_browser_headers = request.browser_request_metadata().is_some_and(|metadata| {
+        matches!(
+            metadata,
+            BrowserRequestMetadata::Fetch
+                | BrowserRequestMetadata::JsonModule
+                | BrowserRequestMetadata::TextModule
+                | BrowserRequestMetadata::Manifest
+                | BrowserRequestMetadata::StyleModule
+                | BrowserRequestMetadata::Xhr
+        )
+    });
+    request.request_headers.iter().all(|(name, _)| {
+        name.eq_ignore_ascii_case("accept")
+            || (allow_browser_headers && browser_cache_ignored_request_header(name))
+    })
 }
 
 fn browser_cache_ignored_request_header(name: &str) -> bool {
