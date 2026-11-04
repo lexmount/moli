@@ -6,8 +6,8 @@ use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 use crate::automation::FrontendProtocol;
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, CommittedRendererDocumentBinding,
-    DeferredMainDocumentLoadObservationId, DocumentNavigationToken, NavigationDispatchState,
-    RendererDocumentLoadBoundary, RendererPageResidenceIdentity,
+    DeferredMainDocumentLoadObservationId, DocumentNavigationToken, LoadPublicationState,
+    NavigationDispatchState, RendererPageResidenceIdentity,
 };
 use crate::domains::command_output::{BackgroundProtocolEventBuffer, CommandOutputBuffer};
 use crate::domains::network::{
@@ -44,34 +44,32 @@ pub(crate) struct MainDocumentFailedNavigationActivity {
     response_mode: FailedNavigationResponseMode,
 }
 
-struct DeferredMainDocumentLoadCompletionState {
+/// The Document owns its load output until the navigation's commit prefix is
+/// installed and a concrete lifecycle fact reaches the load boundary. No
+/// waiter owns, releases, or discards these notifications.
+pub(crate) struct MainDocumentLoadPublication {
     navigation_activity: MainDocumentNavigationActivity,
     renderer_document_binding: Option<CommittedRendererDocumentBinding>,
     pending_download: Option<RendererPendingDownloadActivation>,
+    observation_id: DeferredMainDocumentLoadObservationId,
+    renderer_page_residence_identity: Option<RendererPageResidenceIdentity>,
 }
 
-pub(crate) struct DeferredMainDocumentLoadCompletionAdmission {
-    state: DeferredMainDocumentLoadCompletionState,
-}
-
-pub(crate) struct DeferredMainDocumentLoadCompletionActivity {
-    state: DeferredMainDocumentLoadCompletionState,
+/// Ready post-load work retains its scheduler identity even after interruption,
+/// when completing an empty action still settles exact output predecessors.
+pub(crate) struct MainDocumentPostLoadAction {
+    navigation_activity: MainDocumentNavigationActivity,
+    renderer_document: Option<RendererDocumentLifecycleIdentity>,
+    pending_download: Option<RendererPendingDownloadActivation>,
     observation_id: DeferredMainDocumentLoadObservationId,
     renderer_page_residence_identity: Option<RendererPageResidenceIdentity>,
     run_post_load: bool,
 }
 
-/// The Document owns its load output until the navigation's commit prefix is
-/// installed and a concrete lifecycle fact reaches the load boundary. No
-/// waiter owns, releases, or discards these notifications.
-pub(crate) struct MainDocumentLoadPublication {
-    completion: DeferredMainDocumentLoadCompletionActivity,
-}
-
 impl std::fmt::Debug for MainDocumentLoadPublication {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MainDocumentLoadPublication")
-            .field("observation_id", &self.completion.observation_id)
+            .field("observation_id", &self.observation_id)
             .finish_non_exhaustive()
     }
 }
@@ -91,6 +89,10 @@ impl MainDocumentNavigationActivity {
             document_navigation_token,
             deferred_initial_renderer_document_lifecycle_events: Vec::new(),
         }
+    }
+
+    pub(crate) fn owner_scope(&self) -> &CommandOwnerScope {
+        &self.state.owner
     }
 
     pub(crate) fn with_network_error_page_result(
@@ -266,9 +268,10 @@ impl MainDocumentNavigationActivity {
                 elapsed_ms = timing_started.elapsed().as_millis(),
             );
         }
-        let load_output = conn.enqueue_deferred_main_document_load_completion(
-            DeferredMainDocumentLoadCompletionAdmission::new(self, pending_download)
-                .with_renderer_document_binding(renderer_document_binding),
+        let load_output = conn.enqueue_main_document_load_publication(
+            self,
+            renderer_document_binding,
+            pending_download,
         );
         out.extend_background_events_after_messages(load_output);
     }
@@ -555,96 +558,60 @@ impl MainDocumentNavigationActivity {
     }
 }
 
-impl DeferredMainDocumentLoadCompletionAdmission {
-    fn new(
+impl MainDocumentLoadPublication {
+    pub(crate) fn new(
         navigation_activity: MainDocumentNavigationActivity,
+        renderer_document_binding: Option<CommittedRendererDocumentBinding>,
         pending_download: Option<RendererPendingDownloadActivation>,
+        observation_id: DeferredMainDocumentLoadObservationId,
+        renderer_page_residence_identity: Option<RendererPageResidenceIdentity>,
     ) -> Self {
         Self {
-            state: DeferredMainDocumentLoadCompletionState {
-                navigation_activity,
-                renderer_document_binding: None,
-                pending_download,
-            },
+            navigation_activity,
+            renderer_document_binding,
+            pending_download,
+            observation_id,
+            renderer_page_residence_identity,
         }
     }
 
-    fn with_renderer_document_binding(
-        mut self,
-        binding: Option<CommittedRendererDocumentBinding>,
-    ) -> Self {
-        self.state.renderer_document_binding = binding;
-        self
-    }
-
-    pub(crate) fn owner_scope(&self) -> &CommandOwnerScope {
-        &self.state.navigation_activity.state.owner
-    }
-
-    pub(crate) fn into_publication(
-        self,
-        conn: &CdpConnection,
-        observation_id: DeferredMainDocumentLoadObservationId,
-    ) -> MainDocumentLoadPublication {
-        let renderer_page_residence_identity =
-            conn.renderer_page_residence_identity_for_owner(self.owner_scope());
-        MainDocumentLoadPublication {
-            completion: DeferredMainDocumentLoadCompletionActivity {
-                state: self.state,
-                observation_id,
-                renderer_page_residence_identity,
-                run_post_load: false,
-            },
-        }
-    }
-}
-
-impl MainDocumentLoadPublication {
-    pub(crate) fn owner_scope(&self) -> &CommandOwnerScope {
-        self.completion.owner_scope()
-    }
-
-    pub(crate) fn is_still_current(&self, conn: &CdpConnection) -> bool {
-        conn.renderer_document_load_publication_binding_for_owner(self.owner_scope())
-            .zip(self.completion.state.renderer_document_binding.as_ref())
-            .is_some_and(|(current, expected)| current.shares_document_owner_with(expected))
-    }
-
-    pub(crate) fn boundary(&self, conn: &CdpConnection) -> RendererDocumentLoadBoundary {
-        self.completion
-            .state
-            .renderer_document_binding
-            .as_ref()
-            .map_or(RendererDocumentLoadBoundary::Pending, |binding| {
-                conn.renderer_document_load_boundary_for_owner(self.owner_scope(), binding)
-            })
+    pub(crate) fn state(&self, conn: &CdpConnection) -> LoadPublicationState {
+        conn.main_document_load_publication_state_for_owner(
+            self.navigation_activity.owner_scope(),
+            self.renderer_document_binding.as_ref(),
+        )
     }
 
     pub(crate) fn publish(
         mut self,
         conn: &mut CdpConnection,
-        reached_load: bool,
+        run_post_load: bool,
         out: &mut BackgroundProtocolEventBuffer,
-    ) -> DeferredMainDocumentLoadCompletionActivity {
-        self.completion
-            .state
-            .navigation_activity
+    ) -> MainDocumentPostLoadAction {
+        self.navigation_activity
             .emit_renderer_load_boundary_facts(conn, out);
-        self.completion.run_post_load = reached_load;
-        self.completion
+        let renderer_document = self
+            .renderer_document_binding
+            .as_ref()
+            .map(CommittedRendererDocumentBinding::renderer_document_identity);
+        MainDocumentPostLoadAction {
+            navigation_activity: self.navigation_activity,
+            renderer_document,
+            pending_download: self.pending_download,
+            observation_id: self.observation_id,
+            renderer_page_residence_identity: self.renderer_page_residence_identity,
+            run_post_load,
+        }
     }
 }
 
-impl DeferredMainDocumentLoadCompletionActivity {
+impl MainDocumentPostLoadAction {
     pub(crate) fn owner_scope(&self) -> &CommandOwnerScope {
-        &self.state.navigation_activity.state.owner
+        self.navigation_activity.owner_scope()
     }
 
     pub(crate) fn renderer_document_identity(&self) -> Option<RendererDocumentLifecycleIdentity> {
-        self.state
-            .renderer_document_binding
-            .as_ref()
-            .map(CommittedRendererDocumentBinding::renderer_document_identity)
+        self.renderer_document
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
@@ -652,14 +619,12 @@ impl DeferredMainDocumentLoadCompletionActivity {
     }
 
     pub(crate) fn target_id(&self) -> &str {
-        self.state
-            .navigation_activity
+        self.navigation_activity
             .document_navigation_token
             .as_ref()
-            .map_or(
-                self.state.navigation_activity.state.frame_id.as_str(),
-                |token| token.target_id.as_str(),
-            )
+            .map_or(self.navigation_activity.state.frame_id.as_str(), |token| {
+                token.target_id.as_str()
+            })
     }
 
     pub(crate) fn observation_id(&self) -> DeferredMainDocumentLoadObservationId {
@@ -678,9 +643,8 @@ impl DeferredMainDocumentLoadCompletionActivity {
         if !self.run_post_load {
             return None;
         }
-        let pending_download = self.state.pending_download.take();
-        self.state
-            .navigation_activity
+        let pending_download = self.pending_download.take();
+        self.navigation_activity
             .prepare_deferred_load_completion(conn, out, pending_download)
     }
 }
@@ -926,17 +890,24 @@ mod tests {
         }
     }
 
-    fn deferred_load_admission_for_test(
-        binding: CommittedRendererDocumentBinding,
-    ) -> DeferredMainDocumentLoadCompletionAdmission {
-        let navigation_activity = MainDocumentNavigationActivity::new(
+    fn load_publication_navigation_for_test() -> MainDocumentNavigationActivity {
+        MainDocumentNavigationActivity::new(
             navigation_state(),
             Url::parse("https://example.test/start").unwrap(),
             empty_main_document_progress_gate_for_test(),
             None,
-        );
-        DeferredMainDocumentLoadCompletionAdmission::new(navigation_activity, None)
-            .with_renderer_document_binding(Some(binding))
+        )
+    }
+
+    fn enqueue_load_publication_for_test(
+        conn: &mut CdpConnection,
+        binding: CommittedRendererDocumentBinding,
+    ) -> Vec<BackgroundProtocolEvent> {
+        conn.enqueue_main_document_load_publication(
+            load_publication_navigation_for_test(),
+            Some(binding),
+            None,
+        )
     }
 
     fn take_deferred_load_work_for_test(conn: &mut CdpConnection) -> ProtocolSchedulerWork {
@@ -1439,6 +1410,130 @@ mod tests {
     }
 
     #[test]
+    fn publication_state_distinguishes_stale_owners_from_restarted_epochs() {
+        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        let state = |conn: &CdpConnection, expected: Option<&CommittedRendererDocumentBinding>| {
+            conn.main_document_load_publication_state_for_owner(&owner, expected)
+        };
+        assert_eq!(state(&conn, Some(&binding)), LoadPublicationState::Pending);
+        assert_eq!(state(&conn, None), LoadPublicationState::Stale);
+        assert_eq!(
+            conn.main_document_load_publication_state_for_owner(
+                &CommandOwnerScope::for_session("SID-retired"),
+                Some(&binding),
+            ),
+            LoadPublicationState::Stale
+        );
+
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        assert_eq!(
+            load_count(project_lifecycle(
+                &mut conn,
+                vec![renderer_load_event_for_test(started)]
+            )),
+            0
+        );
+        assert_eq!(
+            state(&conn, Some(&binding)),
+            LoadPublicationState::Reached,
+            "the authoritative Load must classify as reached while its output is still hidden"
+        );
+        assert!(
+            conn.renderer_document_lifecycle_visible_state_for_session_owner(Some("SID-nav"))
+                .unwrap()
+                .1
+                .load
+                .is_none()
+        );
+
+        let terminated = RendererDocumentLifecycleEvent {
+            sequence: 4,
+            timestamp_micros: 40,
+            kind: RendererDocumentLifecycleEventKind::Terminated {
+                last_reached: Some(RendererDocumentLifecycleMilestone::Load),
+                reason: RendererDocumentTerminationReason::RestartedByDocumentOpen,
+            },
+            ..started
+        };
+        let restarted = RendererDocumentLifecycleEvent {
+            epoch: RendererLifecycleEpoch(2),
+            sequence: 5,
+            timestamp_micros: 50,
+            kind: RendererDocumentLifecycleEventKind::Started {
+                reason: RendererLifecycleStartReason::ExplicitDocumentOpen,
+            },
+            ..started
+        };
+        assert!(project_lifecycle(&mut conn, vec![terminated, restarted]).is_empty());
+        assert_eq!(
+            state(&conn, Some(&binding)),
+            LoadPublicationState::Interrupted
+        );
+        let mut foreign = binding.clone();
+        foreign.renderer_document =
+            RendererDocumentToken::new_for_testing(started.frame.page_id, 2);
+        assert_eq!(
+            state(&conn, Some(&foreign)),
+            LoadPublicationState::Stale,
+            "a different Document must be stale even when its epoch also differs"
+        );
+        foreign = binding.clone();
+        foreign.page_attachment_id = crate::conn::TargetPageAttachmentId::from_raw_for_test(2);
+        assert_eq!(state(&conn, Some(&foreign)), LoadPublicationState::Stale);
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .runtime_slot
+            .replace_page_attachment_id_for_test();
+        assert_eq!(
+            state(&conn, Some(&binding)),
+            LoadPublicationState::Stale,
+            "an obsolete binding must not survive replacement of the current Page attachment"
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupted_publication_retains_its_scheduler_settlement_identity() {
+        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+        enable_page_events(&mut conn);
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        assert!(enqueue_load_publication_for_test(&mut conn, binding).is_empty());
+        assert_eq!(
+            load_count(project_lifecycle(
+                &mut conn,
+                vec![renderer_termination_event_for_test(started)]
+            )),
+            0
+        );
+        let work = take_deferred_load_work_for_test(&mut conn);
+        let observation_id = work.main_document_load_observation_id().unwrap();
+        let owner = crate::conn::ProtocolStateOwner::new(conn);
+        let handle = owner.handle();
+        let pending = handle
+            .with_state(|state| state.try_start_owned_protocol_scheduler_work(work))
+            .unwrap()
+            .unwrap_or_else(|_| panic!("post-load workflow"))
+            .unwrap();
+        let completed = pending.wait().await;
+        assert_eq!(
+            completed.main_document_load_observation_id(),
+            Some(observation_id),
+            "interruption must still settle the exact scheduler predecessor"
+        );
+        let (events, scheduler) = handle
+            .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+            .unwrap()
+            .into_protocol_event_parts();
+        assert!(
+            events.is_empty() && scheduler.is_empty(),
+            "an interrupted lifecycle must complete without loaded/idle/stopped notifications"
+        );
+    }
+
+    #[test]
     fn lifecycle_load_is_delivered_without_navigation_observers() {
         let (mut conn, _, started) = connection_with_dcl_only_renderer_lifecycle();
         enable_page_events(&mut conn);
@@ -1457,12 +1552,7 @@ mod tests {
         enable_page_events(&mut conn);
         let owner = CommandOwnerScope::for_session("SID-nav");
         assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
-        assert!(
-            conn.enqueue_deferred_main_document_load_completion(deferred_load_admission_for_test(
-                binding
-            ),)
-                .is_empty()
-        );
+        assert!(enqueue_load_publication_for_test(&mut conn, binding).is_empty());
         assert!(
             conn.take_scheduler_events().is_empty(),
             "DCL must not admit a load-waiting owner task"
@@ -1503,9 +1593,7 @@ mod tests {
         // Replacement metadata is not part of the owning Document identity.
         binding.document_open_replacement_epoch = Some(RendererLifecycleEpoch(99));
         assert_eq!(
-            load_count(conn.enqueue_deferred_main_document_load_completion(
-                deferred_load_admission_for_test(binding),
-            )),
+            load_count(enqueue_load_publication_for_test(&mut conn, binding)),
             1
         );
         assert_eq!(
@@ -1521,9 +1609,7 @@ mod tests {
         enable_page_events(&mut conn);
         let owner = CommandOwnerScope::for_session("SID-nav");
         assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
-        let _ = conn.enqueue_deferred_main_document_load_completion(
-            deferred_load_admission_for_test(binding),
-        );
+        let _ = enqueue_load_publication_for_test(&mut conn, binding);
         let context = crate::automation::AutomationContext {
             protocol: FrontendProtocol::Cdp,
             session_id: Some("SID-nav".into()),
@@ -1575,24 +1661,30 @@ mod tests {
             assert!(
                 conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1")
             );
-            let mut admission = deferred_load_admission_for_test(binding.unwrap());
-            admission
-                .state
-                .navigation_activity
-                .document_navigation_token = Some(token);
-            let mut admission = Some(admission);
+            let binding = binding.unwrap();
+            let mut activity = load_publication_navigation_for_test();
+            activity.document_navigation_token = Some(token);
+            let mut activity = Some(activity);
             if !late {
                 assert!(
-                    conn.enqueue_deferred_main_document_load_completion(admission.take().unwrap())
-                        .is_empty()
+                    conn.enqueue_main_document_load_publication(
+                        activity.take().unwrap(),
+                        Some(binding.clone()),
+                        None,
+                    )
+                    .is_empty()
                 );
             }
             conn.start_document_navigation_for_owner(&owner, "LID-2".into())
                 .unwrap();
             let mut output =
                 project_lifecycle(&mut conn, vec![renderer_load_event_for_test(started)]);
-            if let Some(admission) = admission {
-                output.extend(conn.enqueue_deferred_main_document_load_completion(admission));
+            if let Some(activity) = activity {
+                output.extend(conn.enqueue_main_document_load_publication(
+                    activity,
+                    Some(binding),
+                    None,
+                ));
             }
             assert_eq!(
                 load_count(output),
@@ -1608,9 +1700,7 @@ mod tests {
         enable_page_events(&mut conn);
         let owner = CommandOwnerScope::for_session("SID-nav");
         assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
-        let _ = conn.enqueue_deferred_main_document_load_completion(
-            deferred_load_admission_for_test(binding),
-        );
+        let _ = enqueue_load_publication_for_test(&mut conn, binding);
         assert_eq!(
             load_count(project_lifecycle(
                 &mut conn,
@@ -1648,9 +1738,7 @@ mod tests {
         enable_page_events(&mut conn);
         let owner = CommandOwnerScope::for_session("SID-nav");
         assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
-        let _ = conn.enqueue_deferred_main_document_load_completion(
-            deferred_load_admission_for_test(binding),
-        );
+        let _ = enqueue_load_publication_for_test(&mut conn, binding);
         assert_eq!(
             load_count(project_lifecycle(
                 &mut conn,
@@ -1695,9 +1783,7 @@ mod tests {
                 conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1")
             );
             if !late {
-                let _ = conn.enqueue_deferred_main_document_load_completion(
-                    deferred_load_admission_for_test(binding.clone()),
-                );
+                let _ = enqueue_load_publication_for_test(&mut conn, binding.clone());
             }
             let terminated = RendererDocumentLifecycleEvent {
                 kind: RendererDocumentLifecycleEventKind::Terminated {
@@ -1736,9 +1822,7 @@ mod tests {
                 output.extend(project_lifecycle(&mut conn, vec![event]));
             }
             if late {
-                output.extend(conn.enqueue_deferred_main_document_load_completion(
-                    deferred_load_admission_for_test(binding),
-                ));
+                output.extend(enqueue_load_publication_for_test(&mut conn, binding));
             }
             assert_eq!(load_count(output), 1, "publication registered late: {late}");
         }
@@ -1750,12 +1834,7 @@ mod tests {
         enable_page_events(&mut conn);
         let owner = CommandOwnerScope::for_session("SID-nav");
         assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
-        assert!(
-            conn.enqueue_deferred_main_document_load_completion(deferred_load_admission_for_test(
-                binding
-            ),)
-                .is_empty()
-        );
+        assert!(enqueue_load_publication_for_test(&mut conn, binding).is_empty());
 
         let token = conn
             .start_document_navigation_for_owner(&owner, "LID-2".into())
@@ -1805,12 +1884,7 @@ mod tests {
         let owner = CommandOwnerScope::for_session("SID-nav");
         assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
         binding.page_attachment_id = crate::conn::TargetPageAttachmentId::from_raw_for_test(2);
-        assert!(
-            conn.enqueue_deferred_main_document_load_completion(deferred_load_admission_for_test(
-                binding
-            ))
-            .is_empty()
-        );
+        assert!(enqueue_load_publication_for_test(&mut conn, binding).is_empty());
         assert!(conn.take_scheduler_events().is_empty());
         assert!(
             conn.release_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1")

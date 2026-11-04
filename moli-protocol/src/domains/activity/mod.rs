@@ -11,9 +11,8 @@ mod subresource;
 
 pub(in crate::domains) use contextual_projection::ProtocolOutputProjectionContext;
 pub(crate) use main_document::{
-    DeferredMainDocumentLoadCompletionActivity, DeferredMainDocumentLoadCompletionAdmission,
     MainDocumentFailedNavigationActivity, MainDocumentLoadPublication,
-    MainDocumentNavigationActivity,
+    MainDocumentNavigationActivity, MainDocumentPostLoadAction,
 };
 pub(crate) use output_ingress::{
     AdmittedRendererOutputPublication, OrderedRendererOutputIngress, PreparedProtocolOutputs,
