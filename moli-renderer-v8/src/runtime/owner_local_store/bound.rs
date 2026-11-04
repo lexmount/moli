@@ -756,15 +756,24 @@ pub(super) fn page_ready_descriptor_snapshot(
         descriptors.push(action_window);
         due_deadline_was_ready = true;
     }
-    let timer_selection = if descriptors.is_empty() {
-        crate::page_task_queue::RendererPageTimerSelection::AnyReady
-    } else {
-        crate::page_task_queue::RendererPageTimerSelection::ExcludeUnexpiredIdleCallbacks
-    };
-    if let Some(timer) = entry
+    // An idle callback is eligible only when no ordinary task is ready,
+    // including a later deadline in the same timer heap. The earliest heap
+    // entry can be idle even though another timer has also become due.
+    let timer = entry
         .page_vm()
-        .due_page_timer_ready_descriptor(timer_selection)
-    {
+        .due_page_timer_ready_descriptor(
+            crate::page_task_queue::RendererPageTimerSelection::ExcludeUnexpiredIdleCallbacks,
+        )
+        .or_else(|| {
+            if descriptors.is_empty() {
+                entry.page_vm().due_page_timer_ready_descriptor(
+                    crate::page_task_queue::RendererPageTimerSelection::AnyReady,
+                )
+            } else {
+                None
+            }
+        });
+    if let Some(timer) = timer {
         descriptors.push(timer);
         due_deadline_was_ready = true;
     }
