@@ -1076,10 +1076,6 @@ impl ResourceRequestClient {
         self.page_network_policy.set_cache_disabled(disabled);
     }
 
-    pub(crate) fn prepare_request(&self, request: &mut Request) {
-        self.resource_runtime.client().prepare_request(request);
-    }
-
     pub(crate) fn prepare_service_worker_request(&self, request: &mut Request) {
         // Controlled fetch reconstructs requests without the full network-policy
         // opt-in. Apply headers before defaults, while allowing offline workers
@@ -1087,7 +1083,7 @@ impl ResourceRequestClient {
         self.page_network_policy
             .snapshot()
             .apply_request_headers(request);
-        self.prepare_request(request);
+        self.resource_runtime.client().prepare_request(request);
     }
 
     fn apply_network_policy(&self, mut request: Request) -> Result<Request> {
@@ -1107,7 +1103,7 @@ impl ResourceRequestClient {
             .snapshot()
             .apply_to_request(request)?;
         request.validate_request_mode_for_url(&request.url)?;
-        self.prepare_request(&mut request);
+        self.resource_runtime.client().prepare_request(&mut request);
         Ok(request)
     }
 }

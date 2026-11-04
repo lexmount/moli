@@ -173,7 +173,7 @@ pub(crate) fn outgoing_request_headers_for_url(
     // contract; admitted requests keep the borrowed, allocation-free path.
     let mut prepared = std::borrow::Cow::Borrowed(request);
     if !header_present(&request.request_headers, "accept") {
-        prepared.to_mut().prepare_headers(config);
+        prepared.to_mut().prepare_accept_header(config);
     }
     outgoing_request_header_bytes_for_url(config, &prepared, request_url, cookie_header)
         .to_byte_strings()

@@ -1474,7 +1474,7 @@ async fn prepared_accept_preserves_image_cache_and_partitions_representations() 
                 .with_page_network_policy();
         // ServiceWorker fallback already admits a prepared request; ordinary
         // resource dispatch must retain the same cache eligibility and key.
-        loader.prepare_request(&mut request);
+        loader.prepare_service_worker_request(&mut request);
         let response = timeout(
             Duration::from_secs(15),
             loader.fetch_raw_stream_with_cancel(request, FetchCancelHandle::new()),
