@@ -85,6 +85,7 @@ impl StreamingDocumentInputSource {
         Self { rx }
     }
 
+    #[cfg(test)]
     pub(super) fn has_ready_input(&mut self) -> bool {
         !self.rx.is_empty()
     }
@@ -272,6 +273,101 @@ mod tests {
         assert!(matches!(
             source.try_next().expect("terminal read should succeed"),
             Some(StreamingDocumentInputEvent::Finished(Ok(())))
+        ));
+    }
+
+    #[tokio::test]
+    async fn restoring_after_payload_publication_waits_for_the_parser_continuation() {
+        use super::super::{PhaseOneResidenceAdmission, PhaseOneRestoreRequirement};
+        use parking_lot::Mutex;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        use std::task::{Context, Wake, Waker};
+
+        struct RestoreOnInputWake {
+            input: Mutex<StreamingDocumentInputSource>,
+            networking: Mutex<RendererPageNetworkingSource>,
+            observed: AtomicBool,
+            admission: Mutex<Option<PhaseOneResidenceAdmission>>,
+        }
+
+        impl Wake for RestoreOnInputWake {
+            fn wake(self: Arc<Self>) {
+                self.wake_by_ref();
+            }
+
+            fn wake_by_ref(self: &Arc<Self>) {
+                if self.observed.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                // mpsc wakes the receiver inside payload publication, before
+                // StreamingDocumentInputSender can publish its continuation.
+                let input_ready = self.input.lock().has_ready_input();
+                let task_ready = self.networking.lock().has_ready_task();
+                assert!(input_ready);
+                assert!(!task_ready);
+                *self.admission.lock() = Some(PhaseOneResidenceAdmission::after_stable_restore(
+                    PhaseOneRestoreRequirement::Producer,
+                    task_ready,
+                ));
+            }
+        }
+
+        let (networking, continuation, mut wake_rx) = continuation_fixture(97);
+        let (tx, rx) = mpsc::channel(STREAMING_DOCUMENT_INPUT_BUFFERED_EVENTS);
+        let observer = Arc::new(RestoreOnInputWake {
+            input: Mutex::new(StreamingDocumentInputSource { rx }),
+            networking: Mutex::new(networking),
+            observed: AtomicBool::new(false),
+            admission: Mutex::new(None),
+        });
+        let waker = Waker::from(Arc::clone(&observer));
+        let mut context = Context::from_waker(&waker);
+        assert!(
+            observer
+                .input
+                .lock()
+                .rx
+                .poll_recv(&mut context)
+                .is_pending()
+        );
+        let sender = StreamingDocumentInputSender {
+            tx,
+            parser_continuation: continuation,
+        };
+        assert!(
+            sender
+                .send(StreamingDocumentInputEvent::Chunks(vec![b"body".to_vec()]))
+                .await
+        );
+        assert_eq!(
+            observer.admission.lock().take(),
+            Some(PhaseOneResidenceAdmission::WaitingForProducer),
+        );
+        assert_eq!(
+            wake_rx.try_recv().unwrap().source_for_test(),
+            crate::page_task_queue::RendererOwnerWakeSource::NetworkingTask,
+            "the subsequent continuation publication must wake the restored owner",
+        );
+        let mut networking = observer.networking.lock();
+        assert!(networking.has_ready_task());
+        assert_eq!(
+            PhaseOneResidenceAdmission::after_stable_restore(
+                PhaseOneRestoreRequirement::Producer,
+                networking.has_ready_task(),
+            ),
+            PhaseOneResidenceAdmission::ReadyPageTurn,
+        );
+        let (_, task) = networking.pop_front_task().unwrap();
+        let RendererPageNetworkingTask::MainParserContinuation(task) = task else {
+            panic!("published input must resume through the production parser task");
+        };
+        let _ = task.into_owner();
+        assert!(matches!(
+            observer.input.lock().try_next().unwrap(),
+            Some(StreamingDocumentInputEvent::Chunks(chunks)) if chunks == [b"body".to_vec()],
         ));
     }
 
