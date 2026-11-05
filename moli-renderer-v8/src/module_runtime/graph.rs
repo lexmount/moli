@@ -981,8 +981,15 @@ impl NativeModuleGraphJob {
                         key.clone(),
                         fetch.dependency().cloned(),
                     );
-                    let context = owner.module_fetch_csp_context(&key, &request.fetch_metadata);
-                    let request = request.with_csp_context(context);
+                    let context =
+                        match owner.module_fetch_csp_context(&key, &request.fetch_metadata) {
+                            Ok(context) => context,
+                            Err(error) => {
+                                owner.mark_module_failed(key.clone(), error.clone());
+                                return Err(error);
+                            }
+                        };
+                    let request = request.with_csp_context(Some(context));
                     owner.dispatch_module_fetch_csp_report_only_violation(
                         &key,
                         &request.fetch_metadata,
@@ -2694,6 +2701,54 @@ mod tests {
         .expect("script vm bootstrap should succeed")
         .finish()
         .expect("script vm finish should succeed")
+    }
+
+    #[test]
+    fn child_module_csp_context_missing_fails_before_emitting_fetch() {
+        use super::super::tree_owner::NativeModuleTreeFrameDocumentOwner;
+        use crate::frame_owner_model::{
+            DocumentId, FrameDocumentOwner, FrameRealmId, LocalWindowId,
+        };
+        for module_type in [None, Some("text"), Some("json"), Some("css")] {
+            let mut vm = new_test_vm("https://app.example.test/page");
+            let mut modulator = super::super::NativeDocumentModulator::default();
+            let root_url = url("https://app.example.test/module");
+            let attributes = module_type.map_or_else(ModuleAttributesKey::empty, |kind| {
+                ModuleAttributesKey::from_pairs(vec![("type".into(), kind.into())])
+            });
+            let key = ModuleMapKey::from_url_and_attributes(&root_url, &attributes).unwrap();
+            let mut job = NativeModuleGraphJob::runtime_module_script(ModuleRootInput {
+                source_url: root_url.clone(),
+                base_url: root_url,
+                initiator_url: url("https://app.example.test/page"),
+                attributes,
+                phase: ModuleImportPhase::Evaluation,
+                source_override: None,
+                fetch_metadata: ModuleFetchMetadata::default(),
+                parser_owned: false,
+            });
+            let mut owner = NativeModuleTreeFrameDocumentOwner::new(
+                &mut vm,
+                &mut modulator,
+                FrameDocumentOwner::new(LocalWindowId(u64::MAX), DocumentId(u64::MAX)),
+                FrameRealmId(-999),
+                url("https://app.example.test/page"),
+            );
+            let error = match job.advance_chromium_tree_owner_lane_with_owner(&mut owner) {
+                Err(error) => error,
+                Ok(_) => panic!("missing Child CSP authority must not emit a fetch"),
+            };
+            assert!(
+                error
+                    .message()
+                    .contains("Child module CSP context unavailable")
+            );
+            let entry = owner.module_entry_id(&key).expect("module-map entry");
+            assert!(
+                owner.module_failure(entry).is_some(),
+                "failed admission must settle the reserved entry"
+            );
+        }
     }
 
     #[test]

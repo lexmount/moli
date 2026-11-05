@@ -862,7 +862,14 @@ impl JsContextHost {
                 ),
             );
         };
-        if let Err(error) = request.fetch_source_for_document(loader, send_completion) {
+        let start_result = if request.csp_context().is_some() {
+            request.fetch_source_for_document(loader, send_completion)
+        } else {
+            Err(anyhow::anyhow!(
+                "Child module CSP context unavailable for its Document and realm"
+            ))
+        };
+        if let Err(error) = start_result {
             let message = error.to_string();
             let _ = self
                 .resource_completion_tx
@@ -932,7 +939,14 @@ impl JsContextHost {
                 .with_csp_context(completion_csp_context),
             );
         };
-        if let Err(error) = request.fetch_source_for_document(loader, send_completion) {
+        let start_result = if request.csp_context().is_some() {
+            request.fetch_source_for_document(loader, send_completion)
+        } else {
+            Err(anyhow::anyhow!(
+                "Child module CSP context unavailable for its Document and realm"
+            ))
+        };
+        if let Err(error) = start_result {
             let message = error.to_string();
             let _ = self
                 .resource_completion_tx
