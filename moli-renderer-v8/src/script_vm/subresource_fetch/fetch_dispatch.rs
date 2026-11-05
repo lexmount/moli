@@ -473,6 +473,11 @@ impl ScriptVm {
         mut supplied_network_record: Option<crate::types::SubresourceNetworkRecord>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let completion_result = completion_result.bind_child_body(&mut pending.continuation);
+        if skip_fetch_security_validation
+            && let Some(timing) = pending.continuation.window_resource_timing_mut()
+        {
+            timing.clear_initiator();
+        }
         let consumed_preload = match &completion_result {
             AsyncSubresourceFetchResult::PreloadFailure(_) => true,
             AsyncSubresourceFetchResult::Response(response)
