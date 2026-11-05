@@ -201,6 +201,8 @@ pub struct RendererPopupActivationParts {
     pub source: RendererPopupActivationSource,
     pub disposition: RendererPopupDisposition,
     pub navigation_requested: bool,
+    /// Window.stop cancellation state captured before browser projection.
+    pub navigation_generation: Option<u64>,
     pub navigation_initiator: Option<RendererNavigationInitiator>,
     /// Origin equality with the selected Document at navigation acceptance.
     /// Unlike serialized origins, this preserves inherited opaque identity.
@@ -266,6 +268,7 @@ impl RendererPendingPopupActivation {
                 },
                 disposition,
                 navigation_requested: true,
+                navigation_generation: None,
                 navigation_initiator: None,
                 same_origin_with_target: None,
                 popup_id,
@@ -298,6 +301,7 @@ impl RendererPendingPopupActivation {
                 source: RendererPopupActivationSource::BrowserContext,
                 disposition,
                 navigation_requested: true,
+                navigation_generation: None,
                 navigation_initiator: None,
                 same_origin_with_target: None,
                 popup_id,
@@ -387,6 +391,15 @@ impl RendererPendingPopupActivation {
         self
     }
 
+    pub(crate) fn capture_navigation_cancellation(mut self) -> Self {
+        if self.parts.navigation_requested
+            && let Some(window) = self.parts.auxiliary_window.as_ref()
+        {
+            self.parts.navigation_generation = Some(window.pending_navigation_generation());
+        }
+        self
+    }
+
     pub fn navigation_requested(&self) -> bool {
         self.parts.navigation_requested
     }
@@ -412,6 +425,7 @@ impl PartialEq for RendererPopupActivationParts {
     fn eq(&self, other: &Self) -> bool {
         self.source == other.source
             && self.navigation_requested == other.navigation_requested
+            && self.navigation_generation == other.navigation_generation
             && self.navigation_initiator == other.navigation_initiator
             && self.same_origin_with_target == other.same_origin_with_target
             && self.disposition == other.disposition
