@@ -1274,14 +1274,10 @@ impl DocumentRuntime {
         new_value: Option<&str>,
         policy: AttributeChangedReactionPolicy,
     ) {
-        let retired_event_callback = self.sync_body_window_messageerror_content_attribute(
-            handle,
-            name,
-            namespace,
-            new_value.is_some(),
-        );
-        if let Some(callback_id) = retired_event_callback {
-            unsafe { &mut *host_ptr }.release_event_callback(callback_id);
+        if namespace.is_none() {
+            native_bridge::element::invalidate_event_handler_content_attribute(
+                scope, host_ptr, handle, name,
+            );
         }
         match policy {
             AttributeChangedReactionPolicy::DispatchNow => {

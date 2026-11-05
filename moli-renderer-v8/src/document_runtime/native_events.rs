@@ -12,6 +12,26 @@ pub(crate) struct NativeEventDispatch<'event> {
 }
 
 impl DocumentRuntime {
+    /// Body and frameset content attributes address the main Window, rather
+    /// than the element's own EventTarget. Keep the decision shared by handler
+    /// registration, source lookup, and attribute invalidation.
+    pub(crate) fn event_handler_attribute_target(
+        &self,
+        handle: DomHandle,
+        attribute: &str,
+    ) -> EventTargetHandle {
+        if native_bridge::element::is_body_window_event_handler_attribute(attribute)
+            && self.dom_host.owner_document_handle(handle) == Some(self.document_handle())
+            && self.dom_host.node(handle).is_some_and(|node| {
+                node.is_html_element_named("body") || node.is_html_element_named("frameset")
+            })
+        {
+            EventTargetHandle::Window
+        } else {
+            EventTargetHandle::Node(handle)
+        }
+    }
+
     pub(crate) fn prepare_native_event_dispatch<'event>(
         &self,
         target: EventTargetHandle,
@@ -69,6 +89,9 @@ impl DocumentRuntime {
             }
             EventTargetHandle::ChildWindow(_) => return None,
         };
+        if self.event_handler_attribute_target(handle, &attribute) != target {
+            return None;
+        }
         let element = self.dom_host.node(handle)?.as_element()?;
         if matches!(target, EventTargetHandle::Node(_))
             && (element.is_html_element("body") || element.is_html_element("frameset"))

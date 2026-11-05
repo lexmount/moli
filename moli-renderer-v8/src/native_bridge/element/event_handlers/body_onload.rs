@@ -247,7 +247,7 @@ pub(crate) fn initialize_parser_inserted_body_window_event_handlers(
     }
     for name in ["onload", "onerror"] {
         if runtime.dom_host().get_attribute(handle, name).is_some() {
-            invalidate_body_window_event_attribute_handler(scope, runtime, handle, name);
+            super::invalidate_event_handler_content_attribute(scope, runtime_ptr, handle, name);
         }
     }
 }
@@ -272,11 +272,8 @@ pub(super) fn invalidate_body_window_event_attribute_handler(
         && runtime.owner_dispatch_scope_for_node(handle)
             == Some(crate::native_bridge::OwnerDispatchScope::Top)
     {
-        // Absence means uncompiled content; explicit null is a disabled handler.
-        runtime.clear_event_handler_property(
-            crate::document_runtime::EventTargetHandle::Window,
-            "load",
-        );
+        // The shared attribute mutation entry has invalidated the Window
+        // registration. Only the legacy compilation flag needs resetting here.
         return;
     }
     body_window_event_handler_set(scope, handler_name, v8::null(scope).into());
