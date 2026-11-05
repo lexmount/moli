@@ -19,6 +19,7 @@ use dense_reflector_map::DenseReflectorMap;
 
 mod dense_reflector_map;
 mod node_ownership;
+mod registry_references;
 #[cfg(test)]
 mod wrapper_cache_tests;
 pub(in crate::native_bridge) use node_ownership::resolve_object_node_ownership;
@@ -575,6 +576,12 @@ struct IsolatedWorldWrapperCaches {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct NativeDomHostId(NonZeroU64);
+
+impl NativeDomHostId {
+    pub(crate) fn get(self) -> u64 {
+        self.0.get()
+    }
+}
 
 impl Default for NativeDomHostId {
     fn default() -> Self {

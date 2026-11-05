@@ -538,7 +538,13 @@ impl DocumentRuntime {
     ) -> Option<DomHandle> {
         let first_node_index = self.dom_host().dom().len();
         let parser = HtmlParser::with_scripting_enabled(scripting_enabled);
-        let context_node = self.dom_host().node(context_handle);
+        // The parser needs an element for namespace/tokenization, while the
+        // registry comes from the actual fragment context (including ShadowRoot).
+        let parsing_context = self
+            .dom_host()
+            .shadow_root_host(context_handle)
+            .unwrap_or(context_handle);
+        let context_node = self.dom_host().node(parsing_context);
         let context_namespace = context_node
             .and_then(Node::namespace)
             .unwrap_or("http://www.w3.org/1999/xhtml")
@@ -569,7 +575,7 @@ impl DocumentRuntime {
                 mutation_owner.runtime.document_url().clone(),
                 fragment,
                 document_handle,
-                context_handle,
+                parsing_context,
                 &context_namespace,
                 &context_local_name,
                 html,

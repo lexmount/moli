@@ -22,6 +22,9 @@ impl Drop for CustomElementReactionGuard {
 
 impl Drop for CustomElementReactionScope<'_, '_, '_> {
     fn drop(&mut self) {
+        unsafe { &mut *self.host_ptr }
+            .native_bridge_mut()
+            .synchronize_custom_element_registry_references(self.scope, self.host_ptr);
         super::reactions::flush_current_custom_element_reaction_queue(self.scope, self.host_ptr);
     }
 }
