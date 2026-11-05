@@ -10,6 +10,35 @@ use crate::{
 use super::ScriptVm;
 
 impl ScriptVm {
+    /// Admission policy is checked before the print job charges a blocking
+    /// entry. Cached resources remain usable, and local data/blob responses
+    /// retain the same optional-network-family exemption as request start.
+    pub(crate) fn capture_resource_fetch_enabled(
+        &self,
+        identity: crate::capture_layout_resources::CaptureLayoutIdentity,
+        kind: CaptureResourceKind,
+        url: &url::Url,
+    ) -> Result<bool> {
+        let host = self._context_host.borrow();
+        anyhow::ensure!(
+            host.capture_layout_identity_for_document(identity.document) == Some(identity),
+            "capture resource admission owner is no longer current"
+        );
+        if matches!(url.scheme(), "data" | "blob") {
+            return Ok(true);
+        }
+        let loader = host
+            .document_resource_loader_for_window_owner(identity.target.owner())
+            .ok_or_else(|| anyhow!("capture Document resource authority is unavailable"))?;
+        let resource_type = match kind {
+            CaptureResourceKind::Font => crate::types::SubresourceResourceType::Font,
+            CaptureResourceKind::Image => crate::types::SubresourceResourceType::Image,
+        };
+        Ok(loader
+            .request_client()
+            .optional_resource_fetch_enabled(resource_type))
+    }
+
     /// Start one capture-only resource with the discovery owner's authority.
     /// Context entry is synchronous and never checkpoints or pumps Page tasks.
     pub(crate) fn start_capture_resource(
