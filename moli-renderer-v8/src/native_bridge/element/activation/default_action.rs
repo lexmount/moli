@@ -46,7 +46,8 @@ use super::super::{
 };
 use super::targets::{
     SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
-    named_iframe_target_handle_for_navigation, navigate_element_target_browsing_context,
+    hyperlink_navigation_target_name, named_iframe_target_handle_for_navigation,
+    navigate_element_target_browsing_context,
 };
 
 fn call_node_contains(
@@ -1679,16 +1680,7 @@ fn anchor_click_default_action(
             None,
         );
     }
-    let effective_target_name = reflected_attribute(runtime, handle, "target")
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            let document = runtime.dom_host().owner_document_handle(handle)?;
-            runtime
-                .dom_host()
-                .document_base_target_for_handle(document)
-                .filter(|target| !target.is_empty())
-                .map(str::to_owned)
-        });
+    let effective_target_name = hyperlink_navigation_target_name(runtime, handle);
     let (target_name, popup_disposition) = match navigation_policy {
         HyperlinkNavigationPolicy::Auxiliary(disposition) => {
             (Some("_blank".to_owned()), disposition)

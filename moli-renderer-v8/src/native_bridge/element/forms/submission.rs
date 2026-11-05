@@ -589,18 +589,10 @@ pub(in crate::native_bridge) fn submit_form_default_action(
         return submit_dialog_form(scope, runtime_ptr, form_handle, submitter);
     }
 
-    let (target_name, action, source_document) = {
+    let (action, source_document) = {
         let runtime = unsafe { &*runtime_ptr };
-        let target_name = submitter
-            .and_then(|handle| reflected_attribute(runtime, handle, "formtarget"))
-            .filter(|value| !value.is_empty())
-            .or_else(|| {
-                reflected_attribute(runtime, form_handle, "target")
-                    .filter(|value| !value.is_empty())
-            });
         let source_document = runtime.dom_host().owner_document_handle(form_handle);
         (
-            target_name,
             resolve_form_submission_action(runtime, form_handle, submitter),
             source_document,
         )
@@ -624,11 +616,9 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     };
     // Capture the form Document's authority before formdata can replace its
     // frame. Both methods must stop before navigation events or seed updates.
-    let sandbox_blocks_navigation = super::super::activation::form_blocks_ancestor_navigation(
-        scope,
-        runtime_ptr,
+    let blocked_ancestor_targets = super::super::activation::form_blocked_ancestor_targets(
+        unsafe { &*runtime_ptr },
         form_handle,
-        target_name.as_deref(),
         &action,
     );
     let Some(request) =
@@ -638,9 +628,6 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     };
     if !form_is_connected_or_in_detached_document(unsafe { &*runtime_ptr }, form_handle) {
         return false;
-    }
-    if sandbox_blocks_navigation {
-        return true;
     }
     // formdata may update the policy after the submitting document was captured.
     let runtime = unsafe { &*runtime_ptr };
@@ -659,6 +646,14 @@ pub(in crate::native_bridge) fn submit_form_default_action(
         policy,
     );
 
+    // Entry construction fires formdata. Read the selected attributes and the
+    // owning Document's first base target only after its listeners finish.
+    let target_name = {
+        let runtime = unsafe { &*runtime_ptr };
+        let override_target =
+            submitter.and_then(|handle| reflected_attribute(runtime, handle, "formtarget"));
+        super::super::activation::form_navigation_target_name(runtime, form_handle, override_target)
+    };
     let Some(target) = super::super::activation::choose_form_navigation_target(
         scope,
         runtime_ptr,
@@ -678,6 +673,9 @@ pub(in crate::native_bridge) fn submit_form_default_action(
         super::super::activation::FormNavigationTarget::Local(destination) => *destination,
         super::super::activation::FormNavigationTarget::Related(_) => source,
     };
+    if blocked_ancestor_targets.contains(&destination) {
+        return true;
+    }
     if runtime.blocks_ancestor_navigation(source, destination, request.url()) {
         return false;
     }
