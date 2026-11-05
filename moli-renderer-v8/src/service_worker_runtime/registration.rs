@@ -64,6 +64,8 @@ pub(crate) enum ServiceWorkerNavigationPreloadStateError {
 #[derive(Debug)]
 pub(super) struct ServiceWorkerRegistration {
     pub(super) id: ServiceWorkerRegistrationId,
+    /// Position assigned when this registration enters the registration map.
+    pub(super) registration_order: u64,
     pub(super) storage_key: String,
     pub(super) scope_url: Url,
     pub(super) script_url: Url,

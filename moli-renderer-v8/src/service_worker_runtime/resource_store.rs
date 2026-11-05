@@ -22,12 +22,13 @@ use super::{
     },
 };
 
-const SERVICE_WORKER_RESOURCE_STORE_JSON_VERSION: u32 = 2;
+const SERVICE_WORKER_RESOURCE_STORE_JSON_VERSION: u32 = 3;
 const SERVICE_WORKER_RESOURCE_STORE_MUTATION_RETRY_COUNT: usize = 1;
 
 pub struct ServiceWorkerResourceStore {
     backend: ServiceWorkerResourceStoreBackend,
     revision: u64,
+    next_registration_order: u64,
 }
 
 pub type SharedServiceWorkerResourceStore = Arc<Mutex<ServiceWorkerResourceStore>>;
@@ -47,6 +48,7 @@ struct JsonServiceWorkerResourceStoreBackend {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ServiceWorkerStoredRegistration {
+    pub(super) registration_order: u64,
     pub(super) storage_key: String,
     pub(super) scope_url: Url,
     pub(super) script_url: Url,
@@ -69,7 +71,16 @@ pub fn new_shared_json_service_worker_resource_store(
     path: impl AsRef<Path>,
 ) -> Result<SharedServiceWorkerResourceStore> {
     let backend = JsonServiceWorkerResourceStoreBackend::open(path.as_ref())?;
+    let next_registration_order = backend
+        .registrations
+        .values()
+        .map(|registration| registration.registration_order)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .context("Service Worker registration order exhausted")?;
     Ok(Arc::new(Mutex::new(ServiceWorkerResourceStore {
+        next_registration_order,
         backend: ServiceWorkerResourceStoreBackend::Json(backend),
         revision: 0,
     })))
@@ -80,6 +91,7 @@ impl Default for ServiceWorkerResourceStore {
         Self {
             backend: ServiceWorkerResourceStoreBackend::Memory(BTreeMap::new()),
             revision: 0,
+            next_registration_order: 1,
         }
     }
 }
@@ -106,6 +118,14 @@ impl fmt::Debug for ServiceWorkerResourceStore {
 }
 
 impl ServiceWorkerResourceStore {
+    pub(super) fn allocate_registration_order(&mut self) -> u64 {
+        let order = self.next_registration_order;
+        self.next_registration_order = order
+            .checked_add(1)
+            .expect("Service Worker registration order exhausted");
+        order
+    }
+
     pub(super) fn store_registration(
         &mut self,
         registration: ServiceWorkerStoredRegistration,
@@ -124,6 +144,10 @@ impl ServiceWorkerResourceStore {
         &mut self,
         registration: ServiceWorkerStoredRegistration,
     ) -> Result<()> {
+        let next_order = registration
+            .registration_order
+            .checked_add(1)
+            .context("Service Worker registration order exhausted")?;
         match &mut self.backend {
             ServiceWorkerResourceStoreBackend::Memory(registrations) => {
                 registrations.insert(
@@ -141,6 +165,7 @@ impl ServiceWorkerResourceStore {
                 json.registrations = next_registrations;
             }
         }
+        self.next_registration_order = self.next_registration_order.max(next_order);
         self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
@@ -161,13 +186,15 @@ impl ServiceWorkerResourceStore {
     }
 
     pub(super) fn registrations(&self) -> Vec<ServiceWorkerStoredRegistration> {
-        match &self.backend {
+        let mut registrations: Vec<_> = match &self.backend {
             ServiceWorkerResourceStoreBackend::Memory(registrations) => registrations,
             ServiceWorkerResourceStoreBackend::Json(json) => &json.registrations,
         }
         .values()
         .cloned()
-        .collect()
+        .collect();
+        registrations.sort_by_key(|registration| registration.registration_order);
+        registrations
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -254,7 +281,10 @@ impl JsonServiceWorkerResourceStoreBackend {
                     path.display()
                 )
             })?;
-        if !matches!(file.version, 1 | SERVICE_WORKER_RESOURCE_STORE_JSON_VERSION) {
+        if !matches!(
+            file.version,
+            1 | 2 | SERVICE_WORKER_RESOURCE_STORE_JSON_VERSION
+        ) {
             bail!(
                 "unsupported Service Worker resource store version {} in `{}`; this Moli supports version {}",
                 file.version,
@@ -262,11 +292,29 @@ impl JsonServiceWorkerResourceStoreBackend {
                 SERVICE_WORKER_RESOURCE_STORE_JSON_VERSION
             );
         }
+        // Older writers persisted only the sorted map keys, so the original
+        // creation order is unavailable. Give legacy entries stable positions
+        // in that stored order, after any explicit positions in mixed files.
+        let mut legacy_order = file
+            .registrations
+            .values()
+            .filter_map(|registration| registration.registration_order)
+            .max()
+            .unwrap_or(0);
         let registrations = file
             .registrations
             .into_values()
             .map(|registration| {
-                let registration = registration.into_stored_registration()?;
+                let order = match registration.registration_order {
+                    Some(order) => order,
+                    None => {
+                        legacy_order = legacy_order
+                            .checked_add(1)
+                            .context("Service Worker legacy registration order exhausted")?;
+                        legacy_order
+                    }
+                };
+                let registration = registration.into_stored_registration(order)?;
                 Ok((
                     resource_store_key_for_registration(&registration),
                     registration,
@@ -331,6 +379,8 @@ struct JsonServiceWorkerResourceStoreFile {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsonStoredRegistration {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registration_order: Option<u64>,
     storage_key: Option<String>,
     scope_url: String,
     script_url: String,
@@ -383,7 +433,10 @@ struct JsonClassicScript {
 }
 
 impl JsonStoredRegistration {
-    fn into_stored_registration(self) -> Result<ServiceWorkerStoredRegistration> {
+    fn into_stored_registration(
+        self,
+        registration_order: u64,
+    ) -> Result<ServiceWorkerStoredRegistration> {
         let scope_url = parse_url_field("scopeUrl", &self.scope_url)?;
         let storage_key = self
             .storage_key
@@ -392,6 +445,7 @@ impl JsonStoredRegistration {
             })
             .unwrap_or_else(|| ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url));
         Ok(ServiceWorkerStoredRegistration {
+            registration_order,
             storage_key,
             scope_url,
             script_url: parse_url_field("scriptUrl", &self.script_url)?,
@@ -441,6 +495,7 @@ fn normalize_json_stored_registration_storage_key(scope_url: &Url, storage_key: 
 impl From<&ServiceWorkerStoredRegistration> for JsonStoredRegistration {
     fn from(registration: &ServiceWorkerStoredRegistration) -> Self {
         Self {
+            registration_order: Some(registration.registration_order),
             storage_key: Some(registration.storage_key.clone()),
             scope_url: registration.scope_url.as_str().to_owned(),
             script_url: registration.script_url.as_str().to_owned(),
@@ -705,7 +760,7 @@ mod tests {
         }
 
         let json = fs::read_to_string(&temp.path).expect("resource store should be written");
-        assert!(json.contains(r#""version": 2"#));
+        assert!(json.contains(r#""version": 3"#));
         assert!(json.contains(
             r#""storageKey": "storage-key:v1;origin=https://service-worker-resources.test;top-level-site=https://service-worker-resources.test""#
         ));
@@ -723,6 +778,99 @@ mod tests {
             reopened.lock().registration_for_key(&registration_key),
             Some(registration)
         );
+    }
+
+    #[test]
+    fn json_service_worker_resource_store_preserves_creation_order_across_reopen() {
+        let temp = TempStorePath::new("creation-order");
+        let mut registrations = Vec::new();
+        for (index, name) in ["z", "b", "a"].into_iter().enumerate() {
+            let mut registration = stored_registration();
+            registration.scope_url = registration.scope_url.join(&format!("{name}/")).unwrap();
+            registration.registration_order = (index as u64 + 1) * 10;
+            registrations.push(registration);
+        }
+        {
+            let store = new_shared_json_service_worker_resource_store(&temp.path).unwrap();
+            for registration in registrations.iter().rev() {
+                store
+                    .lock()
+                    .store_registration(registration.clone())
+                    .unwrap();
+            }
+            registrations[0].update_via_cache = ServiceWorkerUpdateViaCache::All;
+            store
+                .lock()
+                .store_registration(registrations[0].clone())
+                .unwrap();
+        }
+        let reopened = new_shared_json_service_worker_resource_store(&temp.path).unwrap();
+        assert_eq!(reopened.lock().registrations(), registrations);
+        assert_eq!(reopened.lock().allocate_registration_order(), 31);
+        reopened
+            .lock()
+            .delete_registration(&registration_key_for(&registrations[1]))
+            .unwrap();
+        assert_eq!(reopened.lock().allocate_registration_order(), 32);
+        let reopened = new_shared_json_service_worker_resource_store(&temp.path).unwrap();
+        assert_eq!(
+            reopened.lock().registrations(),
+            [registrations[0].clone(), registrations[2].clone()]
+        );
+    }
+
+    #[test]
+    fn json_service_worker_resource_store_migrates_legacy_registration_order() {
+        for version in [1, 2] {
+            let temp = TempStorePath::new("legacy-order");
+            {
+                let store = new_shared_json_service_worker_resource_store(&temp.path).unwrap();
+                for (index, name) in ["z", "b", "a"].into_iter().enumerate() {
+                    let mut registration = stored_registration();
+                    registration.scope_url =
+                        registration.scope_url.join(&format!("{name}/")).unwrap();
+                    registration.registration_order = index as u64 + 1;
+                    store.lock().store_registration(registration).unwrap();
+                }
+            }
+            let mut file: serde_json::Value =
+                serde_json::from_slice(&fs::read(&temp.path).unwrap()).unwrap();
+            file["version"] = version.into();
+            for registration in file["registrations"].as_object_mut().unwrap().values_mut() {
+                registration
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("registrationOrder");
+            }
+            fs::write(&temp.path, serde_json::to_vec(&file).unwrap()).unwrap();
+            let migrated;
+            {
+                let store = new_shared_json_service_worker_resource_store(&temp.path).unwrap();
+                migrated = store.lock().registrations();
+                // Legacy files lost creation order; retain their stored key order.
+                assert_eq!(
+                    migrated
+                        .iter()
+                        .map(|r| r.scope_url.path())
+                        .collect::<Vec<_>>(),
+                    ["/app/a/", "/app/b/", "/app/z/"]
+                );
+                assert_eq!(
+                    migrated
+                        .iter()
+                        .map(|r| r.registration_order)
+                        .collect::<Vec<_>>(),
+                    [1, 2, 3]
+                );
+                assert_eq!(store.lock().allocate_registration_order(), 4);
+                store
+                    .lock()
+                    .store_registration(migrated[1].clone())
+                    .unwrap();
+            }
+            let reopened = new_shared_json_service_worker_resource_store(&temp.path).unwrap();
+            assert_eq!(reopened.lock().registrations(), migrated);
+        }
     }
 
     #[test]
@@ -976,6 +1124,7 @@ mod tests {
             WorkerScriptResourceKind::CssModule,
         );
         ServiceWorkerStoredRegistration {
+            registration_order: 1,
             storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
             scope_url,
             script_url: "https://service-worker-resources.test/app/worker.js"

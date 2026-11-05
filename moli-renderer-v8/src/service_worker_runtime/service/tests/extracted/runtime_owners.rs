@@ -306,6 +306,7 @@ fn idle_timeout_is_ignored_after_new_event_invalidates_timeout_token() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -382,6 +383,7 @@ fn stopped_waiting_activation_queues_lifecycle_event_and_starts_worker() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: waiting_script_url.clone(),
@@ -537,6 +539,7 @@ fn stale_start_completion_does_not_dispatch_pending_lifecycle_activation() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: waiting_script_url.clone(),

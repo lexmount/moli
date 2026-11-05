@@ -93,10 +93,16 @@ impl ServiceWorkerRuntimeService {
             return registration.id;
         }
         let id = self.next_unused_registration_id_locked(state);
+        let registration_order = self
+            .inner
+            .resource_store
+            .lock()
+            .allocate_registration_order();
         state.registrations.insert(
             id,
             ServiceWorkerRegistration {
                 id,
+                registration_order,
                 storage_key: key.storage_key,
                 scope_url: job.scope_url.clone(),
                 script_url: job.script_url.clone(),

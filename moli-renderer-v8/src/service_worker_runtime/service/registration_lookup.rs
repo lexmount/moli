@@ -275,16 +275,20 @@ impl ServiceWorkerRuntimeService {
     ) -> Vec<ServiceWorkerRegistrationSnapshot> {
         let current_document_url = service_worker_current_url_for_creation_url(document_url);
         let mut state = self.inner.state.lock();
-        self.restore_stored_registrations_for_document_url_locked(
+        self.restore_stored_registrations_for_storage_key_locked(
             &mut state,
             &current_document_url,
             storage_key,
         );
-        state
+        let mut registrations = state
             .registrations
             .values()
             .filter(|registration| !registration.pending_unregistration)
             .filter(|registration| registration.storage_key == storage_key)
+            .collect::<Vec<_>>();
+        registrations.sort_by_key(|registration| registration.registration_order);
+        registrations
+            .into_iter()
             .map(|registration| service_worker_registration_snapshot(&state, registration))
             .collect()
     }
