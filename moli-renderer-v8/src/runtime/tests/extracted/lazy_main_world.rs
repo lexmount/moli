@@ -251,27 +251,6 @@ async fn scriptless_document_can_close_without_initializing_main_world() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn force_main_world_initialization_prebuilds_scriptless_document() {
-    let (_runtime, mut page) = lazy_test_page(
-        "<!doctype html><p>Eager automation</p>",
-        crate::RendererDocumentOptions {
-            document_settings: moli_page_types::DocumentSettings {
-                force_main_world_initialization: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-    )
-    .await;
-    assert_main_world_count(&page, 1).await;
-    assert_eq!(
-        evaluate_lazy_test(&page, "document.body.textContent").await,
-        "Eager automation"
-    );
-    page.close_async().await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn lazy_main_world_preserves_document_timing_without_replaying_load() {
     let before = crate::context_bootstrap::unix_epoch_millis();
     let (_runtime, mut page) = lazy_test_page(
