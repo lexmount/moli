@@ -626,6 +626,16 @@ async fn activate_target_then_attach_can_navigate_on_activated_target_without_lo
     consume_main_document_navigation_start(&mut ctx);
     let navigation = take_response_by_id(&mut ctx, 1808);
     assert_eq!(navigation["result"]["frameId"], json!(second_target_id));
+    let loader_id = navigation["result"]["loaderId"]
+        .as_str()
+        .expect("activated target navigation loader id");
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        Some(&session_id),
+        &second_target_id,
+        loader_id,
+    )
+    .await;
     ctx.take_all();
 
     ctx.process_async(json!({
