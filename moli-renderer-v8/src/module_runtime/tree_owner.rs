@@ -31,9 +31,7 @@ pub(crate) trait NativeModuleTreeDocumentOwnerAdapter {
         &self,
         _key: &ModuleMapKey,
         _metadata: &ModuleFetchMetadata,
-    ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
-        None
-    }
+    ) -> Result<crate::content_security_policy::ModuleFetchCspContext, ModuleLoadError>;
     fn compile_module_record(
         &mut self,
         key: ModuleMapKey,
@@ -122,7 +120,7 @@ impl<T: NativeModuleTreeDocumentOwnerAdapter + ?Sized> NativeModuleTreeDocumentO
         &self,
         key: &ModuleMapKey,
         metadata: &ModuleFetchMetadata,
-    ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
+    ) -> Result<crate::content_security_policy::ModuleFetchCspContext, ModuleLoadError> {
         (**self).module_fetch_csp_context(key, metadata)
     }
     fn compile_module_record(
@@ -297,12 +295,11 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeDocumentOwner<'_> 
         &self,
         key: &ModuleMapKey,
         metadata: &ModuleFetchMetadata,
-    ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
-        Some(
-            self.vm
-                .document_runtime
-                .module_fetch_csp_context(key.url(), key.kind(), metadata),
-        )
+    ) -> Result<crate::content_security_policy::ModuleFetchCspContext, ModuleLoadError> {
+        Ok(self
+            .vm
+            .document_runtime
+            .module_fetch_csp_context(key.url(), key.kind(), metadata))
     }
     fn compile_module_record(
         &mut self,
@@ -476,14 +473,21 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeFrameDocumentOwner
         &self,
         key: &ModuleMapKey,
         metadata: &ModuleFetchMetadata,
-    ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
-        self.vm.module_fetch_csp_context_for_child_owner(
-            self.document_owner,
-            self.realm_id,
-            key.url(),
-            key.kind(),
-            metadata,
-        )
+    ) -> Result<crate::content_security_policy::ModuleFetchCspContext, ModuleLoadError> {
+        self.vm
+            .module_fetch_csp_context_for_child_owner(
+                self.document_owner,
+                self.realm_id,
+                key.url(),
+                key.kind(),
+                metadata,
+            )
+            .ok_or_else(|| {
+                ModuleLoadError::new(
+                    super::ModuleLoadStage::Fetch,
+                    "Child module CSP context unavailable for its Document and realm",
+                )
+            })
     }
     fn compile_module_record(
         &mut self,
