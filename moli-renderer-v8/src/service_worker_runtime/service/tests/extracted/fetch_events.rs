@@ -521,6 +521,9 @@ fn navigation_preload_state_survives_initial_activation() {
     );
     {
         let mut state = service.inner.state.lock();
+        let registration = state.registrations.get_mut(&registration_id).unwrap();
+        registration.waiting_version_id = None;
+        registration.active_version_id = Some(version_id);
         let version = state.versions.get_mut(&version_id).unwrap();
         version.lifecycle_state = ServiceWorkerVersionLifecycleState::Activating;
         version.in_flight_event_count = 1;
@@ -812,7 +815,6 @@ fn pending_unregistration_waits_for_active_fetch_to_complete_before_delete() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1316,7 +1318,6 @@ fn restart_start_failure_rejects_pending_fetch_job() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -2021,7 +2022,6 @@ fn no_fetch_handler_controlled_fetch_falls_back_without_dispatching_event() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -2535,7 +2535,6 @@ fn fetch_completion_schedules_idle_timeout_for_running_active_worker() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -2777,7 +2776,6 @@ fn active_fetch_completion_queues_waiting_activation_after_controllees_are_gone(
                 run: active_run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -2804,7 +2802,6 @@ fn active_fetch_completion_queues_waiting_activation_after_controllees_are_gone(
                 run: waiting_run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -3018,7 +3015,6 @@ fn activating_new_worker_fails_replaced_active_fetch_and_pending_start_events() 
                 run: active_run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -3045,12 +3041,31 @@ fn activating_new_worker_fails_replaced_active_fetch_and_pending_start_events() 
                 run: waiting_run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: true,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
     }
 
+    publish_activating_version_for_test(&service, registration_id, waiting_version_id);
+    {
+        let state = service.inner.state.lock();
+        assert_eq!(
+            state
+                .registrations
+                .get(&registration_id)
+                .unwrap()
+                .active_version_id,
+            Some(waiting_version_id)
+        );
+        assert_eq!(
+            state
+                .versions
+                .get(&active_version_id)
+                .unwrap()
+                .lifecycle_state,
+            ServiceWorkerVersionLifecycleState::Redundant
+        );
+    }
     service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
         event_id: ServiceWorkerEventId(2),
         owner: test_run_owner(waiting_version_id, &waiting_run),

@@ -871,7 +871,7 @@ impl WeakServiceWorkerRuntimeService {
         service.finish_worker_skip_waiting_requested(registration_id, version_id);
     }
 
-    pub(in crate::service_worker_runtime) fn finish_worker_clients_claim_requested(
+    pub(in crate::service_worker_runtime) fn finish_clients_claim_requested(
         &self,
         registration_id: ServiceWorkerRegistrationId,
         owner: ServiceWorkerRunOwner,
@@ -880,6 +880,6 @@ impl WeakServiceWorkerRuntimeService {
         let Some(service) = self.upgrade() else {
             return;
         };
-        service.finish_worker_clients_claim_request(registration_id, owner, request_id);
+        service.finish_clients_claim_requested(registration_id, owner, request_id);
     }
 }
