@@ -9,7 +9,9 @@ use futures_util::{
 };
 
 use moli_core::{
-    RendererPageCommand, RendererPageReply, ace_page_task::AcePageTask, page::CompletedPageCommand,
+    RendererPageCommand, RendererPageReply,
+    ace_page_task::{AcePageTask, AcePageTaskKind},
+    page::CompletedPageCommand,
 };
 
 use super::{ProtocolWorkflowDriver, ProtocolWorkflowState};
@@ -122,7 +124,7 @@ impl ProtocolWorkflowState<'_> {
             let initial = conn
                 .start_initial_document_page_ensure_for_owner(&owner)
                 .map_err(|error| AcePageTaskError::new(409, error))?;
-            let is_input = task.is_input();
+            let kind = task.kind();
             let access = conn.protocol_state_access();
             Ok(PreparedCommandWorkflow::new(
                 move |mut context| async move {
@@ -191,7 +193,7 @@ impl ProtocolWorkflowState<'_> {
                         state.finish_ace_page_task(
                             &host,
                             &page_owner,
-                            is_input,
+                            kind,
                             completed,
                             context.context_mut(),
                         )
@@ -208,7 +210,10 @@ impl ProtocolWorkflowState<'_> {
                             ));
                         }
                     };
-                    if let Some(outcome) = output.input_outcome {
+                    // Settle every accepted input even if the task or an earlier
+                    // effect failed. A task's business result cannot discard effects.
+                    let mut effect_error = None;
+                    for outcome in output.input_outcomes {
                         match crate::domains::input::handle_ace_page_task_input_dispatch_outcome(
                             &mut driver,
                             None,
@@ -221,13 +226,15 @@ impl ProtocolWorkflowState<'_> {
                         {
                             Ok(events) => context.context_mut().defer_command_events(events),
                             Err(error) => {
-                                return context.complete(store_result(
-                                    &workflow_result,
-                                    Err(AcePageTaskError::new(500, error)),
-                                ));
+                                if effect_error.is_none() {
+                                    effect_error = Some(AcePageTaskError::new(500, error));
+                                }
                             }
                         }
                     }
+                    let task_result = output
+                        .result
+                        .map_err(|error| AcePageTaskError::new(409, error));
                     context.complete_in_owner_turn(CommandOutputPlan::default(), move |state, _| {
                         let result = (|| {
                             if !host.can_start_operation(state.connection) {
@@ -236,7 +243,7 @@ impl ProtocolWorkflowState<'_> {
                                     "Page target closed during task",
                                 ));
                             }
-                            if !is_input
+                            if kind == AcePageTaskKind::ReadOnly
                                 && state
                                     .connection
                                     .target_page_residence_identity_for_owner(host.owner())
@@ -252,8 +259,12 @@ impl ProtocolWorkflowState<'_> {
                                 page_owner.browser_context_id(),
                                 page_owner.target_id().map(str::to_owned),
                             );
+                            let value = task_result?.value;
+                            if let Some(error) = effect_error {
+                                return Err(error);
+                            }
                             Ok(AcePageTaskResult {
-                                value: output.value,
+                                value,
                                 before,
                                 after,
                             })
@@ -319,10 +330,10 @@ impl ProtocolWorkflowState<'_> {
         self,
         host: &ProtocolPageHostScope,
         page: &TargetPageResidenceIdentity,
-        is_input: bool,
+        kind: AcePageTaskKind,
         completed: anyhow::Result<CompletedPageCommand>,
         context: &mut CommandDispatchContext,
-    ) -> Result<moli_core::ace_page_task::AcePageTaskOutput, AcePageTaskError> {
+    ) -> Result<moli_core::ace_page_task::AcePageTaskExecution, AcePageTaskError> {
         let current = host.is_current(self.connection);
         let completed = completed
             .map_err(|error| AcePageTaskError::new(if current { 409 } else { 404 }, error))?;
@@ -336,7 +347,7 @@ impl ProtocolWorkflowState<'_> {
         if !current {
             return Err(AcePageTaskError::new(404, "Page target closed during task"));
         }
-        if !is_input
+        if kind == AcePageTaskKind::ReadOnly
             && self
                 .connection
                 .target_page_residence_identity_for_owner(host.owner())

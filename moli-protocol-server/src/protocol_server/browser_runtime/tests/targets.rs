@@ -147,13 +147,15 @@ async fn navigate_fixture_document(
 #[derive(Debug)]
 struct ReadAcePageTask;
 impl moli_core::ace_page_task::AcePageTask for ReadAcePageTask {
+    fn kind(&self) -> moli_core::ace_page_task::AcePageTaskKind {
+        moli_core::ace_page_task::AcePageTaskKind::ReadOnly
+    }
     fn run(
         self: Box<Self>,
         host: &mut dyn moli_core::ace_page_task::PageExtensionHost,
     ) -> anyhow::Result<moli_core::ace_page_task::AcePageTaskOutput> {
         Ok(moli_core::ace_page_task::AcePageTaskOutput {
             value: json!({"url":host.url(), "id":0, "result":null, "error":"payload"}),
-            input_outcome: None,
         })
     }
 }
@@ -251,6 +253,9 @@ struct HeldAcePageTask {
     runs: Arc<std::sync::atomic::AtomicUsize>,
 }
 impl moli_core::ace_page_task::AcePageTask for HeldAcePageTask {
+    fn kind(&self) -> moli_core::ace_page_task::AcePageTaskKind {
+        moli_core::ace_page_task::AcePageTaskKind::ReadOnly
+    }
     fn run(
         self: Box<Self>,
         _: &mut dyn moli_core::ace_page_task::PageExtensionHost,
@@ -258,10 +263,7 @@ impl moli_core::ace_page_task::AcePageTask for HeldAcePageTask {
         let _ = self.entered.send(());
         self.release.recv_timeout(Duration::from_secs(5))?;
         self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(moli_core::ace_page_task::AcePageTaskOutput {
-            value: json!({}),
-            input_outcome: None,
-        })
+        Ok(moli_core::ace_page_task::AcePageTaskOutput { value: json!({}) })
     }
 }
 

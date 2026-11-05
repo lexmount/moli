@@ -1,5 +1,5 @@
 use super::*;
-use moli_core::ace_page_task::AcePageTask;
+use moli_core::ace_page_task::{AcePageTask, AcePageTaskKind};
 use moli_protocol::ace_page_task::{
     AcePageTaskError, AcePageTaskResult, PendingAcePageTaskDispatch,
 };
@@ -10,7 +10,7 @@ mod tests;
 pub(super) fn blocks_page_javascript(in_flight: &InFlightCommands) -> bool {
     in_flight
         .values()
-        .any(|work| matches!(work, InFlightWork::AcePageTask(state) if state.is_input))
+        .any(|work| matches!(work, InFlightWork::AcePageTask(state) if state.kind == AcePageTaskKind::Input))
 }
 
 fn owner_output_metadata() -> InFlightCommandMetadata {
@@ -28,7 +28,7 @@ fn owner_output_metadata() -> InFlightCommandMetadata {
 }
 
 pub(super) struct InFlightAcePageTask {
-    pub is_input: bool,
+    pub kind: AcePageTaskKind,
     pub turn: u64,
     pub wait_task: CommandWaitTask,
     pending: PendingAcePageTaskDispatch,
@@ -46,14 +46,14 @@ pub(super) fn start(
     in_flight: &mut InFlightCommands,
     next_token: &mut u64,
 ) {
-    let is_input = task.is_input();
+    let kind = task.kind();
     let (pending, permit, context) = scheduler.start_ace_page_task(&target_id, task);
     let token = take_next_in_flight_command_token(next_token);
     let wait_task = spawn_wait(token, 0, pending.clone(), completions);
     in_flight.insert(
         token,
         InFlightWork::AcePageTask(Box::new(InFlightAcePageTask {
-            is_input,
+            kind,
             turn: 0,
             wait_task,
             pending,
