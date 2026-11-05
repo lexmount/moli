@@ -2,23 +2,18 @@ use anyhow::{Context, Result, anyhow};
 use std::pin::pin;
 use std::time::{Duration, Instant};
 
-use super::{ScriptVm, main_world::MainWorldLifecycleTiming};
-use crate::context_bootstrap::{
-    construct_original_event, construct_original_page_transition_event,
-    record_performance_dom_content_loaded_event_end,
-    record_performance_dom_content_loaded_event_start, record_performance_load_event_end,
-    record_performance_load_event_start,
-};
+use super::ScriptVm;
+use crate::context_bootstrap::project_document_lifecycle_timing;
 use crate::document_runtime::{
-    DeferredPageTask, DeferredPageTaskLane, DocumentRuntime, FollowupPageTaskDisposition,
+    DeferredPageTask, DeferredPageTaskLane, DocumentLifecycleTiming, DocumentRuntime,
+    FollowupPageTaskDisposition, NativeEventDispatch,
 };
 use crate::frame_owner_model::MainDocumentScriptLoadDelayLease;
 use crate::host::{EventTargetHandle, HostTimeoutRunResult};
-use crate::native_bridge::{JsContextHost, element::queue_revealed_lazy_media_loads};
+use crate::native_bridge::element::queue_revealed_lazy_media_loads;
 use crate::page_task_queue::{PostParseLifecycleWork, PostParsePageOwnedWork};
 use crate::planning::PreparedScript;
 use crate::script_vm::ImmediateRuntimeScriptWorkSignal;
-use crate::util::v8str;
 use crate::v8_execution_watchdog::{
     V8ExecutionWatchdog, V8ExecutionWatchdogKind, V8ExecutionWatchdogOutcome,
 };
@@ -26,11 +21,41 @@ use crate::v8_execution_watchdog::{
 const LIFECYCLE_EVENT_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
 
 impl ScriptVm {
-    fn dispatch_document_event_body(&mut self, event_type: &str) -> Result<()> {
-        self.with_current_main_world_document_scope(|scope, host_ptr, document_runtime| {
-            document_runtime
-                .dispatch_document_event(scope, host_ptr, event_type)
+    pub(super) fn prepare_main_document_event<'event>(
+        &self,
+        target: EventTargetHandle,
+        original_target: EventTargetHandle,
+        event_type: &'event str,
+    ) -> Option<NativeEventDispatch<'event>> {
+        let event = self.document_runtime.prepare_native_event_dispatch(
+            target,
+            original_target,
+            event_type,
+        );
+        // Before any realm exists, only native registrations and source
+        // attributes can observe the event. Existing realms may also own
+        // retained/adopted wrappers; their callbacks resolve in dispatch.
+        (self.current_main_world().is_some()
+            || self.document_runtime.native_event_has_observers(&event))
+        .then_some(event)
+    }
+
+    fn dispatch_native_event_body(&mut self, event: NativeEventDispatch<'_>) -> Result<()> {
+        self.with_main_world_document_scope(|scope, host_ptr, document| {
+            document
+                .dispatch_native_event_in_scope(scope, host_ptr, event)
                 .map_err(anyhow::Error::msg)
+        })
+    }
+
+    fn record_main_document_lifecycle_timing(
+        &mut self,
+        phase: DocumentLifecycleTiming,
+    ) -> Result<()> {
+        let timing = self.document_runtime.record_lifecycle_timing(phase);
+        self.with_current_main_world_scope(|scope, _| {
+            project_document_lifecycle_timing(scope, timing.lifecycle);
+            Ok(())
         })
         .map(|_| ())
     }
@@ -98,13 +123,13 @@ impl ScriptVm {
         &mut self,
         event_type: &str,
     ) -> Result<()> {
-        let runtime = if event_type == "DOMContentLoaded" {
-            self.main_world
-                .record_lifecycle_timing(MainWorldLifecycleTiming::DomContentLoadedStart)
-        } else {
-            self.current_main_world()
-        };
-        let Some(context_ptr) = runtime.map(super::WindowRealmRuntime::context_ptr) else {
+        if event_type == "DOMContentLoaded" {
+            self.record_main_document_lifecycle_timing(
+                DocumentLifecycleTiming::DomContentLoadedStart,
+            )?;
+        }
+        let target = EventTargetHandle::Node(self.document_runtime.document_handle());
+        let Some(event) = self.prepare_main_document_event(target, target, event_type) else {
             return Ok(());
         };
         let watchdog = self
@@ -119,20 +144,7 @@ impl ScriptVm {
                 )
             });
         let watchdog_timeout = watchdog.timeout();
-        let result = {
-            self.renderer_document_isolate
-                .with_renderer_document_isolate_mut(|isolate| {
-                    let scope = pin!(v8::HandleScope::new(isolate));
-                    let scope = &mut scope.init();
-                    let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                    let scope = &mut v8::ContextScope::new(scope, context);
-                    if event_type == "DOMContentLoaded" {
-                        record_performance_dom_content_loaded_event_start(scope);
-                    }
-                    Ok(())
-                })
-        }
-        .and_then(|()| self.dispatch_document_event_body(event_type));
+        let result = self.dispatch_native_event_body(event);
         let timed_out = watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut;
         result?;
         if timed_out {
@@ -150,16 +162,8 @@ impl ScriptVm {
         if event_type != "DOMContentLoaded" {
             return;
         }
-        let context_ptr = self
-            .main_world
-            .record_lifecycle_timing(MainWorldLifecycleTiming::DomContentLoadedEnd)
-            .map(super::WindowRealmRuntime::context_ptr);
-        if let Some(context_ptr) = context_ptr {
-            let _ = self.with_context_scope_by_ptr(context_ptr, |scope, _| {
-                record_performance_dom_content_loaded_event_end(scope);
-                Ok(())
-            });
-        }
+        let _ = self
+            .record_main_document_lifecycle_timing(DocumentLifecycleTiming::DomContentLoadedEnd);
     }
 
     /// Compatibility boundary for direct ScriptVm fixtures. Production
@@ -241,104 +245,19 @@ impl ScriptVm {
     /// Dispatch the Window `load` body without crossing the load-to-pageshow
     /// lifecycle checkpoint.
     pub(super) fn dispatch_window_load_event_body(&mut self) -> Result<()> {
-        self.initialize_main_world_for_window_handler()?;
-        let Some(context_ptr) = self
-            .main_world
-            .record_lifecycle_timing(MainWorldLifecycleTiming::LoadStart)
-            .map(super::WindowRealmRuntime::context_ptr)
-        else {
-            return Ok(());
-        };
-        let timing_enabled = moli_trace::cdp_nav_timing_enabled();
-        let task_started = timing_enabled.then(Instant::now);
+        self.record_main_document_lifecycle_timing(DocumentLifecycleTiming::LoadStart)?;
         self.prune_stale_child_default_execution_contexts();
-        let context_host = self._context_host.clone();
-        let document_runtime = &mut self.document_runtime;
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                // SAFETY: as_ptr() — V8 callbacks are re-entrant; borrow_mut() panics. See util.rs.
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
-                let global = scope.get_current_context().global(scope);
-                let step_started = timing_enabled.then(Instant::now);
-                if let Some(document_value) = global.get(scope, v8str(scope, "document").into())
-                    && let Ok(document) = v8::Local::<v8::Object>::try_from(document_value)
-                    && let Some(body_value) = document.get(scope, v8str(scope, "body").into())
-                    && let Ok(body) = v8::Local::<v8::Object>::try_from(body_value)
-                {
-                    let _ = body.get(scope, v8str(scope, "onload").into());
-                }
-                if let Some(step_started) = step_started {
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        stage = "window_load_event_step_completed",
-                        step = "body_onload_getter",
-                        step_elapsed_ms = step_started.elapsed().as_millis(),
-                        total_elapsed_ms = task_started
-                            .as_ref()
-                            .map(|started| started.elapsed().as_millis())
-                            .unwrap_or_default(),
-                    );
-                }
-
-                let step_started = timing_enabled.then(Instant::now);
-                let event = construct_original_event(scope, "load")
-                    .ok_or_else(|| anyhow!("failed to construct window load event"))?;
-                if let Some(step_started) = step_started {
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        stage = "window_load_event_step_completed",
-                        step = "construct_load_event",
-                        step_elapsed_ms = step_started.elapsed().as_millis(),
-                        total_elapsed_ms = task_started
-                            .as_ref()
-                            .map(|started| started.elapsed().as_millis())
-                            .unwrap_or_default(),
-                    );
-                }
-                let document_target = EventTargetHandle::Node(document_runtime.document_handle());
-                record_performance_load_event_start(scope);
-                let step_started = timing_enabled.then(Instant::now);
-                document_runtime
-                    .dispatch_public_event_with_original_target(
-                        scope,
-                        host_ptr,
-                        EventTargetHandle::Window,
-                        document_target,
-                        event,
-                    )
-                    .map_err(anyhow::Error::msg)?;
-                if let Some(step_started) = step_started {
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        stage = "window_load_event_step_completed",
-                        step = "dispatch_public_load_event",
-                        step_elapsed_ms = step_started.elapsed().as_millis(),
-                        total_elapsed_ms = task_started
-                            .as_ref()
-                            .map(|started| started.elapsed().as_millis())
-                            .unwrap_or_default(),
-                    );
-                }
-                let step_started = timing_enabled.then(Instant::now);
-                queue_revealed_lazy_media_loads(scope, host_ptr);
-                if let Some(step_started) = step_started {
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        stage = "window_load_event_step_completed",
-                        step = "queue_revealed_lazy_media_loads",
-                        step_elapsed_ms = step_started.elapsed().as_millis(),
-                        total_elapsed_ms = task_started
-                            .as_ref()
-                            .map(|started| started.elapsed().as_millis())
-                            .unwrap_or_default(),
-                    );
-                }
-                Ok(())
-            })
+        let document = EventTargetHandle::Node(self.document_runtime.document_handle());
+        if let Some(event) =
+            self.prepare_main_document_event(EventTargetHandle::Window, document, "load")
+        {
+            self.dispatch_native_event_body(event)?;
+        }
+        self.with_current_main_world_scope(|scope, host_ptr| {
+            queue_revealed_lazy_media_loads(scope, host_ptr);
+            Ok(())
+        })
+        .map(|_| ())
     }
 
     /// Publish load event-end and dispatch the non-persisted `pageshow` body.
@@ -347,39 +266,14 @@ impl ScriptVm {
     /// checkpoint. This method deliberately does not perform the final task-end
     /// checkpoint after pageshow.
     pub(super) fn dispatch_window_pageshow_event_body(&mut self) -> Result<()> {
-        let Some(context_ptr) = self
-            .main_world
-            .record_lifecycle_timing(MainWorldLifecycleTiming::LoadEnd)
-            .map(super::WindowRealmRuntime::context_ptr)
+        self.record_main_document_lifecycle_timing(DocumentLifecycleTiming::LoadEnd)?;
+        let document = EventTargetHandle::Node(self.document_runtime.document_handle());
+        let Some(event) =
+            self.prepare_main_document_event(EventTargetHandle::Window, document, "pageshow")
         else {
             return Ok(());
         };
-        let context_host = self._context_host.clone();
-        let document_runtime = &mut self.document_runtime;
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                // SAFETY: as_ptr() — V8 callbacks are re-entrant; borrow_mut() panics. See util.rs.
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
-                let document_target = EventTargetHandle::Node(document_runtime.document_handle());
-                record_performance_load_event_end(scope);
-                let pageshow =
-                    construct_original_page_transition_event(scope, "pageshow", false)
-                        .ok_or_else(|| anyhow!("failed to construct window pageshow event"))?;
-                document_runtime
-                    .dispatch_public_event_with_original_target(
-                        scope,
-                        host_ptr,
-                        EventTargetHandle::Window,
-                        document_target,
-                        pageshow,
-                    )
-                    .map_err(anyhow::Error::msg)?;
-                Ok(())
-            })
+        self.dispatch_native_event_body(event)
     }
 
     /// Compatibility wrapper for direct ScriptVm fixtures. Production

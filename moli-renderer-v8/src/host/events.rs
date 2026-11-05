@@ -306,50 +306,106 @@ fn invoke_event_handler_property<'s>(
             ) {
                 return;
             }
-            let Some(key) = v8_string(scope, &handler_name) else {
-                return;
+            let wrapper_handler = matches!(target, EventTargetHandle::Node(_))
+                .then(|| {
+                    crate::native_bridge::element::node_event_handler_value_from_wrapper(
+                        scope,
+                        target_object,
+                        &handler_name,
+                    )
+                })
+                .flatten();
+            let native_inline = if wrapper_handler.is_some() {
+                None
+            } else {
+                match target {
+                EventTargetHandle::Window if matches!(event_type, "load" | "pageshow") => Some(
+                    crate::native_bridge::element::compile_window_body_event_attribute(
+                        scope, host_ptr, event_type,
+                    ),
+                ),
+                EventTargetHandle::Node(handle)
+                    if crate::native_bridge::element::is_global_event_handler_attribute(
+                        &handler_name,
+                    ) && unsafe { &*host_ptr }
+                        .dom_host()
+                        .node(handle)
+                        .and_then(|node| node.as_element())
+                        .is_some_and(|element| {
+                            element.namespace() == "http://www.w3.org/1999/xhtml"
+                        }) =>
+                {
+                    Some(
+                        crate::native_bridge::element::compile_node_content_attribute_for_dispatch(
+                            scope, host_ptr, handle, event_type,
+                        ),
+                    )
+                }
+                _ => None,
+            }
             };
-            let handler = target_object
-                .get(scope, key.into())
-                .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
-            let (handler, persistent) = match handler {
-                Some(handler) => (handler, false),
-                None if target == EventTargetHandle::Window && event_type == "messageerror" => {
-                    let Some(handler) =
-                        crate::native_bridge::element::compile_window_body_onmessageerror_attribute(
+            let (handler, persistent) = if let Some(value) = wrapper_handler {
+                let Ok(handler) = v8::Local::<v8::Function>::try_from(value) else {
+                    return;
+                };
+                // A foreign wrapper can still be updated in its producer realm.
+                // Do not cache a second registration in its new document.
+                (handler, false)
+            } else if let Some(handler) = native_inline {
+                let Some(handler) = handler else {
+                    return;
+                };
+                (handler, true)
+            } else {
+                let Some(key) = v8_string(scope, &handler_name) else {
+                    return;
+                };
+                let handler = target_object
+                    .get(scope, key.into())
+                    .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
+                match handler {
+                    Some(handler) => (handler, false),
+                    None if target == EventTargetHandle::Window && event_type == "messageerror" => {
+                        let Some(handler) = crate::native_bridge::element::compile_window_body_onmessageerror_attribute(
                             scope, host_ptr,
-                        )
-                    else {
-                        return;
-                    };
-                    (handler, true)
+                        ) else { return; };
+                        (handler, true)
+                    }
+                    None => return,
                 }
-                None => return,
             };
-            let callback = v8::Local::<v8::Object>::from(handler);
-            let relevant_context = callback
-                .get_creation_context(scope)
-                .unwrap_or_else(|| scope.get_current_context());
-            let incumbent_context = scope
-                .get_incumbent_context()
-                .unwrap_or_else(|| scope.get_current_context());
-            let callback_id = unsafe { &mut *host_ptr }.register_event_callback(
-                scope,
-                callback,
-                relevant_context,
-                incumbent_context,
-            );
-            if persistent {
-                if let Some(previous) = registry.set_event_handler_property(
-                    EventTargetHandle::Window,
-                    event_type,
-                    Some(callback_id),
-                ) {
-                    unsafe { &mut *host_ptr }.release_event_callback(previous);
-                }
+            // Native inline compilation already installed its exact callback
+            // and realm. Reuse that identity rather than registering a second
+            // temporary callback for the same function.
+            if persistent
+                && let Some(EventHandlerPropertyValue::Callback(callback_id)) =
+                    registry.event_handler_property_value(target, event_type)
+            {
                 (callback_id, false)
             } else {
-                (callback_id, true)
+                let callback = v8::Local::<v8::Object>::from(handler);
+                let relevant_context = callback
+                    .get_creation_context(scope)
+                    .unwrap_or_else(|| scope.get_current_context());
+                let incumbent_context = scope
+                    .get_incumbent_context()
+                    .unwrap_or_else(|| scope.get_current_context());
+                let callback_id = unsafe { &mut *host_ptr }.register_event_callback(
+                    scope,
+                    callback,
+                    relevant_context,
+                    incumbent_context,
+                );
+                if persistent {
+                    if let Some(previous) =
+                        registry.set_event_handler_property(target, event_type, Some(callback_id))
+                    {
+                        unsafe { &mut *host_ptr }.release_event_callback(previous);
+                    }
+                    (callback_id, false)
+                } else {
+                    (callback_id, true)
+                }
             }
         }
     };
@@ -1018,6 +1074,22 @@ impl HostEventTargetRegistry {
             .get(&target)
             .and_then(|target_listeners| target_listeners.get(event_type))
             .is_some_and(|entries| entries.iter().any(|entry| !entry.removed))
+    }
+
+    pub(crate) fn has_listener_in_dispatch_path(
+        &self,
+        target: EventTargetHandle,
+        event_type: &str,
+        include_bubbling: bool,
+    ) -> bool {
+        self.listeners
+            .get(&target)
+            .and_then(|listeners| listeners.get(event_type))
+            .is_some_and(|entries| {
+                entries
+                    .iter()
+                    .any(|entry| !entry.removed && (entry.capture || include_bubbling))
+            })
     }
 
     fn allocate_listener_id(&mut self) -> u64 {

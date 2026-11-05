@@ -444,11 +444,9 @@ pub(crate) use self::notification_runtime::{
     notification_options_payload,
 };
 pub(crate) use self::performance_runtime::{
-    ResourcePerformanceEntry, bind_deferred_main_world_performance, bind_window_performance_seed,
+    ResourcePerformanceEntry, bind_document_performance, bind_window_performance_seed,
     current_performance_time_origin, increment_performance_event_count,
-    record_performance_dom_content_loaded_event_end,
-    record_performance_dom_content_loaded_event_start, record_performance_load_event_end,
-    record_performance_load_event_start, record_resource_performance_entry,
+    project_document_lifecycle_timing, record_resource_performance_entry,
     run_resource_timing_buffer_full_task,
 };
 use self::range_live::{

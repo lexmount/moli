@@ -45,7 +45,6 @@ impl DocumentRuntime {
                                 | "video"
                                 | "source"
                                 | "track"
-                                | "details"
                                 | "option"
                                 | "slot"
                         )
@@ -53,10 +52,6 @@ impl DocumentRuntime {
                             && element.attribute("http-equiv").is_some()
                         || element.attribute("shadowrootmode").is_some()
                         || element.attribute("nonce").is_some()
-                        || element
-                            .attributes()
-                            .iter()
-                            .any(|attribute| attribute.local_name().starts_with("on"))
                 })
             {
                 return true;
@@ -93,6 +88,16 @@ impl DocumentRuntime {
                 self.parser_remove_child_effects_in_structural_scope(parent, child),
             ),
         };
+        if effects.did_change()
+            && let ParserDomMutation::AppendChild { child, .. }
+            | ParserDomMutation::InsertBefore { child, .. } = mutation
+        {
+            let mut nodes = vec![child];
+            while let Some(element) = nodes.pop() {
+                unsafe { &mut *host_ptr }.queue_native_parser_details_toggle_event(element);
+                nodes.extend(self.dom_host.child_handles(element));
+            }
+        }
         self.reset_non_dirty_textarea_selection_after_child_list_change(parent);
         self.apply_parser_mutation_effects_without_window_realm(host_ptr, &effects);
     }

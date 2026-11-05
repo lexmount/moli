@@ -123,16 +123,12 @@ pub(in crate::context_bootstrap) use entries::{
     set_performance_entry_slot_number,
 };
 pub(crate) use install::increment_performance_event_count;
+pub(crate) use install::project_document_lifecycle_timing;
 pub(crate) use install::{
     finalize_performance_observer_realm_bindings, finalize_window_performance_realm_bindings,
 };
 pub(super) use install::{
     install_performance_template_bindings, install_worker_performance_runtime_state,
-};
-pub(crate) use install::{
-    record_performance_dom_content_loaded_event_end,
-    record_performance_dom_content_loaded_event_start, record_performance_load_event_end,
-    record_performance_load_event_start,
 };
 pub(super) use marks_measures::{
     performance_clear_marks_callback, performance_clear_measures_callback,
@@ -140,7 +136,7 @@ pub(super) use marks_measures::{
 };
 pub(super) use resource_buffer::resource_timing_dropped_entries_count;
 pub(crate) use resource_buffer::run_resource_timing_buffer_full_task;
-pub(crate) use window_state::{bind_deferred_main_world_performance, bind_window_performance_seed};
+pub(crate) use window_state::{bind_document_performance, bind_window_performance_seed};
 pub(super) use window_state::{
     build_window_performance_for_receiver, ensure_current_window_performance,
     finish_window_performance_materialization, install_default_window_performance_seed,

@@ -13,7 +13,6 @@ use crate::webidl_iterator::{
 use anyhow::{Result, anyhow};
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
 
-pub(super) const MIN_LIFECYCLE_TIMING_DELTA_MILLIS: f64 = 0.001;
 pub(super) const EVENT_COUNTS_TRACKED_TYPES: &[&str] = &[
     "auxclick",
     "click",
@@ -482,7 +481,7 @@ pub(super) fn apply_pending_window_performance_state<'s>(
         dom_content_loaded_end,
         load_start,
         load_end,
-    ] = super::window_state::take_pending_lifecycle_timestamps(scope, window);
+    ] = super::window_state::take_projected_lifecycle_timestamps(scope, window);
     if let Some(timestamp) = dom_content_loaded_start {
         apply_dom_content_loaded_start(scope, performance, timestamp);
     }
@@ -709,14 +708,47 @@ fn create_navigation_performance_entry<'s>(
     entry
 }
 
-pub(crate) fn record_performance_dom_content_loaded_event_start(scope: &mut v8::PinScope<'_, '_>) {
-    let Some(performance) = window_performance_value(scope) else {
-        super::window_state::record_pending_dom_content_loaded_start(scope);
+/// Update JavaScript projections from the native Document clock. This never
+/// reads the current time or creates a Performance object.
+pub(crate) fn project_document_lifecycle_timing(
+    scope: &mut v8::PinScope<'_, '_>,
+    timestamps: [Option<f64>; 4],
+) {
+    let window = scope.get_current_context().global(scope);
+    project_window_lifecycle_timing(scope, window, timestamps, true);
+}
+
+pub(super) fn project_window_lifecycle_timing<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    timestamps: [Option<f64>; 4],
+    notify_observers: bool,
+) {
+    let Some(performance) = get_private_value(scope, window, WINDOW_PERFORMANCE_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        super::window_state::store_projected_lifecycle_timestamps(scope, window, timestamps);
         return;
     };
-    let previous = 0.0;
-    let timestamp = monotonic_lifecycle_timestamp(scope, performance, previous);
-    apply_dom_content_loaded_start(scope, performance, timestamp);
+    let load_already_ended =
+        performance_lifecycle_timestamp(scope, performance, LOAD_END_INDEX).is_some();
+    if let Some(timestamp) = timestamps[DOM_CONTENT_LOADED_START_INDEX] {
+        apply_dom_content_loaded_start(scope, performance, timestamp);
+    }
+    if let Some(timestamp) = timestamps[DOM_CONTENT_LOADED_END_INDEX] {
+        apply_dom_content_loaded_end(scope, performance, timestamp);
+    }
+    if let Some(timestamp) = timestamps[LOAD_START_INDEX] {
+        apply_load_start(scope, performance, timestamp);
+    }
+    if let Some(timestamp) = timestamps[LOAD_END_INDEX] {
+        apply_load_end(
+            scope,
+            performance,
+            timestamp,
+            notify_observers && !load_already_ended,
+        );
+    }
 }
 
 fn apply_dom_content_loaded_start<'s>(
@@ -743,18 +775,6 @@ fn apply_dom_content_loaded_start<'s>(
     }
 }
 
-pub(crate) fn record_performance_dom_content_loaded_event_end(scope: &mut v8::PinScope<'_, '_>) {
-    let Some(performance) = window_performance_value(scope) else {
-        super::window_state::record_pending_dom_content_loaded_end(scope);
-        return;
-    };
-    let previous =
-        performance_lifecycle_timestamp(scope, performance, DOM_CONTENT_LOADED_START_INDEX)
-            .unwrap_or(0.0);
-    let timestamp = monotonic_lifecycle_timestamp(scope, performance, previous);
-    apply_dom_content_loaded_end(scope, performance, timestamp);
-}
-
 fn apply_dom_content_loaded_end<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
@@ -777,18 +797,6 @@ fn apply_dom_content_loaded_end<'s>(
     }
 }
 
-pub(crate) fn record_performance_load_event_start(scope: &mut v8::PinScope<'_, '_>) {
-    let Some(performance) = window_performance_value(scope) else {
-        super::window_state::record_pending_load_start(scope);
-        return;
-    };
-    let previous =
-        performance_lifecycle_timestamp(scope, performance, DOM_CONTENT_LOADED_END_INDEX)
-            .unwrap_or(0.0);
-    let timestamp = monotonic_lifecycle_timestamp(scope, performance, previous);
-    apply_load_start(scope, performance, timestamp);
-}
-
 fn apply_load_start<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
@@ -801,20 +809,6 @@ fn apply_load_start<'s>(
         set_performance_entry_slot_number(scope, entry, NAV_DOM_COMPLETE_SLOT, timestamp);
         set_performance_entry_slot_number(scope, entry, NAV_LOAD_EVENT_START_SLOT, timestamp);
     }
-}
-
-pub(crate) fn record_performance_load_event_end(scope: &mut v8::PinScope<'_, '_>) {
-    let Some(performance) = window_performance_value(scope) else {
-        super::window_state::record_pending_load_end(scope);
-        return;
-    };
-    if performance_lifecycle_timestamp(scope, performance, LOAD_END_INDEX).unwrap_or(0.0) > 0.0 {
-        return;
-    }
-    let previous =
-        performance_lifecycle_timestamp(scope, performance, LOAD_START_INDEX).unwrap_or(0.0);
-    let timestamp = monotonic_lifecycle_timestamp(scope, performance, previous);
-    apply_load_end(scope, performance, timestamp, true);
 }
 
 fn apply_load_end<'s>(
@@ -832,21 +826,6 @@ fn apply_load_end<'s>(
         if notify_observers {
             queue_matching_performance_observers(scope, performance, entry, "navigation");
         }
-    }
-}
-
-fn monotonic_lifecycle_timestamp<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    performance: v8::Local<'s, v8::Object>,
-    previous: f64,
-) -> f64 {
-    let time_origin =
-        performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
-    let now = dom_time_since_origin_millis(time_origin).max(0.0);
-    if now > previous {
-        now
-    } else {
-        previous + MIN_LIFECYCLE_TIMING_DELTA_MILLIS
     }
 }
 

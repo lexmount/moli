@@ -168,6 +168,62 @@ async fn native_environment_updates_survive_main_world_activation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn unobserved_inline_attributes_and_native_toggle_tasks_keep_main_world_lazy() {
+    for html in [
+        "<!doctype html><button onclick='globalThis.unusedHandler=1'>Native button</button>",
+        "<!doctype html><p onclick='function ('>Uncompiled malformed source</p>",
+        "<!doctype html><div onmadeupevent='throw 1'>Unknown event attribute</div>",
+        "<!doctype html><div onload='globalThis.unusedHandler=1'>Unrelated load target</div>",
+        "<!doctype html><body onerror='globalThis.unusedHandler=1'>Unused error handler",
+        "<!doctype html><details open><summary>Native details</summary>Native toggle</details>",
+    ] {
+        let (_runtime, mut page) = lazy_test_page(html, Default::default()).await;
+        assert_main_world_count(&page, 0).await;
+        page.close_async().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_input_activates_the_live_document_and_its_inline_handler_once() {
+    let runtime = initialize_layout_test_runtime();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/lazy-native-input").unwrap(),
+        "<!doctype html><button style='position:absolute;left:10px;top:10px;width:200px;height:80px' onclick='globalThis.hits=(globalThis.hits||0)+1;globalThis.receiver=this===event.currentTarget;globalThis.trusted=event.isTrusted'>Native button</button>",
+    ).await;
+    assert_main_world_count(&page, 0).await;
+    capture_screenshot_for_renderer_page(&page).await;
+    assert_main_world_count(&page, 0).await;
+    for event in ["mousemove", "mousedown", "mouseup"] {
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::DispatchMouseEventAtPoint {
+                x: 30.0,
+                y: 30.0,
+                event_name: event.to_owned(),
+                button: if event == "mousemove" { -1 } else { 0 },
+                buttons: Some(if event == "mousedown" { 1 } else { 0 }),
+                click_count: 1,
+                delta_x: 0.0,
+                delta_y: 0.0,
+                pointer: RendererPointerEventProperties::default(),
+                modifiers: 0,
+                intercept_drags: false,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(reply, RendererPageReply::InputDispatchOutcome(_)));
+    }
+    assert_main_world_count(&page, 1).await;
+    assert_eq!(
+        evaluate_lazy_test(&page, "JSON.stringify({hits,receiver,trusted})").await,
+        r#"{"hits":1,"receiver":true,"trusted":true}"#
+    );
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn cold_runtime_binding_install_initializes_main_world() {
     for execution_context_id in [None, Some(0)] {
         let (_runtime, mut page) = lazy_test_page(

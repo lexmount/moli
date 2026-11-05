@@ -1,27 +1,21 @@
-use super::time_origin_seed;
 use crate::{
-    context_bootstrap::{
-        dom_time_since_origin_millis,
-        performance_runtime::{
-            ResourcePerformanceEntry,
-            install::{EVENT_COUNTS_TRACKED_TYPES, MIN_LIFECYCLE_TIMING_DELTA_MILLIS},
-        },
+    context_bootstrap::performance_runtime::{
+        ResourcePerformanceEntry, install::EVENT_COUNTS_TRACKED_TYPES,
     },
     util::{array_push_value, get_private_value, set_private_value, v8_string},
 };
 
-const WINDOW_PERFORMANCE_PENDING_LIFECYCLE_SLOT: &str = "__moliWindowPerformancePendingLifecycle";
+const WINDOW_PERFORMANCE_PROJECTED_LIFECYCLE_SLOT: &str =
+    "__moliWindowPerformanceProjectedLifecycle";
 const WINDOW_PERFORMANCE_PENDING_RESOURCES_SLOT: &str = "__moliWindowPerformancePendingResources";
 const WINDOW_PERFORMANCE_PENDING_EVENT_COUNTS_SLOT: &str =
     "__moliWindowPerformancePendingEventCounts";
 
-const DOM_CONTENT_LOADED_START_INDEX: usize = 0;
-const DOM_CONTENT_LOADED_END_INDEX: usize = 1;
-const LOAD_START_INDEX: usize = 2;
-const LOAD_END_INDEX: usize = 3;
 const LIFECYCLE_TIMESTAMP_COUNT: usize = 4;
 
-pub(super) fn seed_deferred_lifecycle<'s>(
+pub(in crate::context_bootstrap::performance_runtime) fn store_projected_lifecycle_timestamps<
+    's,
+>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
     timestamps: [Option<f64>; 4],
@@ -39,44 +33,20 @@ pub(super) fn seed_deferred_lifecycle<'s>(
     set_private_value(
         scope,
         window,
-        WINDOW_PERFORMANCE_PENDING_LIFECYCLE_SLOT,
+        WINDOW_PERFORMANCE_PROJECTED_LIFECYCLE_SLOT,
         array.into(),
     );
 }
 
-pub(in crate::context_bootstrap::performance_runtime) fn record_pending_dom_content_loaded_start(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> f64 {
-    record_pending_lifecycle_timestamp(scope, DOM_CONTENT_LOADED_START_INDEX)
-}
-
-pub(in crate::context_bootstrap::performance_runtime) fn record_pending_dom_content_loaded_end(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> f64 {
-    record_pending_lifecycle_timestamp(scope, DOM_CONTENT_LOADED_END_INDEX)
-}
-
-pub(in crate::context_bootstrap::performance_runtime) fn record_pending_load_start(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> f64 {
-    record_pending_lifecycle_timestamp(scope, LOAD_START_INDEX)
-}
-
-pub(in crate::context_bootstrap::performance_runtime) fn record_pending_load_end(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> f64 {
-    record_pending_lifecycle_timestamp(scope, LOAD_END_INDEX)
-}
-
-pub(in crate::context_bootstrap::performance_runtime) fn take_pending_lifecycle_timestamps<'s>(
+pub(in crate::context_bootstrap::performance_runtime) fn take_projected_lifecycle_timestamps<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> [Option<f64>; LIFECYCLE_TIMESTAMP_COUNT] {
-    let Some(values) = private_array(scope, window, WINDOW_PERFORMANCE_PENDING_LIFECYCLE_SLOT)
+    let Some(values) = private_array(scope, window, WINDOW_PERFORMANCE_PROJECTED_LIFECYCLE_SLOT)
     else {
         return [None; LIFECYCLE_TIMESTAMP_COUNT];
     };
-    clear_private_value(scope, window, WINDOW_PERFORMANCE_PENDING_LIFECYCLE_SLOT);
+    clear_private_value(scope, window, WINDOW_PERFORMANCE_PROJECTED_LIFECYCLE_SLOT);
     std::array::from_fn(|index| {
         values
             .get_index(scope, index as u32)
@@ -200,43 +170,12 @@ pub(super) fn clear_pending_window_performance_state(
     window: v8::Local<'_, v8::Object>,
 ) {
     for slot in [
-        WINDOW_PERFORMANCE_PENDING_LIFECYCLE_SLOT,
+        WINDOW_PERFORMANCE_PROJECTED_LIFECYCLE_SLOT,
         WINDOW_PERFORMANCE_PENDING_RESOURCES_SLOT,
         WINDOW_PERFORMANCE_PENDING_EVENT_COUNTS_SLOT,
     ] {
         clear_private_value(scope, window, slot);
     }
-}
-
-fn record_pending_lifecycle_timestamp(scope: &mut v8::PinScope<'_, '_>, index: usize) -> f64 {
-    let global = scope.get_current_context().global(scope);
-    let values = ensure_private_array(
-        scope,
-        global,
-        WINDOW_PERFORMANCE_PENDING_LIFECYCLE_SLOT,
-        LIFECYCLE_TIMESTAMP_COUNT as i32,
-    );
-    if let Some(existing) = values
-        .get_index(scope, index as u32)
-        .filter(|value| !value.is_undefined())
-        .and_then(|value| value.number_value(scope))
-    {
-        return existing;
-    }
-    let previous = index
-        .checked_sub(1)
-        .and_then(|previous| values.get_index(scope, previous as u32))
-        .and_then(|value| value.number_value(scope))
-        .unwrap_or(0.0);
-    let now = dom_time_since_origin_millis(time_origin_seed(scope, global)).max(0.0);
-    let timestamp = if now > previous {
-        now
-    } else {
-        previous + MIN_LIFECYCLE_TIMING_DELTA_MILLIS
-    };
-    let timestamp_value = v8::Number::new(scope, timestamp);
-    let _ = values.set_index(scope, index as u32, timestamp_value.into());
-    timestamp
 }
 
 fn ensure_private_array<'s>(
