@@ -96,6 +96,102 @@ fn xml_serialization_resolves_namespace_declaration_conflicts() {
 }
 
 #[test]
+fn xml_serialization_tracks_effective_prefix_bindings() {
+    let mut vm = new_storage_html_test_vm("https://xml-effective-prefixes.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        const xmlns = 'http://www.w3.org/2000/xmlns/';
+        const serializer = new XMLSerializer();
+        const signature = element => [element.namespaceURI, element.localName,
+            Array.from(element.attributes).filter(attr => attr.namespaceURI !== xmlns)
+                .map(attr => [attr.namespaceURI, attr.localName, attr.value]).sort(),
+            Array.from(element.children).map(signature)];
+        for (const doc of [document, document.implementation.createDocument(null, 'doc')]) {
+            const root = doc.createElementNS(null, 'root');
+            root.setAttributeNS(xmlns, 'xmlns:p', 'urn:one');
+            root.setAttributeNS(xmlns, 'xmlns:q', 'urn:one');
+            const child = doc.createElementNS(null, 'child');
+            child.setAttributeNS(xmlns, 'xmlns:p', 'urn:two');
+            child.setAttributeNS('urn:one', 'p:id', 'child');
+            child.setAttributeNS('urn:two', 'p:other', 'two');
+            const grandchild = doc.createElementNS(null, 'grandchild');
+            grandchild.setAttributeNS(xmlns, 'xmlns:p', 'urn:one');
+            grandchild.setAttributeNS('urn:two', 'p:id', 'grandchild');
+            child.appendChild(grandchild);
+            const sibling = doc.createElementNS(null, 'sibling');
+            sibling.setAttributeNS('urn:one', 'p:id', 'sibling');
+            const prefixed = doc.createElementNS('urn:one', 'p:element');
+            prefixed.setAttributeNS(xmlns, 'xmlns:p', 'urn:two');
+            root.append(child, sibling, prefixed);
+            const before = JSON.stringify(signature(root));
+            const xml = serializer.serializeToString(root);
+            const parsed = new DOMParser().parseFromString(xml, 'application/xml');
+            if (parsed.getElementsByTagName('parsererror').length ||
+                JSON.stringify(signature(parsed.documentElement)) !== before)
+                throw Error('shadowed namespace round trip: ' + xml);
+            if (parsed.documentElement.children[0].getAttributeNodeNS('urn:one', 'id').prefix !== 'q' ||
+                parsed.documentElement.children[1].getAttributeNodeNS('urn:one', 'id').prefix !== 'p')
+                throw Error('effective candidate ordering or sibling scope: ' + xml);
+            if (JSON.stringify(signature(root)) !== before || serializer.serializeToString(root) !== xml)
+                throw Error('serializer changed source or prefix order');
+            root.removeAttributeNS(xmlns, 'q');
+            const withoutAlternative = serializer.serializeToString(root);
+            const reparsed = new DOMParser().parseFromString(withoutAlternative, 'application/xml');
+            if (reparsed.getElementsByTagName('parsererror').length ||
+                JSON.stringify(signature(reparsed.documentElement)) !== before)
+                throw Error('generated fallback round trip: ' + withoutAlternative);
+        }
+        return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+fn xml_serialization_uses_one_attribute_prefix_allocator() {
+    let mut vm = new_storage_html_test_vm("https://xml-attribute-prefixes.test/");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+        const xmlns = 'http://www.w3.org/2000/xmlns/';
+        const serializer = new XMLSerializer();
+        for (const namespace of ['urn:value', 'http://www.w3.org/1999/xlink']) {
+            const free = document.createElementNS(null, 'root');
+            free.setAttributeNS(namespace, 'p:name', 'test');
+            const expected = '<root xmlns:p="' + namespace + '" p:name="test"/>';
+            if (serializer.serializeToString(free) !== expected)
+                throw Error('preserve explicit prefix: ' + serializer.serializeToString(free));
+            for (const declarationFirst of [false, true]) {
+                const root = document.createElementNS(null, 'root');
+                if (declarationFirst) root.setAttributeNS(xmlns, 'xmlns:p', 'urn:reserved');
+                root.setAttributeNS(namespace, 'p:name', 'test');
+                if (!declarationFirst) root.setAttributeNS(xmlns, 'xmlns:p', 'urn:reserved');
+                root.setAttributeNS('urn:second', 'p:second', 'two');
+                const xml = serializer.serializeToString(root);
+                const parsed = new DOMParser().parseFromString(xml, 'application/xml');
+                if (parsed.getElementsByTagName('parsererror').length ||
+                    parsed.documentElement.getAttributeNS(namespace, 'name') !== 'test' ||
+                    parsed.documentElement.getAttributeNS('urn:second', 'second') !== 'two' ||
+                    parsed.documentElement.lookupNamespaceURI('p') !== 'urn:reserved')
+                    throw Error('local prefix conflict: ' + xml);
+                if (root.getAttributeNodeNS(namespace, 'name').prefix !== 'p')
+                    throw Error('serializer changed original attribute');
+            }
+            const root = document.createElementNS('urn:element', 'p:root');
+            root.setAttributeNS(namespace, 'p:name', 'test');
+            const xml = serializer.serializeToString(root);
+            const parsed = new DOMParser().parseFromString(xml, 'application/xml');
+            if (parsed.getElementsByTagName('parsererror').length ||
+                parsed.documentElement.namespaceURI !== 'urn:element' ||
+                parsed.documentElement.getAttributeNS(namespace, 'name') !== 'test')
+                throw Error('element prefix reservation: ' + xml);
+        }
+        return true;
+    })()"#
+        )
+        .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn xml_serialization_preserves_ordinary_xmlns_spelling_and_generated_prefix_collisions() {
     let mut vm = new_storage_html_test_vm("https://xml-namespace-collisions.test/");
     let result = vm

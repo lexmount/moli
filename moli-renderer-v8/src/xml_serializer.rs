@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     dom::native::{DomHost, Element, NativeNodeId, NodeType},
@@ -13,7 +13,6 @@ const VOID_HTML: &[&str] = &[
     "keygen", "link", "menuitem", "meta", "param", "source", "track", "wbr",
 ];
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
-const XLINK_NAMESPACE: &str = "http://www.w3.org/1999/xlink";
 const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
 const XMLNS_NAMESPACE: &str = "http://www.w3.org/2000/xmlns/";
 
@@ -60,7 +59,10 @@ pub(super) fn xml_serializer_serialize_to_string_callback<'s>(
 #[derive(Clone, Debug)]
 struct NamespaceContext {
     default_namespace: String,
+    // Candidate order survives rebinding, but only the current binding can
+    // authorize reuse. Each element clones both maps to keep sibling scopes apart.
     prefixes: HashMap<String, Vec<String>>,
+    bindings: HashMap<String, String>,
 }
 
 impl Default for NamespaceContext {
@@ -68,12 +70,15 @@ impl Default for NamespaceContext {
         Self {
             default_namespace: String::new(),
             prefixes: HashMap::from([(XML_NAMESPACE.to_owned(), vec!["xml".to_owned()])]),
+            bindings: HashMap::from([("xml".to_owned(), XML_NAMESPACE.to_owned())]),
         }
     }
 }
 
 impl NamespaceContext {
     fn add_prefix(&mut self, namespace: &str, prefix: &str) {
+        self.bindings
+            .insert(prefix.to_owned(), namespace.to_owned());
         self.prefixes
             .entry(namespace.to_owned())
             .or_default()
@@ -83,17 +88,21 @@ impl NamespaceContext {
     fn preferred_prefix(&self, namespace: &str, preferred: Option<&str>) -> Option<String> {
         let candidates = self.prefixes.get(namespace)?;
         if let Some(preferred) = preferred
-            && candidates.iter().any(|candidate| candidate == preferred)
+            && self.contains_prefix(namespace, preferred)
         {
             return Some(preferred.to_owned());
         }
-        candidates.last().cloned()
+        candidates
+            .iter()
+            .rev()
+            .find(|prefix| self.contains_prefix(namespace, prefix))
+            .cloned()
     }
 
     fn contains_prefix(&self, namespace: &str, prefix: &str) -> bool {
-        self.prefixes
-            .get(namespace)
-            .is_some_and(|prefixes| prefixes.iter().any(|candidate| candidate == prefix))
+        self.bindings
+            .get(prefix)
+            .is_some_and(|binding| binding == namespace)
     }
 }
 
@@ -211,19 +220,20 @@ fn serialize_native_element(
     let mut namespace_context = parent_namespace_context.clone();
     let (local_default_namespace, local_prefixes) =
         record_namespace_information(element, &mut namespace_context);
+    // Declaration emission and prefix use are different: the element name and
+    // earlier attributes must not have their bindings overwritten by a later
+    // attribute, even when the prefix was originally inherited.
+    let mut occupied_prefixes: HashSet<_> = local_prefixes.keys().cloned().collect();
     let mut inherited_namespace = parent_namespace_context.default_namespace.clone();
     let mut ignore_namespace_definition_attribute = false;
     let mut serialized_attributes = String::new();
 
     let tag = if inherited_namespace == namespace {
-        if local_default_namespace.is_some()
-            && !local_prefixes
-                .values()
-                .any(|namespace| namespace.is_empty())
-        {
+        if local_default_namespace.is_some() {
             ignore_namespace_definition_attribute = true;
         }
         if namespace == XML_NAMESPACE {
+            occupied_prefixes.insert("xml".to_owned());
             format!("xml:{local_name}")
         } else {
             local_name.to_owned()
@@ -231,6 +241,7 @@ fn serialize_native_element(
     } else {
         let candidate_prefix = namespace_context.preferred_prefix(namespace, original_prefix);
         if let Some(candidate_prefix) = candidate_prefix {
+            occupied_prefixes.insert(candidate_prefix.clone());
             if let Some(local_default_namespace) = local_default_namespace
                 .as_deref()
                 .filter(|namespace| *namespace != XML_NAMESPACE)
@@ -250,6 +261,7 @@ fn serialize_native_element(
                 &format!("xmlns:{prefix}"),
                 namespace,
             );
+            occupied_prefixes.insert(prefix.clone());
             if let Some(local_default_namespace) = local_default_namespace.as_deref() {
                 inherited_namespace = local_default_namespace.to_owned();
             }
@@ -270,6 +282,7 @@ fn serialize_native_element(
         &mut namespace_context,
         next_generated_prefix,
         &local_prefixes,
+        &mut occupied_prefixes,
         ignore_namespace_definition_attribute,
         &mut serialized_attributes,
     );
@@ -341,6 +354,7 @@ fn serialize_native_attributes(
     namespace_context: &mut NamespaceContext,
     next_generated_prefix: &mut usize,
     local_prefixes: &HashMap<String, String>,
+    occupied_prefixes: &mut HashSet<String>,
     ignore_namespace_definition_attribute: bool,
     output: &mut String,
 ) {
@@ -373,23 +387,28 @@ fn serialize_native_attributes(
             if attribute.prefix() == Some("xmlns") {
                 candidate_prefix = Some("xmlns".to_owned());
             }
-        } else if attribute_namespace == XLINK_NAMESPACE
-            && candidate_prefix.is_none()
-            && let Some(prefix) = attribute.prefix().filter(|prefix| !prefix.is_empty())
-        {
-            // XML serialization preserves an explicitly supplied XLink prefix here;
-            // unlike HTML serialization, it must not force the canonical `xlink` prefix.
-            namespace_context.add_prefix(attribute_namespace, prefix);
-            write_attribute(output, &format!("xmlns:{prefix}"), attribute_namespace);
-            candidate_prefix = Some(prefix.to_owned());
         } else if !attribute_namespace.is_empty() && candidate_prefix.is_none() {
-            let prefix = generate_namespace_prefix(
-                namespace_context,
-                attribute_namespace,
-                next_generated_prefix,
-            );
+            let prefix = if let Some(prefix) = attribute
+                .prefix()
+                .filter(|prefix| !prefix.is_empty() && !occupied_prefixes.contains(*prefix))
+            {
+                namespace_context.add_prefix(attribute_namespace, prefix);
+                prefix.to_owned()
+            } else {
+                generate_namespace_prefix(
+                    namespace_context,
+                    attribute_namespace,
+                    next_generated_prefix,
+                )
+            };
             write_attribute(output, &format!("xmlns:{prefix}"), attribute_namespace);
             candidate_prefix = Some(prefix);
+        }
+
+        if attribute_namespace != XMLNS_NAMESPACE
+            && let Some(prefix) = &candidate_prefix
+        {
+            occupied_prefixes.insert(prefix.clone());
         }
 
         let attribute_name = candidate_prefix
@@ -757,7 +776,7 @@ mod tests {
         assert!(host.set_attribute_ns(empty, Some(XMLNS_NAMESPACE), Some("xmlns"), "p", ""));
         assert_eq!(
             serialize_native_handle(&host, empty),
-            "<empty xmlns=\"\" xmlns:p=\"\"/>"
+            "<empty xmlns:p=\"\"/>"
         );
     }
 }
