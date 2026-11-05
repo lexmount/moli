@@ -6,8 +6,8 @@ async fn ace_page_task_waiter_rejoins_once_and_releases_input_blocking() {
     #[derive(Debug)]
     struct UnreachableInput;
     impl moli_core::ace_page_task::AcePageTask for UnreachableInput {
-        fn is_input(&self) -> bool {
-            true
+        fn kind(&self) -> AcePageTaskKind {
+            AcePageTaskKind::Input
         }
         fn run(
             self: Box<Self>,

@@ -8,17 +8,29 @@ use std::{collections::HashMap, fmt::Debug};
 
 /// Tasks own their data; host borrows must not escape this call.
 pub trait AcePageTask: Debug + Send {
-    /// Input tasks may complete after their action navigates the page.
-    fn is_input(&self) -> bool {
-        false
-    }
+    /// A stable declaration used by admission, scheduling and host capabilities.
+    fn kind(&self) -> AcePageTaskKind;
     fn run(self: Box<Self>, host: &mut dyn PageExtensionHost) -> Result<AcePageTaskOutput>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcePageTaskKind {
+    ReadOnly,
+    /// Input tasks may complete after their action navigates the page.
+    Input,
 }
 
 #[derive(Clone, Debug)]
 pub struct AcePageTaskOutput {
     pub value: serde_json::Value,
-    pub input_outcome: Option<RendererInputDispatchOutcome>,
+}
+
+/// Renderer-owned effects survive a task error and cannot be replaced by its
+/// business return value. Only the host records input outcomes.
+#[derive(Clone, Debug)]
+pub struct AcePageTaskExecution {
+    pub result: Result<AcePageTaskOutput, String>,
+    pub input_outcomes: Vec<RendererInputDispatchOutcome>,
 }
 
 #[derive(Clone, Debug)]
@@ -86,7 +98,7 @@ pub trait PageExtensionHost {
         buttons: Option<i32>,
         click_count: i32,
         modifiers: u8,
-    ) -> Result<RendererInputDispatchOutcome>;
+    ) -> Result<bool>;
     fn key(
         &mut self,
         event: &str,
@@ -96,16 +108,10 @@ pub trait PageExtensionHost {
         modifiers: u8,
         repeat: bool,
         insert_text: bool,
-    ) -> Result<RendererInputDispatchOutcome>;
-    fn activate(
-        &mut self,
-        handle: DomHandle,
-        x: f64,
-        y: f64,
-        modifiers: u8,
-    ) -> Result<RendererInputDispatchOutcome>;
+    ) -> Result<bool>;
+    fn activate(&mut self, handle: DomHandle, x: f64, y: f64, modifiers: u8) -> Result<bool>;
     fn replace_text(&mut self, handle: DomHandle, text: &str) -> Result<bool>;
-    fn submit(&mut self, handle: DomHandle) -> Result<Option<RendererInputDispatchOutcome>>;
+    fn submit(&mut self, handle: DomHandle) -> Result<bool>;
     fn select_values(
         &mut self,
         handle: DomHandle,
