@@ -1655,7 +1655,6 @@ fn modulepreload_task(sequence: u64) -> FrameDocumentModulepreloadFetchTask {
         NativeModuleSingleFetchRequest::new(
             source_url.clone(),
             source_url.clone(),
-            source_url.clone(),
             ModuleMapKey::java_script(source_url),
             ModuleFetchMetadata::default(),
         ),

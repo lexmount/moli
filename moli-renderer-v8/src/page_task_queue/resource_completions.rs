@@ -911,7 +911,6 @@ mod tests {
             target,
             Ok(ModuleGraphFetchedSource::new(
                 request_url.clone(),
-                false,
                 ModuleSource::text("export default 1;".to_owned()),
             )),
             None,
@@ -946,7 +945,6 @@ mod tests {
             target,
             Ok(ModuleGraphFetchedSource::new(
                 request_url.clone(),
-                false,
                 ModuleSource::text("export default 1;".to_owned()),
             )),
             None,
@@ -976,7 +974,6 @@ mod tests {
             target,
             Ok(ModuleGraphFetchedSource::new(
                 request_url.clone(),
-                false,
                 ModuleSource::text("export default 1;".to_owned()),
             )),
             None,
@@ -1006,7 +1003,6 @@ mod tests {
             target,
             Ok(ModuleGraphFetchedSource::new(
                 request_url.clone(),
-                false,
                 ModuleSource::text("export default 1;".to_owned()),
             )),
             None,

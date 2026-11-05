@@ -139,9 +139,8 @@ impl ModuleScriptGraphFetchContinuation {
         job: &mut NativeModuleGraphJob,
         source: std::result::Result<ModuleSource, ModuleLoadError>,
     ) -> std::result::Result<NativeModuleGraphJobAdvance, ModuleLoadError> {
-        let source = source.map(|source| {
-            ModuleGraphFetchedSource::new(self.request.source_url.clone(), false, source)
-        });
+        let source = source
+            .map(|source| ModuleGraphFetchedSource::new(self.request.source_url.clone(), source));
         self.finish_fetch_into_job(vm, job, source)
     }
 }
@@ -197,7 +196,7 @@ impl ModuleScriptGraphFetchBatch {
         let source_url = self.request().source_url().clone();
         self.finish_fetch(
             vm,
-            source.map(|source| ModuleGraphFetchedSource::new(source_url, false, source)),
+            source.map(|source| ModuleGraphFetchedSource::new(source_url, source)),
         )
     }
 
@@ -550,7 +549,6 @@ impl NativeModuleGraphFetchRequest {
                     Ok(match kind {
                         ModuleKind::WebAssembly => ModuleGraphFetchedSource::new(
                             head.final_url,
-                            head.redirected,
                             ModuleSource::binary(body_bytes),
                         )
                         .with_response_referrer_policy(response_referrer_policy),
@@ -559,7 +557,6 @@ impl NativeModuleGraphFetchRequest {
                         | ModuleKind::Css
                         | ModuleKind::Text => ModuleGraphFetchedSource::new(
                             head.final_url,
-                            head.redirected,
                             ModuleSource::text(moli_encoding::decode_utf8(&body_bytes)),
                         )
                         .with_response_referrer_policy(response_referrer_policy),
@@ -2907,7 +2904,6 @@ mod tests {
         let root_url = url("https://app.example.test/data.json");
         let single_fetch = NativeModuleSingleFetchRequest::new(
             root_url.clone(),
-            root_url.clone(),
             url("https://app.example.test/page"),
             ModuleMapKey::json_with_attributes(root_url, ModuleAttributesKey::empty()),
             ModuleFetchMetadata::default(),
@@ -2929,7 +2925,6 @@ mod tests {
     fn modulepreload_css_single_fetch_uses_style_destination_metadata() {
         let root_url = url("https://app.example.test/sheet.css");
         let single_fetch = NativeModuleSingleFetchRequest::new(
-            root_url.clone(),
             root_url.clone(),
             url("https://app.example.test/page"),
             ModuleMapKey::css_with_attributes(root_url, ModuleAttributesKey::empty()),
@@ -2963,7 +2958,6 @@ mod tests {
         let module_key = ModuleMapKey::java_script(root_url.clone());
         NativeModuleSingleFetchRequest::new(
             root_url.clone(),
-            root_url,
             url("https://app.example.test/page"),
             module_key,
             metadata,
@@ -3812,7 +3806,6 @@ import "./c.mjs";
                     &mut vm,
                     Ok(ModuleGraphFetchedSource::new(
                         response_url.clone(),
-                        true,
                         ModuleSource::text("import './dep.mjs';".to_owned()),
                     )
                     .with_response_referrer_policy(Some("no-referrer".to_owned()))),
@@ -3882,7 +3875,6 @@ import "./c.mjs";
                     &mut vm,
                     Ok(ModuleGraphFetchedSource::new(
                         response_url.clone(),
-                        true,
                         ModuleSource::text("import './dep.mjs';".to_owned()),
                     )),
                 )
@@ -4917,7 +4909,6 @@ import "./shared.mjs";
             request_url: root_url.clone(),
             result: Ok(ModuleGraphFetchedSource::new(
                 root_url,
-                false,
                 ModuleSource::text("import './dep.mjs'; export const root = 1;".to_owned()),
             )),
             network_result: None,
@@ -5029,7 +5020,6 @@ import "./shared.mjs";
             request_url: root_url.clone(),
             result: Ok(ModuleGraphFetchedSource::new(
                 root_url.clone(),
-                false,
                 ModuleSource::text(root_source.to_owned()),
             )),
             network_result: None,

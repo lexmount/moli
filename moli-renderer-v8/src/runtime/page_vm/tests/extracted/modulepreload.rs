@@ -965,7 +965,6 @@ async fn modulepreload_fetch_failure_wakes_joined_parser_script_waiter() {
         let shared_key = ModuleMapKey::java_script(shared_url.clone());
         let modulepreload = NativeModuleSingleFetchRequest::new(
             shared_url.clone(),
-            shared_url.clone(),
             document_url,
             shared_key.clone(),
             ModuleFetchMetadata::default(),
@@ -1090,7 +1089,6 @@ async fn parser_module_script_observes_prior_modulepreload_failure() {
         let module_url = Url::parse("https://example.com/module.mjs").expect("module URL");
         let modulepreload = NativeModuleSingleFetchRequest::new(
             module_url.clone(),
-            module_url.clone(),
             document_url,
             ModuleMapKey::java_script(module_url.clone()),
             ModuleFetchMetadata::default(),
@@ -1165,7 +1163,6 @@ async fn parser_module_script_joins_inflight_same_url_modulepreload_failure() {
 
         let module_url = Url::parse("https://example.com/module.mjs").expect("module URL");
         let modulepreload = NativeModuleSingleFetchRequest::new(
-            module_url.clone(),
             module_url.clone(),
             document_url,
             ModuleMapKey::java_script(module_url.clone()),

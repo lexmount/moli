@@ -16,7 +16,6 @@ fn runtime_module_completion(
         .map(|source| {
             ModuleGraphFetchedSource::new(
                 request_url.clone(),
-                false,
                 ModuleSource::text(source.to_owned()),
             )
         })

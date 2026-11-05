@@ -140,7 +140,7 @@ impl NativeDocumentModulator {
                 .referrer_policy
                 .clone();
             Some(FrameDocumentModuleFetchTerminalResult::Fetched(
-                ModuleGraphFetchedSource::new(final_url.clone(), final_url != *key.url(), source)
+                ModuleGraphFetchedSource::new(final_url.clone(), source)
                     .with_response_referrer_policy(response_referrer_policy),
             ))
         } else {

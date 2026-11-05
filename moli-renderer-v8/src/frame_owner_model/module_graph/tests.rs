@@ -63,7 +63,6 @@ fn modulepreload_request(path: &str) -> NativeModuleSingleFetchRequest {
     let source_url = base_url.join(path).expect("modulepreload url should parse");
     NativeModuleSingleFetchRequest::new(
         source_url.clone(),
-        base_url.clone(),
         base_url,
         ModuleMapKey::java_script(source_url),
         ModuleFetchMetadata::default(),

@@ -72,7 +72,6 @@ fn dynamic_import_completion_with_source(
         request_url: url.clone(),
         result: Ok(ModuleGraphFetchedSource::new(
             url,
-            false,
             ModuleSource::text(source.to_owned()),
         )),
         network_result: None,

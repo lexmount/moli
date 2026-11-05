@@ -395,7 +395,6 @@ fn dynamic_import_owner_module_fetch_completion_action()
         .inflight;
     let source = Ok(ModuleGraphFetchedSource::new(
         source_url,
-        false,
         ModuleSource::text("export const value = 1;".to_owned()),
     ));
     FrameDocumentDynamicImportTerminalPreparedAction::from_fetch_completion(
@@ -1470,7 +1469,6 @@ fn module_script_terminal_runner_dispatches_parser_root_terminal_batch() {
     let key = ModuleMapKey::java_script(root_url.clone());
     let fetched = FrameDocumentModuleFetchTerminalResult::Fetched(ModuleGraphFetchedSource::new(
         root_url.clone(),
-        false,
         ModuleSource::text("export const value = 1;".to_owned()),
     ));
     let works = vec![

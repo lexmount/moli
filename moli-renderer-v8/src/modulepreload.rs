@@ -193,7 +193,6 @@ pub(crate) fn modulepreload_fetch_candidate(
         key: key.clone(),
         request: NativeModuleSingleFetchRequest::new(
             request_url.clone(),
-            request_url,
             document_url.clone(),
             key,
             ModuleFetchMetadata::from_modulepreload_script_fetch_metadata(&fetch_metadata),

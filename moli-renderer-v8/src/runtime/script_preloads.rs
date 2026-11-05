@@ -1105,7 +1105,6 @@ impl BufferedScriptPreloadRequest {
             );
         crate::module_runtime::NativeModuleSingleFetchRequest::new(
             self.url.clone(),
-            self.url,
             self.initiator_url,
             module_key,
             fetch_metadata,

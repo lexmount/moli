@@ -418,7 +418,6 @@ fn test_child_modulepreload_start_task_for_target(
         NativeModuleSingleFetchRequest::new(
             source_url.clone(),
             source_url.clone(),
-            source_url.clone(),
             ModuleMapKey::java_script(source_url),
             ModuleFetchMetadata::default(),
         ),
@@ -1049,7 +1048,6 @@ fn enqueue_parser_owned_module_script_fetch_completion_for_target_for_test(
             target,
             Ok(ModuleGraphFetchedSource::new(
                 module_url.clone(),
-                false,
                 ModuleSource::text(source.to_owned()),
             )),
             None,

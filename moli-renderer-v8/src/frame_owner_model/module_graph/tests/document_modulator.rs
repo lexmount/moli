@@ -251,7 +251,6 @@ fn modulepreload_completion_action(
     let request = modulepreload_request("modulepreload-runner-complete.js");
     let source = Ok(ModuleGraphFetchedSource::new(
         request.source_url().clone(),
-        false,
         ModuleSource::text("export const value = 1;".to_owned()),
     ));
     FrameDocumentModulepreloadFetchCompletionAction::new(owner, realm_id, 55, request, source)
@@ -435,7 +434,6 @@ fn modulepreload_fetch_completion_settles_source_in_modulator_store() {
             inflight,
             Ok(ModuleGraphFetchedSource::new(
                 request.source_url().clone(),
-                false,
                 ModuleSource::text("export const value = 1;".to_owned()),
             )),
         )

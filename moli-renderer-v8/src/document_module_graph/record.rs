@@ -15,16 +15,14 @@ pub(crate) enum ModuleSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModuleGraphFetchedSource {
     final_url: Url,
-    redirected: bool,
     response_referrer_policy: Option<String>,
     source: ModuleSource,
 }
 
 impl ModuleGraphFetchedSource {
-    pub(crate) fn new(final_url: Url, redirected: bool, source: ModuleSource) -> Self {
+    pub(crate) fn new(final_url: Url, source: ModuleSource) -> Self {
         Self {
             final_url,
-            redirected,
             response_referrer_policy: None,
             source,
         }

@@ -63,7 +63,6 @@ fn child_parser_root_clients_fan_out_from_module_map_entry() {
                 key.clone(),
                 Ok(ModuleGraphFetchedSource::new(
                     root_url.clone(),
-                    false,
                     ModuleSource::text("export const wrong = true;".to_owned()),
                 )),
             )
@@ -78,7 +77,6 @@ fn child_parser_root_clients_fan_out_from_module_map_entry() {
                 key.clone(),
                 Ok(ModuleGraphFetchedSource::new(
                     root_url.clone(),
-                    false,
                     ModuleSource::text("export const stale = true;".to_owned()),
                 )),
             )
@@ -91,7 +89,6 @@ fn child_parser_root_clients_fan_out_from_module_map_entry() {
         key.clone(),
         Ok(ModuleGraphFetchedSource::new(
             root_url.clone(),
-            false,
             ModuleSource::text("export const value = 1;".to_owned()),
         )),
     );
@@ -149,7 +146,6 @@ fn child_parser_root_already_terminal_entries_emit_owner_tasks() {
         fetched_key.clone(),
         Ok(ModuleGraphFetchedSource::new(
             fetched_url.clone(),
-            false,
             ModuleSource::text("export const value = 1;".to_owned()),
         )),
     );

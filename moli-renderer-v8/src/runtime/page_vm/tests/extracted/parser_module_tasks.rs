@@ -916,7 +916,6 @@ async fn document_replacement_drops_parser_pending_module_tree_owner() {
                 stale_target,
                 Ok(ModuleGraphFetchedSource::new(
                     module_url.clone(),
-                    false,
                     ModuleSource::text(
                         "globalThis.__oldModuleAfterReplacement = true; export const value = 1;"
                             .to_owned(),
