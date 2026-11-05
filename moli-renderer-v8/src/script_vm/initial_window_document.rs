@@ -114,6 +114,7 @@ impl ScriptVm {
                 runtime.set_bypass_content_security_policy(
                     env.document_settings.bypass_content_security_policy,
                 );
+                runtime.retain_performance_clock_from_initial_document(&vm.document_runtime);
                 runtime.retain_event_targets_from_initial_document(&mut vm.document_runtime);
                 // JsContextHost and retained native wrappers point into this allocation.
                 // Replace its contents while keeping the allocation's address stable.

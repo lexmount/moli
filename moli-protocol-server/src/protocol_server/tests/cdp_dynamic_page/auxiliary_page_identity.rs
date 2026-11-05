@@ -1269,8 +1269,20 @@ async fn initial_same_origin_popup_commit_preserves_window_and_replaces_document
         .iter()
         .map(|target| target["id"].clone())
         .collect();
-    assert_eq!(evaluate_window_name_probe(&mut opener, 3,
-        "window.p=open('/child/dir','initial-state');p.marker=73;p.onload=()=>p.onloadMarker=91;p.addEventListener('load',()=>p.listenerMarker=92);window.oldArray=p.Array;window.oldDocument=p.document;oldDocument.body.innerHTML='<span id=old>initial</span>';oldDocument.addEventListener('retained',()=>p.oldDocumentMarker=93);window.oldFilter=()=>1;window.oldWalker=oldDocument.createTreeWalker(oldDocument.body,1,oldFilter);true").await, true);
+    assert_eq!(evaluate_window_name_probe(&mut opener, 3, r#"
+        window.p=open('/child/dir','initial-state');p.marker=73;
+        window.oldPerformance=p.performance;window.oldPerformanceTiming=oldPerformance.timing;
+        window.oldTimeOrigin=oldPerformance.timeOrigin;oldPerformance.mark('initial-window');
+        p.onload=()=>{
+            p.onloadMarker=91;
+            const navigation=p.performance.getEntriesByType('navigation')[0];
+            p.clockAtLoad={now:p.performance.now(),loadStart:navigation.loadEventStart,
+                legacyLoadStart:p.performance.timing.loadEventStart,loadEnd:navigation.loadEventEnd};
+        };
+        p.addEventListener('load',()=>p.listenerMarker=92);window.oldArray=p.Array;
+        window.oldDocument=p.document;oldDocument.body.innerHTML='<span id=old>initial</span>';
+        oldDocument.addEventListener('retained',()=>p.oldDocumentMarker=93);window.oldFilter=()=>1;
+        window.oldWalker=oldDocument.createTreeWalker(oldDocument.body,1,oldFilter);true"#).await, true);
     let targets = wait_for_target_list(addr, "review popup published", |targets| {
         targets.len() == ids.len() + 1
     })
@@ -1302,7 +1314,12 @@ async fn initial_same_origin_popup_commit_preserves_window_and_replaces_document
         return [p.marker??null,p.serverMarker,p.Array===oldArray,p.document!==oldDocument,
             oldDocument.URL,oldDocument.getElementById('old').textContent,p.onloadMarker,
             oldWalker.filter===oldFilter,oldWalker.nextNode().textContent,p.listenerMarker,
-            p.oldDocumentMarker??null,dispatched,event.target===null,event.currentTarget===null];
+            p.oldDocumentMarker??null,dispatched,event.target===null,event.currentTarget===null,
+            p.performance===oldPerformance,p.performance.timing===oldPerformanceTiming,
+            p.performance.timeOrigin===oldTimeOrigin,
+            p.performance.getEntriesByName('initial-window').length===1,
+            p.clockAtLoad.loadStart>=150,p.clockAtLoad.legacyLoadStart-oldTimeOrigin>=149,
+            p.clockAtLoad.now+1>=p.clockAtLoad.loadStart,p.clockAtLoad.loadEnd===0];
     })()"#,
     )
     .await;
@@ -1329,6 +1346,14 @@ async fn initial_same_origin_popup_commit_preserves_window_and_replaces_document
             92,
             null,
             false,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
             true,
             true
         ]),

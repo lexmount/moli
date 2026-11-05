@@ -37,6 +37,14 @@ impl Default for DocumentTiming {
 }
 
 impl DocumentRuntime {
+    /// Replacing the initial Document can retain the actual Window and its
+    /// Performance objects. Keep that clock's anchors, but leave this new
+    /// Document's lifecycle slots empty.
+    pub(crate) fn retain_performance_clock_from_initial_document(&mut self, initial: &Self) {
+        self.timing.time_origin = initial.timing.time_origin;
+        self.timing.started = initial.timing.started;
+    }
+
     pub(crate) fn document_timing_snapshot(&self) -> DocumentTimingSnapshot {
         DocumentTimingSnapshot {
             time_origin: self.timing.time_origin,
