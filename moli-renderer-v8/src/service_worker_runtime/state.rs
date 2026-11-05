@@ -183,6 +183,8 @@ pub(super) struct ServiceWorkerRuntimeState {
     pub(super) pending_fetch_jobs: HashMap<ServiceWorkerEventId, ServiceWorkerFetchJob>,
     pub(super) pending_fetch_body_uploads: HashMap<ServiceWorkerEventId, ServiceWorkerRunOwner>,
     pub(super) lifecycle_watchers: Vec<ServiceWorkerLifecycleWatcher>,
+    pub(super) worker_lifecycle_watchers:
+        HashMap<ServiceWorkerVersionId, ServiceWorkerWorkerLifecycleWatcher>,
     pub(super) live_clients: HashMap<ServiceWorkerClientId, ServiceWorkerClient>,
     pub(super) notification_records: Vec<ServiceWorkerNotificationRecord>,
     pub(super) sync_registrations:
@@ -289,6 +291,7 @@ impl ServiceWorkerRuntimeState {
             pending_fetch_jobs: HashMap::new(),
             pending_fetch_body_uploads: HashMap::new(),
             lifecycle_watchers: Vec::new(),
+            worker_lifecycle_watchers: HashMap::new(),
             live_clients: HashMap::new(),
             notification_records: Vec::new(),
             sync_registrations: HashMap::new(),
@@ -864,22 +867,64 @@ pub(super) struct ServiceWorkerLifecycleWatcher {
     pub(super) completion_tx: RendererPageServiceWorkerTaskSender,
 }
 
-pub(super) struct ServiceWorkerLifecycleNotificationDelivery {
-    pub(super) watcher: ServiceWorkerLifecycleWatcher,
-    pub(super) registration: ServiceWorkerRegistrationSnapshot,
-    pub(super) events: Vec<ServiceWorkerLifecycleClientEvent>,
+#[derive(Clone, Debug)]
+pub(super) struct ServiceWorkerWorkerLifecycleWatcher {
+    pub(super) owner: ServiceWorkerRunOwner,
+    pub(super) completion_tx: tokio::sync::mpsc::WeakUnboundedSender<WorkerMessage>,
+}
+
+pub(super) enum ServiceWorkerLifecycleNotificationDelivery {
+    Page {
+        watcher: ServiceWorkerLifecycleWatcher,
+        registration: ServiceWorkerRegistrationSnapshot,
+        events: Vec<ServiceWorkerLifecycleClientEvent>,
+    },
+    Worker {
+        completion_tx: tokio::sync::mpsc::UnboundedSender<WorkerMessage>,
+        task: super::snapshots::ServiceWorkerRegistrationTask,
+    },
 }
 
 impl ServiceWorkerLifecycleNotificationDelivery {
+    pub(super) fn send_worker_registration_state(&self) {
+        if let Self::Worker {
+            completion_tx,
+            task,
+        } = self
+        {
+            let _ = completion_tx.send(WorkerMessage::ServiceWorkerRegistrationTask(Box::new(
+                super::snapshots::ServiceWorkerRegistrationTask {
+                    registration: task.registration.clone(),
+                    events: Vec::new(),
+                },
+            )));
+        }
+    }
+
     pub(super) fn send(self) {
-        let _ = self.watcher.completion_tx.send_service_worker_lifecycle(
-            ServiceWorkerLifecycleNotification {
-                document_owner: self.watcher.document_owner,
-                storage_key: self.watcher.storage_key,
-                registration: self.registration,
-                events: self.events,
-            },
-        );
+        match self {
+            Self::Page {
+                watcher,
+                registration,
+                events,
+            } => {
+                let _ = watcher.completion_tx.send_service_worker_lifecycle(
+                    ServiceWorkerLifecycleNotification {
+                        document_owner: watcher.document_owner,
+                        storage_key: watcher.storage_key,
+                        registration,
+                        events,
+                    },
+                );
+            }
+            Self::Worker {
+                completion_tx,
+                task,
+            } => {
+                let _ = completion_tx
+                    .send(WorkerMessage::ServiceWorkerRegistrationTask(Box::new(task)));
+            }
+        }
     }
 }
 

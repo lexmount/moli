@@ -1,6 +1,153 @@
 use super::*;
 
 #[test]
+fn worker_registration_watch_preserves_queued_states_and_exact_run_owner() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    let scope = url("https://example.test/app/");
+    insert_inactive_registration(
+        &service,
+        registration_id,
+        version_id,
+        scope.join("worker.js").unwrap(),
+        scope,
+    );
+    let owner = {
+        let mut state = service.inner.state.lock();
+        let version = state.versions.get_mut(&version_id).unwrap();
+        let owner = version.run_owner();
+        version.running_state = ServiceWorkerVersionRunningState::Starting {
+            host: new_loading_test_host(version_id, owner.run_identity()),
+        };
+        let mut job = ServiceWorkerPendingRegisterJob::new(Vec::new());
+        job.start_current_moli_job();
+        state
+            .registrations
+            .get_mut(&registration_id)
+            .unwrap()
+            .pending_register_jobs
+            .insert(version_id, job);
+        owner
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    assert!(
+        service
+            .watch_registration_in_worker(
+                registration_id,
+                &ServiceWorkerRunOwner::fresh(version_id),
+                &tx
+            )
+            .is_none()
+    );
+    assert!(
+        service
+            .watch_registration_in_worker(ServiceWorkerRegistrationId(2), &owner, &tx)
+            .is_none()
+    );
+    let initial = service
+        .watch_registration_in_worker(registration_id, &owner, &tx)
+        .unwrap();
+    assert!(
+        initial.installing().is_none(),
+        "script evaluation precedes Install publication"
+    );
+    let installing_deliveries = {
+        let mut state = service.inner.state.lock();
+        let snapshot =
+            service_worker_registration_snapshot(&state, &state.registrations[&registration_id]);
+        let _ = state
+            .registrations
+            .get_mut(&registration_id)
+            .unwrap()
+            .pending_register_jobs
+            .get_mut(&version_id)
+            .unwrap()
+            .complete_install_started(snapshot);
+        registration_notifications_locked(
+            &state,
+            registration_id,
+            vec![ServiceWorkerLifecycleClientEvent::UpdateFound],
+        )
+    };
+    let installed_deliveries = {
+        let mut state = service.inner.state.lock();
+        let registration = state.registrations.get_mut(&registration_id).unwrap();
+        registration.installing_version_id = None;
+        registration.waiting_version_id = Some(version_id);
+        state.versions.get_mut(&version_id).unwrap().lifecycle_state =
+            ServiceWorkerVersionLifecycleState::Installed;
+        registration_notifications_locked(
+            &state,
+            registration_id,
+            vec![ServiceWorkerLifecycleClientEvent::WorkerStateChanged {
+                version_id,
+                state: "installed",
+            }],
+        )
+    };
+    // Advance the owner before draining either task: the first task must retain
+    // its installing slot and state, independently of the current owner state.
+    for delivery in installing_deliveries
+        .into_iter()
+        .chain(installed_deliveries)
+    {
+        delivery.send();
+    }
+    let crate::worker::WorkerMessage::ServiceWorkerRegistrationTask(first) = rx.try_recv().unwrap()
+    else {
+        panic!("expected installing task");
+    };
+    assert_eq!(
+        first.registration.installing().unwrap().state(),
+        "installing"
+    );
+    assert!(first.registration.waiting().is_none());
+    let crate::worker::WorkerMessage::ServiceWorkerRegistrationTask(second) =
+        rx.try_recv().unwrap()
+    else {
+        panic!("expected installed task");
+    };
+    assert!(second.registration.installing().is_none());
+    assert_eq!(second.registration.waiting().unwrap().state(), "installed");
+    let new_owner = {
+        let mut state = service.inner.state.lock();
+        let version = state.versions.get_mut(&version_id).unwrap();
+        let owner = version.replace_run_owner();
+        version.running_state = ServiceWorkerVersionRunningState::Starting {
+            host: new_loading_test_host(version_id, owner.run_identity()),
+        };
+        assert!(registration_notifications_locked(&state, registration_id, Vec::new()).is_empty());
+        owner
+    };
+    assert!(
+        service
+            .watch_registration_in_worker(registration_id, &owner, &tx)
+            .is_none()
+    );
+    let (new_tx, mut new_rx) = tokio::sync::mpsc::unbounded_channel();
+    let restarted = service
+        .watch_registration_in_worker(registration_id, &new_owner, &new_tx)
+        .unwrap();
+    assert_eq!(restarted.waiting().unwrap().state(), "installed");
+    let deliveries =
+        registration_notifications_locked(&service.inner.state.lock(), registration_id, Vec::new());
+    for delivery in deliveries {
+        delivery.send();
+    }
+    assert!(new_rx.try_recv().is_ok());
+    assert!(
+        rx.try_recv().is_err(),
+        "a retired run must receive no new tasks"
+    );
+    drop(new_rx);
+    assert!(
+        registration_notifications_locked(&service.inner.state.lock(), registration_id, Vec::new())
+            .is_empty()
+    );
+}
+
+#[test]
 fn failed_replacement_updates_only_its_registration_object() {
     let service = new_service_worker_runtime_service();
     let old_id = ServiceWorkerRegistrationId(10);
@@ -409,11 +556,14 @@ fn registration_lifecycle_watchers_are_partitioned_by_storage_key() {
     };
 
     assert_eq!(deliveries.len(), 1);
+    let ServiceWorkerLifecycleNotificationDelivery::Page { watcher, .. } = &deliveries[0] else {
+        panic!("expected a page lifecycle notification");
+    };
     assert_eq!(
-        deliveries[0].watcher.document_owner,
+        watcher.document_owner,
         crate::native_bridge::WindowDocumentOwner::for_test(7)
     );
-    assert_ne!(deliveries[0].watcher.storage_key, "different-partition");
+    assert_ne!(watcher.storage_key, "different-partition");
 }
 #[test]
 fn queued_unregister_job_phase_transitions_to_complete() {

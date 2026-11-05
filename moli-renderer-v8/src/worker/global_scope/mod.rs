@@ -134,8 +134,8 @@ pub(crate) use redirect_owner::WorkerRedirectOwner;
 
 use self::service_worker_api::*;
 pub(super) use self::service_worker_api::{
-    build_service_worker_client_object, build_service_worker_client_object_from_snapshot,
-    build_service_worker_global_service_worker, dispatch_service_worker_registration_update_found,
+    apply_service_worker_registration_task, build_service_worker_client_object,
+    build_service_worker_client_object_from_snapshot, build_service_worker_global_service_worker,
 };
 pub(crate) use self::service_worker_api::{
     install_service_worker_interface_template_bindings, service_worker_runtime_identity,

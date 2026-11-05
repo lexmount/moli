@@ -201,15 +201,40 @@ fn service_worker_registration_snapshot(
     state: &ServiceWorkerRuntimeState,
     registration: &ServiceWorkerRegistration,
 ) -> ServiceWorkerRegistrationSnapshot {
+    service_worker_registration_snapshot_with_installing(
+        state,
+        registration,
+        registration.installing_version_id,
+    )
+}
+
+fn service_worker_registration_snapshot_for_worker(
+    state: &ServiceWorkerRuntimeState,
+    registration: &ServiceWorkerRegistration,
+) -> ServiceWorkerRegistrationSnapshot {
+    // Update runs the script before Install publishes the installing worker.
+    // The internal slot also reserves the in-progress registration job.
+    let installing = registration.installing_version_id.filter(|version_id| {
+        registration
+            .pending_register_jobs
+            .get(version_id)
+            .is_none_or(|job| job.install_started())
+    });
+    service_worker_registration_snapshot_with_installing(state, registration, installing)
+}
+
+fn service_worker_registration_snapshot_with_installing(
+    state: &ServiceWorkerRuntimeState,
+    registration: &ServiceWorkerRegistration,
+    installing: Option<ServiceWorkerVersionId>,
+) -> ServiceWorkerRegistrationSnapshot {
     ServiceWorkerRegistrationSnapshot::new(
         registration.id,
         registration.scope_url.clone(),
         registration.update_via_cache,
         registration.navigation_preload_state.clone(),
         service_worker_version_snapshot(
-            registration
-                .installing_version_id
-                .and_then(|version_id| state.versions.get(&version_id)),
+            installing.and_then(|version_id| state.versions.get(&version_id)),
         ),
         service_worker_version_snapshot(
             registration
@@ -603,7 +628,7 @@ fn registration_notifications_locked(
         return Vec::new();
     };
     let snapshot = service_worker_registration_snapshot(state, registration);
-    state
+    let page_deliveries = state
         .lifecycle_watchers
         .iter()
         .filter(|watcher| {
@@ -611,12 +636,43 @@ fn registration_notifications_locked(
                 && watcher.storage_key == registration.storage_key
         })
         .cloned()
-        .map(|watcher| ServiceWorkerLifecycleNotificationDelivery {
+        .map(|watcher| ServiceWorkerLifecycleNotificationDelivery::Page {
             watcher,
             registration: snapshot.clone(),
             events: events.clone(),
+        });
+    let worker_snapshot = service_worker_registration_snapshot_for_worker(state, registration);
+    let mut deliveries: Vec<_> = state
+        .worker_lifecycle_watchers
+        .iter()
+        .filter_map(|(version_id, watcher)| {
+            let version = state.versions.get(version_id)?;
+            if version.registration_id != registration_id
+                || version.run != watcher.owner.cloned_run_identity()
+                || matches!(
+                    version.running_state,
+                    ServiceWorkerVersionRunningState::Stopped
+                )
+            {
+                return None;
+            }
+            let completion_tx = watcher.completion_tx.upgrade()?;
+            if completion_tx.is_closed() {
+                return None;
+            }
+            Some(ServiceWorkerLifecycleNotificationDelivery::Worker {
+                completion_tx,
+                task: super::snapshots::ServiceWorkerRegistrationTask {
+                    registration: worker_snapshot.clone(),
+                    events: events.clone(),
+                },
+            })
         })
-        .collect()
+        .collect();
+    // An updatefound page listener can immediately message the active worker.
+    // Queue the worker's registration task before exposing that event to pages.
+    deliveries.extend(page_deliveries);
+    deliveries
 }
 
 #[cfg(test)]

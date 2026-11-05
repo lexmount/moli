@@ -90,5 +90,6 @@ pub(crate) use service::{
     new_service_worker_runtime_service_with_resource_store_and_browser_resource_runtime_binding,
 };
 pub(crate) use snapshots::{
-    ServiceWorkerControlState, ServiceWorkerRegistrationSnapshot, ServiceWorkerVersionSnapshot,
+    ServiceWorkerControlState, ServiceWorkerRegistrationSnapshot, ServiceWorkerRegistrationTask,
+    ServiceWorkerVersionSnapshot,
 };

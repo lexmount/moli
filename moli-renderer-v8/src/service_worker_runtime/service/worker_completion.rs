@@ -66,7 +66,7 @@ impl ServiceWorkerRuntimeService {
             return;
         };
         let loaded_main_script_resource = script_resource.is_some();
-        let (lifecycle_start, register_completion, notifications, worker_hosts, pending_events) = {
+        let (lifecycle_start, register_completion, notifications, pending_events) = {
             let mut state = self.inner.state.lock();
             let (registration_id, lifecycle_state, pending_events, run) = {
                 let Some(version) = state.versions.get_mut(&version_id) else {
@@ -149,30 +149,14 @@ impl ServiceWorkerRuntimeService {
             } else {
                 None
             };
-            let (mut notifications, worker_hosts) = if lifecycle_start.is_some() {
-                let notifications = lifecycle_notifications_for_registration_locked(
+            let mut notifications = if lifecycle_start.is_some() {
+                lifecycle_notifications_for_registration_locked(
                     &state,
                     registration_id,
                     vec![ServiceWorkerLifecycleClientEvent::UpdateFound],
-                );
-                let hosts = state
-                    .versions
-                    .values()
-                    .filter_map(|version| {
-                        if version.registration_id != registration_id {
-                            return None;
-                        }
-                        match &version.running_state {
-                            ServiceWorkerVersionRunningState::Running { host } => {
-                                Some(host.clone())
-                            }
-                            _ => None,
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                (notifications, hosts)
+                )
             } else {
-                (Vec::new(), Vec::new())
+                Vec::new()
             };
             // A first register() creates its JS registration when the completion is
             // delivered. Queue updatefound for that document after the completion,
@@ -187,13 +171,14 @@ impl ServiceWorkerRuntimeService {
                     else {
                         continue;
                     };
-                    if notifications
-                        .iter()
-                        .any(|notification| notification.watcher.document_owner == *document_owner)
-                    {
+                    if notifications.iter().any(|notification| {
+                        matches!(notification,
+                            ServiceWorkerLifecycleNotificationDelivery::Page { watcher, .. }
+                                if watcher.document_owner == *document_owner)
+                    }) {
                         continue;
                     }
-                    notifications.push(ServiceWorkerLifecycleNotificationDelivery {
+                    notifications.push(ServiceWorkerLifecycleNotificationDelivery::Page {
                         watcher: ServiceWorkerLifecycleWatcher {
                             scope_url: snapshot.scope_url().clone(),
                             storage_key: state.registrations[&registration_id].storage_key.clone(),
@@ -210,21 +195,22 @@ impl ServiceWorkerRuntimeService {
                 lifecycle_start,
                 register_completion,
                 notifications,
-                worker_hosts,
                 pending_events,
             )
         };
+        // Install publishes the installing slot before resolving the update
+        // promise, while updatefound is a later task. Do not refresh from an
+        // older completion snapshot on the worker's promise-result path.
+        for notification in &notifications {
+            notification.send_worker_registration_state();
+        }
         if let Some((callbacks, snapshot)) = register_completion
             && !callbacks.is_empty()
         {
             ServiceWorkerRegisterJob::send_all(callbacks, Ok(snapshot));
         }
-        // Script evaluation must succeed before updatefound. Deliver it on each
-        // existing worker loop before install (and before page listeners can send
-        // another event to the active worker).
-        for host in worker_hosts {
-            host.dispatch_registration_update_found();
-        }
+        // Worker registration tasks and updatefound precede install, including
+        // on worker loops that were already running when the update started.
         for notification in notifications {
             notification.send();
         }

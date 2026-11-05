@@ -113,8 +113,10 @@ pub(crate) enum WorkerMessage {
     ServiceWorkerPeriodicSyncEvent(Box<ServiceWorkerPeriodicSyncEvent>),
     /// Dispatch `navigator.serviceWorker` `controllerchange` in this worker client.
     ServiceWorkerControllerChange,
-    /// Dispatch updatefound on the original registration in this service worker realm.
-    ServiceWorkerRegistrationUpdateFound,
+    /// Apply a registration snapshot and its events on this service worker loop.
+    ServiceWorkerRegistrationTask(
+        Box<crate::service_worker_runtime::ServiceWorkerRegistrationTask>,
+    ),
     /// Settle a registration.update() promise on the requesting worker loop.
     ServiceWorkerUpdateResult {
         request_id: u64,
@@ -991,12 +993,6 @@ impl WorkerHandle {
         let _ = self
             .tx
             .send(WorkerMessage::ServiceWorkerLifecycleEvent(Box::new(event)));
-    }
-
-    pub(crate) fn dispatch_service_worker_registration_update_found(&self) {
-        let _ = self
-            .tx
-            .send(WorkerMessage::ServiceWorkerRegistrationUpdateFound);
     }
 
     pub(crate) fn dispatch_service_worker_fetch_event(&self, event: ServiceWorkerFetchEvent) {

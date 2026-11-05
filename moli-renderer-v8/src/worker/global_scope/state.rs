@@ -130,6 +130,12 @@ pub(crate) struct WorkerGlobalState {
     /// Browser-context Service Worker owner inherited by real worker clients.
     pub(in crate::worker) service_worker_runtime:
         Option<crate::service_worker_runtime::ServiceWorkerRuntimeService>,
+    /// Registration state last applied by this worker's task queue.
+    pub(in crate::worker) service_worker_registration:
+        Option<crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot>,
+    /// One wrapper per service worker version in this realm.
+    pub(in crate::worker) service_worker_objects:
+        HashMap<ServiceWorkerVersionId, v8::Global<v8::Object>>,
     /// Live Service Worker client id for DedicatedWorker/SharedWorker globals.
     pub(in crate::worker) service_worker_client_id:
         Option<crate::service_worker_runtime::ServiceWorkerClientId>,

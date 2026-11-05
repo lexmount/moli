@@ -50,9 +50,14 @@ fn build_service_worker_global_registration<'s>(
         scope,
         "ServiceWorkerRegistration",
     )?;
-    let update_via_cache = worker_service_worker_runtime(scope)
-        .and_then(|runtime| runtime.registration_snapshot_by_id(registration_id))
-        .map(|snapshot| snapshot.update_via_cache().as_str())
+    let update_via_cache = get_worker_state(scope)
+        .and_then(|state| {
+            state
+                .borrow()
+                .service_worker_registration
+                .as_ref()
+                .map(|snapshot| snapshot.update_via_cache().as_str())
+        })
         .unwrap_or("imports");
     let registration = ServiceWorkerRegistrationObjectDeclaration {
         prototype,
@@ -91,9 +96,91 @@ fn build_service_worker_global_registration<'s>(
     Ok(registration)
 }
 
-pub(in crate::worker) fn dispatch_service_worker_registration_update_found<'s>(
+pub(in crate::worker) fn apply_service_worker_registration_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    task: crate::service_worker_runtime::ServiceWorkerRegistrationTask,
 ) {
+    use crate::types::ServiceWorkerLifecycleClientEvent;
+
+    let Some(state) = get_worker_state(scope) else {
+        return;
+    };
+    {
+        let mut state = state.borrow_mut();
+        if !state.callback_task_delivery_allowed()
+            || !matches!(state.global_kind, WorkerGlobalKind::Service { registration_id, .. }
+                if registration_id == task.registration.registration_id())
+        {
+            return;
+        }
+        state.service_worker_registration = Some(task.registration.clone());
+    }
+    let global = scope.get_current_context().global(scope);
+    if let Some(registration) =
+        get_private_value(scope, global, SERVICE_WORKER_GLOBAL_REGISTRATION_SLOT)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        let update_via_cache = v8str(scope, task.registration.update_via_cache().as_str());
+        set_private_value(
+            scope,
+            registration,
+            crate::context_bootstrap::service_worker_interfaces::REGISTRATION_UPDATE_VIA_CACHE,
+            update_via_cache.into(),
+        );
+    }
+    // Materialize the slot objects before dispatch, reusing this realm's
+    // wrappers. Getters only observe this task's snapshot, never owner state.
+    for version in [
+        task.registration.installing(),
+        task.registration.waiting(),
+        task.registration.active(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Ok(worker) = build_service_worker_global_service_worker(scope, version) {
+            set_service_worker_object_state(scope, worker, version.state());
+        }
+    }
+    for event in task.events {
+        match event {
+            ServiceWorkerLifecycleClientEvent::UpdateFound => {
+                dispatch_service_worker_registration_update_found(scope);
+            }
+            ServiceWorkerLifecycleClientEvent::WorkerStateChanged {
+                version_id,
+                state: new_state,
+            } => {
+                let worker = state
+                    .borrow()
+                    .service_worker_objects
+                    .get(&version_id)
+                    .cloned();
+                if let Some(worker) = worker {
+                    let worker = v8::Local::new(scope, worker);
+                    set_service_worker_object_state(scope, worker, new_state);
+                    dispatch_service_worker_object_event(scope, worker, "statechange");
+                }
+            }
+        }
+    }
+}
+
+fn set_service_worker_object_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    worker: v8::Local<'s, v8::Object>,
+    state: &'static str,
+) {
+    let state = v8str(scope, state);
+    set_private_value(
+        scope,
+        worker,
+        crate::context_bootstrap::service_worker_interfaces::WORKER_STATE,
+        state.into(),
+    );
+}
+
+fn dispatch_service_worker_registration_update_found<'s>(scope: &mut v8::PinScope<'s, '_>) {
     let global = scope.get_current_context().global(scope);
     let Some(registration) =
         get_private_value(scope, global, SERVICE_WORKER_GLOBAL_REGISTRATION_SLOT)
@@ -101,6 +188,14 @@ pub(in crate::worker) fn dispatch_service_worker_registration_update_found<'s>(
     else {
         return;
     };
+    dispatch_service_worker_object_event(scope, registration, "updatefound");
+}
+
+fn dispatch_service_worker_object_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    event_type: &str,
+) {
     let Ok(prototype) =
         crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Event")
     else {
@@ -108,14 +203,9 @@ pub(in crate::worker) fn dispatch_service_worker_registration_update_found<'s>(
     };
     let event = v8::Object::new(scope);
     let _ = event.set_prototype(scope, prototype.into());
-    crate::context_bootstrap::initialize_event_object(scope, event, "updatefound", false, false);
+    crate::context_bootstrap::initialize_event_object(scope, event, event_type, false, false);
     crate::context_bootstrap::mark_event_trusted(scope, event);
-    crate::context_bootstrap::dispatch_simple_event_target_event(
-        scope,
-        registration,
-        "updatefound",
-        event,
-    );
+    crate::context_bootstrap::dispatch_simple_event_target_event(scope, target, event_type, event);
 }
 
 fn build_service_worker_global_navigation_preload_manager<'s>(
@@ -183,12 +273,10 @@ fn service_worker_registration_worker_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     phase: ServiceWorkerRegistrationWorkerPhase,
 ) -> v8::Local<'s, v8::Value> {
-    let Some((registration_id, _, _)) = service_worker_runtime_identity(scope) else {
+    let Some(state) = get_worker_state(scope) else {
         return v8::null(scope).into();
     };
-    let Some(snapshot) = worker_service_worker_runtime(scope)
-        .and_then(|runtime| runtime.registration_snapshot_by_id(registration_id))
-    else {
+    let Some(snapshot) = state.borrow().service_worker_registration.clone() else {
         return v8::null(scope).into();
     };
     let version = match phase {
@@ -206,6 +294,14 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     version: &crate::service_worker_runtime::ServiceWorkerVersionSnapshot,
 ) -> Result<v8::Local<'s, v8::Object>> {
+    if let Some(state) = get_worker_state(scope)
+        && let Some(worker) = state
+            .borrow()
+            .service_worker_objects
+            .get(&version.version_id())
+    {
+        return Ok(v8::Local::new(scope, worker));
+    }
     let prototype =
         crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "ServiceWorker")?;
     let worker = ServiceWorkerObjectDeclaration {
@@ -223,6 +319,12 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
         version_id_value.into(),
     );
     initialize_simple_event_target(scope, worker);
+    if let Some(state) = get_worker_state(scope) {
+        state
+            .borrow_mut()
+            .service_worker_objects
+            .insert(version.version_id(), v8::Global::new(scope, worker));
+    }
     Ok(worker)
 }
 

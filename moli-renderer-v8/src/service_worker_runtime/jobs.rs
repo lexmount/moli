@@ -159,6 +159,15 @@ impl ServiceWorkerPendingRegisterJob {
         self.phase
     }
 
+    pub(super) fn install_started(&self) -> bool {
+        matches!(
+            self.phase,
+            ServiceWorkerRegisterJobPhase::Install
+                | ServiceWorkerRegisterJobPhase::Store
+                | ServiceWorkerRegisterJobPhase::Complete
+        )
+    }
+
     pub(super) fn start_current_moli_job(&mut self) {
         self.phase = ServiceWorkerRegisterJobPhase::Start;
         self.phase = ServiceWorkerRegisterJobPhase::Register;

@@ -1,6 +1,40 @@
 use super::*;
 
 impl ServiceWorkerRuntimeService {
+    pub(crate) fn watch_registration_in_worker(
+        &self,
+        registration_id: ServiceWorkerRegistrationId,
+        owner: &ServiceWorkerRunOwner,
+        completion_tx: &tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerMessage>,
+    ) -> Option<ServiceWorkerRegistrationSnapshot> {
+        let mut state = self.inner.state.lock();
+        let version = state.versions.get(&owner.version_id())?;
+        if version.registration_id != registration_id
+            || version.run != owner.cloned_run_identity()
+            || matches!(
+                version.running_state,
+                ServiceWorkerVersionRunningState::Stopped
+            )
+        {
+            return None;
+        }
+        let registration = state.registrations.get(&registration_id)?;
+        let snapshot = service_worker_registration_snapshot_for_worker(&state, registration);
+        // Subscribe atomically with the initial snapshot, before the worker
+        // thread starts. The weak route cannot retain a retired worker loop.
+        state
+            .worker_lifecycle_watchers
+            .retain(|_, watcher| watcher.completion_tx.strong_count() > 0);
+        state.worker_lifecycle_watchers.insert(
+            owner.version_id(),
+            super::super::state::ServiceWorkerWorkerLifecycleWatcher {
+                owner: owner.clone(),
+                completion_tx: completion_tx.downgrade(),
+            },
+        );
+        Some(snapshot)
+    }
+
     #[cfg(test)]
     pub(crate) fn watch_ready_registration(
         &self,
@@ -221,18 +255,6 @@ impl ServiceWorkerRuntimeService {
                 )
             })
             .max_by_key(|registration| registration.scope_url.as_str().len())
-            .map(|registration| service_worker_registration_snapshot(&state, registration))
-    }
-
-    pub(crate) fn registration_snapshot_by_id(
-        &self,
-        registration_id: ServiceWorkerRegistrationId,
-    ) -> Option<ServiceWorkerRegistrationSnapshot> {
-        let state = self.inner.state.lock();
-        state
-            .registrations
-            .get(&registration_id)
-            .filter(|registration| !registration.pending_unregistration)
             .map(|registration| service_worker_registration_snapshot(&state, registration))
     }
 

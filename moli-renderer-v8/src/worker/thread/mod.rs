@@ -216,6 +216,7 @@ pub(crate) struct WorkerSpawnOptions {
     pub(crate) creator_message_security:
         Option<crate::context_bootstrap::RuntimeMessageSourceSecurity>,
     pub(crate) service_worker_runtime: Option<ServiceWorkerRuntimeService>,
+    service_worker_run_owner: Option<crate::service_worker_runtime::ServiceWorkerRunOwner>,
     pub(crate) service_worker_script_resources: Vec<WorkerScriptResource>,
     pub(crate) service_worker_updated_script_resources: crate::worker::WorkerScriptUpdateResources,
     pub(crate) service_worker_can_import_new_scripts: bool,
@@ -358,6 +359,7 @@ impl WorkerSpawnOptions {
             creator_storage_key: None,
             creator_message_security: None,
             service_worker_runtime: None,
+            service_worker_run_owner: None,
             service_worker_script_resources: Vec::new(),
             service_worker_updated_script_resources: Default::default(),
             service_worker_can_import_new_scripts: true,
@@ -542,6 +544,14 @@ impl WorkerSpawnOptions {
 
     pub(crate) fn with_creator_storage_key(mut self, storage_key: MoliStorageKey) -> Self {
         self.creator_storage_key = Some(storage_key);
+        self
+    }
+
+    pub(crate) fn with_service_worker_run_owner(
+        mut self,
+        owner: crate::service_worker_runtime::ServiceWorkerRunOwner,
+    ) -> Self {
+        self.service_worker_run_owner = Some(owner);
         self
     }
 
@@ -1428,6 +1438,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         creator_storage_key,
         creator_message_security,
         service_worker_runtime,
+        service_worker_run_owner,
         service_worker_script_resources,
         service_worker_updated_script_resources,
         service_worker_can_import_new_scripts,
@@ -1442,6 +1453,20 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
     let (parent_to_worker_tx, parent_to_worker_rx) = mpsc::unbounded_channel::<WorkerMessage>();
     let (worker_to_parent_tx, worker_to_parent_rx) =
         mpsc::unbounded_channel::<WorkerToParentMessage>();
+    let service_worker_registration = match (
+        &global_kind,
+        &service_worker_runtime,
+        &service_worker_run_owner,
+    ) {
+        (
+            WorkerGlobalKind::Service {
+                registration_id, ..
+            },
+            Some(runtime),
+            Some(owner),
+        ) => runtime.watch_registration_in_worker(*registration_id, owner, &parent_to_worker_tx),
+        _ => None,
+    };
     let worker_wake_tx = parent_to_worker_tx.clone();
     let isolate_handle = Arc::new(Mutex::new(None));
     let worker_isolate_handle = Arc::clone(&isolate_handle);
@@ -1486,6 +1511,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 creator_storage_key,
                 creator_message_security,
                 service_worker_runtime,
+                service_worker_registration,
                 service_worker_script_resources,
                 service_worker_updated_script_resources,
                 service_worker_can_import_new_scripts,
@@ -1626,6 +1652,9 @@ async fn worker_main(
     creator_storage_key: Option<MoliStorageKey>,
     creator_message_security: Option<crate::context_bootstrap::RuntimeMessageSourceSecurity>,
     service_worker_runtime: Option<ServiceWorkerRuntimeService>,
+    service_worker_registration: Option<
+        crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot,
+    >,
     service_worker_script_resources: Vec<WorkerScriptResource>,
     service_worker_updated_script_resources: crate::worker::WorkerScriptUpdateResources,
     service_worker_can_import_new_scripts: bool,
@@ -1869,6 +1898,8 @@ async fn worker_main(
         abort: Rc::new(RefCell::new(super::abort::WorkerAbortStore::default())),
         worker_context_runtime,
         service_worker_runtime,
+        service_worker_registration,
+        service_worker_objects: std::collections::HashMap::new(),
         service_worker_client_id,
         message_port_registry,
         message_port_wrappers: std::collections::HashMap::new(),
@@ -2768,17 +2799,17 @@ async fn worker_main(
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
-            WorkerLoopWake::Message(Some(WorkerMessage::ServiceWorkerRegistrationUpdateFound)) => {
+            WorkerLoopWake::Message(Some(WorkerMessage::ServiceWorkerRegistrationTask(task))) => {
                 if pending_module_bootstrap.is_some() {
                     pending_bootstrap_messages
-                        .push_back(WorkerMessage::ServiceWorkerRegistrationUpdateFound);
+                        .push_back(WorkerMessage::ServiceWorkerRegistrationTask(task));
                     continue;
                 }
                 let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
                 let scope = &mut scope.init();
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
-                super::global_scope::dispatch_service_worker_registration_update_found(scope);
+                super::global_scope::apply_service_worker_registration_task(scope, *task);
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }

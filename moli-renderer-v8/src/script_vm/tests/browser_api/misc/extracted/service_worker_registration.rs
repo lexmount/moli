@@ -1,6 +1,173 @@
 use super::*;
 
 #[tokio::test]
+async fn navigator_service_worker_global_registration_starts_with_empty_installing_slot() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/bootstrap.js",
+        "text/javascript; charset=utf-8",
+        r#"
+        const initial = [registration.installing, registration.waiting, registration.active]
+          .map(worker => worker === null).join(":");
+        self.addEventListener("message", event => event.ports[0].postMessage(initial));
+        "#,
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+      globalThis.__registrationBootstrapDone = false;
+      (async () => {
+        const sw = navigator.serviceWorker;
+        await sw.register("bootstrap.js", { scope: "./" });
+        const registration = await __moliTestActivatedServiceWorker(sw);
+        const channel = new MessageChannel();
+        const result = new Promise(resolve => channel.port1.onmessage = event => resolve(event.data));
+        registration.active.postMessage("initial", [channel.port2]);
+        globalThis.__registrationBootstrap = await result;
+        channel.port1.close();
+      })().catch(error => {
+        globalThis.__registrationBootstrap = "error:" + error.name + ":" + error.message;
+      }).finally(() => { globalThis.__registrationBootstrapDone = true; });
+    "#).expect("worker registration bootstrap probe should evaluate");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(globalThis.__registrationBootstrapDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(globalThis.__registrationBootstrap)")
+            .unwrap(),
+        "true:true:true"
+    );
+    server.await.expect("worker script should be fetched");
+}
+
+#[tokio::test]
+async fn navigator_service_worker_global_worker_objects_keep_identity_and_statechange_order() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/lifecycle.js",
+        "text/javascript; charset=utf-8",
+        r#"
+        const seen = [];
+        let worker;
+        registration.addEventListener("updatefound", () => {
+          worker = registration.installing;
+          seen.push("updatefound:" + (worker === registration.installing) + ":" + worker.state);
+          worker.addEventListener("statechange", event => {
+            seen.push("statechange:" + worker.state + ":" + event.isTrusted + ":" +
+              (event.target === worker) + ":" +
+              (worker === (registration.installing || registration.waiting || registration.active)));
+          });
+        });
+        self.addEventListener("install", () => {
+          seen.push("install:" + (worker === registration.installing) + ":" + registration.installing.state);
+        });
+        self.addEventListener("activate", () => {
+          seen.push("activate:" + (worker === registration.active) + ":" + registration.active.state);
+        });
+        self.addEventListener("message", event => event.ports[0].postMessage(seen.join("|")));
+        "#,
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+      globalThis.__registrationLifecycleDone = false;
+      (async () => {
+        const sw = navigator.serviceWorker;
+        await sw.register("lifecycle.js", { scope: "./" });
+        const registration = await __moliTestActivatedServiceWorker(sw);
+        const channel = new MessageChannel();
+        const result = new Promise(resolve => channel.port1.onmessage = event => resolve(event.data));
+        registration.active.postMessage("events", [channel.port2]);
+        globalThis.__registrationLifecycle = await result;
+        channel.port1.close();
+      })().catch(error => {
+        globalThis.__registrationLifecycle = "error:" + error.name + ":" + error.message;
+      }).finally(() => { globalThis.__registrationLifecycleDone = true; });
+    "#).expect("worker registration lifecycle probe should evaluate");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(globalThis.__registrationLifecycleDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(globalThis.__registrationLifecycle)")
+            .unwrap(),
+        "updatefound:true:installing|install:true:installing|statechange:installed:true:true:true|statechange:activating:true:true:true|activate:true:activating|statechange:activated:true:true:true"
+    );
+    server.await.expect("worker script should be fetched");
+}
+
+#[tokio::test]
+async fn navigator_service_worker_module_global_registration_applies_lifecycle_tasks() {
+    let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![(
+        "/app/lifecycle-module.js",
+        "text/javascript; charset=utf-8",
+        Vec::new(),
+        r#"
+        const seen = ["evaluate:" + (registration.installing === null)];
+        registration.onupdatefound = () => {
+          const worker = registration.installing;
+          seen.push("updatefound:" + worker.state);
+          worker.onstatechange = () => seen.push("statechange:" + worker.state);
+        };
+        self.oninstall = () => seen.push("install:" + registration.installing.state);
+        self.onactivate = () => seen.push("activate:" + registration.active.state);
+        self.onmessage = event => event.ports[0].postMessage(seen.join("|"));
+        "#,
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+      globalThis.__moduleRegistrationDone = false;
+      (async () => {
+        const sw = navigator.serviceWorker;
+        await sw.register("lifecycle-module.js", { scope: "./", type: "module" });
+        const registration = await __moliTestActivatedServiceWorker(sw);
+        const channel = new MessageChannel();
+        const result = new Promise(resolve => channel.port1.onmessage = event => resolve(event.data));
+        registration.active.postMessage("events", [channel.port2]);
+        globalThis.__moduleRegistration = await result;
+        channel.port1.close();
+      })().catch(error => {
+        globalThis.__moduleRegistration = "error:" + error.name + ":" + error.message;
+      }).finally(() => { globalThis.__moduleRegistrationDone = true; });
+    "#).expect("module registration lifecycle probe should evaluate");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(globalThis.__moduleRegistrationDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(globalThis.__moduleRegistration)").unwrap(),
+        "evaluate:true|updatefound:installing|install:installing|statechange:installed|statechange:activating|activate:activating|statechange:activated"
+    );
+    server
+        .await
+        .expect("module worker script should be fetched");
+}
+
+#[tokio::test]
 async fn navigator_service_worker_skip_waiting_resolves_after_activate_dispatch() {
     let (base_url, server) = spawn_service_worker_response_server(vec![
         (
@@ -1774,7 +1941,9 @@ async fn navigator_service_worker_update_in_worker_preserves_events_and_install_
           onactivate = () => seen.push('activate');
           onmessage = e => {
             if (e.data === 'sample') e.ports[0].postMessage(seen.join(',') + '|' + installError);
-            else e.waitUntil(original.update().then(r => e.ports[0].postMessage(r === original)));
+            else e.waitUntil(original.update().then(r => e.ports[0].postMessage([
+              r === original, r.installing?.state, seen.filter(event => event === 'before').length
+            ].join(':'))));
           };
           Object.defineProperty(self, 'registration', {get(){throw new Error('public registration read');}});
         "#),
@@ -1812,7 +1981,7 @@ async fn navigator_service_worker_update_in_worker_preserves_events_and_install_
         &runtime,
         &loader,
         "String(globalThis.__workerUpdate)",
-        "before,true:true:true:true:true:false:false,after,activate|InvalidStateError|true",
+        "before,true:true:true:true:true:false:false,after,activate|InvalidStateError|true:installing:1",
     )
     .await;
     server.await.expect("worker update server");
