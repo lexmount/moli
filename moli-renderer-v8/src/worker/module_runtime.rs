@@ -60,9 +60,7 @@ struct WorkerImportMetaDeclaration<'scope> {
 pub(super) struct WorkerModuleGraphFetchCompletion {
     fetch_id: WorkerModuleGraphFetchId,
     result: Result<WorkerModuleFetchedSource, String>,
-    csp_violation: Option<ContentSecurityPolicyUrlViolation>,
-    csp_report_only_violation: Option<ContentSecurityPolicyUrlViolation>,
-    redirect_csp_violations: Vec<ContentSecurityPolicyUrlViolation>,
+    csp_violations: Vec<ContentSecurityPolicyUrlViolation>,
 }
 
 pub(super) struct WorkerModuleFetchedSource {
@@ -199,47 +197,26 @@ impl WorkerModuleGraphFetchCompletion {
         Self {
             fetch_id,
             result,
-            csp_violation: None,
-            csp_report_only_violation: None,
-            redirect_csp_violations: Vec::new(),
+            csp_violations: Vec::new(),
         }
-    }
-
-    pub(super) fn with_csp_violation(
-        mut self,
-        violation: ContentSecurityPolicyUrlViolation,
-    ) -> Self {
-        self.csp_violation = Some(violation);
-        self
-    }
-
-    pub(super) fn with_csp_report_only_violation(
-        mut self,
-        violation: ContentSecurityPolicyUrlViolation,
-    ) -> Self {
-        self.csp_report_only_violation = Some(violation);
-        self
     }
 
     pub(super) fn fetch_id(&self) -> WorkerModuleGraphFetchId {
         self.fetch_id
     }
 
-    pub(super) fn with_redirect_csp_violations(
+    pub(super) fn with_csp_violations(
         mut self,
         violations: Vec<ContentSecurityPolicyUrlViolation>,
     ) -> Self {
-        self.redirect_csp_violations = violations;
+        self.csp_violations = violations;
         self
     }
 
     pub(super) fn csp_violations(
         &self,
     ) -> impl Iterator<Item = &ContentSecurityPolicyUrlViolation> {
-        self.csp_report_only_violation
-            .iter()
-            .chain(self.redirect_csp_violations.iter())
-            .chain(self.csp_violation.iter())
+        self.csp_violations.iter()
     }
 
     pub(super) fn result(&self) -> Result<&WorkerModuleFetchedSource, &str> {
