@@ -263,6 +263,15 @@ impl PageVm {
                 let Some(url) = resource.request_url().cloned() else {
                     continue;
                 };
+                if !available
+                    && !self.vm().capture_resource_fetch_enabled(
+                        member.identity,
+                        CaptureResourceKind::Font,
+                        &url,
+                    )?
+                {
+                    continue;
+                }
                 let spec = CaptureResourceSpec {
                     identity: member.identity,
                     kind: CaptureResourceKind::Font,
@@ -273,8 +282,29 @@ impl PageVm {
             }
         }
         for image in discovery.css_images {
+            // Preserve each use until output policy is applied: a background
+            // and a mask may share a URL, while only the mask needs fetching.
+            if image.purpose == moli_layout::LayoutCssImagePurpose::Background
+                && matches!(
+                    job.request.purpose(),
+                    RendererScreenshotPurpose::Print {
+                        print_background: false
+                    }
+                )
+            {
+                continue;
+            }
             let url = url::Url::parse(&image.resolved_url)?;
             let available = image.ready.is_some();
+            if !available
+                && !self.vm().capture_resource_fetch_enabled(
+                    image.identity,
+                    CaptureResourceKind::Image,
+                    &url,
+                )?
+            {
+                continue;
+            }
             if let Some(ready) = image.ready {
                 job.overlay
                     .insert_image(image.identity, image.resolved_url, ready);
