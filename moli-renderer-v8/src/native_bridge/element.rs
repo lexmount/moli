@@ -261,8 +261,11 @@ pub(crate) use event_handlers::compile_window_body_onmessageerror_attribute;
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
 pub(crate) use event_handlers::{
     EventAttributeHandlerScope, GlobalEventHandlerOwner, compile_event_attribute_handler_for_owner,
+    compile_node_content_attribute_for_dispatch, compile_window_body_event_attribute,
     event_handler_content_attribute_name, initialize_parser_inserted_body_window_event_handlers,
+    is_body_window_event_handler_attribute, is_global_event_handler_attribute,
     node_event_handler_getter_function, node_event_handler_setter_function,
+    node_event_handler_value_from_wrapper,
 };
 use event_handlers::{
     body_onerror_getter_function, body_onerror_setter_function, body_onload_getter_function,

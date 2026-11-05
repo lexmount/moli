@@ -159,6 +159,9 @@ impl ScriptVmPageRealmBootstrap {
         let scope = &mut v8::ContextScope::new(scope, local_context);
         crate::context_bootstrap::initialize_main_session_history(scope);
         let baseline = (|| {
+            let global = local_context.global(scope);
+            let timing = context_host.borrow().document_timing_snapshot();
+            crate::context_bootstrap::bind_document_performance(scope, global, timing)?;
             let baseline = ScriptVmDefaultWorldBootstrap::capture_baseline_globals_in_scope(scope)?;
             let mut host = context_host.borrow_mut();
             let binding = host

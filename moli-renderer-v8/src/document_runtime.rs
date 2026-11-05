@@ -18,6 +18,8 @@ mod lifecycle;
 mod main_parser_continuation;
 mod meta_refresh;
 mod mutation_commands;
+mod native_events;
+pub(crate) use native_events::NativeEventDispatch;
 mod parser_blocking;
 mod parser_modulepreload;
 mod query_facade;
@@ -27,6 +29,8 @@ mod script_scheduling;
 mod security_policy;
 #[path = "stylesheet_runtime/mod.rs"]
 mod stylesheet_runtime;
+mod timing;
+pub(crate) use timing::{DocumentLifecycleTiming, DocumentTimingSnapshot};
 
 #[cfg(test)]
 pub(crate) use mutation_commands::ParserPostStepRuntimeWorkForTest;
@@ -731,6 +735,7 @@ pub(super) struct DocumentRuntime {
     selector_engine: QueryEngine,
     selector_debug: SelectorDebugCounters,
     document: HostDocumentState,
+    timing: timing::DocumentTiming,
     script_execution_control: crate::script_execution_control::RendererScriptExecutionControl,
     author_styles_disabled: bool,
     bypass_content_security_policy: bool,

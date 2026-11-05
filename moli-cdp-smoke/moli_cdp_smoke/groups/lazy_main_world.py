@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from html import escape
 from typing import Any
 from urllib.parse import quote
 
@@ -58,10 +59,70 @@ class _Wire:
         return result.get("result", {}).get("value")
 
 
+def _native_event_fixture(activation: str, html: str) -> str:
+    if activation in ("native-click", "getter-click"):
+        source = "globalThis.inlineHits=(globalThis.inlineHits||0)+1;globalThis.inlineThis=this===event.currentTarget;globalThis.inlineTrusted=event.isTrusted"
+        html = html.replace("<p id=", f'<p onclick="{escape(source, quote=True)}" id=')
+        if activation == "getter-click":
+            html += "<script>globalThis.getterCalls=0;Object.defineProperty(document.querySelector('#target'),'onclick',{get(){getterCalls++;return null}})</script>"
+    elif activation == "getter-load":
+        html = html.replace("<p id=", '<body onload="globalThis.inlineHits=(globalThis.inlineHits||0)+1"><p id=')
+        html += "<script>globalThis.getterCalls=0;Object.defineProperty(document.body,'onload',{get(){getterCalls++;return null}})</script>"
+    elif activation == "inline-pageshow":
+        load = "globalThis.inlineHits=(globalThis.inlineHits||0)+1;globalThis.loadCorrect=this===window&&event.target===document&&event.currentTarget===window;globalThis.loadTiming=performance.getEntriesByType('navigation')[0];globalThis.timeAtLoad=performance.timeOrigin;globalThis.loadStarted=loadTiming.loadEventStart>0&&loadTiming.loadEventEnd===0;Promise.resolve().then(()=>globalThis.endAtMicrotask=loadTiming.loadEventEnd===0)"
+        pageshow = "globalThis.pageshowHits=(globalThis.pageshowHits||0)+1;globalThis.pageshowCorrect=this===window&&event instanceof PageTransitionEvent&&!event.persisted;globalThis.loadEnded=loadTiming.loadEventEnd>0&&timeAtLoad===performance.timeOrigin"
+        html = html.replace("<p id=", f'<body onload="{escape(load, quote=True)}" onpageshow="{escape(pageshow, quote=True)}"><p id=')
+    elif activation == "cached-timing":
+        html += """<script>
+        globalThis.timingChecks=[];
+        globalThis.timingOrder=[];
+        globalThis.cachedNavigation=performance.getEntriesByType('navigation')[0];
+        globalThis.cachedLegacy=performance.timing;
+        addEventListener('DOMContentLoaded',()=>{
+          timingOrder.push('dcl');
+          timingChecks.push(cachedNavigation.domContentLoadedEventStart>0,
+                            cachedNavigation.domContentLoadedEventEnd===0,
+                            cachedLegacy.domContentLoadedEventStart>0);
+        });
+        addEventListener('load',()=>{
+          timingOrder.push('load');
+          timingChecks.push(cachedNavigation.domContentLoadedEventEnd>0,
+                            cachedNavigation.loadEventStart>0,cachedNavigation.loadEventEnd===0,
+                            cachedLegacy.loadEventEnd===0);
+          Promise.resolve().then(()=>timingChecks.push(cachedNavigation.loadEventEnd===0));
+        });
+        addEventListener('pageshow',()=>{
+          timingOrder.push('pageshow');
+          timingChecks.push(cachedNavigation.loadEventEnd>0,cachedLegacy.loadEventEnd>0);
+        });
+        </script>"""
+    elif activation == "deferred-invalid-handler":
+        html = html.replace("<p id=", '<p onclick="function (" id=')
+    elif activation in ("native-details", "details-activation"):
+        final_state = "closed" if activation == "details-activation" else "open"
+        source = f"globalThis.toggleHits=(globalThis.toggleHits||0)+1;globalThis.toggleCorrect=this===event.currentTarget&&event.oldState==='closed'&&event.newState==='{final_state}'&&event instanceof ToggleEvent&&!event.bubbles"
+        html += f'<details open ontoggle="{escape(source, quote=True)}"><summary>Native details</summary>Content</details>'
+        if activation == "details-activation":
+            html += "<script>document.querySelector('details').open=false</script>"
+    return html
+
+
+async def _click_native_node(wire: _Wire, session: str, node: int) -> None:
+    box = (await wire.call("DOM.getBoxModel", {"nodeId": node}, session))["model"]["border"]
+    x, y = (box[0] + box[4]) / 2, (box[1] + box[5]) / 2
+    for kind in ("mouseMoved", "mousePressed", "mouseReleased"):
+        await wire.call("Input.dispatchMouseEvent", {
+            "type": kind, "x": x, "y": y, "button": "left", "clickCount": 1,
+        }, session)
+
+
 async def run_lazy_main_world_group(endpoint: str, _fixture: str,
                                     results: list[dict[str, Any]]) -> None:
     for activation in ("evaluate", "runtime-enable", "isolated-world", "preload",
-                       "deferred-script", "inline-load", "native-io", "navigate-close"):
+                       "deferred-script", "inline-load", "native-io", "navigate-close",
+                       "native-click", "getter-click", "getter-load", "inline-pageshow",
+                       "cached-timing", "deferred-invalid-handler", "native-details",
+                       "isolated-listener", "details-activation"):
         client = await connect_raw_cdp(endpoint)
         wire = _Wire(client)
         context = None
@@ -83,6 +144,7 @@ async def run_lazy_main_world_group(endpoint: str, _fixture: str,
                 html += "<script defer src='data:text/javascript,globalThis.activationCount=1'></script>"
             elif activation == "inline-load":
                 html = html.replace("<p id=", "<body onload='globalThis.activationCount=1'><p id=")
+            html = _native_event_fixture(activation, html)
             frame = await wire.load(session, html)
             # DOM and Page queries must work before any explicit script request.
             root = (await wire.call("DOM.getDocument", {"depth": 1}, session))["root"]["nodeId"]
@@ -90,6 +152,8 @@ async def run_lazy_main_world_group(endpoint: str, _fixture: str,
             outer = (await wire.call("DOM.getOuterHTML", {"nodeId": node}, session))["outerHTML"]
             if "Native content" not in outer:
                 raise SmokeError(f"native DOM query returned {outer!r}")
+            if activation in ("native-click", "getter-click"):
+                await _click_native_node(wire, session, node)
             if activation == "native-io":
                 await wire.call("Emulation.setTouchEmulationEnabled", {
                     "enabled": True, "maxTouchPoints": 7,
@@ -131,6 +195,40 @@ async def run_lazy_main_world_group(endpoint: str, _fixture: str,
                     assert_equal(await wire.evaluate(session, "({touch:navigator.maxTouchPoints, print:matchMedia('print').matches, dark:matchMedia('(prefers-color-scheme: dark)').matches})"),
                                  {"touch": 7, "print": True, "dark": True},
                                  "native emulation survives the first main-world activation")
+                if activation in ("native-click", "getter-click"):
+                    assert_equal(await wire.evaluate(session, "({hits:inlineHits, receiver:inlineThis, trusted:inlineTrusted})"),
+                                 {"hits": 1, "receiver": True, "trusted": True},
+                                 "native input invokes the inline listener in its own realm")
+                if activation in ("getter-click", "getter-load"):
+                    assert_equal(await wire.evaluate(session, "({hits:inlineHits,getters:getterCalls})"),
+                                 {"hits": 1, "getters": 0},
+                                 "native dispatch does not read overridden handler getters")
+                if activation == "inline-pageshow":
+                    assert_equal(await wire.evaluate(session, "({load:inlineHits,pageshow:pageshowHits,loadCorrect,loadStarted,endAtMicrotask,pageshowCorrect,loadEnded})"),
+                                 {"load": 1, "pageshow": 1, "loadCorrect": True, "loadStarted": True,
+                                  "endAtMicrotask": True, "pageshowCorrect": True, "loadEnded": True},
+                                 "late inline activation preserves native timing and event identity")
+                if activation == "cached-timing":
+                    assert_equal(await wire.evaluate(session, "({order:timingOrder,checks:timingChecks.length,valid:timingChecks.every(Boolean),same:cachedNavigation===performance.getEntriesByType('navigation')[0]&&cachedLegacy===performance.timing})"),
+                                 {"order": ["dcl", "load", "pageshow"], "checks": 10, "valid": True, "same": True},
+                                 "cached timing projections update at the lifecycle boundary")
+                if activation == "deferred-invalid-handler":
+                    assert_equal(await wire.evaluate(session, "(()=>{globalThis.handlerErrors=0;addEventListener('error',e=>{handlerErrors++;e.preventDefault()});const target=document.querySelector('#target');const first=target.onclick;const second=target.onclick;return {errors:handlerErrors,first:first===null,second:second===null}})()"),
+                                 {"errors": 1, "first": True, "second": True},
+                                 "unobserved malformed inline source compiles only when requested")
+                if activation in ("native-details", "details-activation"):
+                    assert_equal(await wire.evaluate(session, "new Promise(resolve=>{const done=()=>resolve({hits:toggleHits,correct:toggleCorrect});if(globalThis.toggleHits)done();else document.querySelector('details').addEventListener('toggle',done,{once:true})})", awaitPromise=True),
+                                 {"hits": 1, "correct": True},
+                                 "native parser toggle tasks preserve their initial transition")
+                if activation == "isolated-listener":
+                    world = await wire.call("Page.createIsolatedWorld", {
+                        "frameId": frame, "worldName": "native-event-listener",
+                    }, session)
+                    await wire.evaluate(session, "globalThis.listenerRealm='isolated';document.querySelector('#target').addEventListener('click',function(e){this.setAttribute('data-realm',listenerRealm);this.setAttribute('data-native-event',String(e instanceof Event))},{once:true});true", contextId=world["executionContextId"])
+                    await _click_native_node(wire, session, node)
+                    assert_equal(await wire.evaluate(session, "({realm:document.querySelector('#target').getAttribute('data-realm'),event:document.querySelector('#target').getAttribute('data-native-event'),main:typeof listenerRealm})"),
+                                 {"realm": "isolated", "event": "true", "main": "undefined"},
+                                 "native callback IDs retain the listener's exact realm")
                 if activation in ("preload", "deferred-script", "inline-load"):
                     assert_equal(await wire.evaluate(session, "activationCount"), 1,
                                  "initial script runs exactly once")

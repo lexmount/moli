@@ -10,19 +10,6 @@ pub(super) enum MainWorld {
 }
 
 impl MainWorld {
-    pub(super) fn record_lifecycle_timing(
-        &mut self,
-        timing: MainWorldLifecycleTiming,
-    ) -> Option<&WindowRealmRuntime> {
-        match self {
-            Self::Pending(pending) => {
-                pending.performance.record(timing as usize);
-                None
-            }
-            Self::Ready { runtime, .. } => Some(runtime),
-        }
-    }
-
     pub(super) fn current(&self) -> Option<&WindowRealmRuntime> {
         match self {
             Self::Pending(_) => None,
@@ -52,13 +39,6 @@ impl MainWorld {
     }
 }
 
-pub(super) enum MainWorldLifecycleTiming {
-    DomContentLoadedStart,
-    DomContentLoadedEnd,
-    LoadStart,
-    LoadEnd,
-}
-
 /// Native Document state is already live. These are the remaining inputs for
 /// its first main-world Context, not a second Document or bootstrap DOM.
 #[derive(Default)]
@@ -68,35 +48,6 @@ pub(super) struct PendingMainWorld {
     pub(super) navigator_identity: Option<moli_browser_profile::BrowserIdentityProfile>,
     pub(super) history_position: Option<moli_session_history::SessionHistoryPosition>,
     pub(super) history_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
-    pub(super) performance: DeferredMainWorldPerformance,
-}
-
-pub(super) struct DeferredMainWorldPerformance {
-    origin: f64,
-    started: std::time::Instant,
-    timestamps: [Option<f64>; 4],
-}
-
-impl Default for DeferredMainWorldPerformance {
-    fn default() -> Self {
-        Self {
-            origin: crate::context_bootstrap::unix_epoch_millis(),
-            started: std::time::Instant::now(),
-            timestamps: [None; 4],
-        }
-    }
-}
-
-impl DeferredMainWorldPerformance {
-    pub(super) fn record(&mut self, index: usize) {
-        let previous = self.timestamps[..index]
-            .iter()
-            .flatten()
-            .copied()
-            .fold(0.0, f64::max);
-        self.timestamps[index] =
-            Some((self.started.elapsed().as_secs_f64() * 1000.0).max(previous + 0.001));
-    }
 }
 
 pub(super) fn initialize(
@@ -153,12 +104,8 @@ pub(super) fn initialize(
         let global = context.global(scope);
         crate::context_bootstrap::set_window_origin_runtime_state(scope, global, &origin)?;
         crate::context_bootstrap::initialize_main_session_history(scope);
-        crate::context_bootstrap::bind_deferred_main_world_performance(
-            scope,
-            global,
-            pending.performance.origin,
-            pending.performance.timestamps,
-        )?;
+        let timing = host.borrow().document_timing_snapshot();
+        crate::context_bootstrap::bind_document_performance(scope, global, timing)?;
         if let Some(identity) = pending.navigator_identity.as_ref() {
             crate::context_bootstrap::set_window_navigator_identity(scope, identity)?;
         }
@@ -189,26 +136,6 @@ pub(super) fn initialize(
 }
 
 impl ScriptVm {
-    pub(super) fn initialize_main_world_for_window_handler(&mut self) -> Result<()> {
-        if self.current_main_world().is_some() {
-            return Ok(());
-        }
-        let dom = self.document_runtime.dom_host().dom();
-        let has_handler = dom
-            .body_node_id()
-            .and_then(|body| dom.node(body))
-            .and_then(|node| node.as_element())
-            .is_some_and(|body| {
-                ["onload", "onpageshow"]
-                    .iter()
-                    .any(|name| body.attribute(name).is_some())
-            });
-        if has_handler {
-            self.ensure_main_world()?;
-        }
-        Ok(())
-    }
-
     pub(super) fn current_main_world(&self) -> Option<&WindowRealmRuntime> {
         self.main_world.current()
     }

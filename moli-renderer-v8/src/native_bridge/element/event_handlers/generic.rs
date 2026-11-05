@@ -1,8 +1,8 @@
 use crate::{
     document_runtime::EventTargetHandle,
     util::{
-        context_host_ptr_from_global_bridge, node_wrapper_from_handle, throw_type_error, v8_string,
-        v8str,
+        context_host_ptr_from_global_bridge, get_private_value, node_wrapper_from_handle,
+        set_private_value, throw_type_error, v8_string, v8str,
     },
 };
 
@@ -309,14 +309,7 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         rv.set(current);
         return;
     }
-    let slot_name = event_handler_slot_name(&handler_name);
-    let Some(slot_key) = v8_string(scope, &slot_name) else {
-        rv.set_null();
-        return;
-    };
-    if let Some(current) = object.get(scope, slot_key.into())
-        && !current.is_undefined()
-    {
+    if let Some(current) = node_event_handler_value_from_wrapper(scope, object, &handler_name) {
         rv.set(current);
         return;
     }
@@ -385,6 +378,36 @@ fn node_event_handler_target_context<'s>(
     runtime
         .window_execution_context(scope, owner, dispatch_scope)
         .map(|(_, context)| context)
+}
+
+pub(crate) fn compile_node_content_attribute_for_dispatch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut crate::native_bridge::JsContextHost,
+    handle: crate::document_runtime::DomHandle,
+    event_type: &str,
+) -> Option<v8::Local<'s, v8::Function>> {
+    let name = event_handler_content_attribute_name(event_type)?;
+    if !GENERIC_EVENT_HANDLER_PROPERTIES.contains(&name.as_str()) {
+        return None;
+    }
+    let source_node = unsafe { &*host_ptr }
+        .event_handler_content_attribute_node(EventTargetHandle::Node(handle), event_type)?;
+    let source = element_attribute(unsafe { &*host_ptr }, source_node, &name)?;
+    let context = node_event_handler_target_context(scope, host_ptr, source_node)?;
+    let handler = {
+        let target_scope = &mut v8::ContextScope::new(scope, context);
+        let object = node_wrapper_from_handle(target_scope, source_node)?;
+        compile_node_event_attribute_handler(
+            target_scope,
+            host_ptr,
+            source_node,
+            object,
+            &name,
+            &source,
+        )
+        .map(|handler| v8::Global::new(target_scope, handler))
+    }?;
+    Some(v8::Local::new(scope, &handler))
 }
 
 fn compile_node_event_attribute_handler<'s>(
@@ -462,11 +485,6 @@ pub(crate) fn node_event_handler_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let slot_name = event_handler_slot_name(&handler_name);
-    let Some(slot_key) = v8_string(scope, &slot_name) else {
-        rv.set_undefined();
-        return;
-    };
     let object = args.this();
     let value = args.get(0);
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
@@ -483,7 +501,13 @@ pub(crate) fn node_event_handler_setter_function<'s>(
     } else {
         v8::null(scope).into()
     };
-    let _ = object.set(scope, slot_key.into(), stored);
+    let backing = moli_webapi_declare::web_api_object_target(scope, object).unwrap_or(object);
+    set_private_value(
+        scope,
+        backing,
+        &event_handler_slot_name(&handler_name),
+        stored,
+    );
     if let Some(event_type) = event_handler_event_type(&handler_name) {
         let handler = v8::Local::<v8::Function>::try_from(value).ok();
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
@@ -518,6 +542,22 @@ fn event_handler_slot_name(name: &str) -> String {
     format!("{EVENT_HANDLER_SLOT_PREFIX}{name}")
 }
 
+/// An adopted node keeps its original wrapper and callback realm. Read its
+/// native handler slot without evaluating an author-defined property getter.
+pub(crate) fn node_event_handler_value_from_wrapper<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let backing = moli_webapi_declare::web_api_object_target(scope, object).unwrap_or(object);
+    get_private_value(scope, backing, &event_handler_slot_name(name))
+        .filter(|value| !value.is_undefined())
+}
+
+pub(crate) fn is_global_event_handler_attribute(name: &str) -> bool {
+    GENERIC_EVENT_HANDLER_PROPERTIES.contains(&name)
+}
+
 fn event_handler_event_type(name: &str) -> Option<&str> {
     name.strip_prefix("on")
         .filter(|event_type| !event_type.is_empty())
@@ -546,6 +586,7 @@ fn handle_invalid_event_handler_receiver<'s>(
 }
 
 pub(super) fn invalidate_node_event_attribute_handler(
+    scope: &mut v8::PinScope<'_, '_>,
     runtime: &mut super::super::super::JsContextHost,
     handle: crate::document_runtime::DomHandle,
     name: &str,
@@ -555,6 +596,21 @@ pub(super) fn invalidate_node_event_attribute_handler(
         return;
     };
     runtime.clear_event_handler_property(EventTargetHandle::Node(handle), event_type);
+    crate::util::with_cached_node_wrapper_realm(scope, runtime, handle, |scope, wrapper| {
+        let object = crate::util::get_private_object(
+            scope,
+            wrapper,
+            crate::dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
+        )
+        .unwrap_or(wrapper);
+        let backing = moli_webapi_declare::web_api_object_target(scope, object).unwrap_or(object);
+        set_private_value(
+            scope,
+            backing,
+            &event_handler_slot_name(&normalized_name),
+            v8::undefined(scope).into(),
+        );
+    });
 }
 
 pub(crate) fn event_handler_content_attribute_name(event_type: &str) -> Option<String> {
