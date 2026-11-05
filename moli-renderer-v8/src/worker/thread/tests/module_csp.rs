@@ -286,8 +286,10 @@ async fn worker_synthetic_module_dynamic_imports_use_connect_csp() {
             "default",
             "allowed",
             "report-only",
+            "blocked-and-report",
             "redirect",
             "redirect-report-only",
+            "redirect-all-report-only",
         ] {
             let (cross_url, cross_server) = spawn_raw_path_response_http_server(vec![(
                 "/value",
@@ -300,9 +302,11 @@ async fn worker_synthetic_module_dynamic_imports_use_connect_csp() {
                 ("/worker/redirect", format!("HTTP/1.1 302 Found\r\nLocation: {cross_url}/value\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"), Duration::ZERO),
             ]).await;
             let policy = match case {
-                "blocked" => "connect-src 'none'; script-src *",
+                "blocked" | "blocked-and-report" => "connect-src 'none'; script-src *",
                 "default" => "default-src 'none'; script-src *",
-                "redirect-report-only" => "connect-src *; script-src 'none'",
+                "redirect-report-only" | "redirect-all-report-only" => {
+                    "connect-src *; script-src 'none'"
+                }
                 _ => "connect-src 'self'; script-src 'none'",
             };
             let path = if case.starts_with("redirect") {
@@ -330,7 +334,10 @@ async fn worker_synthetic_module_dynamic_imports_use_connect_csp() {
             let options = if case == "redirect-report-only" {
                 options
                     .with_content_security_report_only_policies(vec!["connect-src 'self'".into()])
-            } else if case == "report-only" {
+            } else if matches!(
+                case,
+                "report-only" | "blocked-and-report" | "redirect-all-report-only"
+            ) {
                 options
                     .with_content_security_report_only_policies(vec!["connect-src 'none'".into()])
             } else {
@@ -344,13 +351,28 @@ async fn worker_synthetic_module_dynamic_imports_use_connect_csp() {
                     .expect("worker closed"),
             );
             let result: serde_json::Value = serde_json::from_str(&result).unwrap();
-            let blocked = matches!(case, "blocked" | "default" | "redirect");
+            let blocked = matches!(
+                case,
+                "blocked" | "blocked-and-report" | "default" | "redirect"
+            );
             assert_eq!(
                 result["status"],
                 if blocked { "TypeError" } else { "loaded" },
                 "{module_type}/{case}: {result}"
             );
-            if blocked || case.ends_with("report-only") {
+            if case == "blocked-and-report" {
+                assert_eq!(
+                    result["events"],
+                    serde_json::json!([["connect-src", "report"], ["connect-src", "enforce"]]),
+                    "{module_type}/{case}"
+                );
+            } else if case == "redirect-all-report-only" {
+                assert_eq!(
+                    result["events"],
+                    serde_json::json!([["connect-src", "report"], ["connect-src", "report"]]),
+                    "{module_type}/{case}: each violating hop must be preserved exactly once"
+                );
+            } else if blocked || case.ends_with("report-only") {
                 assert_eq!(
                     result["events"],
                     serde_json::json!([[
