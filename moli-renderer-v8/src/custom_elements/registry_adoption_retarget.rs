@@ -1,6 +1,6 @@
 use super::registry::{
     AdoptionCallbackTarget, CustomElementAdoptionPlan, CustomElementRegistryAssociation,
-    CustomElementRegistryKey, RegistryAssociationRetarget,
+    RegistryAssociationRetarget,
 };
 use crate::{
     document_runtime::DomHandle,
@@ -47,16 +47,16 @@ pub(crate) fn adoption_plan_before_adoption(
                 .shadow_root_uses_null_custom_element_registry(handle)
                 .unwrap_or(false);
         let association = match current {
-            CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(_, _)) => {
-                current
-            }
+            CustomElementRegistryAssociation::Registry(key) if key.is_scoped() => current,
             CustomElementRegistryAssociation::Null if preserves_null_shadow_registry => {
                 CustomElementRegistryAssociation::Null
             }
             _ if crosses_document => new_document_default,
-            CustomElementRegistryAssociation::Registry(
-                CustomElementRegistryKey::Global(_) | CustomElementRegistryKey::Child(_, _),
-            ) if current != new_document_default => new_document_default,
+            CustomElementRegistryAssociation::Registry(key)
+                if key.is_document_default_backed() && current != new_document_default =>
+            {
+                new_document_default
+            }
             _ => current,
         };
         let has_explicit_association = host.custom_element_registry_association(handle).is_some();

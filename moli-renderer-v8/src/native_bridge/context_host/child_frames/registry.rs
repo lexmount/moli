@@ -1,6 +1,8 @@
 use super::super::child_documents::ChildInitialEmptyDocumentInit;
 use super::*;
-use crate::custom_elements::{CustomElementRegistryAssociation, CustomElementRegistryKey};
+use crate::custom_elements::{
+    CustomElementRegistryAssociation, CustomElementRegistryKey, CustomElementRegistryKind,
+};
 use crate::document_script_scheduler::FrameDocumentClassicScriptSchedulerWork;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
@@ -803,7 +805,7 @@ impl JsContextHost {
             if let Some(document_handle) = document_handle_before_drop {
                 self.set_custom_element_registry_association(
                     document_handle,
-                    CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
+                    CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::child(
                         self.custom_element_registry_owner_id(),
                         handle,
                     )),
@@ -904,14 +906,12 @@ impl JsContextHost {
             .filter(|handle| !live_handles.contains(handle))
             .collect::<HashSet<_>>();
         for association in self.custom_element_registry_associations.values() {
-            if let CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
-                owner,
-                handle,
-            )) = association
-                && *owner == self.custom_element_registry_owner_id()
-                && !live_handles.contains(handle)
+            if let CustomElementRegistryAssociation::Registry(key) = association
+                && key.owner() == self.custom_element_registry_owner_id()
+                && let CustomElementRegistryKind::Child(handle) = key.kind()
+                && !live_handles.contains(&handle)
             {
-                stale_registry_context_handles.insert(*handle);
+                stale_registry_context_handles.insert(handle);
             }
         }
         for handle in stale_registry_context_handles {
@@ -920,7 +920,7 @@ impl JsContextHost {
             if let Some(document_handle) = document_handle {
                 self.set_custom_element_registry_association(
                     document_handle,
-                    CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
+                    CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::child(
                         self.custom_element_registry_owner_id(),
                         handle,
                     )),

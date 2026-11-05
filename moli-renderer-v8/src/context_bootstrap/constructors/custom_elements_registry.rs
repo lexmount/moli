@@ -134,8 +134,12 @@ pub(in crate::context_bootstrap) fn custom_elements_registry_constructor_callbac
     };
     let registry = args.this();
     custom_elements::mark_custom_elements_registry_owner(scope, registry);
-    let scoped_id =
-        unsafe { &mut *host_ptr }.create_scoped_custom_elements_registry(scope, registry);
+    let Some(scoped_id) =
+        unsafe { &mut *host_ptr }.create_scoped_custom_elements_registry(scope, registry)
+    else {
+        throw_range_error(scope, "CustomElementRegistry identifier space exhausted");
+        return;
+    };
     custom_elements::mark_scoped_custom_elements_registry(scope, registry, scoped_id);
     rv.set(registry.into());
 }
@@ -187,12 +191,7 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
             .dom_host_mut()
             .register_shadow_disabled_custom_element_definition(&parsed.name);
     }
-    if matches!(
-        registry_key,
-        custom_elements::CustomElementRegistryKey::Global(_)
-            | custom_elements::CustomElementRegistryKey::Child(_, _)
-    ) && is_autonomous_definition
-    {
+    if registry_key.is_document_default_backed() && is_autonomous_definition {
         // Parser streams keep their own set of autonomous names so they can
         // yield at parser-created custom element boundaries before constructing
         // the element. This is a token-time handoff signal, not an upgrade
@@ -200,8 +199,8 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
         // upgrades for already-created elements.
         unsafe { &mut *host_ptr }.note_parser_defined_autonomous_custom_element(&parsed.name);
     }
-    match registry_key {
-        custom_elements::CustomElementRegistryKey::Global(_) => {
+    match registry_key.kind() {
+        custom_elements::CustomElementRegistryKind::Global => {
             custom_elements::upgrade_existing_definition_for_child(
                 scope,
                 host_ptr,
@@ -209,7 +208,7 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
                 &parsed.name,
             );
         }
-        custom_elements::CustomElementRegistryKey::Child(_, handle) => {
+        custom_elements::CustomElementRegistryKind::Child(handle) => {
             custom_elements::upgrade_existing_definition_for_child(
                 scope,
                 host_ptr,
@@ -217,7 +216,7 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
                 &parsed.name,
             );
         }
-        custom_elements::CustomElementRegistryKey::Scoped(_, _) => {
+        custom_elements::CustomElementRegistryKind::Scoped(_) => {
             custom_elements::upgrade_existing_definition_for_registry(
                 scope,
                 host_ptr,
@@ -346,13 +345,11 @@ pub(in crate::context_bootstrap) fn custom_elements_initialize_callback<'s>(
     };
     let registry_association =
         custom_elements::CustomElementRegistryAssociation::Registry(registry_key);
-    if matches!(
-        registry_key,
-        custom_elements::CustomElementRegistryKey::Global(_)
-    ) && unsafe { &*host_ptr }
-        .dom_host()
-        .node(root_handle)
-        .is_some_and(crate::dom::native::Node::is_document)
+    if registry_key.is_global()
+        && unsafe { &*host_ptr }
+            .dom_host()
+            .node(root_handle)
+            .is_some_and(crate::dom::native::Node::is_document)
     {
         let exception = dom_exception_value(
             scope,
