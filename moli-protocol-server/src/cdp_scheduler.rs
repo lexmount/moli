@@ -48,7 +48,7 @@ pub(crate) use adapter_scheduler::{
 pub(crate) use automation_dispatch::{
     AutomationCommandProgress, AutomationWorkflowReady, PendingAutomationExecution,
 };
-pub(crate) use command_dispatch::CommandTurnOutput;
+pub(crate) use command_dispatch::{CommandPostFlushActions, CommandTurnOutput};
 pub(crate) use frontend_control::CdpOwnerActorLifecycle;
 use protocol_residence::{ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues};
 use runtime_command_barrier::CommandOutputReleasePermit;
@@ -1001,6 +1001,7 @@ impl CdpScheduler {
                     scheduler_events,
                     renderer_output_predecessor,
                 ) = result.into_renderer_owner_turn_parts();
+                let post_flush = CommandPostFlushActions::admit(self, scheduler_events);
                 CommandTaskStep::Complete(Box::new(
                     CommandTurnOutput::new_with_post_response_events(
                         self.route_background_events_around_inflight_navigation(events),
@@ -1008,7 +1009,7 @@ impl CdpScheduler {
                             post_response_events,
                         )
                         .into_background_events(),
-                        scheduler_events,
+                        post_flush,
                     )
                     .with_renderer_output_boundary(
                         renderer_output_boundary,
@@ -2982,7 +2983,7 @@ impl CdpScheduler {
 
     pub(crate) fn finish_command_dispatch_output_flush(
         &mut self,
-        post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
+        post_flush_scheduler_events: CommandPostFlushActions,
         output_release_permit: Option<CommandOutputReleasePermit>,
     ) -> ProtocolOutputSequence {
         if moli_trace::cdp_runtime_trace_enabled() {
@@ -2993,12 +2994,16 @@ impl CdpScheduler {
                 protocol_residence_len = self.queues.protocol_residence_len(),
             );
         }
-        self.apply_scheduler_events(post_flush_scheduler_events);
+        self.apply_scheduler_events(post_flush_scheduler_events.finish());
+        // Background continuations must still start at this boundary: another
+        // command may already be waiting for their native commit to settle.
+        let navigation = self.queues.take_flushed_navigation_protocol_snapshot();
+        let mut output = self.complete_protocol_residence_snapshot(navigation);
         let Some(permit) = output_release_permit else {
-            return ProtocolOutputSequence::empty();
+            return output;
         };
         let Some(runtime_barrier) = permit.finish_response() else {
-            return ProtocolOutputSequence::empty();
+            return output;
         };
         let completion = self
             .state
@@ -3011,7 +3016,8 @@ impl CdpScheduler {
                 terminal = ?completion.terminal(),
             );
         }
-        self.apply_protocol_only_turn_outcome(completion.into_outcome())
+        output.append(self.apply_protocol_only_turn_outcome(completion.into_outcome()));
+        output
     }
 
     fn next_protocol_scheduler_step(&self) -> ProtocolSchedulerStep {

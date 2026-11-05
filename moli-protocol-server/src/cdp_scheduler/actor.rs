@@ -8,9 +8,9 @@ use std::{
 use anyhow::{Context as _, Result};
 use moli_core::{RendererOutputFence, RendererOutputTransportMessage};
 use moli_protocol::{
-    BackgroundNavigationCompletion, BackgroundProtocolEvent, CdpSchedulerEvent,
-    CommandDispatchContext, CommandWaitLifetime, CompletedCdpCommandDispatch,
-    CompletedPageScreencastCapture, ParsedCdpCommand, PendingCdpCommandDispatch,
+    BackgroundNavigationCompletion, BackgroundProtocolEvent, CommandDispatchContext,
+    CommandWaitLifetime, CompletedCdpCommandDispatch, CompletedPageScreencastCapture,
+    ParsedCdpCommand, PendingCdpCommandDispatch,
     conn::{RuntimeInspectorAsyncCompletionReceiver, RuntimeInspectorResponseReady},
 };
 use serde_json::Value;
@@ -913,7 +913,7 @@ enum RuntimeDeferredReplyFlushItem {
 }
 
 struct RuntimeDeferredReplyCompletedCommand {
-    post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
+    post_flush_scheduler_events: super::CommandPostFlushActions,
     output_release_permit: Option<CommandOutputReleasePermit>,
 }
 
@@ -1212,7 +1212,7 @@ async fn fail_runtime_deferred_reply_for_loose_protocol_response(
             "RuntimeDeferredReplyLooseProtocolResponse".to_owned(),
             None,
         )),
-        Vec::new(),
+        Default::default(),
     ))
     .with_output_release_permit(pending.output_release_permit);
     Ok(RuntimeDeferredReplyAdvance::Complete(Box::new(
@@ -1383,7 +1383,7 @@ fn runtime_deferred_reply_unexpected_pending_output(
                 "pendingKind": pending_kind,
             })),
         )),
-        Vec::new(),
+        Default::default(),
     )
 }
 

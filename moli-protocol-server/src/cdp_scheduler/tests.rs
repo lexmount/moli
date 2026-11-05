@@ -1371,6 +1371,125 @@ fn concrete_protocol_output_preserves_protocol_publish_order() {
 }
 
 #[test]
+fn completed_command_reserves_protocol_work_before_later_state_publications() {
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
+    let turn = moli_protocol::test_support::command_turn_with_scheduler_events(vec![
+        CdpSchedulerEvent::ProtocolWorkPublished {
+            work: root_frame_stopped_loading_work(1, "FRAME-command"),
+        },
+    ]);
+    let super::CommandTaskStep::Complete(output) = scheduler
+        .materialize_command_dispatch_step(moli_protocol::CdpCommandTaskStep::Complete(turn))
+    else {
+        panic!("the command is complete");
+    };
+
+    // A renderer-fence wait can admit a peer publication while this command
+    // still owns its response. Its earlier work must already have a position.
+    scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
+        work: root_frame_stopped_loading_work(2, "FRAME-later"),
+    }]);
+    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::Wait,
+        "the earlier command work must wait for its actual response flush"
+    );
+
+    let (_, _, _, _, post_flush, _, _) = output.into_parts();
+    scheduler.finish_command_dispatch_output_flush(post_flush, None);
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::CompleteReadyResidence
+    );
+    let sequences = scheduler
+        .queues
+        .protocol_residences
+        .iter()
+        .map(|residence| match residence {
+            ProtocolSchedulerResidence::ProtocolWork { work, .. } => work.publish_sequence().get(),
+            _ => panic!("only concrete protocol work was published"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sequences,
+        [1, 2],
+        "the response cannot append earlier work after its peer"
+    );
+}
+
+#[test]
+fn discarded_command_output_retains_its_admitted_protocol_work() {
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
+    let turn = moli_protocol::test_support::command_turn_with_scheduler_events(vec![
+        CdpSchedulerEvent::ProtocolWorkPublished {
+            work: root_frame_stopped_loading_work(1, "FRAME-command"),
+        },
+    ]);
+    let output = scheduler
+        .materialize_command_dispatch_step(moli_protocol::CdpCommandTaskStep::Complete(turn));
+    drop(output);
+    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::CompleteReadyResidence,
+        "losing a response cannot discard accepted owner work or leave it gated forever"
+    );
+    let Some(ProtocolSchedulerResidence::ProtocolWork { work, .. }) =
+        scheduler.queues.pop_next_protocol_residence()
+    else {
+        panic!("the original concrete work must survive response cancellation");
+    };
+    assert_eq!(work.publish_sequence().get(), 1);
+}
+
+#[test]
+fn pending_command_response_allows_peer_target_protocol_work() {
+    let work = |sequence, target: &str| {
+        root_frame_stopped_loading_work_for_target(
+            sequence,
+            vec![None],
+            "BID-command".to_owned(),
+            target.to_owned(),
+            target.to_owned(),
+            format!("LOADER-{target}"),
+        )
+    };
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
+    let turn = moli_protocol::test_support::command_turn_with_scheduler_events(vec![
+        CdpSchedulerEvent::ProtocolWorkPublished {
+            work: work(1, "TID-command"),
+        },
+    ]);
+    let output = scheduler
+        .materialize_command_dispatch_step(moli_protocol::CdpCommandTaskStep::Complete(turn));
+    scheduler.apply_scheduler_events(vec![
+        CdpSchedulerEvent::ProtocolWorkPublished {
+            work: work(2, "TID-command"),
+        },
+        CdpSchedulerEvent::ProtocolWorkPublished {
+            work: work(3, "TID-peer"),
+        },
+    ]);
+    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(2));
+    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::CompleteReadyResidence,
+        "an unrelated target must progress while the original response is held"
+    );
+    let Some(ProtocolSchedulerResidence::ProtocolWork { work, .. }) =
+        scheduler.queues.take_protocol_residence_at(2)
+    else {
+        panic!("the independent target retains its concrete work");
+    };
+    assert_eq!(work.publish_sequence().get(), 3);
+    drop(output);
+    assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(0));
+}
+
+#[test]
 #[should_panic(expected = "protocol work must be admitted in exact publication order")]
 fn concrete_protocol_output_rejects_duplicate_publication_sequence() {
     let mut queues = SchedulerQueues::default();
