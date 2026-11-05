@@ -650,6 +650,9 @@ pub(crate) fn apply_document_focus_fixup(
         scope.thread_safe_handle(),
         SCRIPT_TURN_WATCHDOG_TIMEOUT,
     );
+    // Clear the automatic change before dispatching events so a blur handler's
+    // author focus change can still suppress navigation focus reset.
+    unsafe { &mut *runtime_ptr }.clear_document_focused_area_for_fixup(document, active);
     update_focus(scope, runtime_ptr, None);
     crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
     if watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut {

@@ -1,6 +1,76 @@
 use super::*;
 
 #[tokio::test]
+async fn automatic_focus_fixup_preserves_navigation_reset_and_author_focus() {
+    for (change, before, on_blur, expected) in [
+        ("a.disabled=true", "", "", "b"),
+        ("group.disabled=true", "", "", "b"),
+        ("a.hidden=true", "", "", "b"),
+        ("group.inert=true", "", "", "b"),
+        ("a.disabled=true", "", "c.focus()", "c"),
+        ("a.disabled=true", "", "c.focus();c.blur()", "BODY"),
+        ("a.disabled=true", "c.focus()", "", "c"),
+    ] {
+        let loader = static_http_loader([]);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://navigation-focus-fixup.test/",
+            &loader,
+        );
+        vm.eval(r#"
+          const root=document.documentElement||document.appendChild(document.createElement('html'));
+          const body=document.body||root.appendChild(document.createElement('body'));
+          body.innerHTML='<fieldset id=group><button id=a autofocus></button></fieldset><button id=b autofocus></button><button id=c></button>';
+          const a=document.getElementById('a'),b=document.getElementById('b'),c=document.getElementById('c'),group=document.getElementById('group');
+          a.focus();
+          globalThis.fixupSetupReady=false;
+          requestAnimationFrame(()=>requestAnimationFrame(()=>{fixupSetupReady=true}));
+        "#).unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(fixupSetupReady)",
+            "true",
+            "consume ordinary autofocus while author focus is retained",
+        )
+        .await;
+        assert_eq!(vm.eval("document.activeElement.id").unwrap(), "a");
+        vm.eval(&format!(r##"
+          let release;
+          const held=new Promise(resolve=>{{release=resolve}});
+          navigation.addEventListener('navigate',event=>event.intercept({{handler:()=>held}}),{{once:true}});
+          globalThis.fixupNavigationDone=false;
+          globalThis.fixupNavigationResult='pending';
+          globalThis.fixupBlurCount=0;
+          navigation.navigate('#next').finished.then(()=>{{
+            fixupNavigationResult=document.activeElement.id||document.activeElement.tagName;
+            fixupNavigationDone=true;
+          }});
+          a.addEventListener('blur',()=>{{
+            fixupBlurCount++;
+            {on_blur};
+            setTimeout(release,0);
+          }},{{once:true}});
+          {before};
+          {change};
+        "##)).unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(fixupNavigationDone)",
+            "true",
+            "finish the intercepted navigation after focus fixup and its blur handlers",
+        )
+        .await;
+        assert_eq!(vm.eval("String(fixupBlurCount)").unwrap(), "1");
+        assert_eq!(
+            vm.eval("fixupNavigationResult").unwrap(),
+            expected,
+            "change={change}; before={before}; on_blur={on_blur}",
+        );
+    }
+}
+
+#[tokio::test]
 async fn removal_reenables_navigation_focus_reset_until_another_focus_change() {
     for (action, expected) in [
         ("a.remove()", "autofocus"),

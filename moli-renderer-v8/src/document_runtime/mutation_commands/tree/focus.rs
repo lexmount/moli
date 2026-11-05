@@ -90,7 +90,7 @@ impl DocumentRuntime {
     ) {
         let host = unsafe { &mut *host_ptr };
         if let Some((document, area)) = plan.document_area {
-            host.clear_document_focused_area_on_removal(document, area);
+            host.clear_document_focused_area_for_fixup(document, area);
         }
         let Some(active) = &plan.active_element else {
             return;

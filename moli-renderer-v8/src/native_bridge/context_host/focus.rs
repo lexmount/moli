@@ -9,7 +9,7 @@ pub(super) struct DocumentFocusChangeState {
     focused_area: Option<DomHandle>,
     sequential_starting_point: Option<SequentialFocusStartingPoint>,
     epoch: u64,
-    last_change_was_removal: bool,
+    last_change_was_automatic_fixup: bool,
 }
 
 impl JsContextHost {
@@ -49,7 +49,7 @@ impl JsContextHost {
         for (document, area) in documents {
             // A retained iframe handle must not revive its former parent's
             // focus when script inserts the iframe again after removal.
-            self.clear_document_focused_area_on_removal(document, area);
+            self.clear_document_focused_area_for_fixup(document, area);
         }
     }
 
@@ -124,7 +124,7 @@ impl JsContextHost {
             })
     }
 
-    pub(crate) fn clear_document_focused_area_on_removal(
+    pub(crate) fn clear_document_focused_area_for_fixup(
         &mut self,
         document: DomHandle,
         area: DomHandle,
@@ -134,9 +134,10 @@ impl JsContextHost {
         {
             state.focused_area = None;
             state.epoch = state.epoch.wrapping_add(1);
-            // Removal clears "focus changed during ongoing navigation", even
-            // when an earlier focus() call changed the area during the transition.
-            state.last_change_was_removal = true;
+            // Automatic fixup clears "focus changed during ongoing navigation",
+            // even after an earlier focus() call. Later author focus changes
+            // still suppress the navigation's focus reset.
+            state.last_change_was_automatic_fixup = true;
         }
     }
 
@@ -167,7 +168,7 @@ impl JsContextHost {
     pub(crate) fn focus_changed_since(&self, document: DomHandle, epoch: u64) -> bool {
         self.document_focus_changes
             .get(&document)
-            .is_some_and(|state| state.epoch != epoch && !state.last_change_was_removal)
+            .is_some_and(|state| state.epoch != epoch && !state.last_change_was_automatic_fixup)
     }
 
     pub(crate) fn note_document_focused_area(
@@ -182,7 +183,7 @@ impl JsContextHost {
         if state.focused_area != area {
             state.focused_area = area;
             state.epoch = state.epoch.wrapping_add(1);
-            state.last_change_was_removal = false;
+            state.last_change_was_automatic_fixup = false;
         }
     }
 
