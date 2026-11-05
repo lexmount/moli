@@ -562,7 +562,7 @@ impl ScriptVm {
             ));
             return Ok(FrameDocumentModuleTerminalQueueFollowup::terminal_warning_recorded());
         };
-        self.dispatch_module_fetch_redirect_csp_violations(child_inflight.inflight.csp_context());
+        self.dispatch_module_fetch_csp_violations(child_inflight.inflight.csp_context());
         let source = match result {
             Ok(fetched_source) => Ok(fetched_source),
             Err(error) => Err(ModuleLoadError::new(

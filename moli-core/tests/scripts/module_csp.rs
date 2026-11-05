@@ -1,5 +1,65 @@
 use super::*;
 
+const MISMATCHED_MODULE_INTEGRITY: &str =
+    "sha384-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn parser_modulepreload_csp_hash_admission_preserves_integrity_metadata() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    for case in ["match", "mismatch", "missing", "tampered"] {
+        let label = format!("parser-{case}");
+        let mut page = browser
+            .fetch(&format!(
+                "{}/module-csp-hash-preload.html?{label}",
+                servers.origin
+            ))
+            .await?;
+        let source = format!(
+            "/{}?{label}",
+            if case == "tampered" {
+                "module-csp-hash-tampered.js"
+            } else {
+                "script.js"
+            }
+        );
+        let result = page
+            .evaluate_runtime_expression_with_await_async(
+                r#"
+          new Promise(resolve => {
+            globalThis.finishPreload = () => resolve(JSON.stringify({
+              events: globalThis.hashPreloadEvents,
+              executions: globalThis.sriExecutions || 0,
+            }));
+            if (globalThis.hashPreloadEvents?.length) finishPreload();
+          })
+        "#,
+                true,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{label}: {error}"))?;
+        let result: serde_json::Value = serde_json::from_str(result["value"].as_str().unwrap())?;
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "events": [if case == "match" { "load" } else { "error" }], "executions": 0,
+            }),
+            "{label}"
+        );
+        assert_eq!(
+            servers
+                .requests
+                .lock()
+                .iter()
+                .filter(|request| request.path == source)
+                .count(),
+            usize::from(matches!(case, "match" | "tampered")),
+            "{label}: CSP failures must stop before fetch; SRI still checks admitted response bytes"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn module_csp_redirect_completion_uses_admitted_snapshot_after_meta_policy_change()
 -> Result<()> {
@@ -89,6 +149,40 @@ pub(super) fn fixture_response(
     origin: &str,
     cross: &str,
 ) -> (&'static str, String, String) {
+    if path == "/module-csp-hash-preload.html" {
+        let case = query.split_once('-').unwrap().1;
+        let integrity = match case {
+            "missing" => String::new(),
+            "mismatch" => format!(" integrity=\"{MISMATCHED_MODULE_INTEGRITY}\""),
+            _ => format!(" integrity=\"{INTEGRITY}\""),
+        };
+        let script = if case == "tampered" {
+            "module-csp-hash-tampered.js"
+        } else {
+            "script.js"
+        };
+        let link = format!(
+            r#"<link rel="modulepreload" href="/{script}?{query}"{integrity}
+              onload="(globalThis.hashPreloadEvents ||= []).push(event.type); globalThis.finishPreload?.()"
+              onerror="(globalThis.hashPreloadEvents ||= []).push(event.type); globalThis.finishPreload?.()">"#
+        );
+        return (
+            "200 OK",
+            format!(
+                "Content-Type: text/html\r\nContent-Security-Policy: script-src '{INTEGRITY}'; script-src-attr 'unsafe-inline'\r\n"
+            ),
+            format!(
+                "<!doctype html><html><head>{link}</head><body>Hash-authorized modulepreload</body></html>"
+            ),
+        );
+    }
+    if path == "/module-csp-hash-tampered.js" {
+        return (
+            "200 OK",
+            "Content-Type: text/javascript\r\n".to_owned(),
+            "globalThis.sriExecutions = 1000;".to_owned(),
+        );
+    }
     if matches!(path, "/module-csp-report-uri" | "/module-csp-report-to") {
         return ("204 No Content", String::new(), String::new());
     }

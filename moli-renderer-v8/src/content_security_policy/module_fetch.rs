@@ -15,7 +15,7 @@ type Check = dyn Fn(
     ) + Send
     + Sync;
 
-/// One fetch's captured CSP authority and reports awaiting its owner terminal.
+/// One fetch's captured CSP authority and reports awaiting owner dispatch.
 /// The Fetch thread only evaluates policy; the owning realm dispatches events.
 #[derive(Clone)]
 pub(crate) struct ModuleFetchCspContext(Arc<Inner>);
@@ -29,7 +29,7 @@ struct Inner {
 
 #[derive(Default)]
 struct State {
-    checked_redirects: Vec<(usize, Url)>,
+    checked_hops: Vec<(usize, Url)>,
     violations: Vec<ContentSecurityPolicyUrlViolation>,
 }
 
@@ -80,22 +80,19 @@ impl ModuleFetchCspContext {
     }
 
     pub(crate) fn check_initial_request(&self, url: &Url) -> anyhow::Result<()> {
-        // Main-Document and Worker admission already perform their initial
-        // checks. Child module requests use the captured child authority here.
-        if self.owner_scope().is_some() {
-            self.check_redirect(url, 0)?;
-        }
-        Ok(())
+        self.check_hop(url, 0).map_err(|error| {
+            anyhow::anyhow!("Refused to load module `{}`: {error}", self.original_url())
+        })
     }
 
     pub(crate) fn apply(&self, request: moli_fetch::Request) -> moli_fetch::Request {
         let context = self.clone();
         request.with_redirect_policy(moli_fetch::RequestRedirectPolicy::new(
-            move |url, ordinal| context.check_redirect(url, ordinal),
+            move |url, ordinal| context.check_hop(url, ordinal),
         ))
     }
 
-    fn check_redirect(&self, url: &Url, ordinal: usize) -> anyhow::Result<()> {
+    fn check_hop(&self, url: &Url, ordinal: usize) -> anyhow::Result<()> {
         let (report, enforce) = (self.0.check)(
             url,
             self.original_url(),
@@ -106,7 +103,11 @@ impl ModuleFetchCspContext {
             },
         );
         let mut state = self.0.state.lock();
-        if state.checked_redirects.contains(&(ordinal, url.clone())) {
+        if state
+            .checked_hops
+            .iter()
+            .any(|(checked_ordinal, checked_url)| *checked_ordinal == ordinal && checked_url == url)
+        {
             if let Some(enforce) = enforce {
                 anyhow::bail!(
                     "Module request blocked by Content Security Policy directive `{}`",
@@ -115,7 +116,7 @@ impl ModuleFetchCspContext {
             }
             return Ok(());
         }
-        state.checked_redirects.push((ordinal, url.clone()));
+        state.checked_hops.push((ordinal, url.clone()));
         if let Some(report) = report {
             state.violations.push(report);
         }
@@ -133,38 +134,13 @@ impl ModuleFetchCspContext {
     // Coalesced/cache consumers still validate every recorded redirect against
     // their own policy. The transport owner's checks are not another owner's authority.
     pub(crate) fn check_response(&self, response: &moli_fetch::Response) -> anyhow::Result<()> {
-        let checked = self.0.state.lock().checked_redirects.clone();
         for (index, redirect) in response.redirect_chain.iter().enumerate() {
-            if !checked.contains(&(index + 1, redirect.to_url.clone())) {
-                self.check_redirect(&redirect.to_url, index + 1)?;
-            }
+            self.check_hop(&redirect.to_url, index + 1)?;
         }
         if response.redirected {
-            let (report, enforce) = (self.0.check)(
-                &response.final_url,
-                self.original_url(),
-                ContentSecurityPolicyRedirectStatus::FollowedRedirect,
-            );
-            if let Some(report) = report {
-                self.record_final_violation(report);
-            }
-            if let Some(enforce) = enforce {
-                let message = format!(
-                    "Module response blocked by Content Security Policy directive `{}`",
-                    enforce.effective_directive
-                );
-                self.record_final_violation(enforce);
-                anyhow::bail!(message);
-            }
+            self.check_hop(&response.final_url, response.redirect_chain.len().max(1))?;
         }
         Ok(())
-    }
-
-    fn record_final_violation(&self, violation: ContentSecurityPolicyUrlViolation) {
-        let mut state = self.0.state.lock();
-        if !state.violations.contains(&violation) {
-            state.violations.push(violation);
-        }
     }
 
     pub(crate) fn take_violations(&self) -> Vec<ContentSecurityPolicyUrlViolation> {

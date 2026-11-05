@@ -1,8 +1,4 @@
 use super::*;
-use crate::content_security_policy::{
-    ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
-    ContentSecurityPolicyScriptElementRequest,
-};
 use crate::module_runtime::{
     ModuleLoadError, ModuleLoadStage, ModulePreloadJobRun, NativeModuleSingleFetchRequest,
 };
@@ -146,41 +142,12 @@ impl DocumentRuntime {
     ) -> std::result::Result<MainDocumentModulepreloadFetchOutcome, ModuleLoadError> {
         let document_url = self.document_url().clone();
         let key = request.module_key().clone();
-        request.set_csp_context(self.module_fetch_csp_context(
-            key.url(),
-            key.kind(),
-            request.fetch_metadata(),
-        ));
-        let fetch_request = request.fetch_request();
-        let mut csp_violations = Vec::new();
-        let csp_request = ContentSecurityPolicyScriptElementRequest::parser_inserted_with_nonce(
-            fetch_request.nonce(),
-        );
-        if let Some(violation) = self.module_request_csp_violation(
-            key.url(),
-            key.kind(),
-            ContentSecurityPolicyRedirectStatus::NoRedirect,
-            csp_request,
-            ContentSecurityPolicyDisposition::Report,
-        ) {
-            csp_violations.push(violation);
-        }
-        if let Some(violation) = self.module_request_csp_violation(
-            key.url(),
-            key.kind(),
-            ContentSecurityPolicyRedirectStatus::NoRedirect,
-            csp_request,
-            ContentSecurityPolicyDisposition::Enforce,
-        ) {
-            let error = ModuleLoadError::new(
-                ModuleLoadStage::Fetch,
-                format!(
-                    "Refused to load module `{}` because it violates the document Content Security Policy directive `{}`",
-                    key.url(),
-                    violation.effective_directive
-                ),
-            );
-            csp_violations.push(violation);
+        let csp_context =
+            self.module_fetch_csp_context(key.url(), key.kind(), request.fetch_metadata());
+        let admission = csp_context.check_initial_request(key.url());
+        let csp_violations = csp_context.take_violations();
+        if let Err(error) = admission {
+            let error = ModuleLoadError::new(ModuleLoadStage::Fetch, error.to_string());
             self.mark_native_module_failed(key, error.clone());
             return Ok(MainDocumentModulepreloadFetchOutcome {
                 job_run: Some(ModulePreloadJobRun::CompletedSynchronously),
@@ -188,6 +155,8 @@ impl DocumentRuntime {
                 runtime_warning: Some(format!("native modulepreload failed: {}", error.message())),
             });
         }
+        request.set_csp_context(csp_context);
+        let fetch_request = request.fetch_request();
         let load_id = self.suspend_native_modulepreload_fetch(request);
         let loader = self
             .current_document_resource_loader()

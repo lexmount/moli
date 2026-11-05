@@ -387,8 +387,8 @@ fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
     assert!(error.to_string().contains("Content Security Policy"));
     assert!(!error.to_string().contains("SECRET"));
     assert!(!error.to_string().contains("cdn.test"));
-    vm.dispatch_module_fetch_redirect_csp_violations(Some(&context));
-    vm.dispatch_module_fetch_redirect_csp_violations(Some(&context));
+    vm.dispatch_module_fetch_csp_violations(Some(&context));
+    vm.dispatch_module_fetch_csp_violations(Some(&context));
     assert_eq!(
         drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
         2
@@ -398,6 +398,68 @@ fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
         format!(
             r#"[{{"blockedURI":"{original}","disposition":"report"}},{{"blockedURI":"{original}","disposition":"enforce"}}]"#,
         )
+    );
+    assert!(
+        context.check_response(&response).is_err(),
+        "a previously denied cached middle hop must remain denied after its reports are drained"
+    );
+    vm.dispatch_module_fetch_csp_violations(Some(&context));
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        0,
+        "replaying a response must not report the same hop twice"
+    );
+}
+
+#[test]
+fn module_csp_admission_reports_once_for_service_worker_response_alias() {
+    let mut vm = new_storage_test_vm("https://app.test/page.html");
+    vm.set_response_content_security_policies(&[
+        "script-src https://app.test/request.js".to_owned()
+    ]);
+    vm.set_response_content_security_report_only_policies(&["script-src 'none'".to_owned()]);
+    let original = Url::parse("https://app.test/request.js").unwrap();
+    let context = vm.document_runtime.module_fetch_csp_context(
+        &original,
+        crate::module_runtime::ModuleKind::JavaScript,
+        &crate::module_runtime::ModuleFetchMetadata::default(),
+    );
+    context.check_initial_request(&original).unwrap();
+    let violations = context.take_violations();
+    assert_eq!(
+        violations.len(),
+        1,
+        "Main-Document admission must check report-only policy"
+    );
+    assert_eq!(violations[0].blocked_uri, original.as_str());
+    assert_eq!(
+        violations[0].disposition,
+        crate::content_security_policy::ContentSecurityPolicyDisposition::Report
+    );
+    context.check_initial_request(&original).unwrap();
+    assert!(context.take_violations().is_empty());
+    // respondWith(fetch(...)) can supply a different response URL without a
+    // redirect. It does not turn this request into a fetch of that URL.
+    let response = moli_fetch::Response::from_head_and_text_body(
+        moli_fetch::ResponseHead {
+            final_url: Url::parse("https://app.test/private.js").unwrap(),
+            status: 200,
+            status_text: None,
+            headers: Vec::new(),
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: false,
+            cache_state: moli_fetch::ResponseCacheState::None,
+            negotiated_http_version: None,
+        },
+        "export default 42;".to_owned(),
+    );
+    context.check_response(&response).unwrap();
+    assert!(
+        context.take_violations().is_empty(),
+        "completion must not duplicate admission's report"
     );
 }
 

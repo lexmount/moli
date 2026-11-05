@@ -1923,7 +1923,10 @@ async fn child_dynamic_import_root_fetch_uses_child_import_map_and_initiator_url
         "https://child-dynamic-owner.test/mapped/dynamic-root.js"
     );
     assert_eq!(root_fetch.initiator_url_for_test(), &child_initiator_url);
-    assert_eq!(root_fetch.nonce(), Some("child-dynamic-import-nonce"));
+    assert_eq!(
+        root_fetch.fetch_metadata().nonce(),
+        Some("child-dynamic-import-nonce")
+    );
 }
 #[tokio::test]
 async fn child_dynamic_import_unexpected_complete_followup_without_graph_records_warning() {
