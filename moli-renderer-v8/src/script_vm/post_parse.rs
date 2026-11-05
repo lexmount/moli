@@ -290,15 +290,6 @@ impl ScriptVmContextBootstrap {
             ));
         }
         if matches!(mode, WindowContextBootstrapMode::MainDefault)
-            && reusable_window_proxy.is_none()
-            && let Some(environment) = renderer_page_script_environment.as_ref()
-        {
-            environment.install_initial_main_window_proxy(v8::Global::new(
-                scope,
-                local_context.global(scope),
-            ))?;
-        }
-        if matches!(mode, WindowContextBootstrapMode::MainDefault)
             && reusable_window_proxy.is_some()
         {
             tracing::debug!("attached replacement main context to stable WindowProxy");
