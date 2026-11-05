@@ -348,6 +348,7 @@ impl ScriptVm {
     }
 
     pub(super) fn install_runtime_binding_in_default_context(&mut self, name: &str) -> Result<()> {
+        self.initialize_main_world_if_needed()?;
         let owner = self.runtime_binding_document_owner(None)?;
         let context_ptr: *const v8::Global<v8::Context> =
             &self.page_default_runtime.context as *const _;
@@ -455,6 +456,9 @@ impl ScriptVm {
     }
 
     pub(super) fn remove_runtime_binding_from_default_context(&mut self, name: &str) -> Result<()> {
+        if !self.main_world_is_initialized() {
+            return Ok(());
+        }
         let context_ptr: *const v8::Global<v8::Context> =
             &self.page_default_runtime.context as *const _;
         self.with_context_scope_by_ptr(context_ptr, |scope, _| {

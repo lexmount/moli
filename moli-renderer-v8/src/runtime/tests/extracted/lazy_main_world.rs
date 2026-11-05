@@ -116,6 +116,129 @@ async fn evaluate_lazy_test(page: &RendererPageHandle, source: &str) -> serde_js
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cold_runtime_binding_install_initializes_main_world() {
+    for execution_context_id in [None, Some(0)] {
+        let (_runtime, mut page) = lazy_test_page(
+            "<!doctype html><p>Native binding installation</p>",
+            Default::default(),
+        )
+        .await;
+        assert_main_world_count(&page, 0).await;
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::InstallRuntimeBinding {
+                name: "coldBinding".to_owned(),
+                execution_context_name: None,
+                execution_context_id,
+            })
+            .await
+            .expect("native binding installation must activate the default realm");
+        assert!(matches!(reply, RendererPageReply::Unit));
+        assert_main_world_count(&page, 1).await;
+        assert_eq!(
+            evaluate_lazy_test(&page, "typeof coldBinding").await,
+            "function"
+        );
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::RemoveRuntimeBinding(
+                "coldBinding".to_owned(),
+            ))
+            .await
+            .expect("a materialized binding must remain removable");
+        assert!(matches!(reply, RendererPageReply::Unit));
+        assert_eq!(
+            evaluate_lazy_test(&page, "typeof coldBinding").await,
+            "undefined"
+        );
+        page.close_async().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cold_runtime_binding_removal_keeps_main_world_deferred() {
+    for command in [
+        RendererPageCommand::RemoveRuntimeBinding("coldBinding".to_owned()),
+        RendererPageCommand::RemoveDefaultRuntimeBinding("coldBinding".to_owned()),
+    ] {
+        let (_runtime, mut page) = lazy_test_page(
+            "<!doctype html><p>Native binding removal</p>",
+            Default::default(),
+        )
+        .await;
+        assert_main_world_count(&page, 0).await;
+        let (reply, _) = page
+            .run_async_command(command)
+            .await
+            .expect("removing a binding without a realm must complete natively");
+        assert!(matches!(reply, RendererPageReply::Unit));
+        assert_main_world_count(&page, 0).await;
+        assert_eq!(
+            evaluate_lazy_test(&page, "typeof coldBinding").await,
+            "undefined"
+        );
+        assert_main_world_count(&page, 1).await;
+        page.close_async().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cold_runtime_binding_protocol_removal_clears_pending_world_registration() {
+    for remove in [false, true] {
+        let (_runtime, mut page) = lazy_test_page(
+            "<!doctype html><p>Pending named-world binding</p>",
+            Default::default(),
+        )
+        .await;
+        let binding = crate::protocol_types::RuntimeBindingRegistration {
+            devtools_session: None,
+            name: "pendingBinding".to_owned(),
+            execution_context_name: Some("pending-binding-world".to_owned()),
+        };
+        set_runtime_binding_state_for_test(
+            &page,
+            None,
+            vec![
+                binding
+                    .clone()
+                    .with_devtools_session(DevToolsSessionKey::Primary),
+            ],
+            vec![binding.clone()],
+        )
+        .await
+        .unwrap();
+        assert_main_world_count(&page, 0).await;
+        if remove {
+            page.run_async_command(RendererPageCommand::runtime_binding_events(
+                None, binding, true,
+            ))
+            .await
+            .expect("protocol removal must clear a registration before its world exists");
+        }
+        let execution_context_id =
+            create_isolated_world_runtime_activity_for_test(&page, None, "pending-binding-world")
+                .await
+                .unwrap();
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::EvaluateExpressionInExecutionContext {
+                execution_context_id,
+                expression: "typeof pendingBinding".to_owned(),
+                await_promise: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            renderer_json_value(reply),
+            Some(serde_json::json!(if remove {
+                "undefined"
+            } else {
+                "function"
+            })),
+            "a removed registration must not be restored when its world is created"
+        );
+        page.close_async().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn scriptless_document_can_close_without_initializing_main_world() {
     for html in [
         "<!doctype html><p>Never executes script</p>",
