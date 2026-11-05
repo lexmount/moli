@@ -24,7 +24,9 @@ class _Wire:
         request = await self.client.send(method, params, session_id=session)
         response, messages = await self.client.recv_until_id(request)
         self.messages.extend(messages)
-        result = response.get("result", {})
+        result = response.get("result")
+        if "error" in response or not isinstance(result, dict):
+            raise SmokeError(f"{method}: expected a CDP result object: {response!r}")
         if "exceptionDetails" in result:
             raise SmokeError(f"{method}: {result}")
         return result
