@@ -50,6 +50,10 @@ impl DocumentRuntime {
                         )
                         || element.is_html_element("meta")
                             && element.attribute("http-equiv").is_some()
+                        // Group exclusivity still uses the full insertion and
+                        // attribute-mutation pipeline, including toggle merging.
+                        || element.is_html_element("details")
+                            && element.attribute("name").is_some_and(|name| !name.is_empty())
                         || element.attribute("shadowrootmode").is_some()
                         || element.attribute("nonce").is_some()
                 })

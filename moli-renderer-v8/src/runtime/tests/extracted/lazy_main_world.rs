@@ -184,6 +184,35 @@ async fn unobserved_inline_attributes_and_native_toggle_tasks_keep_main_world_la
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn parser_details_group_exclusivity_is_independent_of_realm_activation() {
+    for name in ["group", " ", ""] {
+        for prefix in ["", "<script>void 0</script>"] {
+            let html = format!(
+                "<!doctype html>{prefix}\
+                 <details id='a' name='{name}' open><summary>A</summary>A content</details>\
+                 <details id='b' name='{name}' open><summary>B</summary>B content</details>"
+            );
+            let (_runtime, mut page) = lazy_test_page(&html, Default::default()).await;
+            // Inspect the native state before any evaluation or Runtime agent:
+            // named groups need the full insertion pipeline, empty names do not.
+            let expected_contexts = u64::from(!name.is_empty() || !prefix.is_empty());
+            assert_main_world_count(&page, expected_contexts).await;
+            assert_eq!(
+                evaluate_lazy_test(
+                    &page,
+                    "JSON.stringify([document.querySelector('#a').open, document.querySelector('#b').open])",
+                )
+                .await,
+                serde_json::Value::String(serde_json::json!([true, name.is_empty()]).to_string()),
+                "name={name:?}, prefix={prefix:?}"
+            );
+            assert_main_world_count(&page, 1).await;
+            page.close_async().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn native_input_activates_the_live_document_and_its_inline_handler_once() {
     let runtime = initialize_layout_test_runtime();
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();

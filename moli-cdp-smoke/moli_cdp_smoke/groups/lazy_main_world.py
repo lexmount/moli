@@ -104,6 +104,13 @@ def _native_event_fixture(activation: str, html: str) -> str:
         html += f'<details open ontoggle="{escape(source, quote=True)}"><summary>Native details</summary>Content</details>'
         if activation == "details-activation":
             html += "<script>document.querySelector('details').open=false</script>"
+    elif activation in ("named-details-native", "named-details-scripted",
+                        "empty-name-details", "whitespace-name-details"):
+        name = "" if activation == "empty-name-details" else " " if activation == "whitespace-name-details" else "group"
+        if activation == "named-details-scripted":
+            html += "<script>void 0</script>"
+        html += (f'<details id="a" name="{name}" open><summary>A</summary>A content</details>'
+                 f'<details id="b" name="{name}" open><summary>B</summary>B content</details>')
     return html
 
 
@@ -122,7 +129,9 @@ async def run_lazy_main_world_group(endpoint: str, _fixture: str,
                        "deferred-script", "inline-load", "native-io", "navigate-close",
                        "native-click", "getter-click", "getter-load", "inline-pageshow",
                        "cached-timing", "deferred-invalid-handler", "native-details",
-                       "isolated-listener", "details-activation"):
+                       "isolated-listener", "details-activation",
+                       "named-details-native", "named-details-scripted",
+                       "empty-name-details", "whitespace-name-details"):
         client = await connect_raw_cdp(endpoint)
         wire = _Wire(client)
         context = None
@@ -152,6 +161,21 @@ async def run_lazy_main_world_group(endpoint: str, _fixture: str,
             outer = (await wire.call("DOM.getOuterHTML", {"nodeId": node}, session))["outerHTML"]
             if "Native content" not in outer:
                 raise SmokeError(f"native DOM query returned {outer!r}")
+            details_expected = None
+            if activation in ("named-details-native", "named-details-scripted",
+                              "empty-name-details", "whitespace-name-details"):
+                details_expected = [True, activation == "empty-name-details"]
+                native_open = []
+                for selector in ("#a", "#b"):
+                    details_node = (await wire.call("DOM.querySelector", {
+                        "nodeId": root, "selector": selector,
+                    }, session))["nodeId"]
+                    attributes = (await wire.call("DOM.getAttributes", {
+                        "nodeId": details_node,
+                    }, session))["attributes"]
+                    native_open.append("open" in attributes[::2])
+                assert_equal(native_open, details_expected,
+                             "parser details exclusivity is visible before Runtime activation")
             if activation in ("native-click", "getter-click"):
                 await _click_native_node(wire, session, node)
             if activation == "native-io":
@@ -191,6 +215,10 @@ async def run_lazy_main_world_group(endpoint: str, _fixture: str,
                 assert_equal(observed, {"title": "Lazy activation", "state": "complete",
                                         "text": "Native content", "color": "rgb(0, 0, 255)"},
                              "first main-world evaluation sees completed native Document")
+                if details_expected is not None:
+                    assert_equal(await wire.evaluate(session, "[document.querySelector('#a').open, document.querySelector('#b').open]"),
+                                 details_expected,
+                                 "first evaluation preserves the parser's details group state")
                 if activation == "native-io":
                     assert_equal(await wire.evaluate(session, "({touch:navigator.maxTouchPoints, print:matchMedia('print').matches, dark:matchMedia('(prefers-color-scheme: dark)').matches})"),
                                  {"touch": 7, "print": True, "dark": True},
