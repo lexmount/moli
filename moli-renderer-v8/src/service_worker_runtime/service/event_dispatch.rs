@@ -289,11 +289,11 @@ impl ServiceWorkerRuntimeService {
         mut fetch_job: ServiceWorkerFetchJob,
         mut request: ServiceWorkerFetchRequest,
     ) -> Result<(), Box<ServiceWorkerFetchJob>> {
-        if let Err(error) = fetch_job.request.browser_origin().and_then(|_| {
-            fetch_job
-                .request
-                .validate_request_mode_for_url(&fetch_job.request.url)
-        }) {
+        if let Err(error) = fetch_job
+            .request
+            .browser_origin()
+            .and_then(|_| fetch_job.request.admit_request_url(&fetch_job.request.url))
+        {
             self.complete_fetch_with_failure(fetch_job, error.to_string());
             return Ok(());
         }

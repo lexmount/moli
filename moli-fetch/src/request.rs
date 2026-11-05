@@ -1177,8 +1177,8 @@ impl Request {
         FetchUrlList::new(request_url, &self.redirect_chain)
     }
 
-    /// Checks mode restrictions before using a cache entry or starting a hop.
-    pub fn validate_request_mode_for_url(&self, request_url: &Url) -> Result<()> {
+    /// Applies request policy before cache lookup or dispatch, including retries.
+    pub fn admit_request_url(&self, request_url: &Url) -> Result<()> {
         // Recheck the effective URL before dispatch/cache lookup, including
         // internal HTTPS upgrades. The hop ordinal lets report producers avoid
         // duplicating the earlier redirect-target check.
@@ -1188,6 +1188,11 @@ impl Request {
         {
             (policy.0)(request_url, self.redirect_chain.len())?;
         }
+        self.validate_request_mode_for_url(request_url)
+    }
+
+    /// Checks Fetch mode restrictions without invoking stateful redirect policy.
+    pub fn validate_request_mode_for_url(&self, request_url: &Url) -> Result<()> {
         if self.request_mode != RequestMode::SameOrigin || request_url.scheme() == "data" {
             return Ok(());
         }
