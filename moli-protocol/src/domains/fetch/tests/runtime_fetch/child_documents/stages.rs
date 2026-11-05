@@ -2,6 +2,18 @@ use super::*;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
+fn pending_fetch_diagnostics(ctx: &TestContext) -> Value {
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .fetch_owner
+            .moli_memory_diagnostics()["pending"]
+            .clone()
+    })
+}
+
 async fn response_pause(ctx: &mut TestContext, url: &str, status: u16) -> Value {
     ctx.wait_for_scheduler_message("child Document response pause", |message| {
         message["method"] == "Fetch.requestPaused"
@@ -284,30 +296,17 @@ async fn child_document_response_stage_actions_settle_once() {
         );
         match action {
             "remove" => {
-                ctx.with_fixture(|conn| {
-                    let pending = conn
-                        .browser_context
-                        .as_ref()
-                        .unwrap()
-                        .active_page_target()
-                        .fetch_owner
-                        .moli_memory_diagnostics();
-                    assert_eq!(
-                        pending["pending"]["pendingSubresourceFetchResponseCount"],
-                        0
-                    );
-                });
+                let pending = pending_fetch_diagnostics(&ctx);
+                assert_eq!(pending["pendingSubresourceFetchResponseCount"], 0);
+                assert_eq!(pending["pendingFetchRequestIdCount"], 0);
                 ctx.process_async(
                     json!({"id":40_208,"sessionId":"SID-1","method":"Fetch.getResponseBody",
                     "params":{"requestId":request_id}}),
                 )
                 .await;
                 let stale = take_response_by_id(&mut ctx, 40_208);
-                assert_eq!(
-                    stale["result"],
-                    json!({}),
-                    "retired request acknowledgement must not return its old body"
-                );
+                assert_eq!(stale["error"]["code"], -32000);
+                assert_eq!(stale["error"]["message"], "RequestNotFound");
             }
             "fail" => {}
             "ignore" => {
@@ -525,19 +524,14 @@ async fn child_document_auth_cancel_default_and_disable_preserve_challenge_respo
                 },
             )
             .await;
-            ctx.with_fixture(|conn| {
-                let pending = conn
-                    .browser_context
-                    .as_ref()
-                    .unwrap()
-                    .active_page_target()
-                    .fetch_owner
-                    .moli_memory_diagnostics();
-                assert_eq!(pending["pending"]["pendingSubresourceFetchAuthCount"], 0);
-            });
+            let pending = pending_fetch_diagnostics(&ctx);
+            assert_eq!(pending["pendingSubresourceFetchAuthCount"], 0);
+            assert_eq!(pending["pendingFetchRequestIdCount"], 0);
             ctx.process_async(json!({"id":40_470,"sessionId":"SID-1","method":"Fetch.continueWithAuth",
                 "params":{"requestId":request_id,"authChallengeResponse":{"response":"CancelAuth"}}})).await;
-            ctx.expect_result(40_470, json!({}), Some("SID-1"));
+            let stale = take_response_by_id(&mut ctx, 40_470);
+            assert_eq!(stale["error"]["code"], -32000);
+            assert_eq!(stale["error"]["message"], "RequestNotFound");
         } else {
             evaluate_until_value_async(
                 &mut ctx,
@@ -948,6 +942,133 @@ async fn child_document_detaching_response_or_auth_handler_resumes_navigation() 
         )
         .await;
         assert_eq!(terminal_events(&ctx, &network_id).len(), 1);
+        server.abort();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repeatedly_removing_paused_child_documents_retires_fetch_ids() {
+    for auth in [false, true] {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let child_hits = hits.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = Router::new()
+            .route(
+                "/page",
+                get(|| async {
+                    (
+                        [("content-type", "text/html")],
+                        "<!doctype html><body></body>",
+                    )
+                }),
+            )
+            .route(
+                "/child",
+                any(move || {
+                    let hits = child_hits.clone();
+                    async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        if auth {
+                            (
+                                StatusCode::UNAUTHORIZED,
+                                [
+                                    ("www-authenticate", "Basic realm=\"child\""),
+                                    ("content-type", "text/html"),
+                                ],
+                                "challenge",
+                            )
+                                .into_response()
+                        } else {
+                            ([("content-type", "text/html")], "child").into_response()
+                        }
+                    }
+                }),
+            );
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let mut ctx = TestContext::new();
+        with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+        ctx.process_async(json!({"id":41_000,"sessionId":"SID-1","method":"Fetch.enable",
+            "params":{"handleAuthRequests":auth,"patterns":[{"resourceType":"Document","requestStage":"Response"}]}})).await;
+        ctx.expect_result(41_000, json!({}), Some("SID-1"));
+        enable_runtime_async(&mut ctx, "SID-1", 41_001).await;
+        assert_eq!(
+            pending_fetch_diagnostics(&ctx)["pendingFetchRequestIdCount"],
+            0
+        );
+
+        let mut request_ids = Vec::new();
+        for cycle in 0..8 {
+            let id = 41_010 + cycle * 10;
+            let url = format!("http://{addr}/child?cycle={cycle}");
+            evaluate_script(&mut ctx, id, &format!(
+                "{{ const frame = document.createElement('iframe'); frame.src = {url:?}; document.body.append(frame); }}"
+            )).await;
+            let paused = ctx
+                .wait_for_scheduler_message("child stage before removal", |message| {
+                    message["sessionId"] == "SID-1"
+                        && message["params"]["request"]["url"] == url
+                        && if auth {
+                            message["method"] == "Fetch.authRequired"
+                        } else {
+                            message["method"] == "Fetch.requestPaused"
+                                && message["params"]["responseStatusCode"] == 200
+                        }
+                })
+                .await;
+            request_ids.push(paused["params"]["requestId"].as_str().unwrap().to_owned());
+            assert_eq!(
+                pending_fetch_diagnostics(&ctx)["pendingFetchRequestIdCount"],
+                1
+            );
+            let network_id = ctx
+                .sent
+                .iter()
+                .find(|message| {
+                    message["method"] == "Network.requestWillBeSent"
+                        && message["params"]["request"]["url"] == url
+                })
+                .unwrap()["params"]["requestId"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            evaluate_script(
+                &mut ctx,
+                id + 1,
+                "document.querySelector('iframe').remove()",
+            )
+            .await;
+            wait_until_message(&mut ctx, "SID-1", "removed child terminal", |message| {
+                message["method"] == "Network.loadingFailed"
+                    && message["params"]["requestId"] == network_id
+            })
+            .await;
+            assert_eq!(terminal_events(&ctx, &network_id).len(), 1);
+            let pending = pending_fetch_diagnostics(&ctx);
+            assert_eq!(pending["pendingSubresourceFetchResponseCount"], 0);
+            assert_eq!(pending["pendingSubresourceFetchAuthCount"], 0);
+            assert_eq!(
+                pending["pendingFetchRequestIdCount"], 0,
+                "cycle={cycle}, auth={auth}"
+            );
+            assert_eq!(pending["empty"], true);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 8);
+        for (index, request_id) in request_ids.into_iter().enumerate() {
+            let id = 41_100 + index as u64;
+            let mut command = if auth {
+                json!({"method":"Fetch.continueWithAuth","params":{"requestId":request_id,
+                    "authChallengeResponse":{"response":"CancelAuth"}}})
+            } else {
+                json!({"method":"Fetch.getResponseBody","params":{"requestId":request_id}})
+            };
+            command["id"] = json!(id);
+            command["sessionId"] = json!("SID-1");
+            ctx.process_async(command).await;
+            let response = take_response_by_id(&mut ctx, id);
+            assert_eq!(response["error"]["code"], -32000);
+            assert_eq!(response["error"]["message"], "RequestNotFound");
+        }
         server.abort();
     }
 }

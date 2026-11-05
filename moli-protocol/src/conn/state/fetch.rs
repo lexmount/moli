@@ -759,13 +759,23 @@ impl TargetFetchState {
         if allow_pending_completion {
             // Native cancellation also invalidates response/auth interception
             // ids, including bodies retained while an iframe was paused.
-            self.pending_subresource_fetch_auths.retain(|_, pending| {
-                pending.internal_id != internal_id || &pending.page_owner != expected_page_owner
-            });
-            self.pending_subresource_fetch_responses
-                .retain(|_, pending| {
-                    pending.internal_id != internal_id || &pending.page_owner != expected_page_owner
-                });
+            for (request_id, _) in self
+                .pending_subresource_fetch_auths
+                .extract_if(|_, pending| {
+                    pending.internal_id == internal_id && &pending.page_owner == expected_page_owner
+                })
+            {
+                self.pending_fetch_request_ids.remove(&request_id);
+            }
+            for (request_id, _) in
+                self.pending_subresource_fetch_responses
+                    .extract_if(|_, pending| {
+                        pending.internal_id == internal_id
+                            && &pending.page_owner == expected_page_owner
+                    })
+            {
+                self.pending_fetch_request_ids.remove(&request_id);
+            }
         }
         let in_flight_matches = self
             .in_flight_subresource_fetches
@@ -2603,6 +2613,73 @@ mod tests {
             response_stage_url_match_policy: ResponseStageUrlMatchPolicy::AlreadyMatched,
             auth_stage_chain: None,
         }
+    }
+
+    #[test]
+    fn native_completion_retires_pause_ids_only_for_the_matching_request_and_page() {
+        let mut fetch = TargetFetchState::default();
+        let page = test_page_owner();
+        let replacement = crate::conn::TargetPageResidenceIdentity::new_for_test(
+            page.browser_context_id().to_owned(),
+            page.target_id().map(str::to_owned),
+            2,
+        );
+        for (name, internal_id, page, session) in [
+            ("matching-a", 7, &page, "SID-A"),
+            ("matching-b", 7, &page, "SID-B"),
+            ("other-page", 7, &replacement, "SID-A"),
+            ("other-request", 8, &page, "SID-A"),
+        ] {
+            let mut auth = pending_subresource_auth(internal_id, Some(session));
+            auth.page_owner = page.clone();
+            fetch.register_pending_subresource_fetch_auth_request(format!("AUTH-{name}"), auth);
+            let mut response = pending_subresource_response(internal_id, Some(session));
+            response.page_owner = page.clone();
+            fetch.register_pending_subresource_fetch_response_request(
+                format!("RESP-{name}"),
+                response,
+            );
+        }
+
+        assert!(
+            fetch
+                .claim_subresource_continue_request(&page, 7, Some("SID-A"), false)
+                .is_none()
+        );
+        assert_eq!(fetch.pending_fetch_request_ids.len(), 8);
+        assert_eq!(fetch.pending_subresource_fetch_auths.len(), 4);
+        assert_eq!(fetch.pending_subresource_fetch_responses.len(), 4);
+
+        let _ = fetch.claim_subresource_continue_request(&page, 7, Some("SID-A"), true);
+        assert_eq!(fetch.pending_subresource_fetch_auths.len(), 2);
+        assert_eq!(fetch.pending_subresource_fetch_responses.len(), 2);
+        assert_eq!(
+            fetch.pending_fetch_request_ids,
+            HashSet::from([
+                "AUTH-other-page".to_owned(),
+                "RESP-other-page".to_owned(),
+                "AUTH-other-request".to_owned(),
+                "RESP-other-request".to_owned(),
+            ]),
+            "native completion must retire every handler's id without touching other requests"
+        );
+        for id in [
+            "AUTH-matching-a",
+            "RESP-matching-a",
+            "AUTH-matching-b",
+            "RESP-matching-b",
+        ] {
+            assert_eq!(
+                fetch.consume_pending_request_action(id),
+                Err("RequestNotFound")
+            );
+        }
+
+        let _ = fetch.claim_subresource_continue_request(&page, 7, Some("SID-A"), true);
+        assert_eq!(fetch.pending_fetch_request_ids.len(), 4);
+        let _ = fetch.claim_subresource_continue_request(&replacement, 7, Some("SID-A"), true);
+        let _ = fetch.claim_subresource_continue_request(&page, 8, Some("SID-A"), true);
+        assert!(fetch.is_empty());
     }
 
     #[test]
