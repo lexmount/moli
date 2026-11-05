@@ -34,6 +34,60 @@ impl SpecialBrowsingContextTarget {
     }
 }
 
+fn document_base_navigation_target_name(
+    runtime: &JsContextHost,
+    element: DomHandle,
+) -> Option<String> {
+    let document = runtime.dom_host().owner_document_handle(element)?;
+    runtime
+        .dom_host()
+        .document_base_target_for_handle(document)
+        .map(str::to_owned)
+}
+
+fn sanitize_navigation_target_name(target: Option<String>) -> Option<String> {
+    target
+        .map(|target| {
+            if target.contains('<')
+                && target
+                    .bytes()
+                    .any(|byte| matches!(byte, b'\t' | b'\n' | b'\r'))
+            {
+                "_blank".to_owned()
+            } else {
+                target
+            }
+        })
+        .filter(|target| !target.is_empty())
+}
+
+/// Preserve the empty-link-target base fallback used by browsers and
+/// html/semantics/document-metadata/the-base-element/base_multiple.html.
+/// Form targets distinguish an empty value from absence below.
+pub(super) fn hyperlink_navigation_target_name(
+    runtime: &JsContextHost,
+    element: DomHandle,
+) -> Option<String> {
+    let target = super::super::reflected_attribute(runtime, element, "target")
+        .filter(|target| !target.is_empty())
+        .or_else(|| document_base_navigation_target_name(runtime, element));
+    sanitize_navigation_target_name(target)
+}
+
+/// An explicitly empty form target or submitter override selects the current
+/// navigable. Only absent attributes inherit the owning Document's base target.
+/// https://html.spec.whatwg.org/multipage/semantics.html#get-an-element's-target
+pub(in crate::native_bridge) fn form_navigation_target_name(
+    runtime: &JsContextHost,
+    form: DomHandle,
+    override_target: Option<String>,
+) -> Option<String> {
+    let target = override_target
+        .or_else(|| super::super::reflected_attribute(runtime, form, "target"))
+        .or_else(|| document_base_navigation_target_name(runtime, form));
+    sanitize_navigation_target_name(target)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ElementPopupRelations {
     suppress_opener: bool,
@@ -387,27 +441,32 @@ fn navigate_element_popup_target(
     true
 }
 
-/// Capture active-Document authority before formdata can replace the source.
-/// Only resolve existing targets here; creating a new context belongs to the
-/// later navigable selection, after the entry list has been constructed.
-pub(in crate::native_bridge) fn form_blocks_ancestor_navigation(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+/// Preserve the active source Document's ancestor permissions across formdata.
+/// The final target is read after that event, so do not reject it based on the
+/// form's or base element's earlier target value.
+pub(in crate::native_bridge) fn form_blocked_ancestor_targets(
+    runtime: &JsContextHost,
     form: DomHandle,
-    target_name: Option<&str>,
     action: &str,
-) -> bool {
-    let Some(source) = (unsafe { &*runtime_ptr }).owner_dispatch_scope_for_node(form) else {
-        return false;
+) -> Vec<crate::native_bridge::OwnerDispatchScope> {
+    let Some(source) = runtime.owner_dispatch_scope_for_node(form) else {
+        return Vec::new();
     };
-    let Some(ExistingHyperlinkTarget::Local(target)) =
-        existing_hyperlink_target(scope, runtime_ptr, source, form, target_name)
-    else {
-        return false;
+    let Ok(destination) = url::Url::parse(action) else {
+        return Vec::new();
     };
-    let runtime = unsafe { &*runtime_ptr };
-    url::Url::parse(action)
-        .is_ok_and(|destination| runtime.blocks_ancestor_navigation(source, target, &destination))
+    let mut blocked = Vec::new();
+    let mut descendant = source;
+    while let crate::native_bridge::OwnerDispatchScope::Child(handle) = descendant {
+        let Some(parent) = runtime.owner_dispatch_scope_for_node(handle) else {
+            break;
+        };
+        if runtime.blocks_ancestor_navigation(source, parent, &destination) {
+            blocked.push(parent);
+        }
+        descendant = parent;
+    }
+    blocked
 }
 
 /// Choose the navigable synchronously. The form's DOM task starts navigation later.

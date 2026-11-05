@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "element_navigation/target_resolution.rs"]
+mod target_resolution;
+
 #[test]
 fn anchor_navigation_fires_once_when_click_is_borrowed_from_child_realm() {
     for target in ["", "_sElF", "_ToP", "_PARENT"] {

@@ -21,8 +21,8 @@ pub(crate) use default_action::{
     scroll_to_url_fragment_or_top, select_contenteditable_contents,
 };
 pub(in crate::native_bridge) use targets::{
-    FormNavigationTarget, choose_form_navigation_target, form_blocks_ancestor_navigation,
-    form_navigation_initiator,
+    FormNavigationTarget, choose_form_navigation_target, form_blocked_ancestor_targets,
+    form_navigation_initiator, form_navigation_target_name,
 };
 pub(crate) use targets::{
     NamedHyperlinkPopup, SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
