@@ -267,7 +267,23 @@ impl JsContextHost {
                                 handle, &url,
                             )
                         });
-                let navigation_entry_seed = if attribute_bootstrap_changed {
+                let javascript_attribute_target = matches!(
+                    &attribute_bootstrap,
+                    ChildBrowsingContextBootstrap::Url(url) if url.scheme() == "javascript"
+                );
+                let navigation_entry_seed = if javascript_attribute_target
+                    && (is_new || attribute_bootstrap_changed)
+                {
+                    // Script evaluation does not navigate to the javascript:
+                    // URL. Only a string completion can replace the active
+                    // entry, retaining its URL and key.
+                    existing
+                        .as_ref()
+                        .map(|entry| entry.committed_navigation_entry_seed())
+                        .unwrap_or_else(|| {
+                            Self::child_browsing_context_single_entry_seed(&live_bootstrap)
+                        })
+                } else if attribute_bootstrap_changed {
                     let mut seed = existing
                         .as_ref()
                         .map(|entry| {

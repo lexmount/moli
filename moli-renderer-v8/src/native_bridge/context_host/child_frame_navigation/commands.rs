@@ -110,7 +110,9 @@ impl JsContextHost {
         let source = moli_page_types::NavigationSourceDocument::from_initial_empty(
             replace_initial_empty_document,
         );
-        if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
+        if url.scheme() != "javascript"
+            && let Some(entry) = self.child_browsing_contexts.get_mut(&handle)
+        {
             if replace_initial_empty_document {
                 entry.replace_navigation_in_entry_seed(&url, source);
             } else {
