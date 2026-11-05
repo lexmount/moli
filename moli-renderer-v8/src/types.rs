@@ -265,14 +265,13 @@ impl PendingSubresourceContinuation {
         xhr: v8::Global<v8::Object>,
         use_cors_preflight: bool,
         csp: crate::network_host::WindowCspRequestContext,
+        timing: crate::context_bootstrap::FetchResourceTiming,
     ) -> Self {
         Self::Xhr {
             xhr,
             use_cors_preflight,
             csp: Box::new(csp),
-            timing: Some(
-                crate::context_bootstrap::FetchResourceTiming::for_initiator_type("xmlhttprequest"),
-            ),
+            timing: Some(timing),
         }
     }
 
@@ -401,11 +400,12 @@ impl PendingWindowFetchContinuation {
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
         redirect_mode: moli_fetch::RequestRedirectMode,
         integrity: String,
+        timing: crate::context_bootstrap::FetchResourceTiming,
     ) -> Box<Self> {
         Box::new(Self {
             promise: PendingWindowFetchPromise::Active(resolver),
             upload: None,
-            timing: crate::context_bootstrap::FetchResourceTiming::new(),
+            timing,
             keepalive,
             redirect_csp_state: crate::network_host::FetchCspRedirectState::new(&connect_policy),
             connect_policy,

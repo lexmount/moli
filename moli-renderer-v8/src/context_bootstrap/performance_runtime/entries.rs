@@ -67,6 +67,9 @@ struct PerformanceResourceTimingSlotDeclaration {
     #[webapi(slot = PERFORMANCE_RESOURCE_INITIATOR_TYPE_SLOT)]
     initiator_type: String,
 
+    #[webapi(slot = PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT, constructor_default = "")]
+    initiator_url: &'static str,
+
     #[webapi(slot = PERFORMANCE_RESOURCE_NEXT_HOP_PROTOCOL_SLOT, constructor_default = "")]
     next_hop_protocol: &'static str,
 
@@ -158,6 +161,7 @@ struct PerformanceResourceTimingJsonSnapshotDeclaration {
     duration: f64,
     navigation_id: f64,
     initiator_type: String,
+    initiator_url: String,
     delivery_type: String,
     next_hop_protocol: String,
     worker_start: f64,
@@ -200,6 +204,7 @@ impl PerformanceResourceTimingJsonSnapshotDeclaration {
             performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_DURATION_SLOT)?,
             performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT)?,
             performance_entry_slot_string(scope, entry, PERFORMANCE_RESOURCE_INITIATOR_TYPE_SLOT)?,
+            performance_entry_slot_string(scope, entry, PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT)?,
             performance_entry_slot_string(scope, entry, PERFORMANCE_RESOURCE_DELIVERY_TYPE_SLOT)?,
             performance_entry_slot_string(
                 scope,
@@ -560,6 +565,13 @@ struct PerformanceResourceTimingPrototypeAccessorsDeclaration {
         enumerable
     )]
     content_encoding: (),
+    #[webapi(
+        accessor_property,
+        getter = performance_resource_timing_attribute_getter_callback,
+        data = callback_data_index_value(scope, 28),
+        enumerable
+    )]
+    initiator_url: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -829,6 +841,7 @@ const PERFORMANCE_RESOURCE_TIMING_ATTRIBUTE_SLOTS: &[&str] = &[
     PERFORMANCE_RESOURCE_RENDER_BLOCKING_STATUS_SLOT,
     PERFORMANCE_RESOURCE_CONTENT_TYPE_SLOT,
     PERFORMANCE_RESOURCE_CONTENT_ENCODING_SLOT,
+    PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT,
 ];
 
 pub(in crate::context_bootstrap) fn performance_get_entries_callback<'s>(
@@ -1095,10 +1108,12 @@ pub(super) fn initialize_resource_timing_response_metadata<'s>(
     entry: v8::Local<'s, v8::Object>,
     delivery_type: &str,
     content_encoding: &str,
+    initiator_url: &str,
 ) {
     for (slot, value) in [
         (PERFORMANCE_RESOURCE_DELIVERY_TYPE_SLOT, delivery_type),
         (PERFORMANCE_RESOURCE_CONTENT_ENCODING_SLOT, content_encoding),
+        (PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT, initiator_url),
     ] {
         if let Some(value) = v8_string(scope, value) {
             set_private_value(scope, entry, slot, value.into());

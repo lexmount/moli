@@ -361,6 +361,7 @@ fn register_pending_window_fetch_for_test(
                 request_cookie_report: None,
             },
             false,
+            scope,
         )
         .expect("test Fetch should be admitted");
 
@@ -532,6 +533,7 @@ fn register_pending_window_fetch_with_connect_policy_for_test(
                 request_cookie_report: None,
             },
             false,
+            scope,
         )
         .expect("test Fetch should be admitted");
     (

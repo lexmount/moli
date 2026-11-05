@@ -277,6 +277,259 @@ async fn window_fetch_reports_native_resource_timing_at_body_terminal() {
     .await;
 }
 
+#[test]
+fn resource_timing_initiator_retains_the_triggering_script_until_publication() {
+    let mut vm = new_storage_test_vm("https://resource-initiator.test/page.html");
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Xhr));
+    for (url, source) in [
+        (
+            "https://resource-initiator.test/library.js",
+            "function requestFromLibrary() { const xhr = new XMLHttpRequest(); xhr.open('GET', '/data'); xhr.send(); }",
+        ),
+        (
+            "https://resource-initiator.test/caller.js",
+            "requestFromLibrary();",
+        ),
+        (
+            "https://resource-initiator.test/later.js",
+            "globalThis.laterScriptExecuted = true;",
+        ),
+    ] {
+        vm.exec_in_enclosing_script_turn_with_provenance(
+            source,
+            &crate::script_provenance::CompiledStringProvenance::at_url(Url::parse(url).unwrap()),
+            0,
+            None,
+            true,
+        )
+        .map_err(|error| error.into_anyhow())
+        .expect("the resource initiator scripts should execute");
+    }
+    let requests = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        internal_id: request.internal_id,
+        request_url: request.url.clone(),
+        request_method: "GET".to_owned(),
+        request_headers: Default::default(),
+        request_body: None,
+        response_status_text: None,
+        skip_fetch_security_validation: false,
+        response_filter: None,
+        network_error_text: None,
+        result: Ok(crate::types::NavigationResponse::from_text_body(
+            request.url.clone(),
+            200,
+            vec![("content-type".to_owned(), b"text/plain".to_vec())],
+            "body".to_owned(),
+        ))
+        .into(),
+    })
+    .expect("the initiating request should complete");
+    assert_eq!(
+        vm.eval("String(performance.getEntriesByType('resource')[0].initiatorUrl)")
+            .unwrap(),
+        "https://resource-initiator.test/caller.js",
+        "resource timing must capture the caller, not the callee or publication-time script"
+    );
+    assert_eq!(
+        vm.eval("performance.getEntriesByType('resource')[0].toJSON().initiatorUrl")
+            .unwrap(),
+        "https://resource-initiator.test/caller.js"
+    );
+}
+
+#[test]
+fn resource_timing_initiator_survives_promises_and_keeps_its_source_url() {
+    let mut vm = new_storage_test_vm("https://resource-initiator.test/page.html");
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
+    vm.exec_in_enclosing_script_turn_with_provenance(
+        "new Promise(resolve => { globalThis.releaseInitiator = resolve; }).then(async () => { await new Promise(resolve => queueMicrotask(resolve)); return fetch('/data'); });",
+        &crate::script_provenance::CompiledStringProvenance::new(
+            Url::parse("https://resource-initiator.test/caller.js").unwrap(),
+            Url::parse("https://resolution-base.test/different/").unwrap(),
+        ),
+        0, None, true,
+    ).map_err(|error| error.into_anyhow()).unwrap();
+    assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+    vm.exec_in_enclosing_script_turn_with_provenance(
+        "releaseInitiator();",
+        &crate::script_provenance::CompiledStringProvenance::at_url(
+            Url::parse("https://resource-initiator.test/later.js").unwrap(),
+        ),
+        0,
+        None,
+        true,
+    )
+    .map_err(|error| error.into_anyhow())
+    .unwrap();
+    let requests = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request.url.as_str(), "https://resource-initiator.test/data");
+    vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        internal_id: request.internal_id,
+        request_url: request.url.clone(),
+        request_method: "GET".to_owned(),
+        request_headers: Default::default(),
+        request_body: None,
+        response_status_text: None,
+        skip_fetch_security_validation: false,
+        response_filter: None,
+        network_error_text: None,
+        result: Ok(crate::types::NavigationResponse::from_text_body(
+            request.url.clone(),
+            200,
+            vec![("content-type".to_owned(), b"text/plain".to_vec())],
+            "body".to_owned(),
+        ))
+        .into(),
+    })
+    .unwrap();
+    assert_eq!(
+        vm.eval("performance.getEntriesByType('resource')[0].initiatorUrl")
+            .unwrap(),
+        "https://resource-initiator.test/caller.js",
+    );
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+        const entry = performance.getEntriesByType('resource')[0];
+        Object.defineProperty(entry, 'initiatorUrl', {get() { throw Error('author getter'); }});
+        return entry.toJSON().initiatorUrl;
+    })()"#
+        )
+        .unwrap(),
+        "https://resource-initiator.test/caller.js"
+    );
+}
+
+#[test]
+fn resource_timing_initiator_requires_a_known_source_and_readable_network_response() {
+    for streaming in [false, true] {
+        for scenario in [
+            "same",
+            "cors",
+            "opaque-tao",
+            "cache",
+            "synthetic",
+            "muted",
+            "unknown",
+        ] {
+            let mut vm = new_storage_test_vm("https://resource-initiator.test/page.html");
+            vm.set_fetch_subresource_interception(
+                true,
+                Some(crate::types::SubresourceResourceType::Fetch),
+            );
+            let target = if matches!(scenario, "cors" | "opaque-tao") {
+                "https://other-initiator.test/data"
+            } else {
+                "https://resource-initiator.test/data"
+            };
+            let mode = if scenario == "opaque-tao" {
+                "no-cors"
+            } else {
+                "cors"
+            };
+            let source =
+                format!("fetch('{target}', {{mode: '{mode}'}}).then(response => response.text());");
+            if scenario == "unknown" {
+                vm.eval(&source).unwrap();
+            } else {
+                let metadata = crate::planning::ScriptFetchMetadata {
+                    muted_errors: scenario == "muted",
+                    ..Default::default()
+                };
+                vm.exec_in_enclosing_script_turn_with_provenance(
+                    &source,
+                    &crate::script_provenance::CompiledStringProvenance::at_url(
+                        Url::parse("https://resource-initiator.test/caller.js").unwrap(),
+                    ),
+                    0,
+                    Some(&metadata),
+                    true,
+                )
+                .map_err(|error| error.into_anyhow())
+                .unwrap();
+            }
+            let requests = vm.take_pending_subresource_fetch_infos();
+            assert_eq!(requests.len(), 1, "{scenario}, streaming={streaming}");
+            let request = &requests[0];
+            let mut headers = vec![("content-type".to_owned(), b"text/plain".to_vec())];
+            if scenario == "cors" {
+                headers.push(("access-control-allow-origin".to_owned(), b"*".to_vec()));
+            }
+            if scenario == "opaque-tao" {
+                headers.push(("timing-allow-origin".to_owned(), b"*".to_vec()));
+            }
+            let mut response = crate::types::NavigationResponse::from_text_body(
+                request.url.clone(),
+                200,
+                headers,
+                "body".to_owned(),
+            );
+            if scenario == "cache" {
+                response.from_cache = true;
+                response.cache_state = moli_fetch::ResponseCacheState::Local;
+            }
+            let synthetic = scenario == "synthetic";
+            if streaming {
+                let body_source_id = crate::network_host::new_network_body_source_id();
+                vm.start_streaming_async_subresource_fetch(
+                    crate::types::AsyncSubresourceStreamingStarted {
+                        internal_id: request.internal_id,
+                        request_url: request.url.clone(),
+                        request_method: "GET".to_owned(),
+                        request_headers: Default::default(),
+                        request_body: None,
+                        skip_fetch_security_validation: synthetic,
+                        response_filter: None,
+                        body_source_id,
+                        head: response.head(),
+                        network_request_headers: None,
+                    },
+                )
+                .unwrap();
+                vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"body".to_vec());
+                vm.finish_streaming_async_subresource_fetch(
+                    request.internal_id,
+                    body_source_id,
+                    Ok(()),
+                )
+                .unwrap();
+            } else {
+                vm.complete_async_subresource_fetch(
+                    crate::types::AsyncSubresourceFetchCompletion {
+                        internal_id: request.internal_id,
+                        request_url: request.url.clone(),
+                        request_method: "GET".to_owned(),
+                        request_headers: Default::default(),
+                        request_body: None,
+                        response_status_text: None,
+                        skip_fetch_security_validation: synthetic,
+                        response_filter: None,
+                        network_error_text: None,
+                        result: Ok(response).into(),
+                    },
+                )
+                .unwrap();
+            }
+            let expected = if matches!(scenario, "same" | "cors") {
+                "https://resource-initiator.test/caller.js"
+            } else {
+                ""
+            };
+            assert_eq!(
+                vm.eval("performance.getEntriesByType('resource')[0].initiatorUrl")
+                    .unwrap(),
+                expected,
+                "{scenario}, streaming={streaming}",
+            );
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
 async fn resource_connection_phases_survive_lazy_realms_and_native_json() {
     run_resource_timing_fixture(

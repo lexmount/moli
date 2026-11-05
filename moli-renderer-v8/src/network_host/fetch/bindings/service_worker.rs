@@ -85,6 +85,7 @@ pub(super) fn dispatch_service_worker_fetch<'s>(
                 request_cookie_report: request_cookie_report.clone(),
             },
             requires_preflight,
+            scope,
         )
         .ok_or_else(|| anyhow::anyhow!("Failed to fetch"))?;
     let mut request = host.service_worker_fetch_request(

@@ -126,7 +126,7 @@ impl ScriptVm {
         result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let RunningSubresourceFetchState {
-            pending,
+            mut pending,
             request_url,
             request_method,
             request_headers,
@@ -135,6 +135,11 @@ impl ScriptVm {
             handle_auth_requests,
             initial_auth_network_request_headers,
         } = running;
+        if skip_fetch_security_validation
+            && let Some(timing) = pending.continuation.window_resource_timing_mut()
+        {
+            timing.clear_initiator();
+        }
         let internal_id = pending.info.internal_id;
         let resource_type = pending.info.resource_type;
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
@@ -906,6 +911,9 @@ impl ScriptVm {
             return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
         };
         if let Some(timing) = pending.continuation.window_resource_timing_mut() {
+            if started.skip_fetch_security_validation {
+                timing.clear_initiator();
+            }
             timing.response_started();
             if let Some(native) = pending.load.response_timing() {
                 timing.observe_native_timing(native);

@@ -294,6 +294,7 @@ fn pending_fetch_continuation<'s>(
             .expect("test Fetch should capture its CSP report context"),
             moli_fetch::RequestRedirectMode::Follow,
             String::new(),
+            crate::context_bootstrap::FetchResourceTiming::new(),
         ),
     )
 }
@@ -3521,6 +3522,9 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                                 v8::Global::new(scope, xhr),
                                 false,
                                 csp,
+                                crate::context_bootstrap::FetchResourceTiming::for_initiator_type(
+                                    "xmlhttprequest",
+                                ),
                             ),
                             load: crate::network::loads::resource_load_lease_for_test(
                                 load_client,
@@ -4773,6 +4777,9 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                             v8::Global::new(scope, xhr),
                             false,
                             csp,
+                            crate::context_bootstrap::FetchResourceTiming::for_initiator_type(
+                                "xmlhttprequest",
+                            ),
                         ),
                         load: crate::network::loads::resource_load_lease_for_test(
                             load_client,

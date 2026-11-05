@@ -444,6 +444,11 @@ impl ScriptVm {
         network_error_text: Option<String>,
         completion_result: AsyncSubresourceFetchResult,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        if skip_fetch_security_validation
+            && let Some(timing) = pending.continuation.window_resource_timing_mut()
+        {
+            timing.clear_initiator();
+        }
         let consumed_preload = match &completion_result {
             AsyncSubresourceFetchResult::PreloadFailure(_) => true,
             AsyncSubresourceFetchResult::Response(response)

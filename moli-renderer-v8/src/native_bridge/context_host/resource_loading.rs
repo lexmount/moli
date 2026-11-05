@@ -676,6 +676,7 @@ impl JsContextHost {
         policy_context: crate::types::SubresourcePolicyContext,
         blob_url_entry: Option<crate::network_host::CapturedBlobUrl>,
         mut info: PendingSubresourceFetchInfo,
+        scope: &mut v8::PinScope<'_, '_>,
     ) -> Option<()> {
         self.assign_pending_subresource_fetch_identity(&mut info);
         let disposition = if keepalive {
@@ -695,6 +696,8 @@ impl JsContextHost {
             None,
         )?;
         self.push_pending_subresource_fetch_info(info.clone());
+        let mut timing = crate::context_bootstrap::FetchResourceTiming::new();
+        timing.capture_window_initiator(scope, self);
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
@@ -715,6 +718,7 @@ impl JsContextHost {
                         csp_report_context,
                         redirect_mode,
                         integrity,
+                        timing,
                     ),
                 ),
                 deferred_request_started: false,
@@ -971,6 +975,7 @@ impl JsContextHost {
         policy_context: crate::types::SubresourcePolicyContext,
         mut info: PendingSubresourceFetchInfo,
         defer_request_started: bool,
+        scope: &mut v8::PinScope<'_, '_>,
     ) -> Option<u64> {
         self.assign_pending_subresource_fetch_identity(&mut info);
         let internal_id = info.internal_id;
@@ -993,6 +998,8 @@ impl JsContextHost {
         if !defer_request_started {
             self.record_pending_subresource_request_started(&info, load.disposition());
         }
+        let mut timing = crate::context_bootstrap::FetchResourceTiming::new();
+        timing.capture_window_initiator(scope, self);
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1013,6 +1020,7 @@ impl JsContextHost {
                         csp_report_context,
                         redirect_mode,
                         integrity,
+                        timing,
                     ),
                 ),
                 deferred_request_started: defer_request_started,
@@ -1704,6 +1712,9 @@ impl JsContextHost {
             None,
         );
         self.push_pending_subresource_fetch_info(info.clone());
+        let mut timing =
+            crate::context_bootstrap::FetchResourceTiming::for_initiator_type("xmlhttprequest");
+        timing.capture_window_initiator(scope, self);
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1720,6 +1731,7 @@ impl JsContextHost {
                     xhr,
                     use_cors_preflight,
                     csp,
+                    timing,
                 ),
                 deferred_request_started: false,
                 blob_url_entry,
@@ -1793,6 +1805,9 @@ impl JsContextHost {
             cancel_handle.clone(),
         );
         self.record_pending_subresource_request_started(&info, load.disposition());
+        let mut timing =
+            crate::context_bootstrap::FetchResourceTiming::for_initiator_type("xmlhttprequest");
+        timing.capture_window_initiator(scope, self);
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1809,6 +1824,7 @@ impl JsContextHost {
                     xhr,
                     use_cors_preflight,
                     csp,
+                    timing,
                 ),
                 deferred_request_started: false,
                 blob_url_entry: None,

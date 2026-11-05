@@ -68,11 +68,14 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
 ) {
     let global = scope.get_current_context().global(scope);
     let entries = ensure_private_array(scope, global, WINDOW_PERFORMANCE_PENDING_RESOURCES_SLOT, 0);
-    let record = v8::Array::new(scope, 25);
+    let record = v8::Array::new(scope, 26);
     let Some(name) = v8_string(scope, &entry.name) else {
         return;
     };
     let Some(initiator_type) = v8_string(scope, &entry.initiator_type) else {
+        return;
+    };
+    let Some(initiator_url) = v8_string(scope, &entry.initiator_url) else {
         return;
     };
     let Some(render_blocking_status) = v8_string(scope, &entry.render_blocking_status) else {
@@ -160,6 +163,7 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
             .redirect_end_unix_millis
             .map(|value| v8::Number::new(scope, value).into())
             .unwrap_or_else(|| v8::undefined(scope).into()),
+        initiator_url.into(),
     ];
     for (index, value) in fields.into_iter().enumerate() {
         let _ = record.set_index(scope, index as u32, value);
@@ -185,6 +189,7 @@ pub(in crate::context_bootstrap::performance_runtime) fn take_pending_resource_e
                 preload_state: Default::default(),
                 name: array_string(scope, record, 0)?,
                 initiator_type: array_string(scope, record, 1)?,
+                initiator_url: array_string(scope, record, 25)?,
                 redirect_start_unix_millis: record
                     .get_index(scope, 23)
                     .filter(|value| !value.is_undefined())

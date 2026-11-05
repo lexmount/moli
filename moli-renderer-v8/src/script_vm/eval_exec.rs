@@ -274,6 +274,19 @@ fn run_source_text_on_current_stack_with_completion(
     {
         scope.set_continuation_preserved_embedder_data(value);
     }
+    if let Some(provenance) = provenance
+        && crate::script_continuation::resource_initiator(&mut scope).is_none()
+    {
+        let origin = context_host_ptr_from_global_bridge(&mut scope)
+            .and_then(|host| unsafe { &mut *host }.window_origin_key_for_current_realm(&mut scope));
+        let source_url = (!script_fetch_metadata.is_some_and(|metadata| metadata.muted_errors))
+            .then(|| provenance.source_url().clone());
+        let data = crate::script_continuation::with_resource_initiator(
+            &mut scope,
+            crate::script_continuation::ResourceInitiator { source_url, origin },
+        );
+        scope.set_continuation_preserved_embedder_data(data);
+    }
     let watchdog = V8ExecutionWatchdog::arm(
         V8ExecutionWatchdogKind::ScriptTurn,
         scope.thread_safe_handle(),

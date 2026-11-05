@@ -48,6 +48,7 @@ pub(super) fn record_intercepted_fetch(
             resource_type: SubresourceResourceType::Fetch,
             request_cookie_report,
         },
+        scope,
     )
 }
 
@@ -340,6 +341,7 @@ pub(super) fn spawn_network_fetch<'s>(
                 request_cookie_report,
             },
             requires_preflight,
+            scope,
         )
         .ok_or_else(|| anyhow::anyhow!("Failed to fetch"))?;
     if prepared.body_source_is_null

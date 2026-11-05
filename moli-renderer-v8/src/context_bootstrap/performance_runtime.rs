@@ -42,6 +42,8 @@ pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_DETAIL_SLOT: &str =
     "__moliPerformanceEntryDetail";
 pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_INITIATOR_TYPE_SLOT: &str =
     "__moliPerformanceResourceInitiatorType";
+pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT: &str =
+    "__moliPerformanceResourceInitiatorUrl";
 pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_NEXT_HOP_PROTOCOL_SLOT: &str =
     "__moliPerformanceResourceNextHopProtocol";
 pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_WORKER_START_SLOT: &str =
@@ -341,6 +343,7 @@ pub(crate) struct ResourcePerformanceEntry {
     preload_state: moli_fetch::ResponsePreloadState,
     name: String,
     initiator_type: String,
+    initiator_url: String,
     start_unix_millis: Option<f64>,
     fetch_start_unix_millis: Option<f64>,
     redirect_start_unix_millis: Option<f64>,
@@ -452,6 +455,7 @@ impl ResourcePerformanceEntry {
             preload_state,
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
+            initiator_url: String::new(),
             start_unix_millis,
             fetch_start_unix_millis: None,
             redirect_start_unix_millis: None,
@@ -530,6 +534,7 @@ impl ResourcePerformanceEntry {
             preload_state: Default::default(),
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
+            initiator_url: String::new(),
             start_unix_millis,
             fetch_start_unix_millis: None,
             redirect_start_unix_millis: None,
@@ -611,6 +616,7 @@ fn append_resource_performance_entry<'s>(
         resource,
         &entry.delivery_type,
         &entry.content_encoding,
+        &entry.initiator_url,
     );
     if let Some(end_time) = end_time {
         let fetch_start = entry.fetch_start_unix_millis.map_or(start_time, |start| {

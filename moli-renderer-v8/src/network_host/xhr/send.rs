@@ -304,6 +304,7 @@ fn send_synchronous_network_xhr(
 ) {
     let mut timing =
         crate::context_bootstrap::FetchResourceTiming::for_initiator_type("xmlhttprequest");
+    timing.capture_window_initiator(scope, host);
     let csp = crate::network_host::WindowCspRequestContext::capture(scope, host, prepared.owner)
         .expect("synchronous XHR prepared a live Document request authority");
     let mut request = Request::new_bytes(

@@ -11,6 +11,7 @@ use super::{ResourceConnectionTiming, ResourcePerformanceEntry};
 #[derive(Debug)]
 pub(crate) struct FetchResourceTiming {
     initiator_type: &'static str,
+    initiator_url: String,
     started: Instant,
     start_unix_millis: f64,
     response_timing: Option<Box<FetchResourceResponseTiming>>,
@@ -46,10 +47,33 @@ impl FetchResourceTiming {
     ) -> Self {
         Self {
             initiator_type,
+            initiator_url: String::new(),
             started,
             start_unix_millis,
             response_timing: None,
         }
+    }
+
+    pub(crate) fn capture_window_initiator(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host: &mut crate::native_bridge::JsContextHost,
+    ) {
+        let Some(initiator) = crate::script_continuation::resource_initiator(scope) else {
+            return;
+        };
+        if initiator.origin.is_some()
+            && initiator.origin == host.window_origin_key_for_current_realm(scope)
+        {
+            self.initiator_url = initiator
+                .source_url
+                .map(|url| url.into())
+                .unwrap_or_default();
+        }
+    }
+
+    pub(crate) fn clear_initiator(&mut self) {
+        self.initiator_url.clear();
     }
 
     fn now(&self) -> f64 {
@@ -158,6 +182,13 @@ impl FetchResourceTiming {
         );
         if readable {
             self.apply_native_body_sizes(&mut entry, head);
+            // TAO alone cannot expose the initiating script, and a locally
+            // fulfilled response does not represent another network download.
+            if head.cache_state == ResponseCacheState::None
+                && !head.preload_state.from_service_worker()
+            {
+                entry.initiator_url.clone_from(&self.initiator_url);
+            }
         }
         if !readable {
             entry.response_status = 0.0;
