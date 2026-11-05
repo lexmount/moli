@@ -85,6 +85,124 @@ async fn independent_command(ctx: &mut TestContext, id: u64) {
 }
 
 #[tokio::test]
+async fn superseded_adopted_replacement_releases_its_parser_before_beforeunload() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let (mut ctx, initial, mut navigation) = super::navigation_error::navigation_fixture();
+            ctx.with_fixture(|conn| {
+                conn.finish_renderer_document_navigation_for_owner(&navigation.owner, &initial)
+                    .unwrap();
+                conn.clear_pending_document_navigation_for_owner_if_loader_matches(
+                    &navigation.owner,
+                    &initial.loader_id,
+                );
+            });
+            ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
+                .await;
+            let token = ctx.with_fixture(|conn| {
+                conn.start_document_navigation_for_owner(
+                    &navigation.owner,
+                    navigation.loader_id.clone(),
+                )
+                .unwrap()
+            });
+            navigation.requested_url = Url::parse(
+                "data:text/html,<!doctype html><title>adopted-before-publication</title>",
+            )
+            .unwrap();
+            let job = ctx.with_fixture(|conn| {
+                conn.background_navigation_load_job_for_navigation(
+                    &token,
+                    &navigation,
+                    Default::default(),
+                    None,
+                )
+                .unwrap()
+            });
+            let (prepared, _) = job.run(None).await;
+            let NavigationLoadOutcome::ResponseCommitReady(prepared) = prepared.unwrap() else {
+                panic!("background job must retain its native DocumentCommit boundary");
+            };
+            let old_agent = ctx.with_fixture(|conn| {
+                conn.loaded_page_mut_for_owner(&navigation.owner)
+                    .unwrap()
+                    .renderer_devtools_agent_token()
+            });
+            let commit = crate::conn::PreparedDocumentCommitState::new();
+            let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+            let loaded = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                commit.commit_using(&mut driver, token.clone(), &navigation, *prepared),
+            )
+            .await
+            .expect("native replacement must be adopted before supersession")
+            .unwrap();
+            assert!(
+                loaded
+                    .page_creation_artifacts
+                    .lifecycle_snapshot
+                    .load
+                    .is_none()
+            );
+            let adopted_agent = ctx.with_fixture(|conn| {
+                conn.loaded_page_mut_for_owner(&navigation.owner)
+                    .unwrap()
+                    .renderer_devtools_agent_token()
+            });
+            assert_ne!(adopted_agent, old_agent);
+            let completion = commit.complete(token, navigation.clone(), Ok(loaded));
+            let successor = ctx.with_fixture(|conn| {
+                conn.start_document_navigation_for_owner(&navigation.owner, "LID-successor".into())
+                    .unwrap()
+            });
+            let mut output = crate::conn::CommandDispatchContext::default();
+            let (mut context, _) = crate::conn::CommandWorkflowContext::take_from(
+                &mut output,
+                None,
+                Some("SID-1".into()),
+            );
+            let stale = context
+                .with_state(&mut driver, move |state, context| {
+                    state.prepare_navigation_protocol_completion(completion, context)
+                })
+                .unwrap();
+            assert!(stale.source_terminal_is_retained());
+            stale
+                .run_into_context(&mut driver, &mut context)
+                .await
+                .unwrap();
+
+            let pending = ctx.with_fixture(|conn| {
+                conn.loaded_page_mut_for_owner(&navigation.owner)
+                    .unwrap()
+                    .start_check_main_document_beforeunload()
+                    .unwrap()
+            });
+            let completed =
+                tokio::time::timeout(std::time::Duration::from_secs(10), pending.wait())
+                    .await
+                    .expect("a stale adopted navigation must release its parser handoff")
+                    .unwrap();
+            assert_eq!(completed.bool_reply_value(), Some(true));
+            ctx.with_fixture(|conn| {
+                assert_eq!(
+                    conn.loaded_page_mut_for_owner(&navigation.owner)
+                        .unwrap()
+                        .renderer_devtools_agent_token(),
+                    adopted_agent
+                );
+                assert!(
+                    conn.accepts_pending_document_navigation_for_owner(
+                        &navigation.owner,
+                        &successor,
+                    )
+                );
+            });
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn beforeunload_reaches_active_document_before_replacement_adoption() {
     tokio::task::LocalSet::new()
         .run_until(async {
@@ -1183,4 +1301,99 @@ async fn non_document_background_completion_keeps_one_terminal_and_preserves_suc
             );
         }
     }
+}
+
+#[tokio::test]
+async fn stale_replacement_completion_keeps_newer_document_parser_handoff() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let CommitFixture {
+                ctx,
+                token,
+                navigation,
+                prepared,
+                ..
+            } = commit_fixture(true).await;
+            let commit = crate::conn::PreparedDocumentCommitState::new();
+            let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+            let loaded = commit
+                .commit_using(&mut driver, token.clone(), &navigation, prepared)
+                .await
+                .unwrap();
+            let previous_agent = ctx.with_fixture(|conn| {
+                conn.loaded_page_mut_for_owner(&navigation.owner)
+                    .unwrap()
+                    .renderer_devtools_agent_token()
+            });
+            let stale_completion = commit.complete(token, navigation.clone(), Ok(loaded));
+            let successor = ctx.with_fixture(|conn| {
+                conn.start_document_navigation_for_owner(&navigation.owner, "LID-newer".into())
+                    .unwrap()
+            });
+            let mut newer = navigation.clone();
+            newer.loader_id = successor.loader_id.clone();
+            newer.requested_url =
+                Url::parse("data:text/html,<!doctype html><title>newer-document</title>").unwrap();
+            let job = ctx.with_fixture(|conn| {
+                conn.background_navigation_load_job_for_navigation(
+                    &successor,
+                    &newer,
+                    Default::default(),
+                    None,
+                )
+                .unwrap()
+            });
+            let (prepared, _) = job.run(None).await;
+            let NavigationLoadOutcome::ResponseCommitReady(prepared) = prepared.unwrap() else {
+                panic!("newer background response must retain its DocumentCommit boundary");
+            };
+            let next_commit = crate::conn::PreparedDocumentCommitState::new();
+            let loaded = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                next_commit.commit_using(&mut driver, successor.clone(), &newer, *prepared),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(
+                loaded
+                    .page_creation_artifacts
+                    .lifecycle_snapshot
+                    .load
+                    .is_none()
+            );
+            let newer_agent = ctx.with_fixture(|conn| {
+                conn.loaded_page_mut_for_owner(&newer.owner)
+                    .unwrap()
+                    .renderer_devtools_agent_token()
+            });
+            assert_ne!(newer_agent, previous_agent);
+            let mut output = crate::conn::CommandDispatchContext::default();
+            let (mut context, _) = crate::conn::CommandWorkflowContext::take_from(
+                &mut output,
+                None,
+                Some("SID-1".into()),
+            );
+            let stale = context
+                .with_state(&mut driver, move |state, context| {
+                    state.prepare_navigation_protocol_completion(stale_completion, context)
+                })
+                .unwrap();
+            stale
+                .run_into_context(&mut driver, &mut context)
+                .await
+                .unwrap();
+            let retained = ctx
+                .with_fixture(|conn| {
+                    let page = conn.loaded_page_mut_for_owner(&newer.owner).unwrap();
+                    assert_eq!(page.renderer_devtools_agent_token(), newer_agent);
+                    page.take_committed_document_post_response_continuation()
+                })
+                .expect("a stale completion must not release the newer adopted Document's parser");
+            assert!(ctx.with_fixture(|conn| {
+                conn.accepts_pending_document_navigation_for_owner(&newer.owner, &successor)
+            }));
+            retained.release();
+        })
+        .await;
 }
