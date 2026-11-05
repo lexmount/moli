@@ -27,7 +27,7 @@ fn indexed_db_completed_cursor_graphs_collect_and_retained_cursors_survive_gc() 
     );
     collect(&mut vm);
     assert_eq!(vm.eval("checkIndexedDbCursorGc()").unwrap(), "true");
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         assert_eq!(
             crate::context_bootstrap::indexed_db_native_cursor_count_for_test(scope),
@@ -101,7 +101,7 @@ fn indexed_db_schema_getters_accept_registered_native_proxies_in_callee_realms()
     )
     .unwrap();
     vm.eval_after_selected_page_tasks("'prepared'").unwrap();
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let key = crate::util::v8str(scope, "schemaValues");

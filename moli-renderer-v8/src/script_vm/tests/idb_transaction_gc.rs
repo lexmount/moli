@@ -13,7 +13,7 @@ fn collect(vm: &mut PageVmTaskExecutorTestHarness) {
 }
 
 fn native_entries(vm: &mut PageVmTaskExecutorTestHarness) -> usize {
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         Ok(crate::context_bootstrap::indexed_db_transaction_state_entries_for_test(scope, global))

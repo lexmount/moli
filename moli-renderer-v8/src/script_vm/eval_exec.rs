@@ -404,11 +404,10 @@ impl ScriptVm {
         &mut self,
         job: MainFrameScriptJob<'_>,
     ) -> PendingScriptTurn<RawScriptExecutionResult<()>> {
-        if let Err(error) = self.initialize_main_world_if_needed() {
-            return PendingScriptTurn::new(Err(error.into()));
-        }
-        let context_ptr: *const v8::Global<v8::Context> =
-            &self.page_default_runtime.context as *const _;
+        let context_ptr = match self.ensure_main_world() {
+            Ok(runtime) => runtime.context_ptr(),
+            Err(error) => return PendingScriptTurn::new(Err(error.into())),
+        };
         self.exec_in_context_ptr_without_turn_drain(
             context_ptr,
             job.source,
@@ -690,9 +689,7 @@ impl ScriptVm {
     }
 
     pub(crate) fn eval(&mut self, source: &str) -> Result<String> {
-        self.initialize_main_world_if_needed()?;
-        let context_ptr: *const v8::Global<v8::Context> =
-            &self.page_default_runtime.context as *const _;
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         self.eval_string_in_context_ptr_runtime_turn(context_ptr, source, false)
     }
 
@@ -701,11 +698,9 @@ impl ScriptVm {
         source: &str,
         base_url: &Url,
     ) -> Result<Option<String>> {
-        self.initialize_main_world_if_needed()?;
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         let source = source.to_owned();
         let base_url = base_url.clone();
-        let context_ptr: *const v8::Global<v8::Context> =
-            &self.page_default_runtime.context as *const _;
         let provenance = CompiledStringProvenance::at_url(base_url.clone());
         let pending = PendingScriptTurn::new(
             self.renderer_document_isolate
@@ -763,9 +758,7 @@ impl ScriptVm {
 
     #[cfg(test)]
     pub(crate) fn eval_with_child_record_sync(&mut self, source: &str) -> Result<String> {
-        self.initialize_main_world_if_needed()?;
-        let context_ptr: *const v8::Global<v8::Context> =
-            &self.page_default_runtime.context as *const _;
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         self.eval_string_in_context_ptr_runtime_turn(context_ptr, source, true)
     }
 
@@ -816,9 +809,7 @@ impl ScriptVm {
         &mut self,
         source: &str,
     ) -> Result<String> {
-        self.initialize_main_world_if_needed()?;
-        let context_ptr: *const v8::Global<v8::Context> =
-            &self.page_default_runtime.context as *const _;
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         self.eval_string_in_context_ptr_without_turn_drain(
             context_ptr,
             source,

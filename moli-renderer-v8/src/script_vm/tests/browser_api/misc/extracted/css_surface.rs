@@ -320,7 +320,7 @@ fn dom_quad_generated_receivers_keep_registered_proxy_identity_and_error_realms(
     materialize_single_child_default_realm_for_test(&mut vm, "native Quad child Realm");
     vm.eval("globalThis.quadRealm = document.getElementById('native-quad-frame').contentWindow;")
         .unwrap();
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let key = crate::util::v8str(scope, "quadTarget");

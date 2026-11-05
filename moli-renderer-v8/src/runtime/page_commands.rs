@@ -337,11 +337,11 @@ impl PageVm {
                 Ok(RendererPageReply::Unit)
             }
             RendererPageCommand::DefaultExecutionContextId => {
-                self.vm_mut().initialize_main_world_if_needed()?;
+                self.vm_mut().ensure_main_world()?;
                 Ok(RendererPageReply::OptionalExecutionContextId(self.default_execution_context_id()))
             }
             RendererPageCommand::DefaultOrInitialExecutionContextId => {
-                self.vm_mut().initialize_main_world_if_needed()?;
+                self.vm_mut().ensure_main_world()?;
                 Ok(RendererPageReply::OptionalExecutionContextId(self.default_or_initial_execution_context_id()))
             }
             RendererPageCommand::HasIsolatedWorldNamed { name, frame_id } => {
@@ -370,7 +370,7 @@ impl PageVm {
                 self.isolated_execution_context_id_for_inspector_context(execution_context_id),
             )),
             RendererPageCommand::RuntimeRealmInventory => {
-                self.vm_mut().initialize_main_world_if_needed()?;
+                self.vm_mut().ensure_main_world()?;
                 Ok(RendererPageReply::RuntimeRealmInventory(self.runtime_realm_inventory()))
             }
             RendererPageCommand::LiveChildDefaultRuntimeRealmInventory => {

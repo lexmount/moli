@@ -76,7 +76,7 @@ async fn xhr_generated_receivers_preserve_registered_native_proxy_state_and_load
     vm.eval(
         "globalThis.xhrOwner = document.querySelector('iframe').contentWindow; globalThis.realXhr = new xhrOwner.XMLHttpRequest(); globalThis.realUpload = realXhr.upload;",
     ).unwrap();
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for (name, alias) in [("realXhr", "xhrProxy"), ("realUpload", "uploadProxy")] {

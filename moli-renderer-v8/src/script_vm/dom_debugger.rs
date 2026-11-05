@@ -35,8 +35,7 @@ impl ScriptVm {
         depth: i32,
         pierce: bool,
     ) -> Result<RendererDomDebuggerEventListenersResolution> {
-        self.initialize_main_world_if_needed()?;
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         let context_host = self._context_host.clone();
         let page_inspector = &self.page_inspector;
         let renderer_document_isolate = self.renderer_document_isolate.clone();

@@ -5,7 +5,7 @@ use super::*;
 
 impl ScriptVm {
     pub(super) fn reconcile_document_font_resources(&mut self) {
-        if !self.main_world_is_initialized() {
+        if self.current_main_world().is_none() {
             let host = self._context_host.borrow();
             let fonts_enabled =
                 host.current_main_document_resource_loader()

@@ -31,7 +31,7 @@ impl NavigationHistoryRealm {
 
 impl ScriptVm {
     pub(crate) fn reset_navigation_history(&mut self) -> Result<bool> {
-        self.initialize_main_world_if_needed()?;
+        self.ensure_main_world()?;
         let realms = self.live_navigation_history_realms();
         let mut plans: Vec<(NavigationHistoryRealm, NavigationHistoryPrunePlan)> =
             Vec::with_capacity(realms.len());
@@ -136,9 +136,9 @@ impl ScriptVm {
         realm: NavigationHistoryRealm,
     ) -> Option<*const v8::Global<v8::Context>> {
         match realm {
-            NavigationHistoryRealm::TopDefault => {
-                Some(&self.page_default_runtime.context as *const _)
-            }
+            NavigationHistoryRealm::TopDefault => self
+                .current_main_world()
+                .map(|runtime| runtime.context_ptr()),
             NavigationHistoryRealm::ChildDefault {
                 execution_context_id,
                 child_handle,

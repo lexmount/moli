@@ -91,6 +91,13 @@ async def run_lazy_main_world_group(endpoint: str, _fixture: str,
             if "Native content" not in outer:
                 raise SmokeError(f"native DOM query returned {outer!r}")
             if activation == "native-io":
+                await wire.call("Emulation.setTouchEmulationEnabled", {
+                    "enabled": True, "maxTouchPoints": 7,
+                }, session)
+                await wire.call("Emulation.setEmulatedMedia", {
+                    "media": "print",
+                    "features": [{"name": "prefers-color-scheme", "value": "dark"}],
+                }, session)
                 await wire.call("Performance.enable", session=session)
                 metrics = {m["name"]: m["value"] for m in
                            (await wire.call("Performance.getMetrics", session=session))["metrics"]}
@@ -120,6 +127,10 @@ async def run_lazy_main_world_group(endpoint: str, _fixture: str,
                 assert_equal(observed, {"title": "Lazy activation", "state": "complete",
                                         "text": "Native content", "color": "rgb(0, 0, 255)"},
                              "first main-world evaluation sees completed native Document")
+                if activation == "native-io":
+                    assert_equal(await wire.evaluate(session, "({touch:navigator.maxTouchPoints, print:matchMedia('print').matches, dark:matchMedia('(prefers-color-scheme: dark)').matches})"),
+                                 {"touch": 7, "print": True, "dark": True},
+                                 "native emulation survives the first main-world activation")
                 if activation in ("preload", "deferred-script", "inline-load"):
                     assert_equal(await wire.evaluate(session, "activationCount"), 1,
                                  "initial script runs exactly once")

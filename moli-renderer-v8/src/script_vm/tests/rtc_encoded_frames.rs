@@ -2,7 +2,7 @@ use super::*;
 
 fn install_frames(vm: &mut ScriptVm) {
     use crate::context_bootstrap::encoded_frames::{FrameKind, native_frame_for_test};
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for (name, kind, metadata) in [
@@ -124,7 +124,7 @@ fn rtc_encoded_frame_cross_isolate_clone_respects_worker_exposure_and_private_in
     let mut vm = new_storage_page_task_executor_test_vm("https://rtc-encoded-frames.test/");
     install_frames(&mut vm);
     vm.eval("globalThis.__wireSource = [audioFrame, audioFrame.data, audioFrame, videoFrame, videoFrame.data]; true").unwrap();
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     let payload = vm
         .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
             let global = scope.get_current_context().global(scope);

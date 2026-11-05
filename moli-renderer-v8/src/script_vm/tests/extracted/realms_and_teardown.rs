@@ -177,7 +177,7 @@ fn retained_response_body_keeps_bytes_until_the_last_v8_reference() {
         let callback = isolate.with_renderer_document_isolate_mut(|isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
             let scope = &mut scope.init();
-            let context = v8::Local::new(scope, &vm.page_default_runtime.context);
+            let context = v8::Local::new(scope, &vm.current_main_world().unwrap().context);
             let scope = &mut v8::ContextScope::new(scope, context);
             let value = context
                 .global(scope)
@@ -430,7 +430,7 @@ fn retained_response_body_keeps_error_reason_until_the_last_v8_reference() {
     let callback = isolate.with_renderer_document_isolate_mut(|isolate| {
         let scope = std::pin::pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
-        let context = v8::Local::new(scope, &vm.page_default_runtime.context);
+        let context = v8::Local::new(scope, &vm.current_main_world().unwrap().context);
         let scope = &mut v8::ContextScope::new(scope, context);
         let value = context
             .global(scope)
@@ -786,7 +786,7 @@ fn retained_module_function_keeps_native_values_until_the_last_v8_reference() {
     let callback = isolate.with_renderer_document_isolate_mut(|isolate| {
         let scope = std::pin::pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
-        let context = v8::Local::new(scope, &vm.page_default_runtime.context);
+        let context = v8::Local::new(scope, &vm.current_main_world().unwrap().context);
         let scope = &mut v8::ContextScope::new(scope, context);
         let value = context
             .global(scope)
@@ -1196,7 +1196,7 @@ fn capture_initial_environment_for_gc_test(
     let environment = isolate.with_renderer_document_isolate_mut(|isolate| {
         let scope = std::pin::pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
-        let context = v8::Local::new(scope, &vm.page_default_runtime.context);
+        let context = v8::Local::new(scope, &vm.current_main_world().unwrap().context);
         let scope = &mut v8::ContextScope::new(scope, context);
         let opener = context.global(scope);
         crate::script_vm::ScriptVmInitialDocumentEnvironment::inherited_in_scope(
@@ -1316,7 +1316,7 @@ fn retained_document_realm_keeps_native_values_until_the_last_v8_reference() {
     .unwrap();
     let weak_host = vm.context_host_weak_for_test();
     let isolate = vm.renderer_document_isolate.clone();
-    let context = vm.page_default_runtime.context.clone();
+    let context = vm.current_main_world().unwrap().context.clone();
     drop(vm);
     assert!(
         weak_host.upgrade().is_some(),
@@ -2959,7 +2959,10 @@ fn resource_owner_id_is_available_from_current_context_slot() {
 #[test]
 fn runtime_observable_context_token_is_available_from_current_context_slot() {
     let mut vm = new_parsed_test_vm("https://example.test/", "<!doctype html><p>runtime</p>");
-    let expected = vm.page_default_runtime.runtime_observable_context_token;
+    let expected = vm
+        .current_main_world()
+        .unwrap()
+        .runtime_observable_context_token;
 
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _runtime_ptr| {
         assert_eq!(
