@@ -1,6 +1,105 @@
 use super::*;
 
 #[test]
+fn service_worker_registration_order_survives_store_writes_and_lazy_restore() {
+    let store = new_shared_service_worker_resource_store();
+    let observer = new_service_worker_runtime_service_with_resource_store(
+        store.clone(),
+        test_worker_context_runtime(),
+    );
+    let writer = new_service_worker_runtime_service_with_resource_store(
+        store,
+        test_worker_context_runtime(),
+    );
+    let scopes = ["z", "b", "a"];
+    let ids = [30, 10, 20];
+    for (name, id) in scopes.into_iter().zip(ids) {
+        let scope = url(&format!("https://example.test/app/{name}/"));
+        let script = scope.join("worker.js").unwrap();
+        let version_id = ServiceWorkerVersionId(id);
+        insert_registered_version(
+            &writer,
+            ServiceWorkerRegistrationId(id),
+            version_id,
+            script.clone(),
+            scope,
+            [],
+        );
+        writer
+            .inner
+            .state
+            .lock()
+            .versions
+            .get_mut(&version_id)
+            .unwrap()
+            .main_script_resource = Some(test_script_resource(&script));
+    }
+    // Installation can finish in a different order from registration creation.
+    for id in ids.into_iter().rev() {
+        assert!(
+            writer
+                .store_registration_resources_for_test(
+                    ServiceWorkerRegistrationId(id),
+                    ServiceWorkerVersionId(id)
+                )
+                .unwrap()
+        );
+    }
+    let job = test_queued_register_job(
+        &observer,
+        url("https://example.test/app/a/worker.js"),
+        url("https://example.test/app/a/"),
+    );
+    {
+        let mut state = observer.inner.state.lock();
+        observer
+            .restore_stored_registration_for_queued_job_locked(&mut state, &job)
+            .unwrap();
+    }
+    insert_registered_version(
+        &observer,
+        ServiceWorkerRegistrationId(99),
+        ServiceWorkerVersionId(99),
+        url("https://example.test/app/recent/worker.js"),
+        url("https://example.test/app/recent/"),
+        [],
+    );
+    let page = url("https://example.test/app/page.html");
+    let scopes = || {
+        observer
+            .all_registrations(&page)
+            .into_iter()
+            .map(|registration| registration.scope_url().path().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(scopes(), ["/app/z/", "/app/b/", "/app/a/", "/app/recent/"]);
+    // Keeping an unregistered worker alive must not keep its old map position.
+    let old_id = observer
+        .all_registrations(&page)
+        .into_iter()
+        .find(|registration| registration.scope_url().path() == "/app/a/")
+        .unwrap()
+        .registration_id();
+    observer
+        .inner
+        .state
+        .lock()
+        .registrations
+        .get_mut(&old_id)
+        .unwrap()
+        .pending_unregistration = true;
+    insert_registered_version(
+        &observer,
+        ServiceWorkerRegistrationId(100),
+        ServiceWorkerVersionId(100),
+        url("https://example.test/app/a/worker.js"),
+        url("https://example.test/app/a/"),
+        [],
+    );
+    assert_eq!(scopes(), ["/app/z/", "/app/b/", "/app/recent/", "/app/a/"]);
+}
+
+#[test]
 fn worker_start_completion_records_main_script_resource_metadata() {
     let service = new_service_worker_runtime_service();
     let (script_url, _, _, version_id) = insert_starting_version(&service);

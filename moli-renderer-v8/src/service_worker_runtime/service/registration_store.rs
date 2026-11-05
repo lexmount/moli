@@ -76,6 +76,25 @@ impl ServiceWorkerRuntimeService {
         document_url: &Url,
         storage_key: &str,
     ) -> Vec<ServiceWorkerRegistrationId> {
+        self.restore_stored_registrations_for_client_locked(state, document_url, storage_key, true)
+    }
+
+    pub(super) fn restore_stored_registrations_for_storage_key_locked(
+        &self,
+        state: &mut ServiceWorkerRuntimeState,
+        document_url: &Url,
+        storage_key: &str,
+    ) -> Vec<ServiceWorkerRegistrationId> {
+        self.restore_stored_registrations_for_client_locked(state, document_url, storage_key, false)
+    }
+
+    fn restore_stored_registrations_for_client_locked(
+        &self,
+        state: &mut ServiceWorkerRuntimeState,
+        document_url: &Url,
+        storage_key: &str,
+        match_client_scope: bool,
+    ) -> Vec<ServiceWorkerRegistrationId> {
         self.sync_stored_registration_cache_locked(state);
         let stored_registrations = state
             .stored_registration_cache
@@ -87,7 +106,10 @@ impl ServiceWorkerRuntimeService {
         let browser_resource_runtime = self.inner.browser_resource_runtime.clone();
         stored_registrations
             .into_iter()
-            .filter(|stored| service_worker_scope_matches_url(&stored.scope_url, document_url))
+            .filter(|stored| {
+                !match_client_scope
+                    || service_worker_scope_matches_url(&stored.scope_url, document_url)
+            })
             .filter_map(|stored| {
                 let launch_config = ServiceWorkerVersionLaunchConfig::restored(
                     document_url.clone(),
@@ -152,6 +174,7 @@ impl ServiceWorkerRuntimeService {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: stored.registration_order,
                 storage_key: stored.storage_key.clone(),
                 scope_url: stored.scope_url.clone(),
                 script_url: stored.script_url.clone(),
@@ -295,6 +318,7 @@ fn stored_registration_from_state_locked(
     }
     let main_script_resource = version.main_script_resource.clone()?;
     Some(ServiceWorkerStoredRegistration {
+        registration_order: registration.registration_order,
         storage_key: registration.storage_key.clone(),
         scope_url: registration.scope_url.clone(),
         script_url: version.script_url.clone(),
