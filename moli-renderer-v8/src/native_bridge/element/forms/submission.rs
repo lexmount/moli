@@ -635,7 +635,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
         return true;
     }
 
-    let Some(destination) = super::super::activation::choose_form_navigation_target(
+    let Some(target) = super::super::activation::choose_form_navigation_target(
         scope,
         runtime_ptr,
         form_handle,
@@ -649,6 +649,10 @@ pub(in crate::native_bridge) fn submit_form_default_action(
         source_document.and_then(|document| runtime.owner_dispatch_scope_for_node(document))
     else {
         return false;
+    };
+    let destination = match &target {
+        super::super::activation::FormNavigationTarget::Local(destination) => *destination,
+        super::super::activation::FormNavigationTarget::Related(_) => source,
     };
     if runtime.blocks_ancestor_navigation(source, destination, request.url()) {
         return false;
@@ -673,8 +677,22 @@ pub(in crate::native_bridge) fn submit_form_default_action(
         request,
         mutation,
         user_initiated,
+        initiator: super::super::activation::form_navigation_initiator(
+            unsafe { &*runtime_ptr },
+            form_handle,
+            target_name.as_deref(),
+        ),
+        source_document_identity: runtime.root_document_lifecycle_identity(),
+        related_source: None,
     };
-    unsafe { &mut *runtime_ptr }.queue_form_navigation_task(navigation)
+    match target {
+        super::super::activation::FormNavigationTarget::Local(_) => {
+            unsafe { &mut *runtime_ptr }.queue_form_navigation_task(navigation)
+        }
+        super::super::activation::FormNavigationTarget::Related(target) => {
+            unsafe { &mut *runtime_ptr }.queue_related_form_navigation_task(target, navigation)
+        }
+    }
 }
 
 fn submit_dialog_form(
@@ -754,9 +772,27 @@ pub(in crate::native_bridge) struct PlannedFormNavigation {
     request: FormSubmissionMethod,
     mutation: moli_page_types::NavigationHistoryMutation,
     user_initiated: bool,
+    initiator: Option<crate::runtime::RendererNavigationInitiator>,
+    pub(in crate::native_bridge) source_document_identity:
+        Option<crate::RendererDocumentLifecycleIdentity>,
+    pub(in crate::native_bridge) related_source:
+        Option<crate::script_vm::WeakRendererPageScriptEnvironment>,
 }
 
 impl PlannedFormNavigation {
+    pub(in crate::native_bridge) fn prepare_for_related_target(
+        &mut self,
+        runtime: &mut JsContextHost,
+    ) {
+        self.source_document = None;
+        self.destination = crate::native_bridge::OwnerDispatchScope::Top;
+        self.mutation = runtime.form_navigation_history_mutation_for_scope(
+            None,
+            self.destination,
+            self.request.url(),
+            self.user_initiated,
+        );
+    }
     pub(in crate::native_bridge) fn is_javascript_url(&self) -> bool {
         self.request.url().scheme() == "javascript"
     }
@@ -928,7 +964,8 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
                 let initiator = navigation
                     .source_document
                     .and_then(|document| runtime.owner_dispatch_scope_for_node(document))
-                    .and_then(|owner| runtime.navigation_initiator_for_owner(owner));
+                    .and_then(|owner| runtime.navigation_initiator_for_owner(owner))
+                    .or(navigation.initiator);
                 runtime.record_pending_location_navigation_request(
                     request.url,
                     request.method,
@@ -941,7 +978,12 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
                 if let Some(initiator) = initiator {
                     runtime.set_pending_location_navigation_source(initiator, None);
                 }
-                crate::context_bootstrap::web_mcp::bind_root_navigation(runtime, navigation.form);
+                if navigation.related_source.is_none() {
+                    crate::context_bootstrap::web_mcp::bind_root_navigation(
+                        runtime,
+                        navigation.form,
+                    );
+                }
                 true
             }
         }

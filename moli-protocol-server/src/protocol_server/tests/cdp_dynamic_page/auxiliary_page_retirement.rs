@@ -16,6 +16,199 @@ async fn wait_for_value(page: &mut TestCdpSocket, expression: &str, expected: se
     .unwrap_or_else(|_| panic!("{expression} did not become {expected}; last value was {actual}"));
 }
 
+async fn check_sequential_form_popup_requests(method: &str) {
+    let requests = Arc::new(parking_lot::Mutex::new(Vec::<serde_json::Value>::new()));
+    let captured = Arc::clone(&requests);
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(axum::routing::any(
+            move |uri: axum::http::Uri,
+                  method: axum::http::Method,
+                  headers: axum::http::HeaderMap,
+                  body: axum::body::Bytes| {
+                let captured = Arc::clone(&captured);
+                async move {
+                    if !uri.path().starts_with("/form/") {
+                        return axum::response::Html("<!doctype html><body></body>".to_owned());
+                    }
+                    let request = json!({
+                        "path": uri.path(),
+                        "query": uri.query(),
+                        "method": method.as_str(),
+                        "body": String::from_utf8(body.to_vec()).unwrap(),
+                        "referrer": headers.get("referer").and_then(|value| value.to_str().ok()),
+                        "contentType": headers.get("content-type").and_then(|value| value.to_str().ok()),
+                    });
+                    captured.lock().push(request.clone());
+                    axum::response::Html(format!(
+                        "<!doctype html><script>const channel=new BroadcastChannel('form-navigation');channel.onmessage=()=>close();channel.postMessage({{request:{request},referrer:document.referrer,hasOpener:opener!==null}});</script>"
+                    ))
+                }
+            },
+        )),
+        "sequential-form-popup-requests",
+    );
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let parent_id = create_dynamic_target(&mut browser, 1).await;
+    let mut parent = connect_dynamic_page(addr, &parent_id).await;
+    send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(
+        &mut parent,
+        2,
+        &format!("{base}/source?accepted=true#fragment"),
+    )
+    .await;
+    evaluate_window_name_probe(
+        &mut parent,
+        3,
+        "window.results=[];window.channel=new BroadcastChannel('form-navigation');channel.onmessage=event=>results.push(event.data);window.form=document.createElement('form');document.body.append(form);true",
+    )
+    .await;
+    let initial_target_count = fetch_server_json(addr, "/json/list")
+        .await
+        .as_array()
+        .unwrap()
+        .len();
+    let mut sequence = 0;
+    for submitter in ["form", "button", "input"] {
+        for (rel, has_opener, has_referrer) in [
+            ("", false, true),
+            ("noopener", false, true),
+            ("noreferrer", false, false),
+            ("opener", true, true),
+            ("noopener noreferrer", false, false),
+            ("noreferrer opener", false, false),
+            ("opener noopener", false, true),
+        ] {
+            let path = format!("/form/{sequence}");
+            evaluate_window_name_probe(
+                &mut parent,
+                4,
+                &format!(
+                    "(()=>{{results.length=0;form.innerHTML='<input type=hidden name=value value=\"a b&c\">';form.action={};form.method={};form.rel={};form.target='_blank';if({}==='form'){{form.submit()}}else{{const control=document.createElement({});control.type='submit';control.formTarget='_blank';form.append(control);control.click()}}return true}})()",
+                    json!(path), json!(method), json!(rel), json!(submitter), json!(submitter),
+                ),
+            )
+            .await;
+            wait_for_value(&mut parent, "results.length > 0", json!(true)).await;
+            let result = evaluate_window_name_probe(&mut parent, 5, "results[0]").await;
+            evaluate_window_name_probe(&mut parent, 6, "channel.postMessage(null);true").await;
+            wait_for_target_list(addr, "submitted popup closed", |targets| {
+                targets.len() == initial_target_count
+            })
+            .await;
+            assert_eq!(
+                evaluate_window_name_probe(&mut parent, 7, "results.length").await,
+                json!(1),
+                "{method}, submitter={submitter}, rel={rel:?}: execute the response once",
+            );
+            let expected_referrer = has_referrer.then(|| format!("{base}/source?accepted=true"));
+            let expected_request = json!({
+                "path": path,
+                "query": (method == "GET").then_some("value=a+b%26c"),
+                "method": method,
+                "body": if method == "POST" { "value=a+b%26c" } else { "" },
+                "referrer": expected_referrer,
+                "contentType": (method == "POST").then_some("application/x-www-form-urlencoded"),
+            });
+            let actual_requests = requests
+                .lock()
+                .iter()
+                .filter(|request| request["path"] == path)
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual_requests,
+                vec![expected_request.clone()],
+                "{method}, submitter={submitter}, rel={rel:?}: exactly one accepted form request",
+            );
+            assert_eq!(
+                result,
+                json!({
+                    "request": expected_request,
+                    "referrer": expected_referrer.as_deref().unwrap_or(""),
+                    "hasOpener": has_opener,
+                }),
+                "{method}, submitter={submitter}, rel={rel:?}: committed popup relations",
+            );
+            sequence += 1;
+        }
+    }
+    let initial_ids = fetch_server_json(addr, "/json/list")
+        .await
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|target| target["id"].clone())
+        .collect::<Vec<_>>();
+    evaluate_window_name_probe(&mut parent, 8, &format!(
+        "(()=>{{results.length=0;form.innerHTML='<input type=hidden name=value value=\"a b&c\"><button type=submit>submit</button>';form.method={};form.rel='opener';form.target='cancelled-form-target';form.action='/form/cancelled';form.submit();form.target='accepted-form-target';form.action='/form/accepted';form.querySelector('button').click();form.method='get';form.action='/wrong';form.rel='noreferrer';form.querySelector('input').value='wrong';return true}})()",
+        json!(method),
+    )).await;
+    wait_for_value(&mut parent, "results.length > 0", json!(true)).await;
+    let result = evaluate_window_name_probe(&mut parent, 9, "results[0]").await;
+    assert_eq!(result["request"]["path"], "/form/accepted");
+    assert_eq!(result["request"]["method"], method);
+    assert_eq!(result["referrer"], format!("{base}/source?accepted=true"));
+    assert_eq!(result["hasOpener"], true);
+    if method == "POST" {
+        assert_eq!(result["request"]["body"], "value=a+b%26c");
+    } else {
+        assert_eq!(result["request"]["query"], "value=a+b%26c");
+    }
+    evaluate_window_name_probe(&mut parent, 10, "channel.postMessage(null);true").await;
+    let remaining =
+        wait_for_target_list(addr, "only the cancelled empty popup remains", |targets| {
+            targets.len() == initial_target_count + 1
+        })
+        .await;
+    assert_eq!(
+        requests
+            .lock()
+            .iter()
+            .filter(|request| request["path"] == "/form/cancelled")
+            .count(),
+        0,
+        "a superseded submission must not start a request on its selected Page",
+    );
+    let cancelled = remaining
+        .iter()
+        .find(|target| !initial_ids.contains(&target["id"]))
+        .unwrap();
+    assert_eq!(cancelled["url"], "about:blank");
+    send_cdp_command(
+        &mut browser,
+        700,
+        "Target.closeTarget",
+        None,
+        json!({"targetId": cancelled["id"]}),
+    )
+    .await;
+    wait_for_target_list(addr, "cancelled form target closed", |targets| {
+        targets.len() == initial_target_count
+    })
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut parent, 11, "results.length").await,
+        json!(1)
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sequential_form_popups_issue_one_get_with_source_referrer() {
+    check_sequential_form_popup_requests("GET").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sequential_form_popups_preserve_post_body_and_source_referrer() {
+    check_sequential_form_popup_requests("POST").await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn popup_document_access_keeps_retained_functions_and_checks_borrowed_receivers() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(

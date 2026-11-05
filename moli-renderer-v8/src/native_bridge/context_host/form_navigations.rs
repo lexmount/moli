@@ -24,7 +24,18 @@ pub(super) struct FormNavigationState {
         RendererPageFormNavigationTaskKind,
         PendingFormNavigation,
     >,
-    by_form: HashMap<DomHandle, Vec<RendererPageFormNavigationTaskId>>,
+    // Native node ids are local to a Document, including in another Page.
+    by_form: HashMap<
+        (Option<crate::RendererDocumentLifecycleIdentity>, DomHandle),
+        Vec<RendererPageFormNavigationTaskId>,
+    >,
+    related_by_form: HashMap<DomHandle, Vec<RelatedFormNavigation>>,
+}
+
+struct RelatedFormNavigation {
+    target: crate::script_vm::WeakRendererPageScriptEnvironment,
+    target_page_id: u64,
+    task_id: RendererPageFormNavigationTaskId,
 }
 
 impl FormNavigationState {
@@ -41,18 +52,130 @@ impl JsContextHost {
         &mut self,
         navigation: PlannedFormNavigation,
     ) -> bool {
-        let Some(target) =
-            self.current_window_document_task_target_for_dispatch_scope(navigation.destination)
+        if navigation.submitter.is_some() {
+            self.cancel_related_form_navigations(navigation.form, None, true);
+        }
+        self.queue_captured_form_navigation_task(navigation, None)
+            .is_some()
+    }
+
+    pub(in crate::native_bridge) fn queue_related_form_navigation_task(
+        &mut self,
+        target: crate::script_vm::RendererPageScriptEnvironment,
+        mut navigation: PlannedFormNavigation,
+    ) -> bool {
+        let Some(source) = self.page_script_environment() else {
+            return false;
+        };
+        let Some(target_host) = target.document_host() else {
+            return false;
+        };
+        let source_origin = navigation
+            .source_document
+            .and_then(|document| self.owner_dispatch_scope_for_node(document))
+            .and_then(|source| self.window_access_origin_for_dispatch_scope(source));
+        let form = navigation.form;
+        let replaces_all = navigation.submitter.is_some();
+        if replaces_all {
+            let previous = self
+                .form_navigations
+                .by_form
+                .get(&(navigation.source_document_identity, form))
+                .cloned()
+                .unwrap_or_default();
+            for task in previous {
+                self.discard_pending_form_navigation_task(task);
+            }
+        }
+        self.cancel_related_form_navigations(form, Some(target.page_id()), replaces_all);
+        navigation.related_source = Some(source.downgrade());
+        let target_runtime = unsafe { &mut *target_host.as_ptr() };
+        navigation.prepare_for_related_target(target_runtime);
+        let Some(task_id) =
+            target_runtime.queue_captured_form_navigation_task(navigation, source_origin)
         else {
             return false;
         };
+        self.form_navigations
+            .related_by_form
+            .entry(form)
+            .or_default()
+            .push(RelatedFormNavigation {
+                target: target.downgrade(),
+                target_page_id: target.page_id(),
+                task_id,
+            });
+        true
+    }
+
+    fn cancel_related_form_navigations(
+        &mut self,
+        form: DomHandle,
+        target_page_id: Option<u64>,
+        all: bool,
+    ) {
+        let pending = self
+            .form_navigations
+            .related_by_form
+            .remove(&form)
+            .unwrap_or_default();
+        let mut retained = Vec::new();
+        for navigation in pending {
+            if all || Some(navigation.target_page_id) == target_page_id {
+                if let Some(host) = navigation
+                    .target
+                    .upgrade()
+                    .and_then(|target| target.document_host())
+                {
+                    unsafe { &mut *host.as_ptr() }
+                        .discard_pending_form_navigation_task(navigation.task_id);
+                }
+            } else {
+                retained.push(navigation);
+            }
+        }
+        if !retained.is_empty() {
+            self.form_navigations.related_by_form.insert(form, retained);
+        }
+    }
+
+    fn forget_related_form_navigation_source(
+        &self,
+        navigation: &PlannedFormNavigation,
+        task_id: RendererPageFormNavigationTaskId,
+    ) -> Option<std::rc::Rc<std::cell::RefCell<JsContextHost>>> {
+        let host = navigation
+            .related_source
+            .as_ref()?
+            .upgrade()?
+            .document_host()?;
+        let source = unsafe { &mut *host.as_ptr() };
+        if source.root_document_lifecycle_identity() != navigation.source_document_identity {
+            return None;
+        }
+        let page_id = self.page_script_environment()?.page_id();
+        source.form_navigations.related_by_form.retain(|_, tasks| {
+            tasks.retain(|task| task.target_page_id != page_id || task.task_id != task_id);
+            !tasks.is_empty()
+        });
+        Some(host)
+    }
+
+    fn queue_captured_form_navigation_task(
+        &mut self,
+        navigation: PlannedFormNavigation,
+        source_origin: Option<WindowAccessOrigin>,
+    ) -> Option<RendererPageFormNavigationTaskId> {
+        let target =
+            self.current_window_document_task_target_for_dispatch_scope(navigation.destination)?;
         let form = navigation.form;
+        let form_key = (navigation.source_document_identity, form);
         // Keep independent script submissions to different named navigables.
         // A submit-button default action replaces earlier work from its form.
         let previous = self
             .form_navigations
             .by_form
-            .get(&form)
+            .get(&form_key)
             .cloned()
             .unwrap_or_default();
         for task_id in previous {
@@ -90,7 +213,8 @@ impl JsContextHost {
         let source_origin = navigation
             .source_document
             .and_then(|document| self.owner_dispatch_scope_for_node(document))
-            .and_then(|source| self.window_access_origin_for_dispatch_scope(source));
+            .and_then(|source| self.window_access_origin_for_dispatch_scope(source))
+            .or(source_origin);
         let task_id = self
             .form_navigations
             .tasks
@@ -110,7 +234,7 @@ impl JsContextHost {
             ));
         self.form_navigations
             .by_form
-            .entry(form)
+            .entry(form_key)
             .or_default()
             .push(task_id);
         if self
@@ -118,10 +242,10 @@ impl JsContextHost {
             .send(target, task_id, kind, cancellation)
             .is_ok()
         {
-            return true;
+            return Some(task_id);
         }
         self.discard_pending_form_navigation_task(task_id);
-        false
+        None
     }
 
     /// A subsequent navigation replaces a submission that has not begun yet.
@@ -170,7 +294,10 @@ impl JsContextHost {
     }
 
     pub(crate) fn has_planned_form_navigation_for(&self, form: DomHandle) -> bool {
-        self.form_navigations.by_form.contains_key(&form)
+        self.form_navigations
+            .by_form
+            .contains_key(&(self.root_document_lifecycle_identity(), form))
+            || self.form_navigations.related_by_form.contains_key(&form)
     }
 
     pub(crate) fn current_pending_form_navigation_task(
@@ -199,11 +326,20 @@ impl JsContextHost {
             .into_payload();
         let navigation = pending.navigation;
         let form = navigation.form;
+        let local_source = navigation.related_source.is_none();
+        let related_source = self.forget_related_form_navigation_source(&navigation, task_id);
         // Clear the planned task before firing any event: listeners may submit again.
         self.form_navigations.forget(task_id);
         let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
         else {
-            crate::context_bootstrap::web_mcp::finish_form_navigation(scope, host_ptr, form, false);
+            let source_ptr = related_source
+                .as_ref()
+                .map_or(host_ptr, |source| source.as_ptr());
+            if local_source || related_source.is_some() {
+                crate::context_bootstrap::web_mcp::finish_form_navigation(
+                    scope, source_ptr, form, false,
+                );
+            }
             return Some(false);
         };
         let scope = &mut v8::ContextScope::new(scope, resolved.context);
@@ -223,7 +359,14 @@ impl JsContextHost {
         // was adopted or its Document was replaced after submission.
         let applied =
             apply_planned_form_navigation(scope, host_ptr, navigation, source_can_access_target);
-        crate::context_bootstrap::web_mcp::finish_form_navigation(scope, host_ptr, form, applied);
+        let source_ptr = related_source
+            .as_ref()
+            .map_or(host_ptr, |source| source.as_ptr());
+        if local_source || related_source.is_some() {
+            crate::context_bootstrap::web_mcp::finish_form_navigation(
+                scope, source_ptr, form, applied,
+            );
+        }
         dispatch.restore(scope, previous);
         Some(applied)
     }
@@ -237,11 +380,17 @@ impl JsContextHost {
             return false;
         };
         let pending = pending.into_payload();
+        let related_source =
+            self.forget_related_form_navigation_source(&pending.navigation, task_id);
         pending.cancellation.cancel();
-        crate::context_bootstrap::web_mcp::note_form_navigation_cancelled(
-            self,
-            pending.navigation.form,
-        );
+        if pending.navigation.related_source.is_none() || related_source.is_some() {
+            crate::context_bootstrap::web_mcp::note_form_navigation_cancelled(
+                related_source
+                    .as_ref()
+                    .map_or(self, |source| unsafe { &mut *source.as_ptr() }),
+                pending.navigation.form,
+            );
+        }
         true
     }
 }

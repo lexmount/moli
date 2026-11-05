@@ -411,19 +411,45 @@ pub(in crate::native_bridge) fn form_blocks_ancestor_navigation(
 }
 
 /// Choose the navigable synchronously. The form's DOM task starts navigation later.
+pub(in crate::native_bridge) enum FormNavigationTarget {
+    Local(crate::native_bridge::OwnerDispatchScope),
+    Related(crate::script_vm::RendererPageScriptEnvironment),
+}
+
+pub(in crate::native_bridge) fn form_navigation_initiator(
+    runtime: &JsContextHost,
+    form: DomHandle,
+    target_name: Option<&str>,
+) -> Option<crate::runtime::RendererNavigationInitiator> {
+    let source = runtime.owner_dispatch_scope_for_node(form)?;
+    let mut policy = runtime.document_policy_container_for_inheritance(source)?;
+    if element_popup_relations(runtime, form, target_name.unwrap_or("_self")).suppress_referrer {
+        policy.referrer_policy = Some("no-referrer".to_owned());
+    }
+    let loader = runtime.document_resource_loader_for_dispatch_scope(source)?;
+    Some(crate::runtime::RendererNavigationInitiator::new(
+        runtime.document_referrer_source_url_for_dispatch_scope(source)?,
+        loader.fetch_context().request_origin(),
+        policy.referrer_policy.clone(),
+        policy,
+    ))
+}
+
 pub(in crate::native_bridge) fn choose_form_navigation_target(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     form: DomHandle,
     target_name: Option<&str>,
     destination: &url::Url,
-) -> Option<crate::native_bridge::OwnerDispatchScope> {
+) -> Option<FormNavigationTarget> {
     use crate::native_bridge::OwnerDispatchScope;
     let runtime = unsafe { &mut *runtime_ptr };
     let source = runtime.owner_dispatch_scope_for_node(form)?;
     let special = target_name.and_then(SpecialBrowsingContextTarget::parse);
     match special {
-        Some(SpecialBrowsingContextTarget::Current) => return Some(source),
+        Some(SpecialBrowsingContextTarget::Current) => {
+            return Some(FormNavigationTarget::Local(source));
+        }
         Some(SpecialBrowsingContextTarget::Parent | SpecialBrowsingContextTarget::Top) => {
             let mut target = source;
             while let OwnerDispatchScope::Child(handle) = target {
@@ -432,17 +458,17 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
                     break;
                 }
             }
-            return Some(target);
+            return Some(FormNavigationTarget::Local(target));
         }
         _ => {}
     }
     let Some(target_name) = target_name else {
-        return Some(source);
+        return Some(FormNavigationTarget::Local(source));
     };
     let named_target =
         runtime.browsing_context_target_by_name_for_navigation(scope, target_name, source);
     if let Some(target @ (OwnerDispatchScope::Top | OwnerDispatchScope::Child(_))) = named_target {
-        return Some(target);
+        return Some(FormNavigationTarget::Local(target));
     }
     if let Some(OwnerDispatchScope::LightweightPopup(popup_id)) = named_target
         && runtime.blocks_ancestor_navigation(
@@ -483,6 +509,56 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
         _ => None,
     };
     let opener_child_handle = opener.and(source_child_handle);
+    if runtime.has_browser_owned_auxiliary_page_factory()
+        && !matches!(named_target, Some(OwnerDispatchScope::LightweightPopup(_)))
+    {
+        let initiator = form_navigation_initiator(runtime, form, Some(target_name))?;
+        let opened = runtime
+            .open_renderer_owned_auxiliary_window(
+                scope,
+                creator.opener,
+                !relations.suppress_opener,
+                source_child_handle,
+                target_name,
+                "about:blank",
+                &initiator.origin(),
+                creator.base_url,
+                creator.policy_container,
+                false,
+            )
+            .ok()?;
+        if !opened.prepare_navigation_activation(scope) {
+            return None;
+        }
+        let target_host =
+            crate::util::context_host_ptr_from_window_object(scope, opened.window_proxy)?;
+        let target = unsafe { &*target_host }.page_script_environment()?;
+        let event = opened.pending_page.is_some().then(|| {
+            RendererPendingWindowOpenEvent::browser_window(
+                destination.as_str(),
+                target_name,
+                runtime.protocol_user_gesture_activation(),
+            )
+        });
+        runtime.record_pending_popup_activation(
+            RendererPendingPopupActivation::window(
+                root_document,
+                window_document_source,
+                !relations.suppress_opener,
+                opened.window.as_ref().map(|window| window.id()),
+                "about:blank".to_owned(),
+                target_name.to_owned(),
+                RendererPopupDisposition::Foreground,
+            )
+            .with_navigation_requested(false)
+            .with_browsing_context_name(opened.name)
+            .with_auxiliary_window(opened.window)
+            .with_pending_auxiliary_page(opened.pending_page)
+            .with_initial_auxiliary_state(opened.session_storage, opened.initial_storage_key),
+            event,
+        );
+        return Some(FormNavigationTarget::Related(target));
+    }
     let opened = match named_target {
         Some(OwnerDispatchScope::LightweightPopup(id)) => runtime.reuse_lightweight_popup_window(
             scope,
@@ -532,7 +608,9 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
         )
     });
     runtime.record_pending_popup_activation(activation, event);
-    Some(OwnerDispatchScope::LightweightPopup(id))
+    Some(FormNavigationTarget::Local(
+        OwnerDispatchScope::LightweightPopup(id),
+    ))
 }
 
 fn element_javascript_url_allowed_by_csp(

@@ -289,6 +289,14 @@ impl WeakRendererPageScriptEnvironment {
     }
 }
 
+impl std::fmt::Debug for WeakRendererPageScriptEnvironment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("WeakRendererPageScriptEnvironment")
+            .field(&self.0.as_ptr())
+            .finish()
+    }
+}
+
 impl std::fmt::Debug for RendererPageScriptEnvironment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RendererPageScriptEnvironment")
@@ -382,6 +390,10 @@ impl RendererPageScriptEnvironment {
 
     pub(super) fn bind_document_host(&self, host: &Rc<RefCell<JsContextHost>>) {
         *self.inner.document_host.borrow_mut() = Rc::downgrade(host);
+    }
+
+    pub(crate) fn document_host(&self) -> Option<Rc<RefCell<JsContextHost>>> {
+        self.inner.document_host.borrow().upgrade()
     }
 
     pub(crate) fn set_top_level_navigation_dispatch(
