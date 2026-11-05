@@ -44,6 +44,11 @@ async fn navigator_service_worker_intercepts_csp_report_destination() {
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 await fetch("blocked-data").catch(() => {});
                 globalThis.__serviceWorkerCspReportProbe = "blocked";
               })().catch((error) => {
@@ -160,6 +165,11 @@ async fn navigator_service_worker_intercepts_worker_csp_report_destination() {
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 const worker = new Worker("client-worker.js");
                 worker.onmessage = event => {
                   globalThis.__serviceWorkerWorkerCspReportProbe =
@@ -246,6 +256,11 @@ async fn navigator_service_worker_does_not_intercept_invalid_no_cors_redirect_mo
           const assert = (value, label) => { if (!value) throw new Error(label); };
           await navigator.serviceWorker.register("worker.js", {scope: "./"});
           await navigator.serviceWorker.ready;
+          if (!navigator.serviceWorker.controller) {
+            await new Promise(resolve => navigator.serviceWorker.addEventListener(
+              "controllerchange", resolve, { once: true }
+            ));
+          }
           const remote = new URL("api/target", location.href);
           remote.hostname = location.hostname === "localhost" ? "127.0.0.1" : "localhost";
           for (const redirect of ["manual", "error"]) {
@@ -321,6 +336,11 @@ async fn navigator_service_worker_intercepts_window_xhr() {
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 const xhr = new XMLHttpRequest();
                 xhr.open("POST", "api/xhr.txt");
                 xhr.setRequestHeader("X-Test", "yes");
@@ -398,6 +418,11 @@ async fn navigator_service_worker_invalid_response_header_fails_window_xhr() {
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 const xhr = new XMLHttpRequest();
                 xhr.onload = () => {
                   globalThis.__serviceWorkerInvalidHeaderXhrProbe =
@@ -484,6 +509,11 @@ async fn navigator_service_worker_intercepts_element_resource_destinations_once(
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 const root = document.body || document.documentElement ||
                   document.appendChild(document.createElement("html"));
                 const img = document.createElement("img");
@@ -695,6 +725,11 @@ async fn navigator_service_worker_intercepts_script_font_face_with_font_request_
         (async () => {
           await navigator.serviceWorker.register("worker.js", {scope:"./"});
           await navigator.serviceWorker.ready;
+          if (!navigator.serviceWorker.controller) {
+            await new Promise(resolve => navigator.serviceWorker.addEventListener(
+              "controllerchange", resolve, { once: true }
+            ));
+          }
           const face = new FontFace("ServiceWorkerFont", 'url("script-font.woff2")');
           document.fonts.add(face);
           await face.load().then(
@@ -818,6 +853,11 @@ async fn navigator_service_worker_intercepts_stylesheet_font_face_destination() 
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 const ensureHead = () => {
                   if (document.head) {
                     return document.head;
@@ -964,6 +1004,11 @@ async fn navigator_service_worker_intercepts_connected_stylesheet_link() {
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 const ensureHead = () => {
                   if (document.head) {
                     return document.head;
@@ -1075,6 +1120,11 @@ async fn navigator_service_worker_no_respond_with_fallback_and_rejected_response
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 const fetchFallback = await fetch("api/fallback.txt?empty-listener");
                 const runXhr = name => new Promise(resolve => {
                   const xhr = new XMLHttpRequest();
@@ -1179,6 +1229,11 @@ async fn navigator_service_worker_response_body_reader_closed_rejects_after_abor
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 const controller = new AbortController();
                 const response = await fetch("api/reader-closed-abort.txt", {
                   signal: controller.signal
@@ -1284,6 +1339,11 @@ async fn navigator_service_worker_response_body_methods_reject_after_abort() {
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 const methods = ["arrayBuffer", "blob", "bytes", "formData", "json", "text"];
                 const results = [];
                 for (const method of methods) {
@@ -1407,6 +1467,11 @@ async fn navigator_service_worker_synthetic_stream_response_resolves_before_body
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 const response = await fetch("api/synthetic-stream.txt");
                 const releaseResponse = await fetch("api/release-synthetic-stream.txt");
                 globalThis.__serviceWorkerSyntheticStreamHeadersFirstProbe = [
@@ -1531,6 +1596,11 @@ async fn navigator_service_worker_respond_with_propagation_and_throw_browser_mat
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 const queuedMessages = [];
                 const messageResolvers = [];
                 navigator.serviceWorker.onmessage = event => {
@@ -1666,6 +1736,11 @@ async fn navigator_service_worker_respond_with_wait_until_lifetime_browser_matri
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 const queuedMessages = [];
                 const messageResolvers = [];
                 navigator.serviceWorker.onmessage = event => {
@@ -1835,6 +1910,11 @@ async fn navigator_service_worker_responds_with_body_accessed_default_and_basic_
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
                 await navigator.serviceWorker.ready;
+                if (!navigator.serviceWorker.controller) {
+                  await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    "controllerchange", resolve, { once: true }
+                  ));
+                }
                 const run = async (type, clone, cacheMode) => {
                   delete globalThis.__serviceWorkerBodyAccessedCallback;
                   const response = await fetch(

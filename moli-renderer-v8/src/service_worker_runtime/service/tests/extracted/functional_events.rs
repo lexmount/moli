@@ -222,7 +222,6 @@ self.addEventListener("message", event => {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -393,7 +392,6 @@ fn show_notification_record_enables_scope_click_dispatch() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -484,7 +482,6 @@ fn push_dispatch_for_active_scope_uses_service_lane_completion() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -558,7 +555,6 @@ fn push_subscription_store_tracks_active_scope_subscription() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -638,7 +634,6 @@ fn sync_register_for_active_scope_retains_tag_until_success_or_last_chance_failu
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -741,7 +736,6 @@ fn sync_registration_request_deduplicates_active_tag_and_refires_after_finish() 
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -879,7 +873,6 @@ fn sync_retry_marks_failed_registration_as_last_chance_event() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1011,7 +1004,6 @@ fn periodic_sync_dispatch_for_registered_tag_queues_functional_event() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1108,7 +1100,6 @@ fn periodic_sync_dispatch_deduplicates_active_tag_and_refires_after_finish() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1228,7 +1219,6 @@ fn notification_store_filters_replaces_tagged_records_and_closes() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1313,6 +1303,106 @@ fn notification_store_filters_replaces_tagged_records_and_closes() {
     assert_eq!(all_after_close[0].title, "loose");
 }
 #[test]
+fn functional_events_wait_for_activation_even_when_bootstrap_finishes_first() {
+    for starting in [false, true] {
+        let service = new_service_worker_runtime_service();
+        let registration_id = ServiceWorkerRegistrationId(1);
+        let version_id = ServiceWorkerVersionId(1);
+        let scope_url = url("https://example.test/app/");
+        let script_url = url("https://example.test/app/sw.js");
+        insert_registered_version(
+            &service,
+            registration_id,
+            version_id,
+            script_url.clone(),
+            scope_url.clone(),
+            [],
+        );
+        let owner = {
+            let mut state = service.inner.state.lock();
+            let version = state.versions.get_mut(&version_id).unwrap();
+            version.lifecycle_state = ServiceWorkerVersionLifecycleState::Activating;
+            version.in_flight_event_count = 1;
+            let owner = version.run_owner();
+            let host = new_running_test_host(version_id, owner.run_identity());
+            version.running_state = if starting {
+                ServiceWorkerVersionRunningState::Starting { host }
+            } else {
+                ServiceWorkerVersionRunningState::Running { host }
+            };
+            owner
+        };
+        assert!(service.show_notification_for_scope(
+            &scope_url,
+            "closing".to_owned(),
+            String::new(),
+            ServiceWorkerNotificationMetadata::default(),
+            Vec::new(),
+            V8StructuredClonePayload::default()
+        ));
+        assert!(service.dispatch_notification_close_for_scope(&scope_url, "closing".to_owned()));
+        assert!(service.dispatch_push_for_scope(&scope_url, Some(vec![1])));
+        assert!(service.register_sync_for_scope(&scope_url, "sync".to_owned()));
+        assert!(service.register_periodic_sync_for_scope(
+            &scope_url,
+            "periodic".to_owned(),
+            60_000
+        ));
+        assert!(service.dispatch_periodic_sync_for_scope(&scope_url, "periodic"));
+        if starting {
+            service.finish_worker_start_completed(
+                version_id,
+                owner.cloned_run_identity(),
+                script_url.to_string(),
+            );
+        }
+        {
+            let state = service.inner.state.lock();
+            let version = state.versions.get(&version_id).unwrap();
+            assert_eq!(
+                version.lifecycle_state,
+                ServiceWorkerVersionLifecycleState::Activating
+            );
+            assert_eq!(version.in_flight_event_count, 5);
+            assert_eq!(version.pending_start_events.len(), 4);
+            assert!(
+                matches!(&version.pending_start_events[0], ServiceWorkerPendingStartEvent::Notification(event) if event.owner == owner)
+            );
+            assert!(
+                matches!(&version.pending_start_events[1], ServiceWorkerPendingStartEvent::Push(event) if event.owner == owner)
+            );
+            assert!(
+                matches!(&version.pending_start_events[2], ServiceWorkerPendingStartEvent::Sync(event) if event.owner == owner)
+            );
+            assert!(
+                matches!(&version.pending_start_events[3], ServiceWorkerPendingStartEvent::PeriodicSync(event) if event.owner == owner)
+            );
+        }
+        assert_eq!(service.pending_service_lane_event_count(), 0);
+        service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
+            event_id: ServiceWorkerEventId(99),
+            owner,
+            kind: ServiceWorkerLifecycleEventKind::Activate,
+            result: Ok(()),
+        });
+        let state = service.inner.state.lock();
+        let version = state.versions.get(&version_id).unwrap();
+        assert_eq!(
+            version.lifecycle_state,
+            ServiceWorkerVersionLifecycleState::Activated
+        );
+        assert!(version.pending_start_events.is_empty());
+        assert_eq!(version.in_flight_event_count, 4);
+        drop(state);
+        assert_eq!(
+            service.pending_service_lane_event_count(),
+            4,
+            "only after activation may the host attempt all four events"
+        );
+    }
+}
+
+#[test]
 fn notification_close_dispatch_removes_record_and_starts_event() {
     let service = new_service_worker_runtime_service();
     let registration_id = ServiceWorkerRegistrationId(1);
@@ -1364,7 +1454,6 @@ fn notification_close_dispatch_removes_record_and_starts_event() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1448,7 +1537,6 @@ fn notification_click_dispatch_enters_active_version_accounting() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );

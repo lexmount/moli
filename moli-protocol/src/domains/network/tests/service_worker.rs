@@ -77,6 +77,15 @@ self.addEventListener("fetch", event => {
 (async () => {
   await navigator.serviceWorker.register("/worker.js", { scope: "/" });
   await navigator.serviceWorker.ready;
+  {
+    // ready may resolve while activate (and its claim) is still pending.
+    const active = (await navigator.serviceWorker.ready).active;
+    if (active.state !== "activated") {
+      await new Promise(resolve => active.addEventListener("statechange", () => {
+        if (active.state === "activated") resolve();
+      }));
+    }
+  }
   const response = await fetch("/probe");
   return JSON.stringify({
     body: await response.text(),

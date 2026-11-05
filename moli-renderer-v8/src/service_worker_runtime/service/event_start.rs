@@ -150,26 +150,8 @@ impl ServiceWorkerRuntimeService {
         else {
             return Vec::new();
         };
-        let Some(start) =
-            self.try_activate_waiting_version_locked(state, registration_id, waiting_version_id)
-        else {
-            return Vec::new();
-        };
-        let mut progress = lifecycle_notifications_for_registration_locked(
-            state,
-            registration_id,
-            vec![ServiceWorkerLifecycleClientEvent::WorkerStateChanged {
-                version_id: waiting_version_id,
-                state: "activating",
-            }],
-        )
-        .into_iter()
-        .map(|notification| LifecycleProgress::NotifyLifecycle(Box::new(notification)))
-        .collect::<Vec<_>>();
-        if let Some(start_progress) = Self::lifecycle_start_to_progress(start) {
-            progress.push(start_progress);
-        }
-        progress
+        self.try_activate_waiting_version_locked(state, registration_id, waiting_version_id)
+            .unwrap_or_default()
     }
 
     pub(super) fn activation_progress_for_active_version_if_ready_locked(
@@ -490,9 +472,18 @@ impl ServiceWorkerRuntimeService {
         let Some(version) = state.versions.get_mut(&event.owner.version_id()) else {
             return ServiceWorkerNotificationStart::Dropped;
         };
-        if version.registration_id != registration_id
-            || version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated
-        {
+        if version.registration_id != registration_id {
+            return ServiceWorkerNotificationStart::Dropped;
+        }
+        if version.lifecycle_state == ServiceWorkerVersionLifecycleState::Activating {
+            Self::begin_version_event_locked(version);
+            event.owner = version.run_owner();
+            version
+                .pending_start_events
+                .push_back(ServiceWorkerPendingStartEvent::Notification(event));
+            return ServiceWorkerNotificationStart::Queued;
+        }
+        if version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
             return ServiceWorkerNotificationStart::Dropped;
         }
 
@@ -553,9 +544,18 @@ impl ServiceWorkerRuntimeService {
         let Some(version) = state.versions.get_mut(&event.owner.version_id()) else {
             return ServiceWorkerPushStart::Dropped;
         };
-        if version.registration_id != registration_id
-            || version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated
-        {
+        if version.registration_id != registration_id {
+            return ServiceWorkerPushStart::Dropped;
+        }
+        if version.lifecycle_state == ServiceWorkerVersionLifecycleState::Activating {
+            Self::begin_version_event_locked(version);
+            event.owner = version.run_owner();
+            version
+                .pending_start_events
+                .push_back(ServiceWorkerPendingStartEvent::Push(event));
+            return ServiceWorkerPushStart::Queued;
+        }
+        if version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
             return ServiceWorkerPushStart::Dropped;
         }
 
@@ -614,9 +614,18 @@ impl ServiceWorkerRuntimeService {
         let Some(version) = state.versions.get_mut(&event.owner.version_id()) else {
             return ServiceWorkerSyncStart::Dropped;
         };
-        if version.registration_id != registration_id
-            || version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated
-        {
+        if version.registration_id != registration_id {
+            return ServiceWorkerSyncStart::Dropped;
+        }
+        if version.lifecycle_state == ServiceWorkerVersionLifecycleState::Activating {
+            Self::begin_version_event_locked(version);
+            event.owner = version.run_owner();
+            version
+                .pending_start_events
+                .push_back(ServiceWorkerPendingStartEvent::Sync(event));
+            return ServiceWorkerSyncStart::Queued;
+        }
+        if version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
             return ServiceWorkerSyncStart::Dropped;
         }
 
@@ -675,9 +684,18 @@ impl ServiceWorkerRuntimeService {
         let Some(version) = state.versions.get_mut(&event.owner.version_id()) else {
             return ServiceWorkerPeriodicSyncStart::Dropped;
         };
-        if version.registration_id != registration_id
-            || version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated
-        {
+        if version.registration_id != registration_id {
+            return ServiceWorkerPeriodicSyncStart::Dropped;
+        }
+        if version.lifecycle_state == ServiceWorkerVersionLifecycleState::Activating {
+            Self::begin_version_event_locked(version);
+            event.owner = version.run_owner();
+            version
+                .pending_start_events
+                .push_back(ServiceWorkerPendingStartEvent::PeriodicSync(event));
+            return ServiceWorkerPeriodicSyncStart::Queued;
+        }
+        if version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
             return ServiceWorkerPeriodicSyncStart::Dropped;
         }
 
@@ -732,15 +750,170 @@ impl ServiceWorkerRuntimeService {
         state: &mut ServiceWorkerRuntimeState,
         registration_id: ServiceWorkerRegistrationId,
         version_id: ServiceWorkerVersionId,
-    ) -> Option<ServiceWorkerLifecycleStart> {
+    ) -> Option<Vec<LifecycleProgress>> {
         let version = state.versions.get(&version_id)?;
         if version.registration_id != registration_id {
             return None;
         }
-        self.lifecycle_event_for_version_locked(
+        let registration = state.registrations.get(&registration_id)?;
+        if registration
+            .active_version_id
+            .and_then(|active| state.versions.get(&active))
+            .is_some_and(|active| {
+                active.lifecycle_state == ServiceWorkerVersionLifecycleState::Activating
+            })
+        {
+            return None;
+        }
+        let start = self.lifecycle_event_for_version_locked(
             state,
             version_id,
             ServiceWorkerLifecycleEventKind::Activate,
-        )
+        )?;
+        let mut progress =
+            self.publish_activating_version_locked(state, registration_id, version_id);
+        if let Some(start) = Self::lifecycle_start_to_progress(start) {
+            progress.push(start);
+        }
+        Some(progress)
+    }
+
+    // The activating worker is already active. In particular, activate's
+    // waitUntil(clients.claim()) must not wait for activation to finish.
+    pub(super) fn publish_activating_version_locked(
+        &self,
+        state: &mut ServiceWorkerRuntimeState,
+        registration_id: ServiceWorkerRegistrationId,
+        version_id: ServiceWorkerVersionId,
+    ) -> Vec<LifecycleProgress> {
+        let registration = state.registrations.get_mut(&registration_id).unwrap();
+        let previous_active_version_id = registration.active_version_id.replace(version_id);
+        registration.waiting_version_id = None;
+        let mut progress = Vec::new();
+        let mut failed_replaced_pending_events = Vec::new();
+        let mut failed_replaced_fetch_completions = Vec::new();
+        let mut previous_target_cleanup = None;
+        if let Some(previous_active_version_id) = previous_active_version_id
+            && previous_active_version_id != version_id
+            && let Some(previous_version) = state.versions.get_mut(&previous_active_version_id)
+        {
+            previous_version.lifecycle_state = ServiceWorkerVersionLifecycleState::Redundant;
+            previous_version.skip_waiting_requested = false;
+            let previous_owner = previous_version.run_owner();
+            failed_replaced_pending_events =
+                previous_version.pending_start_events.drain(..).collect();
+            let failed_replaced_activation_fetch_events = previous_version
+                .pending_activation_fetch_events
+                .drain(..)
+                .collect::<Vec<_>>();
+            let previous_host = previous_version.running_state.take_host_for_shutdown();
+            let previous_host_run = previous_host.as_ref().map(|host| host.run_identity());
+            if let Some(host) = previous_host {
+                progress.push(LifecycleProgress::TerminateHost(host));
+            }
+            previous_target_cleanup = Some((previous_active_version_id, previous_host_run));
+            let pending_start_fetch_event_ids = failed_replaced_pending_events
+                .iter()
+                .filter_map(|event| match event {
+                    ServiceWorkerPendingStartEvent::Fetch(event) => Some(event.event_id),
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
+            let pending_activation_fetch_event_ids = failed_replaced_activation_fetch_events
+                .iter()
+                .map(|event| event.event_id)
+                .collect::<HashSet<_>>();
+            failed_replaced_fetch_completions = state
+                .pending_fetch_jobs
+                .iter()
+                .filter(|(event_id, job)| {
+                    job.is_bound_to_owner(&previous_owner)
+                        && !pending_start_fetch_event_ids.contains(event_id)
+                        && !pending_activation_fetch_event_ids.contains(event_id)
+                })
+                .map(|(event_id, job)| ServiceWorkerFetchCompletion {
+                    event_id: *event_id,
+                    owner: ServiceWorkerRunOwner::new(job.version_id(), job.run_identity().clone()),
+                    result: ServiceWorkerFetchResult::Failure(
+                        "service worker was replaced by a newer active worker".to_owned(),
+                    ),
+                })
+                .collect();
+            failed_replaced_fetch_completions.extend(
+                failed_replaced_activation_fetch_events
+                    .into_iter()
+                    .map(|event| ServiceWorkerFetchCompletion {
+                        event_id: event.event_id,
+                        owner: event.owner,
+                        result: ServiceWorkerFetchResult::Failure(
+                            "service worker was replaced by a newer active worker".to_owned(),
+                        ),
+                    }),
+            );
+        }
+        if let Some((previous_active_version_id, previous_run)) = previous_target_cleanup {
+            if let Some(run) = previous_run {
+                state.record_target_stopped(
+                    previous_active_version_id,
+                    run,
+                    "replaced_by_newer_active_worker",
+                );
+            }
+            state.record_target_destroyed(previous_active_version_id);
+        }
+        let mut lifecycle_events = vec![ServiceWorkerLifecycleClientEvent::WorkerStateChanged {
+            version_id,
+            state: "activating",
+        }];
+        if let Some(previous_active_version_id) = previous_active_version_id
+            && previous_active_version_id != version_id
+        {
+            lifecycle_events.insert(
+                0,
+                ServiceWorkerLifecycleClientEvent::WorkerStateChanged {
+                    version_id: previous_active_version_id,
+                    state: "redundant",
+                },
+            );
+        }
+        progress.extend(
+            lifecycle_notifications_for_registration_locked(
+                state,
+                registration_id,
+                lifecycle_events,
+            )
+            .into_iter()
+            .map(|notification| LifecycleProgress::NotifyLifecycle(Box::new(notification))),
+        );
+
+        let snapshot = service_worker_registration_snapshot(
+            state,
+            state.registrations.get(&registration_id).unwrap(),
+        );
+        let pending_ready_jobs = std::mem::take(&mut state.pending_ready_jobs);
+        for job in pending_ready_jobs {
+            if job.registration_id == registration_id {
+                progress.push(LifecycleProgress::ReadyCompleted(Box::new((
+                    job,
+                    snapshot.clone(),
+                ))));
+            } else {
+                state.pending_ready_jobs.push(job);
+            }
+        }
+        if previous_active_version_id
+            .is_some_and(|previous_version_id| previous_version_id != version_id)
+        {
+            progress.extend(
+                controller_change_deliveries_for_controlled_clients_locked(state, registration_id)
+                    .into_iter()
+                    .map(LifecycleProgress::NotifyControllerChange),
+            );
+        }
+        progress.push(LifecycleProgress::FailReplacedWorkerEvents(Box::new((
+            failed_replaced_pending_events,
+            failed_replaced_fetch_completions,
+        ))));
+        progress
     }
 }

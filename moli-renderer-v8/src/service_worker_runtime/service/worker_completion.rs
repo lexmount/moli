@@ -233,7 +233,35 @@ impl ServiceWorkerRuntimeService {
         {
             self.run_lifecycle_progress(progress);
         }
+        self.dispatch_started_worker_events(pending_events);
+    }
+
+    pub(super) fn dispatch_started_worker_events(
+        &self,
+        pending_events: Vec<ServiceWorkerPendingStartEvent>,
+    ) {
         for event in pending_events {
+            // Functional events wait for both bootstrap and activation. Keep
+            // their original accounting and run owner while they are queued.
+            let activation_owner = match &event {
+                ServiceWorkerPendingStartEvent::Fetch(event) => Some(&event.owner),
+                ServiceWorkerPendingStartEvent::Notification(event) => Some(&event.owner),
+                ServiceWorkerPendingStartEvent::Push(event) => Some(&event.owner),
+                ServiceWorkerPendingStartEvent::Sync(event) => Some(&event.owner),
+                ServiceWorkerPendingStartEvent::PeriodicSync(event) => Some(&event.owner),
+                ServiceWorkerPendingStartEvent::Lifecycle(_)
+                | ServiceWorkerPendingStartEvent::Message(_) => None,
+            };
+            if let Some(owner) = activation_owner {
+                let mut state = self.inner.state.lock();
+                if let Some(version) = state.versions.get_mut(&owner.version_id())
+                    && &version.run == owner.run_identity()
+                    && version.lifecycle_state == ServiceWorkerVersionLifecycleState::Activating
+                {
+                    version.pending_start_events.push_back(event);
+                    continue;
+                }
+            }
             match event {
                 ServiceWorkerPendingStartEvent::Fetch(event) => {
                     let dispatch = {

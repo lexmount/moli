@@ -1173,6 +1173,15 @@ async fn service_worker_register_starts_module_worker_global() {
                     }).then(
                         async registration => {
                             await navigator.serviceWorker.ready;
+                            {
+                              // ready may resolve while activate (and its claim) is still pending.
+                              const active = (await navigator.serviceWorker.ready).active;
+                              if (active.state !== "activated") {
+                                await new Promise(resolve => active.addEventListener("statechange", () => {
+                                  if (active.state === "activated") resolve();
+                                }));
+                              }
+                            }
                             const worker = registration.active ?? registration.waiting ?? registration.installing;
                             globalThis.__serviceWorkerRegisterSettled =
                                 registration.scope + "|" + worker.state;

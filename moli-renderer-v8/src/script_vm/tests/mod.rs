@@ -935,6 +935,34 @@ fn new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
         crate::new_shared_storage_bucket_store_with_indexed_db_manager(&storage_manager),
     );
     install_test_trusted_key_dispatcher(&mut page);
+    // API fixtures that need an activated worker must request that state
+    // explicitly: serviceWorker.ready can settle during activate.
+    page.eval(
+        r#"
+        Object.defineProperty(globalThis, "__moliTestActivatedServiceWorker", {
+          configurable: true,
+          value: async function(container = navigator.serviceWorker) {
+            const registration = await container.ready;
+            const worker = registration.active;
+            if (worker.state !== "activated") {
+              await new Promise((resolve, reject) => {
+                const changed = () => {
+                  if (worker.state === "activated" || worker.state === "redundant") {
+                    worker.removeEventListener("statechange", changed);
+                    if (worker.state === "activated") resolve();
+                    else reject(new Error("worker became redundant before activation"));
+                  }
+                };
+                worker.addEventListener("statechange", changed);
+              });
+            }
+            return registration;
+          }
+        });
+        void 0;
+        "#,
+    )
+    .expect("service worker activation fixture helper should install");
     (page, browser_context_owner)
 }
 

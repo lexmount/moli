@@ -6027,6 +6027,11 @@ fn main_resource_service_worker_response(path: &str) -> (&'static str, &'static 
 	(async () => {
 	  const registration = await navigator.serviceWorker.register("worker.js", { scope: "./" });
 	  await navigator.serviceWorker.ready;
+      if (!navigator.serviceWorker.controller) {
+        await new Promise(resolve => navigator.serviceWorker.addEventListener(
+          "controllerchange", resolve, { once: true }
+        ));
+      }
 	  await registration.navigationPreload.setHeaderValue("core-preload");
 	  await registration.navigationPreload.enable();
 	  globalThis.__mainResourceSwReady =

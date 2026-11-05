@@ -1186,7 +1186,6 @@ fn same_options_register_uses_waiting_newest_worker_for_fast_path() {
                 run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
