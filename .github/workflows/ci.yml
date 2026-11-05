@@ -149,6 +149,13 @@ jobs:
       - name: Run full workspace tests
         run: cargo nextest run --workspace --profile ci
 
+      - name: Run ACE protocol tests
+        run: >-
+          cargo nextest run --profile ci
+          -p moli-renderer-v8 -p moli-protocol -p moli-protocol-server
+          --features ace-protocol
+          -E 'test(ace_page_task) | test(browser_runtime)'
+
   windows-persistent-storage:
     name: Windows persistent storage
     runs-on: windows-2025
