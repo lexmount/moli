@@ -339,6 +339,27 @@ pub(crate) fn build_static_handle_node_list_wrapper<'s>(
         host.native_bridge_mut().static_handle_collection_store()
     };
     let collection_id = collections.borrow_mut().register(handles.to_vec());
+    let anchors = v8::Array::new(
+        scope,
+        i32::try_from(handles.len()).expect("NodeList length fits V8"),
+    );
+    anchors.set_prototype(scope, v8::null(scope).into());
+    for (index, handle) in handles.iter().copied().enumerate() {
+        let ownership = unsafe { &mut *runtime_ptr }
+            .native_bridge_mut()
+            .identity
+            .node_ownership(scope, runtime_ptr, handle);
+        let anchor = ownership
+            .anchor(scope)
+            .expect("NodeList node has an owner realm");
+        anchors.set_index(scope, index as u32, anchor.into());
+    }
+    set_private_value(
+        scope,
+        wrapper,
+        "__moliStaticCollectionNodeOwners",
+        anchors.into(),
+    );
     // Mutation records create short-lived snapshots frequently. Release the
     // native handle vector when its wrapper dies, without retaining the host.
     crate::v8_finalizer::track_context_owned_v8_finalizer(scope, wrapper, move || {
@@ -403,6 +424,11 @@ pub(in crate::native_bridge) fn build_live_collection_wrapper<'s>(
         collection_id,
         descriptor.collection_kind,
     );
+    unsafe { &mut *runtime_ptr }
+        .native_bridge_mut()
+        .identity
+        .node_ownership(scope, runtime_ptr, descriptor.root)
+        .bind(scope, wrapper);
     {
         let host = unsafe { &mut *runtime_ptr };
         host.native_bridge_mut()

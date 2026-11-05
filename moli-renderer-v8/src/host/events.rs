@@ -131,6 +131,74 @@ impl Default for HostEventTargetRegistry {
     }
 }
 
+impl HostEventTargetRegistry {
+    pub(crate) fn transfer_node_targets_from(
+        &mut self,
+        source: &mut Self,
+        handles: &HashMap<DomHandle, DomHandle>,
+    ) -> HashSet<crate::native_bridge::EventCallbackId> {
+        let mut callbacks = HashSet::new();
+        for (&old, &new) in handles {
+            let old = EventTargetHandle::Node(old);
+            let new = EventTargetHandle::Node(new);
+            let mut listeners = source.listeners.remove(&old).unwrap_or_default();
+            let mut handlers = source.handler_properties.remove(&old).unwrap_or_default();
+            let mut event_types = source
+                .event_type_registration_ids
+                .remove(&old)
+                .unwrap_or_default();
+            let mut ids = std::collections::BTreeSet::new();
+            for entries in listeners.values() {
+                ids.extend(entries.iter().map(|entry| entry.id));
+            }
+            ids.extend(handlers.values().filter_map(|entry| match entry {
+                EventHandlerPropertyEntry::Callback {
+                    registration_id, ..
+                } => Some(*registration_id),
+                EventHandlerPropertyEntry::Null => None,
+            }));
+            ids.extend(event_types.values().copied());
+            let ids = ids
+                .into_iter()
+                .map(|old| (old, self.allocate_listener_id()))
+                .collect::<HashMap<_, _>>();
+            for entries in listeners.values_mut() {
+                for entry in entries {
+                    entry.id = ids[&entry.id];
+                    callbacks.insert(entry.callback_id);
+                }
+            }
+            for entry in handlers.values_mut() {
+                if let EventHandlerPropertyEntry::Callback {
+                    callback_id,
+                    registration_id,
+                } = entry
+                {
+                    *registration_id = ids[registration_id];
+                    callbacks.insert(*callback_id);
+                }
+            }
+            for id in event_types.values_mut() {
+                *id = ids[id];
+            }
+            if !listeners.is_empty() {
+                assert!(self.listeners.insert(new, listeners).is_none());
+            }
+            if !handlers.is_empty() {
+                assert!(self.handler_properties.insert(new, handlers).is_none());
+            }
+            if !event_types.is_empty() {
+                assert!(
+                    self.event_type_registration_ids
+                        .insert(new, event_types)
+                        .is_none()
+                );
+            }
+        }
+        callbacks
+    }
+}
+
 impl fmt::Debug for HostEventTargetRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HostEventTargetRegistry")

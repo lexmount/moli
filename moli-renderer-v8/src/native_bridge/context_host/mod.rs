@@ -100,6 +100,7 @@ mod host_loads;
 mod image_decodes;
 mod image_loads;
 mod image_resources;
+mod node_adoption;
 pub(crate) use image_resources::{
     CssImageResourceAdmission, CssImageResourceRequestIdentity, ImageResponseDescriptor,
     ScannedImagePreloadAdmission,
