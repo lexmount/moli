@@ -663,7 +663,7 @@ impl ScriptVm {
             .current_child_module_route_task_owner(owner, realm_id)
             .is_some();
         if is_current {
-            self.dispatch_module_fetch_redirect_csp_violations(task.fetch_request().csp_context());
+            self.dispatch_module_fetch_csp_violations(task.fetch_request().csp_context());
         }
         let tasks = self
             .child_document_modulator_store

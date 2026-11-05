@@ -1191,16 +1191,6 @@ fn captured_webassembly_error_constructor<'s>(
     get_private_value(scope, global, slot)
 }
 
-fn module_fetch_csp_request(
-    fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
-) -> crate::content_security_policy::ContentSecurityPolicyScriptElementRequest<'_> {
-    crate::content_security_policy::ContentSecurityPolicyScriptElementRequest {
-        nonce: fetch_metadata.nonce(),
-        integrity: fetch_metadata.integrity(),
-        parser_inserted: fetch_metadata.parser_inserted,
-    }
-}
-
 fn create_module_script_origin<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resource_name: &str,

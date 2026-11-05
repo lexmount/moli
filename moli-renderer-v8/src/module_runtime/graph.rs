@@ -243,10 +243,6 @@ impl NativeModuleGraphFetchRequest {
         self.initiator_url()
     }
 
-    pub(crate) fn nonce(&self) -> Option<&str> {
-        self.fetch_metadata.nonce()
-    }
-
     pub(crate) fn fetch_metadata(&self) -> &ModuleFetchMetadata {
         &self.fetch_metadata
     }
@@ -990,17 +986,14 @@ impl NativeModuleGraphJob {
                                 return Err(error);
                             }
                         };
-                    let request = request.with_csp_context(Some(context));
-                    owner.dispatch_module_fetch_csp_report_only_violation(
-                        &key,
-                        &request.fetch_metadata,
-                    );
-                    if let Some(error) =
-                        owner.csp_blocked_module_fetch_error(&key, &request.fetch_metadata)
-                    {
+                    let admission = context.check_initial_request(key.url());
+                    owner.queue_module_fetch_csp_violations(&context);
+                    if let Err(error) = admission {
+                        let error = ModuleLoadError::new(ModuleLoadStage::Fetch, error.to_string());
                         owner.mark_module_failed(key.clone(), error.clone());
                         return Err(error);
                     }
+                    let request = request.with_csp_context(Some(context));
                     trace_module_tree_fetch_emitted(fetch.request(), &key);
                     requests.push(request);
                 }
@@ -2344,9 +2337,15 @@ fn module_script_inline_tree_job_for_owner(
     // passed source-text CSP before graph creation; their synthetic identity URL
     // is not a request. Dependency fetches keep their own URL policy checks.
     if source_is_external {
-        vm.dispatch_module_fetch_csp_report_only_violation_for_owner(&key, &root.fetch_metadata);
-        if let Some(error) = vm.csp_blocked_module_fetch_error_for_owner(&key, &root.fetch_metadata)
-        {
+        let context = vm.document_runtime.module_fetch_csp_context(
+            key.url(),
+            key.kind(),
+            &root.fetch_metadata,
+        );
+        let admission = context.check_initial_request(key.url());
+        vm.queue_module_fetch_csp_violations(&context);
+        if let Err(error) = admission {
+            let error = ModuleLoadError::new(ModuleLoadStage::Fetch, error.to_string());
             vm.document_runtime
                 .mark_native_module_failed(key.clone(), error.clone());
             return Err(error);

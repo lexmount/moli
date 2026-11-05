@@ -819,42 +819,6 @@ impl DocumentRuntime {
         }
     }
 
-    pub(crate) fn module_request_csp_violation(
-        &self,
-        request_url: &Url,
-        kind: crate::module_runtime::ModuleKind,
-        redirect_status: ContentSecurityPolicyRedirectStatus,
-        request: ContentSecurityPolicyScriptElementRequest<'_>,
-        disposition: ContentSecurityPolicyDisposition,
-    ) -> Option<DocumentContentSecurityPolicyViolation> {
-        let policies = match disposition {
-            ContentSecurityPolicyDisposition::Enforce => self
-                .document_content_security_policies_for_optional_document(
-                    Some(self.document_handle()),
-                    &self.policy_container.response_content_security_policies,
-                    &self.policy_container.content_security_reporting_endpoints,
-                ),
-            ContentSecurityPolicyDisposition::Report => {
-                document_response_content_security_policies(
-                    &self
-                        .policy_container
-                        .response_content_security_report_only_policies,
-                    &self.policy_container.content_security_reporting_endpoints,
-                )
-            }
-        };
-        document_module_url_policy_violation_from_document_policies(
-            policies,
-            self.document_url(),
-            request_url,
-            request_url,
-            kind,
-            redirect_status,
-            request,
-            disposition,
-        )
-    }
-
     pub(crate) fn module_fetch_csp_context(
         &self,
         request_url: &Url,
@@ -902,7 +866,7 @@ impl DocumentRuntime {
                     integrity: metadata.integrity(),
                     parser_inserted: metadata.parser_inserted,
                 };
-                let check = |policies, disposition| {
+                let check = |policies: &[DocumentContentSecurityPolicy], disposition| {
                     document_module_url_policy_violation_from_document_policies(
                         policies,
                         &document_url,
@@ -915,8 +879,8 @@ impl DocumentRuntime {
                     )
                 };
                 (
-                    check(report.clone(), ContentSecurityPolicyDisposition::Report),
-                    check(enforce.clone(), ContentSecurityPolicyDisposition::Enforce),
+                    check(&report, ContentSecurityPolicyDisposition::Report),
+                    check(&enforce, ContentSecurityPolicyDisposition::Enforce),
                 )
             },
         )
@@ -1765,6 +1729,14 @@ impl DocumentRuntime {
                 violation.clone(),
             ),
         };
+        self.enqueue_content_security_policy_violation_event_task(event_task);
+        Ok(())
+    }
+
+    pub(crate) fn enqueue_content_security_policy_violation_event_task(
+        &mut self,
+        event_task: crate::page_task_queue::ContentSecurityPolicyViolationEventTask,
+    ) {
         let work = PostParseLifecycleWork::DispatchContentSecurityPolicyViolation(event_task);
         if self.has_active_parser_write_insertion_point() {
             self.enqueue_parser_boundary_lifecycle_work(work);
@@ -1777,7 +1749,6 @@ impl DocumentRuntime {
                 .scripts_mut()
                 .enqueue_post_parse_lifecycle_work(work);
         }
-        Ok(())
     }
 
     pub(crate) fn dispatch_content_security_policy_violation_event_page_task<'s>(
@@ -2065,7 +2036,7 @@ fn document_frame_policy_violation_from_document_policies(
 }
 
 fn document_module_url_policy_violation_from_document_policies(
-    policies: Vec<DocumentContentSecurityPolicy>,
+    policies: &[DocumentContentSecurityPolicy],
     document_url: &Url,
     request_url: &Url,
     original_url: &Url,
@@ -2090,12 +2061,12 @@ fn document_module_url_policy_violation_from_document_policies(
         }
         _ => ContentSecurityPolicyUrlRequest::Standard,
     };
-    policies.into_iter().find_map(|policy| {
+    policies.iter().find_map(|policy| {
         let mut violation = crate::content_security_policy::content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
             std::slice::from_ref(&policy.policy), document_url, request_url, original_url,
             resource_kind, redirect_status, disposition, &policy.reporting_endpoints, request,
         )?;
-        apply_document_policy_reporting_flags(&mut violation, &policy);
+        apply_document_policy_reporting_flags(&mut violation, policy);
         Some(violation)
     })
 }

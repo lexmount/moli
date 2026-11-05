@@ -504,9 +504,7 @@ impl ScriptVm {
                     "authorized shared module-map terminal {load_id} has no module map key"
                 )
             })?;
-        self.dispatch_module_fetch_redirect_csp_violations(
-            graph_continuation.request().csp_context(),
-        );
+        self.dispatch_module_fetch_csp_violations(graph_continuation.request().csp_context());
         let source = match result {
             Ok(fetched_source) => Ok(fetched_source),
             Err(error) => Err(ModuleLoadError::new(
@@ -838,7 +836,21 @@ impl ScriptVm {
             .borrow_mut()
             .record_css_module_failure_for_url(key.url());
     }
-    pub(in crate::script_vm) fn dispatch_module_fetch_redirect_csp_violations(
+    /// Admission must not enter child JavaScript while its modulator is borrowed.
+    pub(crate) fn queue_module_fetch_csp_violations(
+        &mut self,
+        context: &crate::content_security_policy::ModuleFetchCspContext,
+    ) {
+        for violation in context.take_violations() {
+            if let Some(owner) = context.owner_scope() {
+                self.queue_captured_module_csp_violation(owner, violation);
+            } else {
+                self.queue_content_security_policy_violation_event_best_effort(&violation);
+            }
+        }
+    }
+
+    pub(crate) fn dispatch_module_fetch_csp_violations(
         &mut self,
         context: Option<&crate::content_security_policy::ModuleFetchCspContext>,
     ) {
@@ -850,43 +862,6 @@ impl ScriptVm {
                     self.queue_content_security_policy_violation_event_best_effort(&violation);
                 }
             }
-        }
-    }
-    pub(crate) fn csp_blocked_module_fetch_error_for_owner(
-        &mut self,
-        key: &ModuleMapKey,
-        fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
-    ) -> Option<ModuleLoadError> {
-        let violation = self.document_runtime.module_request_csp_violation(
-            key.url(),
-            key.kind(),
-            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect,
-            module_fetch_csp_request(fetch_metadata),
-            crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
-        )?;
-        self.queue_content_security_policy_violation_event_best_effort(&violation);
-        Some(ModuleLoadError::new(
-            ModuleLoadStage::Fetch,
-            format!(
-                "Refused to load module `{}` because it violates the document Content Security Policy directive `{}`",
-                key.url(),
-                violation.effective_directive
-            ),
-        ))
-    }
-    pub(crate) fn dispatch_module_fetch_csp_report_only_violation_for_owner(
-        &mut self,
-        key: &ModuleMapKey,
-        fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
-    ) {
-        if let Some(violation) = self.document_runtime.module_request_csp_violation(
-            key.url(),
-            key.kind(),
-            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect,
-            module_fetch_csp_request(fetch_metadata),
-            crate::content_security_policy::ContentSecurityPolicyDisposition::Report,
-        ) {
-            self.queue_content_security_policy_violation_event_best_effort(&violation);
         }
     }
     #[cfg(test)]
@@ -1312,9 +1287,7 @@ impl ScriptVm {
                 ModuleScriptGraphFetchResume::RestoredMissingGraphContinuation,
             ));
         };
-        self.dispatch_module_fetch_redirect_csp_violations(
-            graph_continuation.request().csp_context(),
-        );
+        self.dispatch_module_fetch_csp_violations(graph_continuation.request().csp_context());
         let source = match result {
             Ok(fetched_source) => Ok(fetched_source),
             Err(error) => Err(ModuleLoadError::new(
@@ -1377,9 +1350,7 @@ impl ScriptVm {
             ));
         };
 
-        self.dispatch_module_fetch_redirect_csp_violations(
-            graph_continuation.request().csp_context(),
-        );
+        self.dispatch_module_fetch_csp_violations(graph_continuation.request().csp_context());
         let source = match result {
             Ok(fetched_source) => Ok(fetched_source),
             Err(error) => Err(ModuleLoadError::new(
@@ -1441,7 +1412,7 @@ impl ScriptVm {
             target.import_owner(),
             "dynamic-import resolver claim must match the authorized exact import owner"
         );
-        self.dispatch_module_fetch_redirect_csp_violations(inflight.csp_context());
+        self.dispatch_module_fetch_csp_violations(inflight.csp_context());
         let source = match result {
             Ok(fetched_source) => Ok(fetched_source),
             Err(error) => Err(ModuleLoadError::new(

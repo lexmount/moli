@@ -1,6 +1,196 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn connected_modulepreload_csp_hash_admission_preserves_integrity_metadata() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    const SOURCE: &str = "globalThis.sriExecutions = (globalThis.sriExecutions || 0) + 1;";
+    const INTEGRITY: &str =
+        "sha384-T7tuz8k7Hz0eBaWUPKiAEECRmaKHLJ1eRz7NF4VdK1fN++IaKD3hEk0SETOP+8aJ";
+    for case in ["match", "mismatch", "missing", "tampered"] {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = Arc::clone(&hits);
+        let server = StaticHttpServer::spawn_with_responder(
+            1,
+            "Content-Type: text/javascript\r\n",
+            move |_, _| {
+                server_hits.fetch_add(1, Ordering::SeqCst);
+                if case == "tampered" {
+                    "globalThis.sriExecutions = 1000;"
+                } else {
+                    SOURCE
+                }
+                .to_owned()
+            },
+        )
+        .await;
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let document_url = server.base_url().join("page.html").unwrap();
+        let module_url = server.base_url().join("module.js").unwrap();
+        let mut vm = new_parsed_page_task_executor_test_vm(
+            document_url.as_str(),
+            "<!doctype html><html><head></head><body></body></html>",
+            &loader,
+        );
+        vm.set_response_content_security_policies(&[format!(
+            "script-src '{INTEGRITY}'; script-src-attr 'unsafe-inline'"
+        )]);
+        let integrity = match case {
+            "missing" => None,
+            "mismatch" => {
+                Some("sha384-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+            }
+            _ => Some(INTEGRITY),
+        };
+        vm.eval(&format!(
+            r#"
+          globalThis.hashPreloadEvents = [];
+          const link = document.createElement('link'); link.rel = 'modulepreload';
+          link.href = {url};
+          const integrity = {integrity};
+          if (integrity !== null) link.integrity = integrity;
+          link.addEventListener('load', event => hashPreloadEvents.push(event.type));
+          link.addEventListener('error', event => hashPreloadEvents.push(event.type));
+          document.head.append(link); 'queued';
+        "#,
+            url = serde_json::to_string(module_url.as_str()).unwrap(),
+            integrity = serde_json::to_string(&integrity).unwrap()
+        ))
+        .unwrap();
+        vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        let fetched = matches!(case, "match" | "tampered");
+        if fetched {
+            wait_for_one_page_resource_completion_selected_task_executor_test_turn(
+                &mut vm, &loader, case,
+            )
+            .await;
+        } else {
+            let key = crate::module_runtime::ModuleMapKey::java_script(module_url);
+            let entry = vm
+                .document_runtime
+                .native_module_entry_id(&key)
+                .expect("CSP rejection settles the Module Map");
+            assert!(
+                vm.document_runtime
+                    .native_module_failure(entry)
+                    .unwrap()
+                    .message()
+                    .contains("Content Security Policy"),
+                "{case}"
+            );
+        }
+        assert!(
+            vm.run_one_native_module_owner_event_task_executor_turn(&loader)
+                .await
+                .unwrap(),
+            "{case}: the module-map terminal must notify its link client"
+        );
+        assert!(
+            vm.run_one_dom_manipulation_task_executor_turn(
+                PageDomManipulationTestFamily::ConnectedStyleEvent,
+                &loader
+            )
+            .await
+            .unwrap(),
+            "{case}: the link event uses the selected Page task path"
+        );
+        assert_eq!(
+            vm.eval("hashPreloadEvents.join('|')").unwrap(),
+            if case == "match" { "load" } else { "error" },
+            "{case}"
+        );
+        assert_eq!(
+            vm.eval("String(globalThis.sriExecutions || 0)").unwrap(),
+            "0",
+            "modulepreload must not execute source"
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            usize::from(fetched),
+            "{case}: CSP must reject before sending a request"
+        );
+        if fetched {
+            assert_eq!(server.finish_targets().await, ["/module.js"]);
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn child_module_csp_admission_queues_events_and_rejects_replaced_document() {
+    for replace in [false, true] {
+        let mut vm = new_storage_test_vm("https://child-module-csp-event.test/");
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::CspReport),
+        );
+        vm.eval(r#"
+          globalThis.__queuedModuleCspEvents = [];
+          globalThis.__queuedModuleCspFrame = document.createElement('iframe');
+          (document.body || document.documentElement || document).appendChild(__queuedModuleCspFrame);
+          void __queuedModuleCspFrame.contentWindow;
+          'frame-ready';
+        "#).unwrap();
+        assert_initial_about_blank_child_completed_synchronously_for_test(
+            &mut vm,
+            "queued module CSP event",
+        )
+        .await;
+        let context_id =
+            materialize_single_child_default_realm_for_test(&mut vm, "queued module CSP event");
+        let handle = vm
+            .child_frame_realm_store
+            .get(&context_id)
+            .unwrap()
+            .child_handle;
+        vm.eval(r#"
+          __queuedModuleCspFrame.contentWindow.addEventListener('securitypolicyviolation', event => {
+            __queuedModuleCspEvents.push(event.blockedURI);
+          });
+          'listener-ready';
+        "#).unwrap();
+        let document_url = vm
+            ._context_host
+            .borrow()
+            .child_browsing_context_current_url(handle)
+            .unwrap();
+        let violation = test_window_csp_report_violation(
+            &document_url,
+            &Url::parse("https://report.test/csp").unwrap(),
+        );
+        vm.queue_captured_module_csp_violation(
+            crate::native_bridge::OwnerDispatchScope::Child(handle),
+            violation,
+        );
+        assert_eq!(
+            vm.eval("__queuedModuleCspEvents.length").unwrap(),
+            "0",
+            "admission must not enter child JavaScript while the modulator is borrowed"
+        );
+        if replace {
+            vm.eval("__queuedModuleCspFrame.srcdoc = '<p>replacement</p>'; 'queued'")
+                .unwrap();
+            assert_eq!(
+                vm.run_next_child_frame_semantic_turn_for_test().await,
+                Some(ChildFrameSemanticTurnKind::NavigationCommit)
+            );
+        }
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        assert_eq!(
+            vm.eval("__queuedModuleCspEvents.length").unwrap(),
+            if replace { "0" } else { "1" }
+        );
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        assert_eq!(
+            vm.eval("__queuedModuleCspEvents.length").unwrap(),
+            if replace { "0" } else { "1" },
+            "each queued event is consumed exactly once"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
     let mut vm = new_storage_test_vm("https://detached-fetch-csp-owner.test/");
     vm.set_fetch_subresource_interception(

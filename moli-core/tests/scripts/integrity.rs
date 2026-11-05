@@ -160,7 +160,7 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
-        "/module-csp.html" | "/module-csp-privacy.html" | "/module-csp-report-uri" | "/module-csp-report-to" | "/module-csp.text" | "/module-csp.json" | "/module-csp.css" | "/module-csp.js" | "/module-csp.wasm" => {
+        "/module-csp.html" | "/module-csp-privacy.html" | "/module-csp-report-uri" | "/module-csp-report-to" | "/module-csp-hash-preload.html" | "/module-csp-hash-tampered.js" | "/module-csp.text" | "/module-csp.json" | "/module-csp.css" | "/module-csp.js" | "/module-csp.wasm" => {
             module_csp::fixture_response(path, query, origin, cross)
         }
         "/child-sri-frame.html"
