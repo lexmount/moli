@@ -146,8 +146,11 @@ impl DocumentRuntime {
     ) -> std::result::Result<MainDocumentModulepreloadFetchOutcome, ModuleLoadError> {
         let document_url = self.document_url().clone();
         let key = request.module_key().clone();
-        request
-            .set_csp_context(self.module_fetch_csp_context(key.kind(), request.fetch_metadata()));
+        request.set_csp_context(self.module_fetch_csp_context(
+            key.url(),
+            key.kind(),
+            request.fetch_metadata(),
+        ));
         let fetch_request = request.fetch_request();
         let mut csp_violations = Vec::new();
         let csp_request = ContentSecurityPolicyScriptElementRequest::parser_inserted_with_nonce(

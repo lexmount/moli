@@ -874,6 +874,49 @@ fn url_violation_redacts_data_and_blob_urls_to_their_schemes() {
 }
 
 #[test]
+fn redirected_typed_url_checks_preserve_nonce_and_report_original_url() {
+    let original_url = request_url("https://app.test/module");
+    let target_url = request_url("https://blocked.test/private?token=SECRET");
+    for (kind, directive) in [
+        (
+            ContentSecurityPolicyResourceKind::DocumentScriptElement,
+            "script-src-elem",
+        ),
+        (
+            ContentSecurityPolicyResourceKind::DocumentStyleElement,
+            "style-src-elem",
+        ),
+    ] {
+        for nonce in [None, Some("trusted")] {
+            let request = if kind == ContentSecurityPolicyResourceKind::DocumentScriptElement {
+                ContentSecurityPolicyUrlRequest::Script(ContentSecurityPolicyScriptElementRequest {
+                    nonce,
+                    integrity: None,
+                    parser_inserted: false,
+                })
+            } else {
+                ContentSecurityPolicyUrlRequest::Style(ContentSecurityPolicyStyleElementRequest {
+                    nonce,
+                })
+            };
+            let violation = content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
+                &[format!("{directive} 'nonce-trusted'").into()], &protected_url(), &target_url, &original_url,
+                kind, ContentSecurityPolicyRedirectStatus::FollowedRedirect, ContentSecurityPolicyDisposition::Enforce,
+                &ContentSecurityPolicyReportingEndpoints::default(), request,
+            );
+            if nonce.is_some() {
+                assert!(
+                    violation.is_none(),
+                    "valid nonce must survive the redirect check"
+                );
+            } else {
+                assert_eq!(violation.unwrap().blocked_uri, original_url.as_str());
+            }
+        }
+    }
+}
+
+#[test]
 fn redirected_url_violation_reports_original_blocked_uri() {
     let original_url = request_url("https://app.test/redirect");
     let final_url = request_url("https://blocked.test/data.json");

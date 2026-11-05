@@ -690,11 +690,12 @@ fn start_worker_module_graph_fetch(
         let endpoints = content_security_reporting_endpoints.clone();
         let initiator = request.initiator_url().clone();
         crate::content_security_policy::ModuleFetchCspContext::new(
+            request.url().clone(),
             None,
-            move |url, redirect_status| {
+            move |url, original_url, redirect_status| {
                 let check = |policies: &[ContentSecurityPolicy], disposition| {
-                    content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-                    policies, &initiator, url, resource_kind,
+                    crate::content_security_policy::content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints(
+                    policies, &initiator, url, original_url, resource_kind,
                     redirect_status, disposition, &endpoints,
                 )
                 };
@@ -743,20 +744,22 @@ fn start_worker_module_graph_fetch(
                     && csp_report_only_violation.is_none()
                 {
                     csp_report_only_violation =
-                        content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
+                        crate::content_security_policy::content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints(
                             &response_content_security_report_only_policies,
                             &request_initiator_url,
                             &response.final_url,
+                            &requested_url,
                             response_resource_kind,
                             redirect_status,
                             ContentSecurityPolicyDisposition::Report,
                             &response_content_security_reporting_endpoints,
                         );
                 }
-                if let Some(violation) = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
+                if let Some(violation) = crate::content_security_policy::content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints(
                     &response_content_security_policies,
                     &request_initiator_url,
                     &response.final_url,
+                    &requested_url,
                     response_resource_kind,
                     redirect_status,
                     ContentSecurityPolicyDisposition::Enforce,

@@ -346,15 +346,18 @@ pub fn content_security_policy_url_violation_for_checked_url_with_redirect_statu
     )
 }
 
+/// Request-specific nonce, integrity, and provenance used during URL checks.
 #[derive(Clone, Copy)]
-enum ContentSecurityPolicyUrlRequest<'a> {
+pub enum ContentSecurityPolicyUrlRequest<'a> {
     Standard,
     Script(ContentSecurityPolicyScriptElementRequest<'a>),
     Style(ContentSecurityPolicyStyleElementRequest<'a>),
 }
 
+/// Check the current target while reporting the original request URL. Redirect
+/// targets can contain secrets that must not be exposed in violation reports.
 #[allow(clippy::too_many_arguments)]
-fn content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
+pub fn content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
     policies: &[ContentSecurityPolicy],
     protected_url: &Url,
     checked_url: &Url,

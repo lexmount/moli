@@ -6,6 +6,83 @@ pub(super) fn fixture_response(
     origin: &str,
     cross: &str,
 ) -> (&'static str, String, String) {
+    if matches!(path, "/module-csp-report-uri" | "/module-csp-report-to") {
+        return ("204 No Content", String::new(), String::new());
+    }
+    if path == "/module-csp-privacy.html" {
+        let child = query.starts_with("child-");
+        let report_only = query.contains("report-only");
+        let reporting = if query.ends_with("report-to") {
+            "report-to csp"
+        } else {
+            "report-uri /module-csp-report-uri"
+        };
+        let restrictive = format!(
+            "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; connect-src 'self'; style-src-elem 'self'; {reporting}"
+        );
+        let enforce = if report_only {
+            "script-src * 'unsafe-inline' 'wasm-unsafe-eval'; connect-src *; style-src-elem *"
+        } else {
+            &restrictive
+        };
+        let report = if report_only {
+            format!("Content-Security-Policy-Report-Only: {restrictive}\r\n")
+        } else {
+            String::new()
+        };
+        let mut body = r#"<!doctype html><script>
+          globalThis.privacyProbe = async () => {
+            const modules = [['text','text'],['json','json'],['css','css'],['js',null]];
+            /*WASM*/
+            const events = [];
+            let signal;
+            const reported = new Promise(resolve => signal = resolve);
+            addEventListener('securitypolicyviolation', event => {
+              events.push({blockedURI:event.blockedURI, disposition:event.disposition, directive:event.effectiveDirective});
+              if (events.length === modules.length) signal();
+            });
+            const results = [];
+            for (const [suffix, type] of modules) {
+              const url = '/module-csp.' + suffix + '?privacy-redirect';
+              try { await import(url, type ? {with:{type}} : {}); results.push({status:'loaded'}); }
+              catch (error) { results.push({status:error.name, message:error.message}); }
+            }
+            await reported;
+            return JSON.stringify({events, results});
+          };
+        </script><body>Module redirect privacy"#.to_owned();
+        // Child Wasm evaluation currently looks up records in the top-level
+        // modulator. Window and Worker tests retain Wasm coverage.
+        body = body.replace(
+            "/*WASM*/",
+            if child {
+                ""
+            } else {
+                "modules.push(['wasm',null]);"
+            },
+        );
+        if child {
+            body.push_str(
+                "<script>privacyProbe().then(result => parent.postMessage(result, '*'));</script>",
+            );
+        }
+        return (
+            "200 OK",
+            format!(
+                "Content-Type: text/html\r\nContent-Security-Policy: {enforce}\r\n{report}Reporting-Endpoints: csp=\"{origin}/module-csp-report-to\"\r\n"
+            ),
+            body,
+        );
+    }
+    if query == "privacy-redirect" {
+        return (
+            "302 Found",
+            format!(
+                "Location: {cross}{path}?token=SECRET-redirect\r\nAccess-Control-Allow-Origin: *\r\n"
+            ),
+            String::new(),
+        );
+    }
     if path == "/module-csp.html" {
         let frame_case = query.strip_prefix("frame-");
         let preload_case = query.strip_prefix("preload-");
@@ -125,6 +202,174 @@ pub(super) fn fixture_response(
         format!("Content-Type: {mime}\r\nAccess-Control-Allow-Origin: *\r\n"),
         body.to_owned(),
     )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn module_csp_redirect_privacy_events_reports_and_errors_use_original_request_url()
+-> Result<()> {
+    for child in [false, true] {
+        for report_only in [false, true] {
+            for report_to in [false, true] {
+                let suffixes: &[&str] = if child {
+                    &["text", "json", "css", "js"]
+                } else {
+                    &["text", "json", "css", "js", "wasm"]
+                };
+                let module_count = suffixes.len();
+                let servers = IntegrityServers::spawn().await?;
+                let browser = Browser::new(AppConfig::default())?;
+                let case = format!(
+                    "{}{}-{}",
+                    if child { "child-" } else { "" },
+                    if report_only {
+                        "report-only"
+                    } else {
+                        "enforce"
+                    },
+                    if report_to { "report-to" } else { "report-uri" }
+                );
+                let page_url = if child {
+                    format!("{}/page.html", servers.origin)
+                } else {
+                    format!("{}/module-csp-privacy.html?{case}", servers.origin)
+                };
+                let mut page = browser.fetch(&page_url).await?;
+                let expression = if child {
+                    format!(
+                        r#"new Promise(resolve => {{
+                      const frame = document.createElement('iframe');
+                      addEventListener('message', function receive(event) {{
+                        if (event.source !== frame.contentWindow) return;
+                        removeEventListener('message', receive); resolve(event.data);
+                      }});
+                      frame.src = '/module-csp-privacy.html?{case}';
+                      document.body.append(frame);
+                    }})"#
+                    )
+                } else {
+                    "privacyProbe()".to_owned()
+                };
+                let result = tokio::time::timeout(
+                    Duration::from_secs(15),
+                    page.evaluate_runtime_expression_with_await_async(&expression, true),
+                )
+                .await??;
+                let serialized = result["value"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{case}: {result}"));
+                assert!(
+                    !serialized.contains("SECRET-redirect"),
+                    "{case}: {serialized}"
+                );
+                assert!(
+                    !serialized.contains(&servers.cross_origin),
+                    "{case}: {serialized}"
+                );
+                let result: serde_json::Value = serde_json::from_str(serialized)?;
+                assert_eq!(
+                    result["events"].as_array().unwrap().len(),
+                    module_count,
+                    "{case}: {result}"
+                );
+                assert_eq!(
+                    result["results"].as_array().unwrap().len(),
+                    module_count,
+                    "{case}: {result}"
+                );
+                for outcome in result["results"].as_array().unwrap() {
+                    assert_eq!(
+                        outcome["status"],
+                        if report_only { "loaded" } else { "TypeError" },
+                        "{case}: {result}"
+                    );
+                }
+                let mut originals: Vec<_> = suffixes
+                    .iter()
+                    .map(|suffix| {
+                        format!("{}/module-csp.{suffix}?privacy-redirect", servers.origin)
+                    })
+                    .collect();
+                originals.sort();
+                let mut event_urls: Vec<_> = result["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|event| {
+                        assert_eq!(
+                            event["disposition"],
+                            if report_only { "report" } else { "enforce" }
+                        );
+                        event["blockedURI"].as_str().unwrap().to_owned()
+                    })
+                    .collect();
+                event_urls.sort();
+                assert_eq!(event_urls, originals, "{case}");
+                let endpoint = if report_to {
+                    "/module-csp-report-to"
+                } else {
+                    "/module-csp-report-uri"
+                };
+                tokio::time::timeout(Duration::from_secs(15), async {
+                    loop {
+                        let changed = servers.requests_changed.notified();
+                        if servers
+                            .requests
+                            .lock()
+                            .iter()
+                            .filter(|r| r.path == endpoint)
+                            .count()
+                            >= module_count
+                        {
+                            break;
+                        }
+                        changed.await;
+                    }
+                })
+                .await?;
+                let requests = servers.requests.lock();
+                assert_eq!(
+                    requests
+                        .iter()
+                        .filter(|r| r.path.contains("token=SECRET-redirect"))
+                        .count(),
+                    if report_only { module_count } else { 0 },
+                    "{case}: forbidden target request"
+                );
+                let reports: Vec<_> = requests.iter().filter(|r| r.path == endpoint).collect();
+                assert_eq!(
+                    reports.len(),
+                    module_count,
+                    "{case}: reports must be sent once per module"
+                );
+                let mut report_urls = Vec::new();
+                for report in reports {
+                    assert_eq!(report.method, "POST");
+                    assert!(
+                        !report.body.contains("SECRET-redirect"),
+                        "{case}: {}",
+                        report.body
+                    );
+                    assert!(
+                        !report.body.contains(&servers.cross_origin),
+                        "{case}: {}",
+                        report.body
+                    );
+                    let body: serde_json::Value = serde_json::from_str(&report.body)?;
+                    report_urls.push(
+                        if report_to {
+                            body[0]["body"]["blockedURL"].as_str().unwrap()
+                        } else {
+                            body["csp-report"]["blocked-uri"].as_str().unwrap()
+                        }
+                        .to_owned(),
+                    );
+                }
+                report_urls.sort();
+                assert_eq!(report_urls, originals, "{case}");
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]

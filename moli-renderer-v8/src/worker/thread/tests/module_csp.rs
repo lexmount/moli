@@ -28,7 +28,7 @@ impl RedirectServers {
                     let Ok((mut stream, _)) = listener.accept().await else { break; };
                     let request = read_http_request_head(&mut stream).await.unwrap();
                     hits.fetch_add(1, Ordering::SeqCst);
-                    let path = request.split_whitespace().nth(1).unwrap();
+                    let path = request.split_whitespace().nth(1).unwrap().split('?').next().unwrap();
                     let request_origin = request.lines().filter_map(|line| line.split_once(':'))
                         .find(|(key, _)| key.eq_ignore_ascii_case("origin")).map(|(_, value)| value.trim()).unwrap_or("*");
                     let (mime, body) = match module_type.as_str() {
@@ -37,7 +37,7 @@ impl RedirectServers {
                         _ => ("text/javascript", b"export default 'ok';".as_slice()),
                     };
                     let response = if path == "/start" || (path == "/middle" && roundtrip) {
-                        let target = if path == "/start" { format!("{cross}/middle") } else { format!("{origin}/final") };
+                        let target = if path == "/start" { format!("{cross}/middle?token=SECRET-redirect") } else { format!("{origin}/final") };
                         format!("HTTP/1.1 302 Found\r\nLocation: {target}\r\nAccess-Control-Allow-Origin: {request_origin}\r\nAccess-Control-Allow-Credentials: true\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                     } else {
                         format!("HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nAccess-Control-Allow-Origin: {request_origin}\r\nAccess-Control-Allow-Credentials: true\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len())
@@ -54,6 +54,107 @@ impl RedirectServers {
             origin_hits,
             cross_hits,
             _tasks: tasks,
+        }
+    }
+}
+
+#[tokio::test]
+async fn worker_module_csp_redirect_privacy_in_report_uri_and_report_to() {
+    ensure_v8();
+    for module_type in ["text", "javascript"] {
+        for report_only in [false, true] {
+            for report_to in [false, true] {
+                let servers = RedirectServers::spawn(module_type, false).await;
+                let reporter = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let endpoint = format!("http://{}/report", reporter.local_addr().unwrap());
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let report_task = tokio::spawn(async move {
+                    let (mut stream, _) = reporter.accept().await.unwrap();
+                    let request = read_http_request_with_body(&mut stream).await.unwrap();
+                    stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+                    tx.send(request).unwrap();
+                });
+                let report_directive = if report_to {
+                    "report-to csp".to_owned()
+                } else {
+                    format!("report-uri {endpoint}")
+                };
+                let restrictive =
+                    format!("connect-src 'self'; script-src 'self'; {report_directive}");
+                let source = format!(
+                    r#"
+                  const events = [];
+                  addEventListener('securitypolicyviolation', event => events.push(event.blockedURI));
+                  try {{ await import('./start', {}); postMessage({{status:'loaded', events}}); }}
+                  catch (error) {{ postMessage({{status:error.name, message:error.message, events}}); }}
+                  close();
+                "#,
+                    if module_type == "text" {
+                        "{with:{type:'text'}}"
+                    } else {
+                        "{}"
+                    }
+                );
+                let script_url = url::Url::parse(&format!("{}/root.js", servers.origin)).unwrap();
+                let endpoints = crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(
+                    &[("Reporting-Endpoints".into(), format!("csp=\"{endpoint}\"").into_bytes())], &script_url,
+                );
+                let mut options = WorkerSpawnOptions::new(source, script_url.to_string())
+                    .with_request_client(
+                        ResourceRequestClient::new(&FetchConfig::default()).unwrap(),
+                    )
+                    .with_script_kind(WorkerScriptKind::Module)
+                    .with_content_security_policies(vec![if report_only {
+                        "connect-src *; script-src *".into()
+                    } else {
+                        restrictive.clone().into()
+                    }])
+                    .with_content_security_reporting_endpoints(endpoints);
+                if report_only {
+                    options = options
+                        .with_content_security_report_only_policies(vec![restrictive.into()]);
+                }
+                let mut worker = spawn_test_worker_with_options(options);
+                let message =
+                    expect_post_json(timeout(TIMEOUT, worker.recv()).await.unwrap().unwrap());
+                assert!(
+                    !message.contains("SECRET-redirect") && !message.contains("/middle"),
+                    "{message}"
+                );
+                let result: serde_json::Value = serde_json::from_str(&message).unwrap();
+                assert_eq!(
+                    result["status"],
+                    if report_only { "loaded" } else { "TypeError" }
+                );
+                assert_eq!(
+                    result["events"],
+                    serde_json::json!([format!("{}/start", servers.origin)])
+                );
+                let report = timeout(TIMEOUT, rx)
+                    .await
+                    .expect("redirect CSP report timed out")
+                    .unwrap();
+                report_task.await.unwrap();
+                let body = report.split_once("\r\n\r\n").unwrap().1;
+                assert!(
+                    !body.contains("SECRET-redirect") && !body.contains("/middle"),
+                    "{body}"
+                );
+                let body: serde_json::Value = serde_json::from_str(body).unwrap();
+                assert_eq!(
+                    if report_to {
+                        &body[0]["body"]["blockedURL"]
+                    } else {
+                        &body["csp-report"]["blocked-uri"]
+                    },
+                    &serde_json::json!(format!("{}/start", servers.origin))
+                );
+                assert_eq!(
+                    servers.cross_hits.load(Ordering::SeqCst),
+                    usize::from(report_only)
+                );
+                worker.terminate_and_join();
+            }
         }
     }
 }
@@ -90,7 +191,7 @@ async fn worker_module_csp_redirects_block_network_hops_and_report_intermediate_
                           const events = [];
                           addEventListener('securitypolicyviolation', e => events.push([e.effectiveDirective, e.disposition, e.blockedURI]));
                           try {{ await import('./start', {options}); postMessage({{status:'loaded', events}}); }}
-                          catch (error) {{ postMessage({{status:error.name, events}}); }}
+                          catch (error) {{ postMessage({{status:error.name, message:error.message, events}}); }}
                           close();
                         "#
                         )
@@ -126,7 +227,9 @@ async fn worker_module_csp_redirects_block_network_hops_and_report_intermediate_
                     if static_import {
                         match result {
                             WorkerToParentMessage::Error { message, .. } => assert!(
-                                message.contains("Content Security Policy"),
+                                message.contains("Content Security Policy")
+                                    && !message.contains("SECRET-redirect")
+                                    && !message.contains("/middle"),
                                 "{module_type}: {message}"
                             ),
                             other => panic!(
@@ -154,13 +257,9 @@ async fn worker_module_csp_redirects_block_network_hops_and_report_intermediate_
                             result["events"][0][1],
                             if report_only { "report" } else { "enforce" }
                         );
-                        assert!(
-                            result["events"][0][2]
-                                .as_str()
-                                .unwrap()
-                                .ends_with("/middle"),
-                            "{result}"
-                        );
+                        assert_eq!(result["events"][0][2], format!("{}/start", servers.origin));
+                        assert!(!result.to_string().contains("SECRET-redirect"), "{result}");
+                        assert!(!result.to_string().contains("/middle"), "{result}");
                     }
                     assert_eq!(
                         servers.cross_hits.load(Ordering::SeqCst),

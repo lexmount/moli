@@ -827,6 +827,25 @@ impl DocumentRuntime {
         request: ContentSecurityPolicyScriptElementRequest<'_>,
         disposition: ContentSecurityPolicyDisposition,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
+        self.module_request_csp_violation_for_checked_url(
+            request_url,
+            request_url,
+            kind,
+            redirect_status,
+            request,
+            disposition,
+        )
+    }
+
+    pub(crate) fn module_request_csp_violation_for_checked_url(
+        &self,
+        checked_url: &Url,
+        original_url: &Url,
+        kind: crate::module_runtime::ModuleKind,
+        redirect_status: ContentSecurityPolicyRedirectStatus,
+        request: ContentSecurityPolicyScriptElementRequest<'_>,
+        disposition: ContentSecurityPolicyDisposition,
+    ) -> Option<DocumentContentSecurityPolicyViolation> {
         let policies = match disposition {
             ContentSecurityPolicyDisposition::Enforce => self
                 .document_content_security_policies_for_optional_document(
@@ -846,7 +865,8 @@ impl DocumentRuntime {
         document_module_url_policy_violation_from_document_policies(
             policies,
             self.document_url(),
-            request_url,
+            checked_url,
+            original_url,
             kind,
             redirect_status,
             request,
@@ -856,6 +876,7 @@ impl DocumentRuntime {
 
     pub(crate) fn module_fetch_csp_context(
         &self,
+        request_url: &Url,
         kind: crate::module_runtime::ModuleKind,
         metadata: &crate::module_runtime::ModuleFetchMetadata,
     ) -> crate::content_security_policy::ModuleFetchCspContext {
@@ -865,6 +886,7 @@ impl DocumentRuntime {
             &self.policy_container,
             kind,
             metadata,
+            request_url,
             None,
         )
     }
@@ -876,6 +898,7 @@ impl DocumentRuntime {
         container: &DocumentPolicyContainer,
         kind: crate::module_runtime::ModuleKind,
         metadata: &crate::module_runtime::ModuleFetchMetadata,
+        request_url: &Url,
         owner_scope: Option<crate::native_bridge::OwnerDispatchScope>,
     ) -> crate::content_security_policy::ModuleFetchCspContext {
         let enforce = self.document_content_security_policies_for_optional_document(
@@ -890,8 +913,9 @@ impl DocumentRuntime {
         let document_url = document_url.clone();
         let metadata = metadata.clone();
         crate::content_security_policy::ModuleFetchCspContext::new(
+            request_url.clone(),
             owner_scope,
-            move |url, redirect_status| {
+            move |url, original_url, redirect_status| {
                 let request = ContentSecurityPolicyScriptElementRequest {
                     nonce: metadata.nonce(),
                     integrity: metadata.integrity(),
@@ -902,6 +926,7 @@ impl DocumentRuntime {
                         policies,
                         &document_url,
                         url,
+                        original_url,
                         kind,
                         redirect_status,
                         request,
@@ -2062,6 +2087,7 @@ fn document_module_url_policy_violation_from_document_policies(
     policies: Vec<DocumentContentSecurityPolicy>,
     document_url: &Url,
     request_url: &Url,
+    original_url: &Url,
     kind: crate::module_runtime::ModuleKind,
     redirect_status: ContentSecurityPolicyRedirectStatus,
     request: ContentSecurityPolicyScriptElementRequest<'_>,
@@ -2071,38 +2097,26 @@ fn document_module_url_policy_violation_from_document_policies(
         kind,
         ContentSecurityPolicyResourceKind::DocumentScriptElement,
     );
-    match resource_kind {
+    use crate::content_security_policy::ContentSecurityPolicyUrlRequest;
+    let request = match resource_kind {
         ContentSecurityPolicyResourceKind::DocumentScriptElement => {
-            document_script_element_url_policy_violation_from_document_policies(
-                policies,
-                document_url,
-                request_url,
-                redirect_status,
-                disposition,
-                request,
-            )
+            ContentSecurityPolicyUrlRequest::Script(request)
         }
         ContentSecurityPolicyResourceKind::DocumentStyleElement => {
-            document_style_element_url_policy_violation_from_document_policies(
-                policies,
-                document_url,
-                request_url,
-                redirect_status,
-                disposition,
-                ContentSecurityPolicyStyleElementRequest {
-                    nonce: request.nonce,
-                },
-            )
+            ContentSecurityPolicyUrlRequest::Style(ContentSecurityPolicyStyleElementRequest {
+                nonce: request.nonce,
+            })
         }
-        _ => document_url_policy_violation_from_document_policies(
-            policies,
-            document_url,
-            request_url,
-            resource_kind,
-            redirect_status,
-            disposition,
-        ),
-    }
+        _ => ContentSecurityPolicyUrlRequest::Standard,
+    };
+    policies.into_iter().find_map(|policy| {
+        let mut violation = crate::content_security_policy::content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
+            std::slice::from_ref(&policy.policy), document_url, request_url, original_url,
+            resource_kind, redirect_status, disposition, &policy.reporting_endpoints, request,
+        )?;
+        apply_document_policy_reporting_flags(&mut violation, &policy);
+        Some(violation)
+    })
 }
 
 fn document_url_policy_violation_from_document_policies(
