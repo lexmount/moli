@@ -123,6 +123,57 @@ async def _click_native_node(wire: _Wire, session: str, node: int) -> None:
         }, session)
 
 
+async def _check_handler_attribute_mutations(endpoint: str,
+                                            results: list[dict[str, Any]]) -> None:
+    for tag, event_types in (("body", ("load", "pageshow", "messageerror", "focus")),
+                             ("frameset", ("load", "pageshow"))):
+        for event_type in event_types:
+            client = await connect_raw_cdp(endpoint)
+            wire = _Wire(client)
+            context = None
+            try:
+                context = (await wire.call("Target.createBrowserContext"))["browserContextId"]
+                target = (await wire.call("Target.createTarget", {
+                    "url": "about:blank", "browserContextId": context,
+                }))["targetId"]
+                session = (await wire.call("Target.attachToTarget", {
+                    "targetId": target, "flatten": True,
+                }))["sessionId"]
+                await wire.call("Page.enable", session=session)
+                await wire.load(session, f'<!doctype html><{tag} on{event_type}="globalThis.hits=(globalThis.hits||0)+1"></{tag}>')
+                observed = await wire.evaluate(session, """(type => {
+                  const element=document.body, attribute='on'+type, counts=[];
+                  const dispatch=()=>{
+                    if (type==='focus' && element[attribute]!==window[attribute])
+                      throw new Error('body and Window must expose the same handler');
+                    const event=type==='pageshow' ? new PageTransitionEvent(type) : new Event(type);
+                    window.dispatchEvent(event); counts.push(hits);
+                  };
+                  globalThis.hits=0;
+                  dispatch();
+                  element.setAttribute(attribute, 'hits+=10'); dispatch();
+                  element.getAttributeNode(attribute).value='hits+=100'; dispatch();
+                  element.removeAttributeNode(element.getAttributeNode(attribute)); dispatch();
+                  element.setAttribute(attribute, 'hits+=1000'); dispatch();
+                  element.removeAttribute(attribute); dispatch();
+                  window[attribute]=()=>{hits+=10000};
+                  element.removeAttribute(attribute); dispatch();
+                  window[attribute]=null; dispatch();
+                  element.setAttribute(attribute, 'hits+=100000'); dispatch();
+                  element.setAttributeNS(null, attribute, 'hits+=1000000'); dispatch();
+                  element.removeAttributeNS(null, attribute); dispatch();
+                  return counts;
+                })(""" + repr(event_type) + ")")
+                assert_equal(observed, [1, 11, 111, 111, 1111, 1111, 11111, 11111,
+                                        111111, 1111111, 1111111],
+                             f"{tag} {event_type} mutations update the same Window handler target")
+                record(results, f"handler_attribute_mutations_{tag}_{event_type}", {"counts": observed})
+            finally:
+                if context is not None:
+                    await wire.call("Target.disposeBrowserContext", {"browserContextId": context})
+                await client.websocket.close()
+
+
 async def run_lazy_main_world_group(endpoint: str, _fixture: str,
                                     results: list[dict[str, Any]]) -> None:
     for activation in ("evaluate", "runtime-enable", "isolated-world", "preload",
@@ -273,3 +324,5 @@ async def run_lazy_main_world_group(endpoint: str, _fixture: str,
             if context is not None:
                 await wire.call("Target.disposeBrowserContext", {"browserContextId": context})
             await client.websocket.close()
+
+    await _check_handler_attribute_mutations(endpoint, results)

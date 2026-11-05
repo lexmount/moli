@@ -1,5 +1,4 @@
 use super::*;
-use crate::dom::native::Node;
 use crate::host::HostTimerOwner;
 use crate::host::PublicEventDispatchResult;
 use crate::script_provenance::CompiledStringProvenance;
@@ -388,32 +387,6 @@ impl DocumentRuntime {
         event_type: &str,
     ) -> Option<crate::native_bridge::EventCallbackId> {
         self.events.clear_event_handler_property(target, event_type)
-    }
-
-    pub(crate) fn sync_body_window_messageerror_content_attribute(
-        &mut self,
-        handle: DomHandle,
-        name: &str,
-        namespace: Option<&str>,
-        present: bool,
-    ) -> Option<crate::native_bridge::EventCallbackId> {
-        if namespace.is_some() || !name.eq_ignore_ascii_case("onmessageerror") {
-            return None;
-        }
-        let document_handle = self.document_handle();
-        let dom = self.dom_host().dom();
-        let body_handle = dom
-            .node(document_handle)
-            .and_then(Node::as_document)
-            .and_then(|document| document.body_or_frameset_handle(dom, document_handle));
-        if body_handle != Some(handle) {
-            return None;
-        }
-        if present {
-            self.clear_event_handler_property(EventTargetHandle::Window, "messageerror")
-        } else {
-            self.set_event_handler_property(EventTargetHandle::Window, "messageerror", None)
-        }
     }
 
     pub(crate) fn event_handler_property_callback_id(

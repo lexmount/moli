@@ -65,6 +65,6 @@ pub(crate) fn invalidate_event_handler_content_attribute(
     name: &str,
 ) {
     let runtime = unsafe { &mut *runtime_ptr };
-    generic::invalidate_node_event_attribute_handler(scope, runtime, handle, name);
+    generic::invalidate_event_attribute_handler(scope, runtime, handle, name);
     body_onload::invalidate_body_window_event_attribute_handler(scope, runtime, handle, name);
 }
