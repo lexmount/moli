@@ -232,7 +232,7 @@ impl RendererDocumentLifecycleWaiter {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub struct RendererDocumentLifecycleIdentity {
     pub frame: RendererFrameToken,
     pub document: RendererDocumentToken,
