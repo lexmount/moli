@@ -108,6 +108,12 @@ impl JsContextHost {
         &mut self,
         realm_token: RuntimeObservableContextToken,
     ) {
+        for store in std::iter::once(&mut self.custom_elements)
+            .chain(self.child_custom_elements.values_mut())
+            .chain(self.scoped_custom_elements.values_mut())
+        {
+            store.retire_execution_state_for_realm(realm_token);
+        }
         let timers = self.cancel_timers_for_context_token(realm_token);
         let bindings = self.retire_runtime_binding_context_token(realm_token);
         let images = self.retire_image_decode_requests_for_context_token(realm_token);
@@ -196,10 +202,16 @@ impl JsContextHost {
         // these LocalDOMWindow/ExecutionContext-owned services when the frame
         // is detached while ordinary retained Document/Node values remain
         // usable.
-        drop(std::mem::take(&mut self.custom_elements));
-        self.child_custom_elements.clear();
-        self.scoped_custom_elements.clear();
-        self.foreign_custom_elements.clear();
+        // Release execution-owned registry roots while preserving weak native
+        // metadata. A retained JS registry traces its old values after close;
+        // it must neither lose them nor resume installing new definitions.
+        for store in std::iter::once(&mut self.custom_elements)
+            .chain(self.child_custom_elements.values_mut())
+            .chain(self.scoped_custom_elements.values_mut())
+            .chain(self.foreign_custom_elements.values_mut())
+        {
+            store.retire_execution_state();
+        }
         drop(std::mem::take(&mut self.custom_element_reactions));
         drop(std::mem::take(&mut self.observers));
         drop(std::mem::take(&mut self.child_window_proxy_records));
