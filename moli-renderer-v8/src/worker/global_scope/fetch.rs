@@ -2561,9 +2561,11 @@ pub(super) fn start_worker_resource_fetch<'s>(
         return Some(rejected);
     }
 
+    let origin = worker_global_origin(scope).unwrap_or(moli_url::WebOrigin::Opaque);
     let timing = WorkerResourceTiming::new(
+        scope,
         resolved_url.clone(),
-        worker_global_origin(scope).unwrap_or(moli_url::WebOrigin::Opaque),
+        origin,
         WorkerTimingRequest::Fetch {
             method: method.clone(),
             mode: request_mode,

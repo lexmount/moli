@@ -366,6 +366,10 @@ pub(crate) struct ResourcePerformanceEntry {
 }
 
 impl ResourcePerformanceEntry {
+    pub(crate) fn clear_initiator(&mut self) {
+        self.initiator_url.clear();
+    }
+
     pub(crate) fn from_network_result(
         name: impl Into<String>,
         initiator_type: &'static str,

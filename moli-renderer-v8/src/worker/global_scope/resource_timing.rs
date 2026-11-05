@@ -94,14 +94,21 @@ struct WorkerResourceTimingState {
     body_size: usize,
     completed_at: Option<Instant>,
     synthetic_response_start: Option<Instant>,
+    response_is_synthetic: bool,
     awaiting_selection: bool,
     aborted: bool,
     reported: bool,
 }
 
 impl WorkerResourceTiming {
-    pub(super) fn new(name: Url, origin: WebOrigin, request: WorkerTimingRequest) -> Self {
-        let clock = FetchResourceTiming::for_initiator_type(request.initiator_type());
+    pub(super) fn new(
+        scope: &mut v8::PinScope<'_, '_>,
+        name: Url,
+        origin: WebOrigin,
+        request: WorkerTimingRequest,
+    ) -> Self {
+        let mut clock = FetchResourceTiming::for_initiator_type(request.initiator_type());
+        clock.capture_worker_initiator(scope);
         Self(Arc::new(WorkerResourceTimingInner {
             name,
             origin,
@@ -113,6 +120,7 @@ impl WorkerResourceTiming {
                 body_size: 0,
                 completed_at: None,
                 synthetic_response_start: None,
+                response_is_synthetic: false,
                 awaiting_selection: false,
                 aborted: false,
                 reported: false,
@@ -131,6 +139,7 @@ impl WorkerResourceTiming {
         state.body_size = 0;
         state.completed_at = None;
         state.synthetic_response_start = None;
+        state.response_is_synthetic = false;
         state.awaiting_selection = false;
         state.aborted = false;
     }
@@ -139,6 +148,7 @@ impl WorkerResourceTiming {
         let filter = self.0.request.filter(&self.0.origin, head);
         let mut state = self.0.state.lock();
         state.response = filter.map(|filter| (head.clone(), filter));
+        state.response_is_synthetic = false;
     }
 
     pub(super) fn observe_chunk(&self, size: usize) {
@@ -162,12 +172,14 @@ impl WorkerResourceTiming {
         state.body_size = 0;
         state.completed_at = Some(Instant::now());
         state.synthetic_response_start = None;
+        state.response_is_synthetic = false;
     }
 
     pub(super) fn begin_synthetic_response(&self) {
         self.discard_response();
         let mut state = self.0.state.lock();
         state.synthetic_response_start = state.completed_at;
+        state.response_is_synthetic = true;
     }
 
     pub(super) fn select_response(
@@ -187,6 +199,7 @@ impl WorkerResourceTiming {
             state.completed_at = Some(now);
         }
         state.response = Some((head.clone(), filter));
+        state.response_is_synthetic = synthetic;
         state.body_size = body_size;
         state.awaiting_selection = false;
     }
@@ -255,7 +268,7 @@ impl WorkerResourceTiming {
         } else {
             state.body_size
         };
-        let entry = if !rejected && let Some((head, filter)) = &state.response {
+        let mut entry = if !rejected && let Some((head, filter)) = &state.response {
             if aborted {
                 state.clock.aborted_response(
                     &self.0.name,
@@ -273,6 +286,9 @@ impl WorkerResourceTiming {
         } else {
             state.clock.failure(&self.0.name)
         };
+        if state.response_is_synthetic {
+            entry.clear_initiator();
+        }
         Some(state.clock.completed_at(entry, end))
     }
 }

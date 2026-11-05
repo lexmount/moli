@@ -60,6 +60,169 @@ fn import_resource_client() -> crate::network::ResourceRequestClientOwner {
 }
 
 #[tokio::test]
+async fn worker_resource_initiator_retains_classic_entry_across_callbacks_and_imports() {
+    ensure_v8();
+    let (base, server) = worker_initiator_server().await;
+    let mut worker = worker_initiator_test_worker(&base, "callbacks", &base);
+    assert_eq!(recv_post_json(&mut worker).await, "\"ready\"");
+    worker.post_message(serialize_test_string("run"));
+    let result: serde_json::Value =
+        serde_json::from_str(&recv_post_json(&mut worker).await).unwrap();
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    let expected: serde_json::Map<String, serde_json::Value> = [
+        "import-library",
+        "direct",
+        "promise",
+        "microtask",
+        "timer",
+        "interval",
+        "string",
+        "xhr",
+        "xhr-handler",
+        "xhr-sync",
+        "xhr-sync-handler",
+    ]
+    .into_iter()
+    .map(|label| {
+        (
+            label.to_owned(),
+            serde_json::json!(format!("{base}/worker.js")),
+        )
+    })
+    .collect();
+    assert_eq!(result, serde_json::Value::Object(expected));
+}
+
+#[tokio::test]
+async fn worker_resource_initiator_unknown_debugger_registration_stays_redacted() {
+    ensure_v8();
+    let (base, server) = worker_initiator_server().await;
+    let mut worker = worker_initiator_test_worker(&base, "unknown", &base);
+    assert_eq!(recv_post_json(&mut worker).await, "\"ready\"");
+    let (dispatch_tx, dispatch_rx) = oneshot::channel();
+    let (response_tx, response_rx) = oneshot::channel();
+    assert!(worker.dispatch_runtime_protocol_message(
+        Some("SID-worker-initiator".to_owned()),
+        serde_json::json!({"id": 1, "method": "Runtime.evaluate", "params": {
+            "expression": r#"
+                performance.clearResourceTimings();
+                onmessage = async () => {
+                    await fromLibrary('direct');
+                    await Promise.resolve().then(() => fromLibrary('promise'));
+                    await new Promise((resolve, reject) => setTimeout(() => fromLibrary('timer').then(resolve, reject), 0));
+                    postMessage(collectInitiators());
+                    close();
+                };
+                true;
+            "#,
+            "returnByValue": true
+        }}).to_string(),
+        Some(crate::runtime::RendererRuntimeInspectorResponseSender::new(1, response_tx)),
+        dispatch_tx,
+    ));
+    timeout(TIMEOUT, dispatch_rx)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let completion = timeout(TIMEOUT, response_rx).await.unwrap().unwrap();
+    let response = completion
+        .output
+        .into_protocol_response(1)
+        .unwrap()
+        .into_json()
+        .unwrap();
+    assert!(response.get("error").is_none(), "{response}");
+    assert_eq!(response["result"]["result"]["value"], true, "{response}");
+    worker.post_message(serialize_test_string("run"));
+    let result: serde_json::Value =
+        serde_json::from_str(&recv_post_json(&mut worker).await).unwrap();
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        result,
+        serde_json::json!({"direct": "", "promise": "", "timer": ""})
+    );
+}
+
+#[tokio::test]
+async fn worker_resource_initiator_requires_readable_network_responses() {
+    ensure_v8();
+    let (base, server) = worker_initiator_server().await;
+    let (other, other_server) = worker_initiator_server().await;
+    let mut worker = worker_initiator_test_worker(&base, "privacy", &other);
+    assert_eq!(recv_post_json(&mut worker).await, "\"ready\"");
+    worker.post_message(serialize_test_string("run"));
+    let result: serde_json::Value =
+        serde_json::from_str(&recv_post_json(&mut worker).await).unwrap();
+    server.abort();
+    other_server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    assert!(other_server.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "same": format!("{base}/worker.js"), "cors": format!("{base}/worker.js"),
+            "opaque": "", "tao": "", "blocked": "",
+        })
+    );
+}
+
+fn worker_initiator_test_worker(base: &str, scenario: &str, other: &str) -> WorkerTestHandle {
+    spawn_worker_with_request_client(
+        format!(
+            "const initiatorBase = {}; const initiatorScenario = {}; const initiatorOther = {};\n{}",
+            serde_json::to_string(base).unwrap(),
+            serde_json::to_string(scenario).unwrap(),
+            serde_json::to_string(other).unwrap(),
+            include_str!("../../../../tests/fixtures/worker-resource-initiator.js"),
+        ),
+        format!("{base}/worker.js"),
+        import_resource_client(),
+    )
+}
+
+async fn worker_initiator_server() -> (String, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_http_request_head(&mut stream).await.unwrap();
+            let target = request
+                .lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap();
+            let body = if target.starts_with("/library.js") {
+                "globalThis.fromLibrary = (label, url, options) => fetch(url || initiatorBase + '/probe?case=' + label, options).then(response => response.arrayBuffer());"
+            } else {
+                "body"
+            };
+            let cors = if target.starts_with("/cors") {
+                "Access-Control-Allow-Origin: *\r\n"
+            } else {
+                ""
+            };
+            let tao = if target.starts_with("/tao") {
+                "Timing-Allow-Origin: *\r\n"
+            } else {
+                ""
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\n{cors}{tao}Cache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    (base, server)
+}
+
+#[tokio::test]
 async fn worker_fetch_and_xhr_publish_native_resource_timing() {
     ensure_v8();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

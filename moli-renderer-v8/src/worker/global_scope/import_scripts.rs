@@ -53,7 +53,8 @@ fn materialize_worker_import_source(
         csp.check_url(script_url, ContentSecurityPolicyRedirectStatus::NoRedirect)
             .map_err(WorkerImportScriptError::network)?;
     }
-    let timing = crate::context_bootstrap::FetchResourceTiming::for_initiator_type("other");
+    let mut timing = crate::context_bootstrap::FetchResourceTiming::for_initiator_type("other");
+    timing.capture_worker_initiator(scope);
     let (service_worker, cached, updated, can_import_new) = {
         let state = state.borrow();
         (

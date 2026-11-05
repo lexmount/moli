@@ -1396,9 +1396,11 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
             RequestCredentialsMode::SameOrigin
         };
 
+    let origin = worker_global_origin(scope).unwrap_or(moli_url::WebOrigin::Opaque);
     let timing = WorkerResourceTiming::new(
+        scope,
         resolved_url.clone(),
-        worker_global_origin(scope).unwrap_or(moli_url::WebOrigin::Opaque),
+        origin,
         WorkerTimingRequest::Xhr {
             credentials: credentials_mode,
         },

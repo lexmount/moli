@@ -62,8 +62,25 @@ impl FetchResourceTiming {
         let Some(initiator) = crate::script_continuation::resource_initiator(scope) else {
             return;
         };
-        if initiator.origin.is_some()
-            && initiator.origin == host.window_origin_key_for_current_realm(scope)
+        if let Some(crate::script_continuation::ResourceInitiatorOrigin::Window(origin)) =
+            initiator.origin
+            && Some(origin) == host.window_origin_key_for_current_realm(scope)
+        {
+            self.initiator_url = initiator
+                .source_url
+                .map(|url| url.into())
+                .unwrap_or_default();
+        }
+    }
+
+    pub(crate) fn capture_worker_initiator(&mut self, scope: &mut v8::PinScope<'_, '_>) {
+        let Some(initiator) = crate::script_continuation::resource_initiator(scope) else {
+            return;
+        };
+        if initiator
+            .origin
+            .as_ref()
+            .is_some_and(|origin| origin.matches_worker(scope))
         {
             self.initiator_url = initiator
                 .source_url
@@ -182,13 +199,7 @@ impl FetchResourceTiming {
         );
         if readable {
             self.apply_native_body_sizes(&mut entry, head);
-            // TAO alone cannot expose the initiating script, and a locally
-            // fulfilled response does not represent another network download.
-            if head.cache_state == ResponseCacheState::None
-                && !head.preload_state.from_service_worker()
-            {
-                entry.initiator_url.clone_from(&self.initiator_url);
-            }
+            self.apply_initiator_url(&mut entry, head);
         }
         if !readable {
             entry.response_status = 0.0;
@@ -224,8 +235,19 @@ impl FetchResourceTiming {
             entry.response_status = 0.0;
             entry.content_type.clear();
             entry.content_encoding.clear();
+        } else {
+            self.apply_initiator_url(&mut entry, head);
         }
         entry
+    }
+
+    fn apply_initiator_url(&self, entry: &mut ResourcePerformanceEntry, head: &ResponseHead) {
+        // Callers must first establish response readability. TAO alone cannot
+        // expose the initiating script, nor can a cached or SW response.
+        if head.cache_state == ResponseCacheState::None && !head.preload_state.from_service_worker()
+        {
+            entry.initiator_url.clone_from(&self.initiator_url);
+        }
     }
 
     pub(crate) fn aborted_response(

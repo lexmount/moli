@@ -7,7 +7,7 @@ use crate::{
     },
     util::{get_private_value, set_private_value},
 };
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 const BASE_URL_SLOT: &str = "moli.scriptContinuationBaseURL";
 const WINDOW_SLOT: &str = "moli.scriptContinuationWindow";
@@ -20,7 +20,40 @@ const RESOURCE_INITIATOR_STATE_SLOT: &str = "moli.scriptContinuationResourceInit
 #[derive(Clone, Debug)]
 pub(crate) struct ResourceInitiator {
     pub(crate) source_url: Option<url::Url>,
-    pub(crate) origin: Option<WindowOriginKey>,
+    pub(crate) origin: Option<ResourceInitiatorOrigin>,
+}
+
+/// Attribution identifies the originating environment without rooting its
+/// callback graph or granting permission to execute a callback.
+#[derive(Clone, Debug)]
+pub(crate) enum ResourceInitiatorOrigin {
+    Window(WindowOriginKey),
+    Worker {
+        runtime: Weak<crate::common_runtime::CommonRuntimeState>,
+        origin: moli_url::WebOrigin,
+    },
+}
+
+impl ResourceInitiatorOrigin {
+    pub(crate) fn for_worker(scope: &mut v8::PinScope<'_, '_>) -> Option<Self> {
+        let runtime = crate::common_runtime::CommonRuntimeState::from_scope(scope)?;
+        let origin = crate::worker::worker_global_origin(scope)?;
+        Some(Self::Worker {
+            runtime: Rc::downgrade(&runtime),
+            origin,
+        })
+    }
+
+    pub(crate) fn matches_worker(&self, scope: &mut v8::PinScope<'_, '_>) -> bool {
+        let Self::Worker { runtime, origin } = self else {
+            return false;
+        };
+        let Some(current) = crate::common_runtime::CommonRuntimeState::from_scope(scope) else {
+            return false;
+        };
+        runtime.ptr_eq(&Rc::downgrade(&current))
+            && crate::worker::worker_global_origin(scope).as_ref() == Some(origin)
+    }
 }
 
 /// Immutable attribution captured for one callback registration. Its V8

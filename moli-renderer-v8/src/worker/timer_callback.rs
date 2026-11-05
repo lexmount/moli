@@ -23,11 +23,13 @@ enum WorkerTimerCallbackStorage {
     BrowserFunction {
         callback: v8::Global<v8::Function>,
         context: v8::Global<v8::Context>,
+        resource_initiator: Option<crate::script_continuation::CallbackResourceInitiator>,
     },
     WebIdl {
         callback: WebIdlCallbackFunction,
         target_context: v8::Global<v8::Context>,
         kind: WorkerWebIdlCallbackKind,
+        resource_initiator: crate::script_continuation::CallbackResourceInitiator,
     },
 }
 
@@ -51,6 +53,22 @@ impl WorkerTimerCallback {
             storage: WorkerTimerCallbackStorage::BrowserFunction {
                 callback: v8::Global::new(scope, callback),
                 context: v8::Global::new(scope, scope.get_current_context()),
+                resource_initiator: None,
+            },
+        }
+    }
+
+    pub(super) fn string_timer(
+        scope: &mut v8::PinScope<'_, '_>,
+        callback: v8::Local<'_, v8::Function>,
+    ) -> Self {
+        Self {
+            storage: WorkerTimerCallbackStorage::BrowserFunction {
+                callback: v8::Global::new(scope, callback),
+                context: v8::Global::new(scope, scope.get_current_context()),
+                resource_initiator: Some(
+                    crate::script_continuation::CallbackResourceInitiator::capture(scope),
+                ),
             },
         }
     }
@@ -64,6 +82,9 @@ impl WorkerTimerCallback {
                 callback,
                 target_context: v8::Global::new(scope, scope.get_current_context()),
                 kind: WorkerWebIdlCallbackKind::Timer,
+                resource_initiator: crate::script_continuation::CallbackResourceInitiator::capture(
+                    scope,
+                ),
             },
         }
     }
@@ -78,6 +99,9 @@ impl WorkerTimerCallback {
                 callback,
                 target_context: v8::Global::new(scope, scope.get_current_context()),
                 kind: WorkerWebIdlCallbackKind::AnimationFrame { timestamp },
+                resource_initiator: crate::script_continuation::CallbackResourceInitiator::capture(
+                    scope,
+                ),
             },
         }
     }
@@ -102,7 +126,11 @@ impl WorkerTimerCallback {
         extra_args: &[v8::Global<v8::Value>],
     ) -> WorkerTimerCallbackOutcome {
         match &self.storage {
-            WorkerTimerCallbackStorage::BrowserFunction { callback, .. } => {
+            WorkerTimerCallbackStorage::BrowserFunction {
+                callback,
+                resource_initiator,
+                ..
+            } => {
                 let callback = v8::Local::new(scope, callback);
                 let global = scope.get_current_context().global(scope);
                 let arguments: Vec<_> = extra_args
@@ -111,7 +139,18 @@ impl WorkerTimerCallback {
                     .collect();
                 let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
                 let mut scope = try_catch.init();
-                if callback.call(&scope, global.into(), &arguments).is_some() {
+                let anchor = resource_initiator.as_ref().and_then(|registration| {
+                    crate::script_continuation::callback_resource_initiator(
+                        &mut scope,
+                        Some(registration),
+                    )
+                });
+                let result = crate::script_continuation::with_callback_resource_initiator(
+                    &mut scope,
+                    anchor,
+                    |scope| callback.call(scope, global.into(), &arguments),
+                );
+                if result.is_some() {
                     WorkerTimerCallbackOutcome::Returned
                 } else {
                     let exception = scope.exception();
@@ -131,12 +170,14 @@ impl WorkerTimerCallback {
                 callback,
                 target_context,
                 kind,
+                resource_initiator,
             } => {
                 let callback = callback.prepare(scope);
                 let context = v8::Local::new(scope, target_context);
-                let Some(prepared) =
-                    PreparedWebIdlCallbackExecution::worker(scope, callback, context)
-                else {
+                let Some(prepared) = PreparedWebIdlCallbackExecution::worker(
+                    scope, callback, context,
+                )
+                .map(|prepared| prepared.with_resource_initiator(resource_initiator.clone())) else {
                     return WorkerTimerCallbackOutcome::Returned;
                 };
                 let mut arguments = Vec::new();

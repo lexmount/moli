@@ -196,7 +196,7 @@ fn worker_timer_callback_from_arg<'s>(
     Ok(v8::Script::compile(scope, source, None)
         .and_then(|script| crate::script_execution::execute_compiled_script(scope, script))
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-        .map(|callback| WorkerTimerCallback::browser_function(scope, callback)))
+        .map(|callback| WorkerTimerCallback::string_timer(scope, callback)))
 }
 
 pub(super) fn worker_clear_timeout_callback(
