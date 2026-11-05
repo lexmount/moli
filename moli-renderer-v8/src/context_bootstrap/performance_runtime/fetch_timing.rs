@@ -18,6 +18,7 @@ pub(crate) struct FetchResourceTiming {
 
 #[derive(Clone, Debug, Default)]
 struct FetchResourceResponseTiming {
+    aborted: Option<bool>,
     native: Option<moli_fetch::FetchResponseTiming>,
     request_start: Option<f64>,
     body_sizes: Option<moli_fetch::FetchResponseBodySizes>,
@@ -53,6 +54,17 @@ impl FetchResourceTiming {
             response_timing: Default::default(),
             initiator_url,
         }
+    }
+
+    pub(crate) fn clear_initiator(&mut self) {
+        self.initiator_url.clear();
+    }
+
+    pub(crate) fn response_aborted(&self, transfer_complete: bool) {
+        self.response_timing
+            .borrow_mut()
+            .get_or_insert_with(Default::default)
+            .aborted = Some(transfer_complete);
     }
 
     fn now(&self) -> f64 {
