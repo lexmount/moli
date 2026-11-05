@@ -1,28 +1,29 @@
 use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost};
 use super::definition::{CustomElementDefinition, CustomElementStore};
 use super::definition_name_for_handle;
+use std::rc::Rc;
 
 impl CustomElementStore {
-    pub(crate) fn definition_extends_local_name(&self, name: &str) -> Option<&str> {
-        self.definitions
-            .get(name)
-            .and_then(|definition| definition.extends_local_name.as_deref())
+    pub(crate) fn definition_extends_local_name(&self, name: &str) -> Option<Rc<str>> {
+        self.registry
+            .definition(name)
+            .and_then(|definition| definition.extends_local_name.clone())
     }
 
     pub(crate) fn has_autonomous_definition(&self, local_name: &str) -> bool {
-        self.definitions
-            .get(local_name)
+        self.registry
+            .definition(local_name)
             .is_some_and(|definition| definition.extends_local_name.is_none())
     }
 
     pub(super) fn has_definition(&self, name: &str) -> bool {
-        self.definitions.contains_key(name)
+        self.registry.definitions.borrow().contains_key(name)
     }
 
-    pub(super) fn observed_attributes_for_definition(&self, name: &str) -> Option<&[String]> {
-        self.definitions
-            .get(name)
-            .map(|definition| definition.observed_attributes.as_slice())
+    pub(super) fn observed_attributes_for_definition(&self, name: &str) -> Option<Rc<[String]>> {
+        self.registry
+            .definition(name)
+            .map(|definition| definition.observed_attributes.clone())
     }
 
     pub(super) fn observes_attribute_for_handle(
@@ -46,15 +47,15 @@ impl CustomElementStore {
         is_name: Option<&str>,
     ) -> bool {
         let definition = if self.has_autonomous_definition(local_name) {
-            self.definitions.get(local_name)
+            self.registry.definition(local_name)
         } else {
             let is_name = match is_name {
                 Some(is_name) => is_name,
                 None => return false,
             };
             self.definition_extends_local_name(is_name)
-                .filter(|extends_local_name| *extends_local_name == local_name)
-                .and_then(|_| self.definitions.get(is_name))
+                .filter(|extends_local_name| extends_local_name.as_ref() == local_name)
+                .and_then(|_| self.registry.definition(is_name))
         };
         definition.is_some_and(|definition| definition.form_associated)
     }
@@ -66,10 +67,10 @@ impl CustomElementStore {
     ) -> bool {
         self.upgraded_definition_names
             .get(&handle)
-            .and_then(|name| self.definitions.get(name))
+            .and_then(|name| self.registry.definition(name))
             .or_else(|| {
                 definition_name_for_handle(host_ptr, handle)
-                    .and_then(|candidate| self.definitions.get(&candidate))
+                    .and_then(|candidate| self.registry.definition(&candidate))
             })
             .is_some_and(|definition| definition.disables_shadow)
     }
@@ -83,7 +84,7 @@ impl CustomElementStore {
             return false;
         }
         definition_name_for_handle(host_ptr, handle)
-            .and_then(|name| self.definitions.get(&name))
+            .and_then(|name| self.registry.definition(&name))
             .is_some_and(|definition| {
                 definition.extends_local_name.is_none() && !definition.disables_internals
             })
@@ -93,11 +94,11 @@ impl CustomElementStore {
         &self,
         host_ptr: *mut JsContextHost,
         handle: DomHandle,
-    ) -> Option<&CustomElementDefinition> {
+    ) -> Option<Rc<CustomElementDefinition>> {
         let name = self.upgraded_definition_names.get(&handle)?;
-        self.definitions.get(name).or_else(|| {
+        self.registry.definition(name).or_else(|| {
             definition_name_for_handle(host_ptr, handle)
-                .and_then(|candidate| self.definitions.get(&candidate))
+                .and_then(|candidate| self.registry.definition(&candidate))
         })
     }
 }

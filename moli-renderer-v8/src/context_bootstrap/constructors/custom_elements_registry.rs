@@ -430,10 +430,10 @@ pub(in crate::context_bootstrap) fn custom_elements_when_defined_callback<'s>(
     let Some(registry_key) = custom_elements::registry_store_key(scope, args.this()) else {
         return;
     };
-    match unsafe { &mut *host_ptr }
+    let registry = unsafe { &mut *host_ptr }
         .custom_elements_mut_for_registry_key(registry_key)
-        .when_defined(scope, &name)
-    {
+        .registry_data();
+    match registry.when_defined(scope, &name) {
         Some(promise) => rv.set(promise.into()),
         None => rv.set_undefined(),
     }
