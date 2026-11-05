@@ -1536,20 +1536,11 @@ async fn worker_module_redirected_http_dependency_uses_final_response_url_as_bas
 }
 
 #[tokio::test]
-async fn worker_module_redirected_http_dependency_final_url_obeys_script_src() {
+async fn worker_module_redirected_http_dependency_blocked_before_network_by_script_src() {
     ensure_v8();
-    let target_source = "postMessage('unexpected module target');";
-    let target_response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        target_source.len(),
-        target_source
-    );
-    let (target_base_url, target_server) = spawn_raw_path_response_http_server(vec![(
-        "/worker/final/entry.js",
-        target_response,
-        Duration::ZERO,
-    )])
-    .await;
+    let target_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    target_listener.set_nonblocking(true).unwrap();
+    let target_base_url = format!("http://{}", target_listener.local_addr().unwrap());
     let redirect_response = format!(
         "HTTP/1.1 302 Found\r\nLocation: {target_base_url}/worker/final/entry.js\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     );
@@ -1592,9 +1583,11 @@ async fn worker_module_redirected_http_dependency_final_url_obeys_script_src() {
     source_server
         .await
         .expect("worker module CSP redirect source server should finish");
-    target_server
-        .await
-        .expect("worker module CSP redirect target server should finish");
+    handle.terminate_and_join();
+    match target_listener.accept() {
+        Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock),
+        Ok(_) => panic!("CSP-blocked module redirect connected to its target"),
+    }
 }
 
 #[tokio::test]

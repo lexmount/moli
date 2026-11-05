@@ -1308,6 +1308,7 @@ pub(super) struct ChildParserModuleRootFetchCompletion {
     result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
     network_result: Option<SharedNavigationResponseResult>,
     network_attribution: ChildModuleFetchNetworkAttribution,
+    csp_context: Option<crate::content_security_policy::ModuleFetchCspContext>,
 }
 
 impl ChildParserModuleRootFetchCompletion {
@@ -1326,7 +1327,22 @@ impl ChildParserModuleRootFetchCompletion {
             result,
             network_result,
             network_attribution,
+            csp_context: None,
         }
+    }
+
+    pub(super) fn with_csp_context(
+        mut self,
+        context: Option<crate::content_security_policy::ModuleFetchCspContext>,
+    ) -> Self {
+        self.csp_context = context;
+        self
+    }
+
+    pub(super) fn csp_context(
+        &self,
+    ) -> Option<&crate::content_security_policy::ModuleFetchCspContext> {
+        self.csp_context.as_ref()
     }
 
     pub(super) fn target(&self) -> crate::frame_owner_model::ChildDocumentModuleFetchTarget {

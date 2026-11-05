@@ -81,8 +81,9 @@ pub use request::{
     BrowserNavigationRequestKind, BrowserRequestMetadata, CookieHeaderPolicy, FetchPriorityHint,
     Request, RequestAuth, RequestAuthScheme, RequestAuthTarget, RequestCacheMode,
     RequestCredentialsMode, RequestHeaderOverride, RequestMode, RequestPriorityHints,
-    RequestRedirectHandling, RequestRedirectMode, RequestResourceType, ResourceLoadPriority,
-    ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority, SubresourceRequestMetadata,
+    RequestRedirectHandling, RequestRedirectMode, RequestRedirectPolicy, RequestResourceType,
+    ResourceLoadPriority, ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority,
+    SubresourceRequestMetadata,
 };
 pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port};
 pub use response::{

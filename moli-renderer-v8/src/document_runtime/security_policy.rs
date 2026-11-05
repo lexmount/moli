@@ -843,42 +843,77 @@ impl DocumentRuntime {
                 )
             }
         };
-        let resource_kind = crate::content_security_policy::module_csp_resource_kind(
+        document_module_url_policy_violation_from_document_policies(
+            policies,
+            self.document_url(),
+            request_url,
             kind,
-            ContentSecurityPolicyResourceKind::DocumentScriptElement,
+            redirect_status,
+            request,
+            disposition,
+        )
+    }
+
+    pub(crate) fn module_fetch_csp_context(
+        &self,
+        kind: crate::module_runtime::ModuleKind,
+        metadata: &crate::module_runtime::ModuleFetchMetadata,
+    ) -> crate::content_security_policy::ModuleFetchCspContext {
+        self.module_fetch_csp_context_for_document(
+            Some(self.document_handle()),
+            self.document_url(),
+            &self.policy_container,
+            kind,
+            metadata,
+            None,
+        )
+    }
+
+    pub(crate) fn module_fetch_csp_context_for_document(
+        &self,
+        document_handle: Option<DomHandle>,
+        document_url: &Url,
+        container: &DocumentPolicyContainer,
+        kind: crate::module_runtime::ModuleKind,
+        metadata: &crate::module_runtime::ModuleFetchMetadata,
+        owner_scope: Option<crate::native_bridge::OwnerDispatchScope>,
+    ) -> crate::content_security_policy::ModuleFetchCspContext {
+        let enforce = self.document_content_security_policies_for_optional_document(
+            document_handle,
+            &container.response_content_security_policies,
+            &container.content_security_reporting_endpoints,
         );
-        match resource_kind {
-            ContentSecurityPolicyResourceKind::DocumentScriptElement => {
-                document_script_element_url_policy_violation_from_document_policies(
-                    policies,
-                    self.document_url(),
-                    request_url,
-                    redirect_status,
-                    disposition,
-                    request,
+        let report = document_response_content_security_policies(
+            &container.response_content_security_report_only_policies,
+            &container.content_security_reporting_endpoints,
+        );
+        let document_url = document_url.clone();
+        let metadata = metadata.clone();
+        crate::content_security_policy::ModuleFetchCspContext::new(
+            owner_scope,
+            move |url, redirect_status| {
+                let request = ContentSecurityPolicyScriptElementRequest {
+                    nonce: metadata.nonce(),
+                    integrity: metadata.integrity(),
+                    parser_inserted: metadata.parser_inserted,
+                };
+                let check = |policies, disposition| {
+                    document_module_url_policy_violation_from_document_policies(
+                        policies,
+                        &document_url,
+                        url,
+                        kind,
+                        redirect_status,
+                        request,
+                        disposition,
+                    )
+                };
+                (
+                    check(report.clone(), ContentSecurityPolicyDisposition::Report),
+                    check(enforce.clone(), ContentSecurityPolicyDisposition::Enforce),
                 )
-            }
-            ContentSecurityPolicyResourceKind::DocumentStyleElement => {
-                document_style_element_url_policy_violation_from_document_policies(
-                    policies,
-                    self.document_url(),
-                    request_url,
-                    redirect_status,
-                    disposition,
-                    ContentSecurityPolicyStyleElementRequest {
-                        nonce: request.nonce,
-                    },
-                )
-            }
-            _ => document_url_policy_violation_from_document_policies(
-                policies,
-                self.document_url(),
-                request_url,
-                resource_kind,
-                redirect_status,
-                disposition,
-            ),
-        }
+            },
+        )
     }
 
     pub(crate) fn document_subresource_csp_check(
@@ -2021,6 +2056,53 @@ fn document_frame_policy_violation_from_document_policies(
         redirect_status,
         disposition,
     )
+}
+
+fn document_module_url_policy_violation_from_document_policies(
+    policies: Vec<DocumentContentSecurityPolicy>,
+    document_url: &Url,
+    request_url: &Url,
+    kind: crate::module_runtime::ModuleKind,
+    redirect_status: ContentSecurityPolicyRedirectStatus,
+    request: ContentSecurityPolicyScriptElementRequest<'_>,
+    disposition: ContentSecurityPolicyDisposition,
+) -> Option<DocumentContentSecurityPolicyViolation> {
+    let resource_kind = crate::content_security_policy::module_csp_resource_kind(
+        kind,
+        ContentSecurityPolicyResourceKind::DocumentScriptElement,
+    );
+    match resource_kind {
+        ContentSecurityPolicyResourceKind::DocumentScriptElement => {
+            document_script_element_url_policy_violation_from_document_policies(
+                policies,
+                document_url,
+                request_url,
+                redirect_status,
+                disposition,
+                request,
+            )
+        }
+        ContentSecurityPolicyResourceKind::DocumentStyleElement => {
+            document_style_element_url_policy_violation_from_document_policies(
+                policies,
+                document_url,
+                request_url,
+                redirect_status,
+                disposition,
+                ContentSecurityPolicyStyleElementRequest {
+                    nonce: request.nonce,
+                },
+            )
+        }
+        _ => document_url_policy_violation_from_document_policies(
+            policies,
+            document_url,
+            request_url,
+            resource_kind,
+            redirect_status,
+            disposition,
+        ),
+    }
 }
 
 fn document_url_policy_violation_from_document_policies(

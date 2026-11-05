@@ -684,6 +684,28 @@ fn start_worker_module_graph_fetch(
         .with_initiator_url(request.initiator_url())
         .with_request_origin(moli_url::WebOrigin::from_url(request.initiator_url()))
         .with_credentials_mode(request.credentials_mode());
+    let redirect_csp_context = {
+        let enforce = content_security_policies.clone();
+        let report = content_security_report_only_policies.clone();
+        let endpoints = content_security_reporting_endpoints.clone();
+        let initiator = request.initiator_url().clone();
+        crate::content_security_policy::ModuleFetchCspContext::new(
+            None,
+            move |url, redirect_status| {
+                let check = |policies: &[ContentSecurityPolicy], disposition| {
+                    content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
+                    policies, &initiator, url, resource_kind,
+                    redirect_status, disposition, &endpoints,
+                )
+                };
+                (
+                    check(&report, ContentSecurityPolicyDisposition::Report),
+                    check(&enforce, ContentSecurityPolicyDisposition::Enforce),
+                )
+            },
+        )
+    };
+    fetch_request = redirect_csp_context.apply(fetch_request);
     let requested_url = request.url().clone();
     let request_initiator_url = request.initiator_url().clone();
     let requested_module_type = request.module_type();
@@ -698,12 +720,14 @@ fn start_worker_module_graph_fetch(
     let response_started_at = Instant::now();
     let send_completion = move |result: Result<moli_fetch::Response, anyhow::Error>| {
         let mut csp_violation = None;
+        let had_initial_report = initial_csp_report_only_violation.is_some();
         let mut csp_report_only_violation = initial_csp_report_only_violation;
         let result = result
             .map_err(|error| {
                 format!("failed to fetch module worker dependency `{requested_url}`: {error}")
             })
             .and_then(|response| {
+                redirect_csp_context.check_response(&response).map_err(|error| error.to_string())?;
                 moli_fetch::ensure_http_status_success(
                     response.final_url.as_str(),
                     response.status,
@@ -774,7 +798,16 @@ fn start_worker_module_graph_fetch(
                     .with_resource(resource)
                     .with_response_referrer_policy(response_referrer_policy))
             });
+        let redirect_violations = redirect_csp_context.take_violations();
         let mut completion = WorkerModuleGraphFetchCompletion::new(fetch_id, result);
+        if !had_initial_report
+            && csp_report_only_violation
+                .as_ref()
+                .is_some_and(|v| redirect_violations.contains(v))
+        {
+            csp_report_only_violation = None;
+        }
+        completion = completion.with_redirect_csp_violations(redirect_violations);
         if let Some(violation) = csp_report_only_violation {
             completion = completion.with_csp_report_only_violation(violation);
         }
@@ -3136,11 +3169,7 @@ async fn worker_main(
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 let global = ctx.global(scope);
                 if worker_dynamic_module_import_waits_for_fetch(scope, completion.fetch_id()) {
-                    if let Some(violation) = completion.csp_report_only_violation() {
-                        let loader = state.borrow().loader.clone();
-                        dispatch_worker_csp_violation_event(scope, &loader, violation);
-                    }
-                    if let Some(violation) = completion.csp_violation() {
+                    for violation in completion.csp_violations() {
                         let loader = state.borrow().loader.clone();
                         dispatch_worker_csp_violation_event(scope, &loader, violation);
                     }
@@ -3153,11 +3182,7 @@ async fn worker_main(
                         drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
                     }
                 } else if pending_module_bootstrap.is_some() {
-                    if let Some(violation) = completion.csp_report_only_violation() {
-                        let loader = state.borrow().loader.clone();
-                        dispatch_worker_csp_violation_event(scope, &loader, violation);
-                    }
-                    if let Some(violation) = completion.csp_violation() {
+                    for violation in completion.csp_violations() {
                         let loader = state.borrow().loader.clone();
                         dispatch_worker_csp_violation_event(scope, &loader, violation);
                     }

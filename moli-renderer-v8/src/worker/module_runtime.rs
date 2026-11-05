@@ -62,6 +62,7 @@ pub(super) struct WorkerModuleGraphFetchCompletion {
     result: Result<WorkerModuleFetchedSource, String>,
     csp_violation: Option<ContentSecurityPolicyUrlViolation>,
     csp_report_only_violation: Option<ContentSecurityPolicyUrlViolation>,
+    redirect_csp_violations: Vec<ContentSecurityPolicyUrlViolation>,
 }
 
 pub(super) struct WorkerModuleFetchedSource {
@@ -200,6 +201,7 @@ impl WorkerModuleGraphFetchCompletion {
             result,
             csp_violation: None,
             csp_report_only_violation: None,
+            redirect_csp_violations: Vec::new(),
         }
     }
 
@@ -223,12 +225,21 @@ impl WorkerModuleGraphFetchCompletion {
         self.fetch_id
     }
 
-    pub(super) fn csp_violation(&self) -> Option<&ContentSecurityPolicyUrlViolation> {
-        self.csp_violation.as_ref()
+    pub(super) fn with_redirect_csp_violations(
+        mut self,
+        violations: Vec<ContentSecurityPolicyUrlViolation>,
+    ) -> Self {
+        self.redirect_csp_violations = violations;
+        self
     }
 
-    pub(super) fn csp_report_only_violation(&self) -> Option<&ContentSecurityPolicyUrlViolation> {
-        self.csp_report_only_violation.as_ref()
+    pub(super) fn csp_violations(
+        &self,
+    ) -> impl Iterator<Item = &ContentSecurityPolicyUrlViolation> {
+        self.csp_report_only_violation
+            .iter()
+            .chain(self.redirect_csp_violations.iter())
+            .chain(self.csp_violation.iter())
     }
 
     pub(super) fn result(&self) -> Result<&WorkerModuleFetchedSource, &str> {

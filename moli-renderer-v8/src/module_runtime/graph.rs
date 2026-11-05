@@ -97,6 +97,7 @@ pub(crate) struct NativeModuleGraphFetchRequest {
     tree_graph_level: Option<module_tree::ModuleGraphLevel>,
     module_key: Option<ModuleMapKey>,
     dependency: Option<NativeModuleGraphDependencyRequest>,
+    csp_context: Option<crate::content_security_policy::ModuleFetchCspContext>,
 }
 
 pub(crate) struct ModuleScriptGraphFetchContinuation {
@@ -226,6 +227,7 @@ impl NativeModuleGraphFetchRequest {
             tree_graph_level: None,
             module_key: None,
             dependency: None,
+            csp_context: None,
         }
     }
 
@@ -252,6 +254,20 @@ impl NativeModuleGraphFetchRequest {
 
     pub(crate) fn kind(&self) -> ModuleKind {
         self.kind
+    }
+
+    pub(crate) fn with_csp_context(
+        mut self,
+        context: Option<crate::content_security_policy::ModuleFetchCspContext>,
+    ) -> Self {
+        self.csp_context = context;
+        self
+    }
+
+    pub(crate) fn csp_context(
+        &self,
+    ) -> Option<&crate::content_security_policy::ModuleFetchCspContext> {
+        self.csp_context.as_ref()
     }
 
     pub(crate) fn pending_fetch_key(&self) -> Option<&ModuleMapKey> {
@@ -360,7 +376,7 @@ impl NativeModuleGraphFetchRequest {
             .with_request_origin(request_origin.clone())
             .with_credentials_mode(self.fetch_metadata.credentials_mode)
             .with_script_fetch_metadata(self.fetch_metadata.request_metadata.clone());
-        Ok(match self.kind {
+        let request = match self.kind {
             ModuleKind::Css => request
                 .with_resource_type(RequestResourceType::CssStyleSheet)
                 .with_browser_request_metadata(BrowserRequestMetadata::StyleModule),
@@ -373,6 +389,13 @@ impl NativeModuleGraphFetchRequest {
             ModuleKind::JavaScript | ModuleKind::WebAssembly => {
                 request.with_browser_request_metadata(BrowserRequestMetadata::Script)
             }
+        };
+        Ok(match &self.csp_context {
+            Some(context) => {
+                context.check_initial_request(&request.url)?;
+                context.apply(request)
+            }
+            None => request,
         })
     }
 
@@ -441,6 +464,7 @@ impl NativeModuleGraphFetchRequest {
         let request = self.request(&request_origin)?;
         let request_mode = request.request_mode;
         let credentials_mode = request.credentials_mode;
+        let csp_context = self.csp_context.clone();
         let completion = move |response: anyhow::Result<moli_fetch::Response>| {
             let mut network_result: Option<SharedNavigationResponseResult> = None;
             let result = response
@@ -453,6 +477,9 @@ impl NativeModuleGraphFetchRequest {
                     .to_owned()
                 })
                 .and_then(|response| {
+                    if let Some(context) = &csp_context {
+                        context.check_response(&response).map_err(|error| error.to_string())?;
+                    }
                     let response = NavigationResponse::from(response);
                     network_result = Some(std::sync::Arc::new(Ok(response.clone())));
                     if !(200..=299).contains(&response.status) {
@@ -954,6 +981,8 @@ impl NativeModuleGraphJob {
                         key.clone(),
                         fetch.dependency().cloned(),
                     );
+                    let context = owner.module_fetch_csp_context(&key, &request.fetch_metadata);
+                    let request = request.with_csp_context(context);
                     owner.dispatch_module_fetch_csp_report_only_violation(
                         &key,
                         &request.fetch_metadata,
@@ -3146,6 +3175,7 @@ import "./c.mjs";
             tree_graph_level: None,
             module_key: None,
             dependency: None,
+            csp_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3187,6 +3217,7 @@ import "./c.mjs";
             tree_graph_level: None,
             module_key: None,
             dependency: None,
+            csp_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3236,6 +3267,7 @@ import "./c.mjs";
             tree_graph_level: None,
             module_key: None,
             dependency: None,
+            csp_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3272,6 +3304,7 @@ import "./c.mjs";
             tree_graph_level: None,
             module_key: None,
             dependency: None,
+            csp_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3327,6 +3360,7 @@ import "./c.mjs";
             tree_graph_level: None,
             module_key: None,
             dependency: None,
+            csp_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3374,6 +3408,7 @@ import "./c.mjs";
             tree_graph_level: None,
             module_key: None,
             dependency: None,
+            csp_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3410,6 +3445,7 @@ import "./c.mjs";
             tree_graph_level: None,
             module_key: None,
             dependency: None,
+            csp_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -3439,6 +3475,7 @@ import "./c.mjs";
             tree_graph_level: None,
             module_key: None,
             dependency: None,
+            csp_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",
@@ -4181,6 +4218,7 @@ import "./c.mjs";
             tree_graph_level: None,
             module_key: None,
             dependency: None,
+            csp_context: None,
         };
         let (tx, rx) = oneshot::channel();
         let registry = ResourceLoadRegistry::new(
@@ -4251,6 +4289,7 @@ import "./c.mjs";
             tree_graph_level: None,
             module_key: None,
             dependency: None,
+            csp_context: None,
         }
         .request(&moli_url::WebOrigin::from_url(&url(
             "https://app.example.test/page",

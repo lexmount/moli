@@ -1,6 +1,8 @@
 //! Connect the standalone CSP engine to V8 events and the renderer loader.
 
 pub(crate) use moli_csp::*;
+mod module_fetch;
+pub(crate) use module_fetch::ModuleFetchCspContext;
 
 use crate::context_bootstrap::{initialize_event_object, mark_event_trusted};
 use crate::network::ResourceRequestClient;

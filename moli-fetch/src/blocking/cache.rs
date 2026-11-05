@@ -175,6 +175,7 @@ pub(crate) fn next_followed_redirect_url_from_parts(
     {
         ensure_http_network_transport_url(next_url)?;
         request.validate_request_mode_for_url(next_url)?;
+        request.check_redirect_policy(next_url)?;
     }
     Ok(next_url)
 }

@@ -68,6 +68,27 @@ pub struct Request {
     timeout_policy: RequestTimeoutPolicy,
     network_observation_recorder: Option<NetworkObservationRecorder>,
     browser_identity: Option<std::sync::Arc<moli_browser_profile::BrowserIdentityProfile>>,
+    redirect_policy: Option<RequestRedirectPolicy>,
+}
+
+/// Request-owned admission check, run before following each redirect target.
+/// The callback runs on the Fetch thread and must not enter the renderer VM.
+/// Its second argument is the target's one-based redirect ordinal. A target
+/// can be checked again before dispatch, so reporting should deduplicate by hop.
+#[derive(Clone)]
+pub struct RequestRedirectPolicy(std::sync::Arc<dyn Fn(&Url, usize) -> Result<()> + Send + Sync>);
+
+impl std::fmt::Debug for RequestRedirectPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequestRedirectPolicy")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RequestRedirectPolicy {
+    pub fn new(check: impl Fn(&Url, usize) -> Result<()> + Send + Sync + 'static) -> Self {
+        Self(std::sync::Arc::new(check))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -591,6 +612,7 @@ impl Request {
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
             browser_identity: None,
+            redirect_policy: None,
         })
     }
 
@@ -626,6 +648,7 @@ impl Request {
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
             browser_identity: None,
+            redirect_policy: None,
         }
     }
 
@@ -694,6 +717,7 @@ impl Request {
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
             browser_identity: None,
+            redirect_policy: None,
         }
     }
 
@@ -1126,9 +1150,22 @@ impl Request {
     /// Follows an authorized redirect without rebuilding the Fetch request.
     pub fn follow_redirect(&mut self, redirect: RedirectInfo) -> Result<()> {
         self.validate_request_mode_for_url(&redirect.to_url)?;
+        self.check_redirect_policy(&redirect.to_url)?;
         self.apply_redirect_status(redirect.status);
         self.url = redirect.to_url.clone();
         self.record_redirect(redirect);
+        Ok(())
+    }
+
+    pub fn with_redirect_policy(mut self, policy: RequestRedirectPolicy) -> Self {
+        self.redirect_policy = Some(policy);
+        self
+    }
+
+    pub(crate) fn check_redirect_policy(&self, url: &Url) -> Result<()> {
+        if let Some(policy) = &self.redirect_policy {
+            (policy.0)(url, self.redirect_chain.len() + 1)?;
+        }
         Ok(())
     }
 
@@ -1142,6 +1179,15 @@ impl Request {
 
     /// Checks mode restrictions before using a cache entry or starting a hop.
     pub fn validate_request_mode_for_url(&self, request_url: &Url) -> Result<()> {
+        // Recheck the effective URL before dispatch/cache lookup, including
+        // internal HTTPS upgrades. The hop ordinal lets report producers avoid
+        // duplicating the earlier redirect-target check.
+        if let Some(current) = self.redirect_chain.last()
+            && &current.to_url == request_url
+            && let Some(policy) = &self.redirect_policy
+        {
+            (policy.0)(request_url, self.redirect_chain.len())?;
+        }
         if self.request_mode != RequestMode::SameOrigin || request_url.scheme() == "data" {
             return Ok(());
         }

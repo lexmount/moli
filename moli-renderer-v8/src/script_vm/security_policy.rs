@@ -19,6 +19,39 @@ pub(super) enum ContentSecurityPolicyViolationBodyExecution {
 }
 
 impl ScriptVm {
+    pub(crate) fn module_fetch_csp_context_for_child_owner(
+        &self,
+        owner: crate::frame_owner_model::FrameDocumentOwner,
+        realm: crate::frame_owner_model::FrameRealmId,
+        kind: crate::module_runtime::ModuleKind,
+        metadata: &crate::module_runtime::ModuleFetchMetadata,
+    ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
+        let host = self._context_host.borrow();
+        let task_owner = host.current_child_module_route_task_owner(owner, realm)?;
+        let target = host.current_child_module_fetch_target_for_realm(task_owner, realm)?;
+        host.module_fetch_csp_context_for_owner(
+            crate::native_bridge::OwnerDispatchScope::Child(target.child_handle()),
+            kind,
+            metadata,
+        )
+    }
+
+    pub(in crate::script_vm) fn dispatch_captured_module_csp_violation(
+        &mut self,
+        owner: crate::native_bridge::OwnerDispatchScope,
+        violation: &DocumentContentSecurityPolicyViolation,
+    ) {
+        let result = self.with_default_context_scope(|scope, host_ptr| {
+            unsafe { &mut *host_ptr }
+                .dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                    scope, host_ptr, owner, violation,
+                );
+            Ok(())
+        });
+        if let Err(error) = result {
+            self.record_runtime_warning(format_args!("module CSP report dispatch failed: {error}"));
+        }
+    }
     pub(crate) fn queue_content_security_policy_violation_event_best_effort(
         &mut self,
         violation: &DocumentContentSecurityPolicyViolation,

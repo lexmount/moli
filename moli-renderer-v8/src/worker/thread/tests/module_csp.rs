@@ -1,5 +1,183 @@
 use super::*;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::task::JoinSet;
+
+struct RedirectServers {
+    origin: String,
+    origin_hits: Arc<AtomicUsize>,
+    cross_hits: Arc<AtomicUsize>,
+    _tasks: JoinSet<()>,
+}
+
+impl RedirectServers {
+    async fn spawn(module_type: &str, roundtrip: bool) -> Self {
+        let a = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let b = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", a.local_addr().unwrap());
+        let cross = format!("http://{}", b.local_addr().unwrap());
+        let origin_hits = Arc::new(AtomicUsize::new(0));
+        let cross_hits = Arc::new(AtomicUsize::new(0));
+        let mut tasks = JoinSet::new();
+        for (listener, hits) in [(a, origin_hits.clone()), (b, cross_hits.clone())] {
+            let origin = origin.clone();
+            let cross = cross.clone();
+            let module_type = module_type.to_owned();
+            tasks.spawn(async move {
+                loop {
+                    let Ok((mut stream, _)) = listener.accept().await else { break; };
+                    let request = read_http_request_head(&mut stream).await.unwrap();
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    let path = request.split_whitespace().nth(1).unwrap();
+                    let request_origin = request.lines().filter_map(|line| line.split_once(':'))
+                        .find(|(key, _)| key.eq_ignore_ascii_case("origin")).map(|(_, value)| value.trim()).unwrap_or("*");
+                    let (mime, body) = match module_type.as_str() {
+                        "text" | "json" => ("application/json", b"\"ok\"".as_slice()),
+                        "wasm" => ("application/wasm", b"\0asm\x01\0\0\0".as_slice()),
+                        _ => ("text/javascript", b"export default 'ok';".as_slice()),
+                    };
+                    let response = if path == "/start" || (path == "/middle" && roundtrip) {
+                        let target = if path == "/start" { format!("{cross}/middle") } else { format!("{origin}/final") };
+                        format!("HTTP/1.1 302 Found\r\nLocation: {target}\r\nAccess-Control-Allow-Origin: {request_origin}\r\nAccess-Control-Allow-Credentials: true\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    } else {
+                        format!("HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nAccess-Control-Allow-Origin: {request_origin}\r\nAccess-Control-Allow-Credentials: true\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len())
+                    };
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                    if path != "/start" && !(path == "/middle" && roundtrip) {
+                        stream.write_all(body).await.unwrap();
+                    }
+                }
+            });
+        }
+        Self {
+            origin,
+            origin_hits,
+            cross_hits,
+            _tasks: tasks,
+        }
+    }
+}
+
+#[tokio::test]
+async fn worker_module_csp_redirects_block_network_hops_and_report_intermediate_urls() {
+    ensure_v8();
+    for module_type in ["text", "json", "javascript", "wasm"] {
+        for static_import in [false, true] {
+            for report_only in [false, true] {
+                // Static graphs use the outside enforced policy, as before.
+                if static_import && report_only {
+                    continue;
+                }
+                for roundtrip in [false, true] {
+                    let servers = RedirectServers::spawn(module_type, roundtrip).await;
+                    let attributes = if matches!(module_type, "text" | "json") {
+                        format!("with {{type:'{module_type}'}}")
+                    } else {
+                        String::new()
+                    };
+                    let source = if static_import {
+                        format!(
+                            "import * as module from './start' {attributes}; postMessage('loaded'); close();"
+                        )
+                    } else {
+                        let options = if attributes.is_empty() {
+                            "{}".to_owned()
+                        } else {
+                            format!("{{with:{{type:'{module_type}'}}}}")
+                        };
+                        format!(
+                            r#"
+                          const events = [];
+                          addEventListener('securitypolicyviolation', e => events.push([e.effectiveDirective, e.disposition, e.blockedURI]));
+                          try {{ await import('./start', {options}); postMessage({{status:'loaded', events}}); }}
+                          catch (error) {{ postMessage({{status:error.name, events}}); }}
+                          close();
+                        "#
+                        )
+                    };
+                    let restrictive = "connect-src 'self'; worker-src 'self'; script-src 'self' 'wasm-unsafe-eval'";
+                    let permissive = "connect-src *; worker-src *; script-src * 'wasm-unsafe-eval'";
+                    let mut options =
+                        WorkerSpawnOptions::new(source, format!("{}/root.js", servers.origin))
+                            .with_request_client(
+                                ResourceRequestClient::new(&FetchConfig::default()).unwrap(),
+                            )
+                            .with_script_kind(WorkerScriptKind::Module)
+                            .with_module_static_import_initiator_url(
+                                url::Url::parse(&format!("{}/page.html", servers.origin)).unwrap(),
+                            )
+                            .with_module_static_import_content_security_policies(vec![
+                                restrictive.into(),
+                            ])
+                            .with_content_security_policies(vec![
+                                if static_import || report_only {
+                                    permissive
+                                } else {
+                                    restrictive
+                                }
+                                .into(),
+                            ]);
+                    if report_only {
+                        options = options
+                            .with_content_security_report_only_policies(vec![restrictive.into()]);
+                    }
+                    let mut worker = spawn_test_worker_with_options(options);
+                    let result = timeout(TIMEOUT, worker.recv()).await.unwrap().unwrap();
+                    if static_import {
+                        match result {
+                            WorkerToParentMessage::Error { message, .. } => assert!(
+                                message.contains("Content Security Policy"),
+                                "{module_type}: {message}"
+                            ),
+                            other => panic!(
+                                "static {module_type}: expected blocked redirect, got {other:?}"
+                            ),
+                        }
+                    } else {
+                        let result: serde_json::Value =
+                            serde_json::from_str(&expect_post_json(result)).unwrap();
+                        assert_eq!(
+                            result["status"],
+                            if report_only { "loaded" } else { "TypeError" },
+                            "{module_type}, roundtrip={roundtrip}: {result}"
+                        );
+                        assert_eq!(result["events"].as_array().unwrap().len(), 1, "{result}");
+                        assert_eq!(
+                            result["events"][0][0],
+                            if matches!(module_type, "text" | "json") {
+                                "connect-src"
+                            } else {
+                                "script-src-elem"
+                            }
+                        );
+                        assert_eq!(
+                            result["events"][0][1],
+                            if report_only { "report" } else { "enforce" }
+                        );
+                        assert!(
+                            result["events"][0][2]
+                                .as_str()
+                                .unwrap()
+                                .ends_with("/middle"),
+                            "{result}"
+                        );
+                    }
+                    assert_eq!(
+                        servers.cross_hits.load(Ordering::SeqCst),
+                        usize::from(report_only),
+                        "{module_type}: blocked host was contacted"
+                    );
+                    assert_eq!(
+                        servers.origin_hits.load(Ordering::SeqCst),
+                        if roundtrip && report_only { 2 } else { 1 }
+                    );
+                    worker.terminate_and_join();
+                }
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn worker_synthetic_module_dynamic_imports_use_connect_csp() {
     ensure_v8();
