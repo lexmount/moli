@@ -388,18 +388,10 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
             ));
             return FrameDocumentModuleTerminalQueueFollowup::terminal_warning_recorded();
         };
-        if result.is_err() {
-            self.vm
-                .dispatch_module_fetch_redirect_csp_violations(request.csp_context());
-        }
+        self.vm
+            .dispatch_module_fetch_redirect_csp_violations(request.csp_context());
         let source = match result {
-            Ok(fetched_source) => self.vm.module_graph_fetched_source_or_csp_error(
-                load_id,
-                fetched_source,
-                request.module_key().kind(),
-                request.fetch_metadata(),
-                request.csp_context(),
-            ),
+            Ok(fetched_source) => Ok(fetched_source),
             Err(error) => Err(ModuleLoadError::new(
                 ModuleLoadStage::Fetch,
                 format!("child modulepreload fetch completion {load_id} failed: {error}"),

@@ -42,10 +42,6 @@ impl ModuleGraphFetchedSource {
         &self.final_url
     }
 
-    pub(crate) fn redirected(&self) -> bool {
-        self.redirected
-    }
-
     pub(crate) fn response_referrer_policy(&self) -> Option<&str> {
         self.response_referrer_policy.as_deref()
     }

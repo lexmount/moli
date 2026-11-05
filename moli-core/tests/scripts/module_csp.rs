@@ -1,5 +1,88 @@
 use super::*;
 
+#[tokio::test(flavor = "multi_thread")]
+async fn module_csp_redirect_completion_uses_admitted_snapshot_after_meta_policy_change()
+-> Result<()> {
+    let origin = TcpListener::bind("127.0.0.1:0").await?;
+    let target = TcpListener::bind("127.0.0.1:0").await?;
+    let origin_url = format!("http://{}", origin.local_addr()?);
+    let target_url = format!("http://{}/final.txt", target.local_addr()?);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let origin_requests = Arc::clone(&requests);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let mut servers = JoinSet::new();
+    servers.spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = origin.accept().await else { break };
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") { head.push(stream.read_u8().await?); }
+            let head = String::from_utf8(head)?;
+            let path = head.split_whitespace().nth(1).unwrap();
+            origin_requests.lock().push(path.to_owned());
+            let (status, headers, body) = match path {
+                "/page.html" => ("200 OK", "Content-Type: text/html\r\n".to_owned(), "<!doctype html><head></head><body>snapshot"),
+                "/before.txt" => ("302 Found", format!("Location: {target_url}\r\n"), ""),
+                _ => ("200 OK", "Content-Type: text/plain\r\n".to_owned(), "must not be fetched"),
+            };
+            stream.write_all(format!("HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
+        }
+        anyhow::Ok(())
+    });
+    servers.spawn(async move {
+        let (mut stream, _) = target.accept().await?;
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") { head.push(stream.read_u8().await?); }
+        started_tx.send(()).unwrap();
+        release_rx.await?;
+        let body = "admitted snapshot";
+        stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
+        anyhow::Ok(())
+    });
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser.fetch(&format!("{origin_url}/page.html")).await?;
+    page.evaluate_runtime_expression_async(
+        r#"
+      globalThis.moduleViolations = [];
+      addEventListener('securitypolicyviolation', event => moduleViolations.push(event.blockedURI));
+      globalThis.admittedImport = import('/before.txt', {with:{type:'text'}})
+        .then(module => module.default, error => 'error: ' + error.message);
+      'started';
+    "#,
+    )
+    .await?;
+    tokio::time::timeout(Duration::from_secs(15), started_rx).await??;
+    page.evaluate_runtime_expression_async(
+        r#"
+      const meta = document.createElement('meta');
+      meta.httpEquiv = 'Content-Security-Policy'; meta.content = "connect-src 'none'";
+      document.head.append(meta); 'policy installed';
+    "#,
+    )
+    .await?;
+    release_tx.send(()).unwrap();
+    let admitted = tokio::time::timeout(
+        Duration::from_secs(15),
+        page.evaluate_runtime_expression_with_await_async("admittedImport", true),
+    )
+    .await??;
+    assert_eq!(admitted["value"], "admitted snapshot", "{admitted}");
+    let rejected = page
+        .evaluate_runtime_expression_with_await_async(
+            r#"
+      import('/after.txt', {with:{type:'text'}}).then(() => 'loaded', error => error.name)
+    "#,
+            true,
+        )
+        .await?;
+    assert_eq!(rejected["value"], "TypeError", "{rejected}");
+    assert_eq!(*requests.lock(), ["/page.html", "/before.txt"]);
+    while let Some(task) = servers.try_join_next() {
+        task??;
+    }
+    Ok(())
+}
+
 pub(super) fn fixture_response(
     path: &str,
     query: &str,

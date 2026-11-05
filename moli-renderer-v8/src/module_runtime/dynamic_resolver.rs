@@ -526,14 +526,6 @@ impl DynamicModuleInflightFetch {
         self.request.tree_client()
     }
 
-    pub(crate) fn fetch_metadata(&self) -> &super::ModuleFetchMetadata {
-        self.request.fetch_metadata()
-    }
-
-    pub(crate) fn kind(&self) -> super::ModuleKind {
-        self.request.kind()
-    }
-
     pub(crate) fn csp_context(
         &self,
     ) -> Option<&crate::content_security_policy::ModuleFetchCspContext> {

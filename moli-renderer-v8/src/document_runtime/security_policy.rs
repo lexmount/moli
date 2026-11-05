@@ -827,25 +827,6 @@ impl DocumentRuntime {
         request: ContentSecurityPolicyScriptElementRequest<'_>,
         disposition: ContentSecurityPolicyDisposition,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
-        self.module_request_csp_violation_for_checked_url(
-            request_url,
-            request_url,
-            kind,
-            redirect_status,
-            request,
-            disposition,
-        )
-    }
-
-    pub(crate) fn module_request_csp_violation_for_checked_url(
-        &self,
-        checked_url: &Url,
-        original_url: &Url,
-        kind: crate::module_runtime::ModuleKind,
-        redirect_status: ContentSecurityPolicyRedirectStatus,
-        request: ContentSecurityPolicyScriptElementRequest<'_>,
-        disposition: ContentSecurityPolicyDisposition,
-    ) -> Option<DocumentContentSecurityPolicyViolation> {
         let policies = match disposition {
             ContentSecurityPolicyDisposition::Enforce => self
                 .document_content_security_policies_for_optional_document(
@@ -865,8 +846,8 @@ impl DocumentRuntime {
         document_module_url_policy_violation_from_document_policies(
             policies,
             self.document_url(),
-            checked_url,
-            original_url,
+            request_url,
+            request_url,
             kind,
             redirect_status,
             request,
