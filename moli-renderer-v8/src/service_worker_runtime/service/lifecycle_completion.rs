@@ -10,19 +10,22 @@ impl ServiceWorkerRuntimeService {
         let (
             next_progress,
             activated_pending_fetch_events,
-            failed_replaced_pending_events,
-            failed_replaced_fetch_completions,
+            activated_pending_events,
+            activated_registration_id,
         ) = {
             let mut state = self.inner.state.lock();
             let Some(version) = state.versions.get_mut(&version_id) else {
                 return;
             };
-            if version.run != run {
+            if version.run != run
+                || (completion.kind == ServiceWorkerLifecycleEventKind::Activate
+                    && version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activating)
+            {
                 return;
             }
             let mut activated_pending_fetch_events = Vec::new();
-            let mut failed_replaced_pending_events = Vec::new();
-            let mut failed_replaced_fetch_completions = Vec::new();
+            let mut activated_pending_events = Vec::new();
+            let mut activated_registration_id = None;
             version.in_flight_event_count = version.in_flight_event_count.saturating_sub(1);
             let mut progress = match completion.kind {
                 ServiceWorkerLifecycleEventKind::Install => {
@@ -231,198 +234,29 @@ impl ServiceWorkerRuntimeService {
                     version.lifecycle_state = ServiceWorkerVersionLifecycleState::Activated;
                     activated_pending_fetch_events =
                         version.pending_activation_fetch_events.drain(..).collect();
-                    let should_claim_clients = version.clients_claim_requested;
+                    activated_pending_events = version.pending_start_events.drain(..).collect();
                     let registration_id = version.registration_id;
+                    activated_registration_id = Some(registration_id);
                     state.record_target_version_updated(version_id);
-                    let Some(registration) = state.registrations.get_mut(&registration_id) else {
-                        return;
-                    };
-                    let previous_active_version_id = registration.active_version_id;
-                    if registration.installing_version_id == Some(version_id) {
-                        registration.installing_version_id = None;
-                    }
-                    if registration.waiting_version_id == Some(version_id) {
-                        registration.waiting_version_id = None;
-                    }
-                    registration.active_version_id = Some(version_id);
-                    let _ = registration;
                     let _ = self.store_registration_resources_locked(
                         &state,
                         registration_id,
                         version_id,
                     );
-                    let mut progress = Vec::new();
-                    let mut previous_target_cleanup = None;
-                    if let Some(previous_active_version_id) = previous_active_version_id
-                        && previous_active_version_id != version_id
-                        && let Some(previous_version) =
-                            state.versions.get_mut(&previous_active_version_id)
-                    {
-                        previous_version.lifecycle_state =
-                            ServiceWorkerVersionLifecycleState::Redundant;
-                        previous_version.skip_waiting_requested = false;
-                        let previous_owner = previous_version.run_owner();
-                        failed_replaced_pending_events =
-                            previous_version.pending_start_events.drain(..).collect();
-                        let failed_replaced_activation_fetch_events = previous_version
-                            .pending_activation_fetch_events
-                            .drain(..)
-                            .collect::<Vec<_>>();
-                        let previous_host = previous_version.running_state.take_host_for_shutdown();
-                        let previous_host_run =
-                            previous_host.as_ref().map(|host| host.run_identity());
-                        if let Some(host) = previous_host {
-                            progress.push(LifecycleProgress::TerminateHost(host));
-                        }
-                        previous_target_cleanup =
-                            Some((previous_active_version_id, previous_host_run));
-                        let pending_start_fetch_event_ids = failed_replaced_pending_events
-                            .iter()
-                            .filter_map(|event| match event {
-                                ServiceWorkerPendingStartEvent::Fetch(event) => {
-                                    Some(event.event_id)
-                                }
-                                _ => None,
-                            })
-                            .collect::<HashSet<_>>();
-                        let pending_activation_fetch_event_ids =
-                            failed_replaced_activation_fetch_events
-                                .iter()
-                                .map(|event| event.event_id)
-                                .collect::<HashSet<_>>();
-                        failed_replaced_fetch_completions = state
-                            .pending_fetch_jobs
-                            .iter()
-                            .filter(|(event_id, job)| {
-                                job.is_bound_to_owner(&previous_owner)
-                                    && !pending_start_fetch_event_ids.contains(event_id)
-                                    && !pending_activation_fetch_event_ids.contains(event_id)
-                            })
-                            .map(|(event_id, job)| ServiceWorkerFetchCompletion {
-                                event_id: *event_id,
-                                owner: ServiceWorkerRunOwner::new(
-                                    job.version_id(),
-                                    job.run_identity().clone(),
-                                ),
-                                result: ServiceWorkerFetchResult::Failure(
-                                    "service worker was replaced by a newer active worker"
-                                        .to_owned(),
-                                ),
-                            })
-                            .collect();
-                        failed_replaced_fetch_completions.extend(
-                            failed_replaced_activation_fetch_events
-                                .into_iter()
-                                .map(|event| ServiceWorkerFetchCompletion {
-                                    event_id: event.event_id,
-                                    owner: event.owner,
-                                    result: ServiceWorkerFetchResult::Failure(
-                                        "service worker was replaced by a newer active worker"
-                                            .to_owned(),
-                                    ),
-                                }),
-                        );
-                    }
-                    if let Some((previous_active_version_id, previous_run)) =
-                        previous_target_cleanup
-                    {
-                        if let Some(run) = previous_run {
-                            state.record_target_stopped(
-                                previous_active_version_id,
-                                run,
-                                "replaced_by_newer_active_worker",
-                            );
-                        }
-                        state.record_target_destroyed(previous_active_version_id);
-                    }
-                    let mut lifecycle_events =
+                    let mut progress = lifecycle_notifications_for_registration_locked(
+                        &state,
+                        registration_id,
                         vec![ServiceWorkerLifecycleClientEvent::WorkerStateChanged {
                             version_id,
                             state: "activated",
-                        }];
-                    if let Some(previous_active_version_id) = previous_active_version_id
-                        && previous_active_version_id != version_id
-                    {
-                        lifecycle_events.push(
-                            ServiceWorkerLifecycleClientEvent::WorkerStateChanged {
-                                version_id: previous_active_version_id,
-                                state: "redundant",
-                            },
-                        );
-                    }
-                    if previous_active_version_id
-                        .is_some_and(|previous_version_id| previous_version_id != version_id)
-                    {
-                        progress.extend(
-                            controller_change_deliveries_for_controlled_clients_locked(
-                                &state,
-                                registration_id,
-                            )
-                            .into_iter()
-                            .map(LifecycleProgress::NotifyControllerChange),
-                        );
-                    }
-                    progress.extend(
-                        lifecycle_notifications_for_registration_locked(
-                            &state,
-                            registration_id,
-                            lifecycle_events,
-                        )
-                        .into_iter()
-                        .map(|notification| {
-                            LifecycleProgress::NotifyLifecycle(Box::new(notification))
-                        }),
-                    );
+                        }],
+                    )
+                    .into_iter()
+                    .map(|notification| LifecycleProgress::NotifyLifecycle(Box::new(notification)))
+                    .collect::<Vec<_>>();
                     progress.push(LifecycleProgress::ForceUpdatePageLoadCompleted(
                         state.take_force_update_page_load_waiters_for_version(version_id),
                     ));
-                    let mut pending_ready_jobs = std::mem::take(&mut state.pending_ready_jobs);
-                    let Some(registration) = state.registrations.get(&registration_id) else {
-                        state.pending_ready_jobs = pending_ready_jobs;
-                        return;
-                    };
-                    let snapshot = service_worker_registration_snapshot(&state, registration);
-                    if should_claim_clients {
-                        let claim_result =
-                            claim_live_scope_clients_locked(&mut state, registration_id);
-                        progress.extend(
-                            claim_result
-                                .controller_change_deliveries
-                                .into_iter()
-                                .map(LifecycleProgress::NotifyControllerChange),
-                        );
-                        for changed_registration_id in claim_result.changed_registration_ids {
-                            if state
-                                .registrations
-                                .get(&changed_registration_id)
-                                .is_some_and(|registration| registration.pending_unregistration)
-                            {
-                                progress.extend(
-                                    self.unregistration_progress_for_registration_if_ready_locked(
-                                        &mut state,
-                                        changed_registration_id,
-                                    ),
-                                );
-                            } else {
-                                progress.extend(
-                                    self.activation_progress_for_registration_if_ready_locked(
-                                        &mut state,
-                                        changed_registration_id,
-                                    ),
-                                );
-                            }
-                        }
-                    }
-                    for job in pending_ready_jobs.drain(..) {
-                        if job.registration_id == registration_id {
-                            progress.push(LifecycleProgress::ReadyCompleted(Box::new((
-                                job,
-                                snapshot.clone(),
-                            ))));
-                        } else {
-                            state.pending_ready_jobs.push(job);
-                        }
-                    }
                     progress
                 }
             };
@@ -440,20 +274,23 @@ impl ServiceWorkerRuntimeService {
             (
                 progress,
                 activated_pending_fetch_events,
-                failed_replaced_pending_events,
-                failed_replaced_fetch_completions,
+                activated_pending_events,
+                activated_registration_id,
             )
         };
-        self.fail_pending_start_events(
-            failed_replaced_pending_events,
-            "service worker was replaced by a newer active worker",
-        );
-        for completion in failed_replaced_fetch_completions {
-            self.finish_fetch_event_completed(completion);
-        }
         self.dispatch_pending_activation_fetch_events(activated_pending_fetch_events);
+        self.dispatch_started_worker_events(activated_pending_events);
         for progress in next_progress {
             self.run_lifecycle_progress(progress);
+        }
+        if let Some(registration_id) = activated_registration_id {
+            let progress = self.activation_progress_for_registration_if_ready_locked(
+                &mut self.inner.state.lock(),
+                registration_id,
+            );
+            for progress in progress {
+                self.run_lifecycle_progress(progress);
+            }
         }
     }
 
@@ -461,6 +298,16 @@ impl ServiceWorkerRuntimeService {
         match progress {
             LifecycleProgress::Dispatch((host, event)) => {
                 self.dispatch_lifecycle_event(host, event);
+            }
+            LifecycleProgress::FailReplacedWorkerEvents(events) => {
+                let (pending, completions) = *events;
+                self.fail_pending_start_events(
+                    pending,
+                    "service worker was replaced by a newer active worker",
+                );
+                for completion in completions {
+                    self.finish_fetch_event_completed(completion);
+                }
             }
             LifecycleProgress::TerminateHost(host) => {
                 host.terminate_without_join();

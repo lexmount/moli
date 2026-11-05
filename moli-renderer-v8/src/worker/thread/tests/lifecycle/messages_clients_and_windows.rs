@@ -615,6 +615,120 @@ async fn service_worker_skip_waiting_posts_runtime_request() {
 }
 
 #[tokio::test]
+async fn service_worker_clients_claim_waits_for_owner_completion() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        self.addEventListener("activate", event => {
+            event.waitUntil(clients.claim().then(() => console.log("claim-resolved")));
+            setTimeout(() => console.log("checkpoint"), 0);
+        });
+        "#,
+    );
+    handle.dispatch_service_worker_lifecycle_event(ServiceWorkerLifecycleEvent {
+        event_id: ServiceWorkerEventId::from_u64_for_worker(61),
+        owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+            ServiceWorkerVersionId::from_u64_for_test(1),
+            crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+        ),
+        kind: ServiceWorkerLifecycleEventKind::Activate,
+    });
+    let mut saw_claim = false;
+    let first_post = loop {
+        match timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("claim or independent timer should make progress")
+            .expect("service worker should remain alive")
+        {
+            WorkerToParentMessage::ServiceWorkerClientsClaim { .. } => saw_claim = true,
+            WorkerToParentMessage::Console(message) => break message.message,
+            WorkerToParentMessage::Error { message, .. } => {
+                panic!("unexpected claim worker error: {message}");
+            }
+            _ => {}
+        }
+    };
+    handle.terminate_and_join();
+    assert!(saw_claim, "the host must receive the claim request");
+    assert_eq!(
+        first_post, "log: checkpoint",
+        "claim must remain pending until the host has applied it"
+    );
+}
+
+#[tokio::test]
+async fn service_worker_clients_claim_results_settle_each_pending_promise() {
+    ensure_v8();
+    for claimed in [true, false] {
+        let mut handle = spawn_service_worker_for_test(
+            r#"
+            self.addEventListener("activate", event => {
+                event.waitUntil(Promise.all([clients.claim(), clients.claim()]).then(
+                    values => console.log("resolved:" + String(values[0]) + ":" + String(values[1])),
+                    error => console.log("rejected:" + error.name)
+                ));
+            });
+        "#,
+        );
+        handle.dispatch_service_worker_lifecycle_event(ServiceWorkerLifecycleEvent {
+            event_id: ServiceWorkerEventId::from_u64_for_worker(62),
+            owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+                ServiceWorkerVersionId::from_u64_for_test(1),
+                crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+            ),
+            kind: ServiceWorkerLifecycleEventKind::Activate,
+        });
+        let mut request_ids = Vec::new();
+        while request_ids.len() < 2 {
+            match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+                WorkerToParentMessage::ServiceWorkerClientsClaim { request_id, .. } => {
+                    request_ids.push(request_id)
+                }
+                WorkerToParentMessage::Error { message, .. } => {
+                    panic!("unexpected claim error: {message}")
+                }
+                WorkerToParentMessage::Console(message) => panic!(
+                    "claim settled without owner completion: {}",
+                    message.message
+                ),
+                _ => {}
+            }
+        }
+        assert_ne!(request_ids[0], request_ids[1]);
+        handle.dispatch_service_worker_clients_claim_result(0, false);
+        handle.dispatch_service_worker_clients_claim_result(request_ids[1], true);
+        handle.dispatch_service_worker_clients_claim_result(request_ids[0], claimed);
+        let mut messages = Vec::new();
+        loop {
+            match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+                WorkerToParentMessage::Console(message) => messages.push(message.message),
+                WorkerToParentMessage::ServiceWorkerLifecycleCompleted(completion) => {
+                    assert_eq!(
+                        completion.event_id,
+                        ServiceWorkerEventId::from_u64_for_worker(62)
+                    );
+                    assert_eq!(completion.result, Ok(()));
+                    break;
+                }
+                WorkerToParentMessage::Error { message, .. } => {
+                    panic!("unexpected claim error: {message}")
+                }
+                _ => {}
+            }
+        }
+        handle.terminate_and_join();
+        assert_eq!(
+            messages,
+            [if claimed {
+                "log: resolved:undefined:undefined"
+            } else {
+                "log: rejected:InvalidStateError"
+            }]
+        );
+    }
+}
+
+#[tokio::test]
 async fn service_worker_clients_claim_posts_runtime_request() {
     ensure_v8();
     let mut handle = spawn_service_worker_for_test(
@@ -641,9 +755,11 @@ async fn service_worker_clients_claim_posts_runtime_request() {
             .expect("service worker channel closed");
         match message {
             WorkerToParentMessage::ServiceWorkerClientsClaim {
+                request_id,
                 registration_id,
                 version_id,
             } => {
+                handle.dispatch_service_worker_clients_claim_result(request_id, true);
                 assert_eq!(
                     registration_id,
                     ServiceWorkerRegistrationId::from_u64_for_test(1)

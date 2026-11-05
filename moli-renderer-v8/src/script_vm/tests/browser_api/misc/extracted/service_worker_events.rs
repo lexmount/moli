@@ -74,7 +74,7 @@ async fn navigator_service_worker_shim_controls_window_fetch() {
               });
               sw.register("worker.js#script-fragment", { scope: "./#scope-fragment" })
                 .then(async (registration) => {
-                  const readyRegistration = await sw.ready;
+                  const readyRegistration = await __moliTestActivatedServiceWorker(sw);
                   const response = await fetch("api/data.txt");
                   const dataResponse = await fetch("data:text/plain,data-url");
                   let outOfScopeResult;
@@ -260,7 +260,7 @@ async fn service_worker_bypass_skips_fetch_dispatch_without_dropping_controller(
         globalThis.__serviceWorkerBypassProbe = {};
         navigator.serviceWorker.register("worker.js")
           .then(async () => {
-            await navigator.serviceWorker.ready;
+            await __moliTestActivatedServiceWorker();
             const response = await fetch("data.txt");
             globalThis.__serviceWorkerBypassProbe.before = await response.text();
             globalThis.__serviceWorkerBypassProbe.controllerBefore =
@@ -352,7 +352,7 @@ async fn navigator_service_worker_fetch_event_preload_response_resolves_undefine
           (async () => {
             const sw = navigator.serviceWorker;
             await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
             const response = await fetch("api/preload-response.txt");
             globalThis.__serviceWorkerPreloadResponseProbe = [
               response.status,
@@ -419,7 +419,7 @@ async fn navigator_service_worker_fetch_event_request_has_empty_destination_for_
               globalThis.__serviceWorkerFetchRequestDestinationProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const response = await fetch("api/destination.txt");
                 globalThis.__serviceWorkerFetchRequestDestinationProbe =
                   response.status + "|" + await response.text();
@@ -489,7 +489,7 @@ async fn csp_report_fetch_pause_continue_preserves_service_worker_dispatch() {
               globalThis.__serviceWorkerPausedCspReportProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 globalThis.__serviceWorkerPausedCspReportProbe = "ready";
               })().catch((error) => {
                 globalThis.__serviceWorkerPausedCspReportProbe =
@@ -667,7 +667,7 @@ async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatc
               globalThis.__pausedWorkerCspReportProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 globalThis.__pausedWorkerCspReportProbe = "ready";
               })().catch((error) => {
                 globalThis.__pausedWorkerCspReportProbe =
@@ -809,7 +809,7 @@ async fn navigator_service_worker_fetch_event_request_preserves_window_fetch_pol
               globalThis.__serviceWorkerFetchRequestPolicyMetadataProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const response = await fetch("api/metadata.txt", {
                   cache: "reload",
                   referrer: "./referrer.html",
@@ -907,7 +907,7 @@ async fn navigator_service_worker_fetch_follows_and_filters_synthetic_redirect_r
               globalThis.__serviceWorkerSyntheticRedirectProbe = "pending";
               (async () => {{
                 await navigator.serviceWorker.register("worker.js", {{ scope: "./" }});
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const response = await fetch("api/redirect-start.txt");
                 const manual = await fetch("api/manual-start.txt", {{ redirect: "manual" }});
                 const relativeFollow = await fetch(
@@ -1044,7 +1044,7 @@ async fn navigator_service_worker_fetch_event_request_preserves_worker_fetch_pol
                 "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const worker = new Worker("client-worker.js");
                 worker.onmessage = event => {
                   globalThis.__serviceWorkerWorkerFetchRequestPolicyMetadataProbe =
@@ -1139,7 +1139,7 @@ async fn navigator_service_worker_intercepts_preload_link_destinations() {
               globalThis.__serviceWorkerPreloadDestinationProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const seen = [];
                 const ensureHead = () => {
                   if (document.head) {
@@ -1259,7 +1259,7 @@ async fn navigator_service_worker_opaque_fetch_preload_does_not_satisfy_window_x
               globalThis.__serviceWorkerOpaquePreloadXhrProbe = "pending";
               (async () => {{
                 await navigator.serviceWorker.register("worker.js", {{ scope: "./" }});
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const target =
                   "opaque-response?from=preload&opaque=" + encodeURIComponent({opaque_url_literal});
                 const preloadResult = await new Promise(resolve => {{
@@ -1370,7 +1370,7 @@ async fn navigator_service_worker_fetch_handler_fetches_event_request_from_netwo
               globalThis.__serviceWorkerFetchEventRequestProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const response = await fetch("api/network.txt");
                 globalThis.__serviceWorkerFetchEventRequestProbe = [
                   response.status,
@@ -1526,7 +1526,7 @@ async fn navigator_service_worker_fetch_event_handled_reports_fetch_settlement()
               (async () => {{
                 const registration =
                   await navigator.serviceWorker.register("worker.js", {{ scope: "./" }});
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const queuedMessages = [];
                 const messageResolvers = [];
                 const handledChannel = new MessageChannel();
@@ -1722,7 +1722,7 @@ async fn navigator_service_worker_fetch_abort_reason_reaches_fetch_event_request
               globalThis.__serviceWorkerAbortReasonProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const messageResolvers = [];
                 navigator.serviceWorker.onmessage = event => {
                   const resolve = messageResolvers.shift();
@@ -1820,7 +1820,7 @@ async fn navigator_service_worker_fetch_abort_reason_serializes_on_abort() {
               globalThis.__serviceWorkerAbortReasonSerializationProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const messageResolvers = [];
                 navigator.serviceWorker.onmessage = event => {
                   const resolve = messageResolvers.shift();
@@ -1928,7 +1928,7 @@ async fn navigator_service_worker_pre_aborted_fetch_does_not_dispatch_fetch_even
               globalThis.__serviceWorkerPreAbortedFetchProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const queuedMessages = [];
                 const messageResolvers = [];
                 navigator.serviceWorker.onmessage = event => {
@@ -2029,7 +2029,7 @@ async fn navigator_service_worker_fetch_response_body_abort_uses_abort_reason() 
               globalThis.__serviceWorkerBodyAbortReasonProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const controller = new AbortController();
                 const reason = new Error("body-abort");
                 const response = await fetch("api/body-abort-reason.txt", {
@@ -2090,7 +2090,7 @@ async fn navigator_service_worker_respond_with_fetch_resolves_before_body_chunk(
               globalThis.__serviceWorkerRespondWithFetchHeadersFirstProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const response = await fetch("api/headers-first.txt");
                 globalThis.__serviceWorkerRespondWithFetchHeadersFirstProbe = [
                   "resolved",
@@ -2156,7 +2156,7 @@ async fn navigator_service_worker_respond_with_fetch_body_read_abort_headers_fir
               globalThis.__serviceWorkerRespondWithFetchHeadersFirstAbortProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const controller = new AbortController();
                 const reason = new Error("headers-first-abort");
                 const response = await fetch("api/headers-first.txt", {
@@ -2233,7 +2233,7 @@ async fn navigator_service_worker_respond_with_fetch_body_methods_abort_headers_
               globalThis.__serviceWorkerRespondWithFetchHeadersFirstBodyMethodProbe = "pending";
               (async () => {{
                 await navigator.serviceWorker.register("worker.js", {{ scope: "./" }});
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const method = "{method}";
                 const controller = new AbortController();
                 const response = await fetch("api/headers-first.txt", {{
@@ -2324,7 +2324,7 @@ async fn navigator_service_worker_respond_with_fetch_event_request_stream_body()
               globalThis.__serviceWorkerRespondWithFetchStreamProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const response = await fetch("api/direct-stream.txt");
                 globalThis.__serviceWorkerRespondWithFetchStreamProbe = [
                   response.status,
@@ -2391,7 +2391,7 @@ async fn navigator_service_worker_invalid_response_body_chunk_errors_reader_not_
               globalThis.__serviceWorkerInvalidChunkProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const response = await fetch("api/invalid-chunk.txt");
                 const reader = response.body.getReader();
                 const first = await reader.read();
@@ -2468,7 +2468,7 @@ async fn navigator_service_worker_response_stream_error_rejects_text_not_fetch()
               globalThis.__serviceWorkerStreamErrorProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const response = await fetch("api/stream-error.txt");
                 try {
                   await response.text();
@@ -2545,7 +2545,7 @@ async fn navigator_service_worker_respond_with_argument_type_controls_fetch_and_
               globalThis.__serviceWorkerRespondWithArgumentProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const direct = await fetch("api/data.txt?response-object");
                 const promised = await fetch("api/data.txt?response-promise-object");
                 let invalidResult;
@@ -2695,7 +2695,7 @@ async fn navigator_service_worker_fetch_event_network_error_xhr_matrix() {
               globalThis.__serviceWorkerNetworkErrorProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const run = name => new Promise(resolve => {
                   const xhr = new XMLHttpRequest();
                   xhr.onload = () => resolve([
@@ -2806,7 +2806,7 @@ async fn navigator_service_worker_respond_with_no_cors_fetch_projects_opaque_res
               globalThis.__serviceWorkerOpaqueRespondWithFetchProbe = "pending";
               (async () => {{
                 await navigator.serviceWorker.register("worker.js", {{ scope: "./" }});
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const response = await fetch({cross_fetch_url_literal}, {{ mode: "no-cors" }});
                 const clone = response.clone();
                 const bodyUsedBefore = response.bodyUsed;
@@ -2902,7 +2902,7 @@ async fn navigator_service_worker_fetch_restarts_stopped_active_worker() {
                 const registration = await navigator.serviceWorker.register("worker.js", {
                   scope: "./"
                 });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const first = await fetch("first.txt");
                 const second = await fetch("second.txt");
                 globalThis.__serviceWorkerRestartProbe.beforeStop = [
@@ -3076,7 +3076,7 @@ async fn navigator_service_worker_navigation_preload_enabled_during_activate_ser
         globalThis.preloadIframeResult = "pending";
         (async () => {
           const registration = await navigator.serviceWorker.register("worker.js", {scope: "./"});
-          await navigator.serviceWorker.ready;
+          await __moliTestActivatedServiceWorker();
           const afterActivate = await registration.navigationPreload.getState();
           if (!afterActivate.enabled) throw new Error("activate did not enable preload");
           const iframe = document.createElement("iframe");
@@ -3156,7 +3156,7 @@ async fn navigator_service_worker_navigation_preload_state_shared_with_worker() 
           (async () => {
             const sw = navigator.serviceWorker;
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
             const manager = registration.navigationPreload;
             const defaultState = await manager.getState();
             let invalidHeaderError = null;
@@ -3324,7 +3324,7 @@ async fn message_event_sources_accept_registered_service_workers_and_reject_auth
       globalThis.messageEventServiceWorkerResult = 'pending';
       (async () => {
         await navigator.serviceWorker.register('source-worker.js', {scope: './'});
-        const registration = await navigator.serviceWorker.ready;
+        const registration = await __moliTestActivatedServiceWorker();
         const source = registration.active;
         if (!(source instanceof ServiceWorker)) throw Error('missing active ServiceWorker');
         const event = new MessageEvent('x', {source});

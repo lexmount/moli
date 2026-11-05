@@ -848,7 +848,11 @@ fn service_worker_query_registration_locked(
 ) -> Option<&ServiceWorkerRegistration> {
     let version = state.versions.get(&version_id)?;
     if version.registration_id != registration_id
-        || version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated
+        || !matches!(
+            version.lifecycle_state,
+            ServiceWorkerVersionLifecycleState::Activating
+                | ServiceWorkerVersionLifecycleState::Activated
+        )
     {
         return None;
     }

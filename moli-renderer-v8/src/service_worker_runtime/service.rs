@@ -781,6 +781,21 @@ mod tests {
             .clone()
     }
 
+    fn publish_activating_version_for_test(
+        service: &ServiceWorkerRuntimeService,
+        registration_id: ServiceWorkerRegistrationId,
+        version_id: ServiceWorkerVersionId,
+    ) {
+        let progress = service.publish_activating_version_locked(
+            &mut service.inner.state.lock(),
+            registration_id,
+            version_id,
+        );
+        for progress in progress {
+            service.run_lifecycle_progress(progress);
+        }
+    }
+
     fn insert_registered_version(
         service: &ServiceWorkerRuntimeServiceOwner,
         registration_id: ServiceWorkerRegistrationId,
@@ -863,7 +878,6 @@ mod tests {
                 run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1021,7 +1035,6 @@ mod tests {
                 run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1432,7 +1445,6 @@ mod tests {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1490,7 +1502,6 @@ mod tests {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1563,7 +1574,6 @@ mod tests {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );

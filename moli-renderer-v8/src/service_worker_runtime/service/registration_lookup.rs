@@ -1,21 +1,5 @@
 use super::*;
 
-fn navigation_preload_version_id(
-    state: &ServiceWorkerRuntimeState,
-    registration: &ServiceWorkerRegistration,
-) -> Option<ServiceWorkerVersionId> {
-    registration.active_version_id.or_else(|| {
-        // The runtime retains an activating version in the waiting slot until
-        // its activate event settles. NavigationPreloadManager must already
-        // be usable inside that event, including promises passed to waitUntil.
-        registration.waiting_version_id.filter(|version_id| {
-            state.versions.get(version_id).is_some_and(|version| {
-                version.lifecycle_state == ServiceWorkerVersionLifecycleState::Activating
-            })
-        })
-    })
-}
-
 impl ServiceWorkerRuntimeService {
     #[cfg(test)]
     pub(crate) fn watch_ready_registration(
@@ -136,7 +120,7 @@ impl ServiceWorkerRuntimeService {
             .find(|registration| {
                 registration.scope_url == *scope_url
                     && !registration.pending_unregistration
-                    && navigation_preload_version_id(&state, registration).is_some()
+                    && registration.active_version_id.is_some()
             })
             .map(|registration| registration.navigation_preload_state.clone())
     }
@@ -180,7 +164,7 @@ impl ServiceWorkerRuntimeService {
         let Some(version_id) = state
             .registrations
             .get(&registration_id)
-            .and_then(|registration| navigation_preload_version_id(&state, registration))
+            .and_then(|registration| registration.active_version_id)
         else {
             return Err(ServiceWorkerNavigationPreloadStateError::InvalidState);
         };
@@ -383,7 +367,11 @@ pub(super) fn active_registration_id_for_scope_locked(
             && registration.active_version_id.is_some()
     })?;
     let version = state.versions.get(&registration.active_version_id?)?;
-    if version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
+    if !matches!(
+        version.lifecycle_state,
+        ServiceWorkerVersionLifecycleState::Activating
+            | ServiceWorkerVersionLifecycleState::Activated
+    ) {
         return None;
     }
     Some(registration.id)

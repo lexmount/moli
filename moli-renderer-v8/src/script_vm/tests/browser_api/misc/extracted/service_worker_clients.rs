@@ -58,7 +58,7 @@ async fn navigator_service_worker_child_frame_controller_uses_child_client() {
               globalThis.__serviceWorkerChildControllerProbe = "pending";
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 const frame = document.createElement("iframe");
                 const loaded = new Promise((resolve, reject) => {
                   frame.onload = resolve;
@@ -161,7 +161,7 @@ async fn navigator_service_worker_post_message_routes_to_waiting_and_active_vers
           (async () => {
             const sw = navigator.serviceWorker;
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
             const updated = await sw.register("worker.js", { scope: "./" });
             let lookup = await sw.getRegistration();
             for (let i = 0; i < 20 && !lookup.waiting; i++) {
@@ -273,7 +273,7 @@ async fn navigator_service_worker_post_message_routes_to_installing_version() {
           (async () => {
             const sw = navigator.serviceWorker;
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
             let installingWorker = null;
             const messagePromise = new Promise(resolve => {
               registration.addEventListener("updatefound", () => {
@@ -391,7 +391,7 @@ async fn navigator_service_worker_installing_post_message_uses_transferred_messa
           (async () => {
             const sw = navigator.serviceWorker;
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
 
             const resultPromise = new Promise(resolve => {
               registration.addEventListener("updatefound", () => {
@@ -506,7 +506,7 @@ async fn navigator_service_worker_installing_post_message_transfers_array_buffer
           (async () => {
             const sw = navigator.serviceWorker;
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
 
             const resultPromise = new Promise(resolve => {
               registration.addEventListener("updatefound", () => {
@@ -667,7 +667,7 @@ async fn navigator_service_worker_installing_message_port_transfers_array_buffer
           (async () => {
             const sw = navigator.serviceWorker;
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
 
             const resultPromise = new Promise(resolve => {
               registration.addEventListener("updatefound", () => {
@@ -795,7 +795,7 @@ async fn navigator_service_worker_installing_post_message_transfers_dataview() {
           (async () => {
             const sw = navigator.serviceWorker;
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
 
             const resultPromise = new Promise(resolve => {
               registration.addEventListener("updatefound", () => {
@@ -1063,7 +1063,7 @@ async fn navigator_service_worker_global_post_message_routes_between_worker_vers
           (async () => {
             const sw = navigator.serviceWorker;
             const registration = await sw.register("worker-v1.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
             await sw.register("worker-v2.js", { scope: "./" });
             let lookup = await sw.getRegistration();
             for (let i = 0; i < 20 && !lookup.waiting; i++) {
@@ -1168,7 +1168,7 @@ async fn navigator_service_worker_post_message_to_redundant_worker_is_dropped() 
           (async () => {
             const sw = navigator.serviceWorker;
             const registration = await sw.register("worker-v1.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
             const firstWorker = registration.active;
             if (!firstWorker) {
               throw new Error("expected first active worker");
@@ -1301,7 +1301,7 @@ async fn navigator_service_worker_client_message_round_trips_from_event_source()
               }
             };
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
             registration.active.postMessage("ping");
           })().catch(error => {
             globalThis.__serviceWorkerClientMessageProbe = "error:" + String(error);
@@ -1387,7 +1387,7 @@ async fn navigator_service_worker_client_message_transfers_readable_stream_to_pa
           globalThis.__serviceWorkerReadableTransferProbe = "registering";
           (async () => {
             await navigator.serviceWorker.register("worker.js", { scope: "./" });
-            await navigator.serviceWorker.ready;
+            await __moliTestActivatedServiceWorker();
             const frame = document.createElement("iframe");
             const loaded = new Promise((resolve, reject) => {
               frame.onload = resolve;
@@ -1544,7 +1544,7 @@ async fn navigator_service_worker_message_ports_transfer_both_directions() {
             };
 
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
 
             const channel = new MessageChannel();
             channel.port1.onmessage = event => {
@@ -1649,7 +1649,7 @@ async fn navigator_service_worker_wasm_module_cross_agent_messages_fire_messagee
               }
             };
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
             const pageModule = new WebAssembly.Module(
               new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])
             );
@@ -1721,7 +1721,7 @@ async fn navigator_service_worker_message_port_wasm_module_to_sandbox_fires_mess
           (async () => {
             const sw = navigator.serviceWorker;
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
 
             let frame;
             let resolveFrameReady;
@@ -1922,7 +1922,7 @@ async fn navigator_service_worker_clients_query_live_window_clients() {
               globalThis.__serviceWorkerClientsQueryProbe = event.data;
             };
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
             registration.active.postMessage("query-clients");
           })().catch(error => {
             globalThis.__serviceWorkerClientsQueryProbe = "error:" + String(error);
@@ -2037,7 +2037,7 @@ async fn navigator_service_worker_clients_query_nested_frame_type() {
               globalThis.__serviceWorkerNestedFrameTypeProbe = event.data;
             };
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
             globalThis.__serviceWorkerNestedFrameRegistration = registration;
             const frame = document.createElement("iframe");
             frame.src = "./frame.html";
@@ -2190,7 +2190,7 @@ async fn navigator_service_worker_window_client_navigate_rejects_during_pending_
               globalThis.__serviceWorkerNavigateGuardProbe = event.data;
             };
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
             location.href = "./browser-navigation.html";
             registration.active.postMessage("navigate-during-browser-navigation");
           })().catch(error => {
@@ -2268,7 +2268,7 @@ async fn navigator_service_worker_window_client_navigate_rejects_when_overwritte
               globalThis.__serviceWorkerNavigateCancelProbe = event.data;
             };
             const registration = await sw.register("worker.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
             globalThis.__serviceWorkerNavigateCancelRegistration = registration;
             globalThis.__serviceWorkerNavigateCancelProbe = "ready";
           })().catch(error => {
@@ -2359,6 +2359,15 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_document_ow
           (async () => {
             await navigator.serviceWorker.register("worker.js", { scope: "./" });
             const registration = await navigator.serviceWorker.ready;
+            {
+              // ready may resolve while activate (and its claim) is still pending.
+              const active = (await navigator.serviceWorker.ready).active;
+              if (active.state !== "activated") {
+                await new Promise(resolve => active.addEventListener("statechange", () => {
+                  if (active.state === "activated") resolve();
+                }));
+              }
+            }
             globalThis.__serviceWorkerStaleOwnerProbe = registration.active.state;
           })().catch(error => {
             globalThis.__serviceWorkerStaleOwnerProbe = "error:" + String(error);
@@ -2489,6 +2498,15 @@ async fn service_worker_client_focus_request_marks_current_page_focused() {
               scope: "./"
             });
             await navigator.serviceWorker.ready;
+            {
+              // ready may resolve while activate (and its claim) is still pending.
+              const active = (await navigator.serviceWorker.ready).active;
+              if (active.state !== "activated") {
+                await new Promise(resolve => active.addEventListener("statechange", () => {
+                  if (active.state === "activated") resolve();
+                }));
+              }
+            }
             globalThis.__serviceWorkerFocusProbe = registration.active.state;
           })().catch(error => {
             globalThis.__serviceWorkerFocusProbe = "error:" + String(error);
