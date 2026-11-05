@@ -61,6 +61,8 @@ pub struct PageLoadingFacts {
 /// Owner-thread capabilities, with no access to V8 handles or renderer internals.
 /// DOM borrows cannot survive an input operation; node identities must be checked
 /// again after operations that can execute page JavaScript.
+/// Input methods require an `Input` task and report whether the input was handled.
+/// The host retains their effects even if the task subsequently returns an error.
 pub trait PageExtensionHost {
     fn layout_enabled(&self) -> bool;
     fn document_identity(&self) -> RendererDocumentLifecycleIdentity;
@@ -111,13 +113,13 @@ pub trait PageExtensionHost {
     ) -> Result<bool>;
     fn activate(&mut self, handle: DomHandle, x: f64, y: f64, modifiers: u8) -> Result<bool>;
     fn replace_text(&mut self, handle: DomHandle, text: &str) -> Result<bool>;
+    /// Explicit requestSubmit-style submission of this form or control's form.
+    /// A supplied submit button is the submitter. Other controls do not select a
+    /// default button. Use `key` to simulate Enter's implicit submission rules.
     fn submit(&mut self, handle: DomHandle) -> Result<bool>;
-    fn select_values(
-        &mut self,
-        handle: DomHandle,
-        values: &[String],
-        multiple: bool,
-    ) -> Result<bool>;
+    /// Selects a complete value set using the element's actual `multiple` state.
+    /// Invalid targets or missing values fail before changing any selection.
+    fn select_values(&mut self, handle: DomHandle, values: &[String]) -> Result<bool>;
     fn screenshot_clip(&mut self, handle: DomHandle) -> Result<RendererScreenshotClip>;
     fn capture(
         &mut self,

@@ -232,17 +232,9 @@ impl PageExtensionHost for AcePageTaskHost<'_> {
             .map(Option::unwrap_or_default);
         self.retain_dispatch(result)
     }
-    fn select_values(
-        &mut self,
-        handle: DomHandle,
-        values: &[String],
-        multiple: bool,
-    ) -> Result<bool> {
+    fn select_values(&mut self, handle: DomHandle, values: &[String]) -> Result<bool> {
         self.require_input()?;
-        let result = self
-            .page
-            .vm_mut()
-            .select_control_values(handle, values, multiple);
+        let result = self.page.vm_mut().select_control_values(handle, values);
         self.retain_input(result)
     }
     fn screenshot_clip(&mut self, handle: DomHandle) -> Result<RendererScreenshotClip> {
