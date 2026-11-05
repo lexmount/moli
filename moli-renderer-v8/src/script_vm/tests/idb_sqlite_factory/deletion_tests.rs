@@ -29,6 +29,14 @@ async fn idb_sqlite_bucket_delete_clears_storage_and_invalidates_retained_object
             tx.oncomplete = () => resolve('unexpected-commit');
         });
         tx.objectStore('records').put({blob:new Blob(['discarded'])}).onerror = event => event.preventDefault();
+        // Keep the transaction pending until deletion closes it; otherwise it
+        // can legitimately auto-commit before the maintenance worker runs.
+        const keepAlive = () => {
+            const request = tx.objectStore('records').get(1);
+            request.onsuccess = keepAlive;
+            request.onerror = event => event.preventDefault();
+        };
+        keepAlive();
         await Promise.all([navigator.storageBuckets.delete('remove'),navigator.storageBuckets.delete('remove')]);
         let closed = false, stale = false;
         try { db.transaction('records'); } catch (error) { closed = error.name === 'InvalidStateError'; }
