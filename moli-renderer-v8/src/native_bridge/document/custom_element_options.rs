@@ -105,10 +105,10 @@ fn nullable_creation_registry<'s>(
     )?;
     let target = moli_webapi_declare::web_api_object_target(scope, registry.0)
         .expect("converted CustomElementRegistry has native identity");
+    let key = custom_elements::registry_store_key(scope, target)
+        .ok_or_else(|| webidl::WebIdlError::cannot_convert(context, "CustomElementRegistry"))?;
     Ok(Some(
-        custom_elements::CustomElementRegistryAssociation::Registry(
-            custom_elements::registry_store_key(scope, target),
-        ),
+        custom_elements::CustomElementRegistryAssociation::Registry(key),
     ))
 }
 

@@ -619,12 +619,12 @@ fn clone_custom_element_registry_options<'s>(
     let value = match association {
         custom_elements::CustomElementRegistryAssociation::Null => v8::null(scope).into(),
         custom_elements::CustomElementRegistryAssociation::Registry(
-            custom_elements::CustomElementRegistryKey::Scoped(_),
+            custom_elements::CustomElementRegistryKey::Scoped(_, _),
         ) => fallback_value
             .or_else(|| node.get(scope, v8str(scope, "customElementRegistry").into()))?,
         custom_elements::CustomElementRegistryAssociation::Registry(
-            custom_elements::CustomElementRegistryKey::Global
-            | custom_elements::CustomElementRegistryKey::Child(_),
+            custom_elements::CustomElementRegistryKey::Global(_)
+            | custom_elements::CustomElementRegistryKey::Child(_, _),
         ) => return None,
     };
     options.set_string_property(scope, "customElementRegistry", value);
