@@ -704,54 +704,7 @@ fn parser_created_style_import_urls(
 }
 
 fn extract_css_import_urls(base_url: &Url, css_text: &str) -> Vec<Url> {
-    let mut out = Vec::new();
-    for statement in css_text.split(';') {
-        let statement = statement.trim();
-        if !statement
-            .get(..7)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("@import"))
-        {
-            continue;
-        }
-        let remainder = statement[7..].trim_start();
-        let Some(specifier) = extract_css_import_specifier(remainder) else {
-            continue;
-        };
-        if let Ok(url) = base_url.join(&specifier) {
-            out.push(url);
-        }
-    }
-    out
-}
-
-fn extract_css_import_specifier(input: &str) -> Option<String> {
-    let input = input.trim_start();
-    if input.starts_with("url(") || input.starts_with("URL(") {
-        let rest = &input[4..];
-        let end = rest.find(')')?;
-        let inner = rest[..end].trim();
-        return trim_css_string(inner);
-    }
-    if let Some(quote) = input.chars().next().filter(|ch| matches!(ch, '"' | '\'')) {
-        let remainder = &input[quote.len_utf8()..];
-        let end = remainder.find(quote)?;
-        let specifier = &remainder[..end];
-        return Some(specifier.trim().to_owned());
-    }
-    trim_css_string(input)
-}
-
-fn trim_css_string(input: &str) -> Option<String> {
-    let trimmed = input.trim();
-    if trimmed.len() < 2 {
-        return None;
-    }
-    let first = trimmed.as_bytes()[0] as char;
-    let last = trimmed.as_bytes()[trimmed.len() - 1] as char;
-    if !matches!(first, '"' | '\'') || first != last {
-        return None;
-    }
-    Some(trimmed[1..trimmed.len() - 1].trim().to_owned())
+    moli_css_parse::stylesheet_import_urls_with_stylo(css_text, base_url)
 }
 
 #[cfg(test)]

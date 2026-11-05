@@ -1354,3 +1354,79 @@ fn parser_owner_style_import_handoff_is_stylesheet_gated_on_live_page_vm() {
         );
     }));
 }
+
+fn assert_parser_style_import_graph_is_shared(css: &str) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime should build");
+    runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+        let PhaseOnePageVmHarness {
+            mut page_vm,
+            loader,
+            state,
+        } = new_phase_one_page_vm_harness_for_test();
+        let mut driver = ParserDriver {
+            loader,
+            final_url: &state.final_url,
+            parser_session: &mut state.parser_session,
+            scheduler: &mut state.scheduler,
+            buffered_document_preloads: &mut state.buffered_document_preloads,
+            service_worker_preload_context: state.service_worker_preload_context.as_ref(),
+            input_closed: &state.input_closed,
+            image_document: &mut state.image_document,
+        };
+        let html = format!(
+            "<!doctype html><html><head><style id='blocking-style'>{css}</style>\
+             <script>window.afterStyle = true;</script></head></html>"
+        );
+        let outcome = driver
+            .advance_parser_step(&mut page_vm, &html, None)
+            .await
+            .expect("parser step should complete");
+        assert!(
+            matches!(outcome, ParserStepAdvanceOutcome::BlockedOnStylesheet(_)),
+            "an unfinished import must retain the parser script gate: {css}"
+        );
+        let style = page_vm
+            .vm()
+            .document_runtime
+            .dom_host()
+            .element_handle_by_id("blocking-style")
+            .expect("parser-created style owner");
+        assert_eq!(
+            page_vm
+                .vm()
+                .document_runtime
+                .pending_style_import_binding_for_test(style),
+            Some((1, true)),
+            "CSSOM installation and the parser gate must share the same import graph: {css}"
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval("String(window.afterStyle)").unwrap(),
+            "undefined"
+        );
+    }));
+}
+
+#[test]
+fn parser_owner_duplicate_style_imports_share_blocking_graph() {
+    assert_parser_style_import_graph_is_shared(concat!(
+        "@import url('/shared.css');",
+        "@import url('/shared.css') screen;",
+        "@import url('/shared.css') all;",
+        "@import url('/other.css');",
+    ));
+}
+
+#[test]
+fn parser_owner_style_import_css_syntax_shares_blocking_graph() {
+    assert_parser_style_import_graph_is_shared(concat!(
+        "/* @import 'comment.css'; */ @layer base;",
+        "@import url('/skipped.css') supports(unknown-property: impossible);",
+        "@import url('/shar\\65 d.css#first');",
+        "@import '/shared.css#second';",
+        "@import url('/semi;colon.css') supports(display: block);",
+        "div {} @import '/too-late.css';",
+    ));
+}

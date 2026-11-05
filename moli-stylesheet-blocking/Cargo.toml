@@ -6,6 +6,7 @@ edition = "2024"
 
 [dependencies]
 futures-util = "0.3.31"
+moli-css-parse = { path = "../moli-css-parse" }
 moli-dom = { path = "../moli-dom" }
 moli-fetch = { path = "../moli-fetch" }
 moli-owner-queue = { path = "../moli-owner-queue" }
