@@ -210,23 +210,23 @@ impl ManualCorsRedirectState {
             }
         }
         let redirect_status = head.status;
-        self.request.record_redirect(RedirectInfo {
-            source: moli_fetch::RedirectSource::Network,
-            from_url: head.final_url,
-            to_url: next_url.clone(),
-            status: redirect_status,
-            headers: head.headers,
-            network_extra_info_available,
-            request_extra_info: None,
-            response_extra_info: None,
-            redirect_has_extra_info: network_extra_info_available,
-            request_cookie_report: head.request_cookie_report,
-            cookie_set_reports: head.cookie_set_reports,
-            from_cache: head.from_cache,
-            negotiated_http_version: head.negotiated_http_version,
-        });
-        self.request.apply_redirect_status(redirect_status);
-        self.request.url = next_url;
+        self.request
+            .follow_redirect(RedirectInfo {
+                source: moli_fetch::RedirectSource::Network,
+                from_url: head.final_url,
+                to_url: next_url.clone(),
+                status: redirect_status,
+                headers: head.headers,
+                network_extra_info_available,
+                request_extra_info: None,
+                response_extra_info: None,
+                redirect_has_extra_info: network_extra_info_available,
+                request_cookie_report: head.request_cookie_report,
+                cookie_set_reports: head.cookie_set_reports,
+                from_cache: head.from_cache,
+                negotiated_http_version: head.negotiated_http_version,
+            })
+            .map_err(|error| error.to_string())?;
         self.preflight_request_headers = self.request.request_headers.to_byte_strings();
         Ok(ManualCorsRedirectTransition::FollowedRedirect)
     }
@@ -1023,6 +1023,39 @@ mod tests {
         assert_eq!(redirects.request().redirect_chain().len(), 1);
         assert_eq!(redirects.request().redirect_chain()[0].status, 303);
         assert!(redirects.request().redirect_chain()[0].network_extra_info_available);
+        Ok(())
+    }
+
+    #[test]
+    fn manual_cors_redirect_policy_blocks_before_next_hop_preflight() -> Result<()> {
+        let current_url = Url::parse("https://origin.test/start")?;
+        let request = Request::get(current_url.as_str())?
+            .with_request_origin(moli_url::WebOrigin::from_url(&current_url))
+            .with_redirect_policy(moli_fetch::RequestRedirectPolicy::new(|_, _| {
+                anyhow::bail!("CSP denied next hop")
+            }));
+        let mut redirects = ManualCorsRedirectState::new(request, Vec::new());
+        let error = redirects
+            .advance(
+                ResponseHead {
+                    final_url: current_url.clone(),
+                    status: 302,
+                    status_text: None,
+                    headers: vec![("Location".to_owned(), b"https://target.test/final".to_vec())],
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    redirected: false,
+                    redirect_chain: Vec::new(),
+                    from_cache: false,
+                    cache_state: Default::default(),
+                    negotiated_http_version: None,
+                },
+                false,
+            )
+            .unwrap_err();
+        assert!(error.contains("CSP denied next hop"), "{error}");
+        assert_eq!(redirects.request().url, current_url);
+        assert!(redirects.request().redirect_chain().is_empty());
         Ok(())
     }
 

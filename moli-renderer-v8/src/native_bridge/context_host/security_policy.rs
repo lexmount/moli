@@ -131,6 +131,25 @@ impl JsContextHost {
         )
     }
 
+    pub(crate) fn module_fetch_csp_context_for_owner(
+        &self,
+        owner: OwnerDispatchScope,
+        kind: crate::module_runtime::ModuleKind,
+        metadata: &crate::module_runtime::ModuleFetchMetadata,
+    ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
+        let snapshot = self.owner_document_policy_snapshot(owner)?;
+        Some(
+            unsafe { &*self.runtime }.module_fetch_csp_context_for_document(
+                snapshot.document_handle,
+                &snapshot.document_url,
+                &snapshot.policy_container,
+                kind,
+                metadata,
+                Some(owner),
+            ),
+        )
+    }
+
     pub(crate) fn document_permissions_policy_for_owner(
         &self,
         owner: OwnerDispatchScope,
@@ -1257,7 +1276,7 @@ impl JsContextHost {
         }
     }
 
-    fn dispatch_content_security_policy_violation_event_for_owner_best_effort<'s>(
+    pub(crate) fn dispatch_content_security_policy_violation_event_for_owner_best_effort<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,

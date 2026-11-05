@@ -562,12 +562,18 @@ impl ScriptVm {
             ));
             return Ok(FrameDocumentModuleTerminalQueueFollowup::terminal_warning_recorded());
         };
+        if result.is_err() {
+            self.dispatch_module_fetch_redirect_csp_violations(
+                child_inflight.inflight.csp_context(),
+            );
+        }
         let source = match result {
             Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
                 load_id,
                 fetched_source,
                 child_inflight.inflight.kind(),
                 child_inflight.inflight.fetch_metadata(),
+                child_inflight.inflight.csp_context(),
             ),
             Err(error) => Err(ModuleLoadError::new(
                 ModuleLoadStage::Fetch,

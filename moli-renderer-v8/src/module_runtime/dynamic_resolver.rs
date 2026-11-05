@@ -534,6 +534,12 @@ impl DynamicModuleInflightFetch {
         self.request.kind()
     }
 
+    pub(crate) fn csp_context(
+        &self,
+    ) -> Option<&crate::content_security_policy::ModuleFetchCspContext> {
+        self.request.csp_context()
+    }
+
     #[cfg(test)]
     pub(crate) fn request_for_test(&self) -> &NativeModuleGraphFetchRequest {
         &self.request

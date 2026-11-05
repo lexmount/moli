@@ -657,6 +657,14 @@ impl ScriptVm {
         result: FrameDocumentModuleFetchTerminalResult,
     ) -> FrameDocumentModuleTerminalQueueFollowup {
         let owner = task.owner().document_owner();
+        let is_current = self
+            ._context_host
+            .borrow()
+            .current_child_module_route_task_owner(owner, realm_id)
+            .is_some();
+        if is_current {
+            self.dispatch_module_fetch_redirect_csp_violations(task.fetch_request().csp_context());
+        }
         let tasks = self
             .child_document_modulator_store
             .finish_parser_module_dependency_fetch(owner, realm_id, task, result);

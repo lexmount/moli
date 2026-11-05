@@ -437,11 +437,19 @@ impl JsContextHost {
         &mut self,
         handle: DomHandle,
         link_handle: DomHandle,
-        request: NativeModuleSingleFetchRequest,
+        mut request: NativeModuleSingleFetchRequest,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
         }
+        let Some(context) = self.module_fetch_csp_context_for_owner(
+            crate::native_bridge::context_host::OwnerDispatchScope::Child(handle),
+            request.module_key().kind(),
+            request.fetch_metadata(),
+        ) else {
+            return false;
+        };
+        request.set_csp_context(context);
         let Some(owner) = self
             .frame_owner_store
             .current_child_document_task_owner(handle)
@@ -882,6 +890,13 @@ impl JsContextHost {
             return;
         }
         let request = child_parser_module_root_fetch_request(&fetch_start.script);
+        let csp_context = self.module_fetch_csp_context_for_owner(
+            crate::native_bridge::context_host::OwnerDispatchScope::Child(target.child_handle()),
+            request.kind(),
+            request.fetch_metadata(),
+        );
+        let request = request.with_csp_context(csp_context.clone());
+        let completion_csp_context = csp_context.clone();
         let completion_tx = self.resource_completion_tx.clone();
         debug_assert_eq!(target.child_handle(), fetch_start.child_handle);
         let script_handle = fetch_start.script_handle;
@@ -911,21 +926,25 @@ impl JsContextHost {
                     result,
                     network_result,
                     completion_network_attribution,
-                ),
+                )
+                .with_csp_context(completion_csp_context),
             );
         };
         if let Err(error) = request.fetch_source_for_document(loader, send_completion) {
             let message = error.to_string();
             let _ = self
                 .resource_completion_tx
-                .send_child_parser_module_root_fetch(ChildParserModuleRootFetchCompletion::new(
-                    target,
-                    request_id,
-                    request_key,
-                    Err(message.clone()),
-                    Some(std::sync::Arc::new(Err(message))),
-                    network_attribution,
-                ));
+                .send_child_parser_module_root_fetch(
+                    ChildParserModuleRootFetchCompletion::new(
+                        target,
+                        request_id,
+                        request_key,
+                        Err(message.clone()),
+                        Some(std::sync::Arc::new(Err(message))),
+                        network_attribution,
+                    )
+                    .with_csp_context(csp_context),
+                );
         }
     }
 

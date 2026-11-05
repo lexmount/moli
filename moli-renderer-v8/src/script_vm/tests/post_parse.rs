@@ -356,6 +356,7 @@ fn module_graph_redirect_final_url_obeys_script_src_csp() {
             fetched_source,
             crate::module_runtime::ModuleKind::JavaScript,
             &crate::module_runtime::ModuleFetchMetadata::default(),
+            None,
         )
         .expect_err("redirected module final URL should be blocked by script-src");
     assert!(error.message().contains("Content Security Policy"));

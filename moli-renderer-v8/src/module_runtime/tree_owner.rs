@@ -27,6 +27,13 @@ pub(crate) struct NativeModuleTreeFrameDocumentOwner<'a> {
 }
 
 pub(crate) trait NativeModuleTreeDocumentOwnerAdapter {
+    fn module_fetch_csp_context(
+        &self,
+        _key: &ModuleMapKey,
+        _metadata: &ModuleFetchMetadata,
+    ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
+        None
+    }
     fn compile_module_record(
         &mut self,
         key: ModuleMapKey,
@@ -111,6 +118,13 @@ pub(crate) trait NativeModuleTreeDocumentOwnerAdapter {
 impl<T: NativeModuleTreeDocumentOwnerAdapter + ?Sized> NativeModuleTreeDocumentOwnerAdapter
     for &mut T
 {
+    fn module_fetch_csp_context(
+        &self,
+        key: &ModuleMapKey,
+        metadata: &ModuleFetchMetadata,
+    ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
+        (**self).module_fetch_csp_context(key, metadata)
+    }
     fn compile_module_record(
         &mut self,
         key: ModuleMapKey,
@@ -279,6 +293,17 @@ impl<'a> NativeModuleTreeFrameDocumentOwner<'a> {
 }
 
 impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeDocumentOwner<'_> {
+    fn module_fetch_csp_context(
+        &self,
+        key: &ModuleMapKey,
+        metadata: &ModuleFetchMetadata,
+    ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
+        Some(
+            self.vm
+                .document_runtime
+                .module_fetch_csp_context(key.kind(), metadata),
+        )
+    }
     fn compile_module_record(
         &mut self,
         key: ModuleMapKey,
@@ -447,6 +472,18 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeDocumentOwner<'_> 
 }
 
 impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeFrameDocumentOwner<'_> {
+    fn module_fetch_csp_context(
+        &self,
+        key: &ModuleMapKey,
+        metadata: &ModuleFetchMetadata,
+    ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
+        self.vm.module_fetch_csp_context_for_child_owner(
+            self.document_owner,
+            self.realm_id,
+            key.kind(),
+            metadata,
+        )
+    }
     fn compile_module_record(
         &mut self,
         key: ModuleMapKey,

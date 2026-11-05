@@ -332,6 +332,8 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
         &mut self,
         completion: ChildParserModuleRootFetchCompletion,
     ) -> FrameDocumentModuleTerminalQueueFollowup {
+        self.vm
+            .dispatch_module_fetch_redirect_csp_violations(completion.csp_context());
         let (target, request_key, result) = completion.into_module_terminal_parts();
         self.vm.finish_child_parser_root_module_fetch(
             target.task_owner(),
@@ -386,12 +388,17 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
             ));
             return FrameDocumentModuleTerminalQueueFollowup::terminal_warning_recorded();
         };
+        if result.is_err() {
+            self.vm
+                .dispatch_module_fetch_redirect_csp_violations(request.csp_context());
+        }
         let source = match result {
             Ok(fetched_source) => self.vm.module_graph_fetched_source_or_csp_error(
                 load_id,
                 fetched_source,
                 request.module_key().kind(),
                 request.fetch_metadata(),
+                request.csp_context(),
             ),
             Err(error) => Err(ModuleLoadError::new(
                 ModuleLoadStage::Fetch,
