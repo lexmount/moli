@@ -59,9 +59,9 @@ pub use form::{form_control_text, select_control_texts};
 pub use layout_tree::{
     FrozenCoordinateSpace, FrozenEmbeddedFrame, FrozenLayoutBox, FrozenLayoutTree,
     GeometryProvider, LayoutAnswers, LayoutBoxGeometry, LayoutBoxModel, LayoutCaretPosition,
-    LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutCssImageReference,
-    LayoutDocumentMetrics, LayoutElementMetrics, LayoutFlushReason, LayoutFragment,
-    LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
+    LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutCssImagePurpose,
+    LayoutCssImageReference, LayoutDocumentMetrics, LayoutElementMetrics, LayoutFlushReason,
+    LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
     LayoutIntersectionGeometry, LayoutNodeOutput, LayoutObjectGeometry, LayoutOutputBoxId,
     LayoutPaintedSurfaceHit, LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad,
     LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutResizeObserverMetrics,
