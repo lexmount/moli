@@ -751,6 +751,15 @@ async fn same_context_background_session_can_remove_its_own_preload_before_activ
     ctx.expect_result(104194115, json!({}), None);
     ctx.take_all();
 
+    ctx.process_async(json!({
+        "id": 104194118,
+        "method": "Page.setLifecycleEventsEnabled",
+        "sessionId": second_session_id,
+        "params": { "enabled": true }
+    }))
+    .await;
+    ctx.expect_result(104194118, json!({}), Some(&second_session_id));
+
     ctx.navigate_with_page_events(json!({
         "id": 104194116,
         "method": "Page.navigate",
@@ -763,6 +772,21 @@ async fn same_context_background_session_can_remove_its_own_preload_before_activ
     consume_main_document_navigation_start(&mut ctx);
     let navigation = take_response_by_id(&mut ctx, 104194116);
     assert_eq!(navigation["result"]["frameId"], json!(second_target_id));
+    let loader_id = navigation["result"]["loaderId"]
+        .as_str()
+        .expect("activated navigation has a loader")
+        .to_owned();
+    // A navigation response admits the load; it does not promise that the
+    // parser has produced #ok. Observe this exact Document before inspecting
+    // its bindings, removed preload, and content.
+    crate::testing::wait_until_scheduler_message(&mut ctx, "activated Document load", |message| {
+        message["sessionId"] == json!(second_session_id)
+            && message["method"] == "Page.lifecycleEvent"
+            && message["params"]["frameId"] == json!(second_target_id)
+            && message["params"]["loaderId"] == json!(loader_id)
+            && message["params"]["name"] == "load"
+    })
+    .await;
 
     assert!(
         !ctx.sent
@@ -783,7 +807,7 @@ async fn same_context_background_session_can_remove_its_own_preload_before_activ
     let activated_eval = take_response_by_id(&mut ctx, 104194117);
     let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("activated payload should be string");
+        .unwrap_or_else(|| panic!("activated payload should be string: {activated_eval}"));
     let activated_payload: serde_json::Value =
         serde_json::from_str(activated_payload).expect("activated payload should be valid json");
     assert_eq!(activated_payload["binding"], json!("function"));
