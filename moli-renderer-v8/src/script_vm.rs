@@ -2469,6 +2469,12 @@ impl ScriptVmDefaultWorldBootstrap {
 
         #[cfg(any(test, feature = "test-support"))]
         {
+            #[cfg(test)]
+            if scope.remove_slot::<main_world::MainWorldBootstrapFailureForTest>()
+                == Some(main_world::MainWorldBootstrapFailureForTest::Baseline)
+            {
+                anyhow::bail!("forced main-world bootstrap failure during baseline");
+            }
             let baseline_source = v8_string(
                 scope,
                 "JSON.stringify(Object.getOwnPropertyNames(globalThis))",
