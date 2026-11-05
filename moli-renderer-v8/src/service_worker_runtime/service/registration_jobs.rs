@@ -156,6 +156,11 @@ impl ServiceWorkerRuntimeService {
                 .entry(registration_id)
                 .or_insert_with(|| ServiceWorkerRegistration {
                     id: registration_id,
+                    registration_order: self
+                        .inner
+                        .resource_store
+                        .lock()
+                        .allocate_registration_order(),
                     storage_key: registration_key.storage_key.clone(),
                     scope_url: queued_job.scope_url.clone(),
                     script_url: queued_job.script_url.clone(),
