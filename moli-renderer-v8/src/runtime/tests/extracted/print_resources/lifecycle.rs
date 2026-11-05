@@ -5,6 +5,8 @@ use super::*;
 use crate::runtime::owner_local::RendererLayoutWorkingSetObservation;
 use tokio::{io::AsyncWriteExt, net::TcpListener, sync::mpsc};
 
+mod admission;
+
 const CASE_TIMEOUT: Duration = Duration::from_secs(20);
 const SIGNAL_TIMEOUT: Duration = Duration::from_secs(3);
 

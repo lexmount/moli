@@ -1,7 +1,5 @@
 use super::*;
-use crate::capture_resources::{
-    CaptureResourceState, PrintCaptureAdvance, PrintCaptureJob, PrintCaptureReply,
-};
+use crate::capture_resources::{PrintCaptureAdvance, PrintCaptureJob, PrintCaptureReply};
 use crate::runtime::{
     RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest, RendererPrintToPdfReply,
     RendererPrintToPdfRequest, RendererScreenshotPurpose,
@@ -74,11 +72,10 @@ async fn ready_print_resources_need_one_layout_and_never_publish_screen_geometry
                 );
                 assert!(job.fetches.is_empty());
                 if raster {
-                    assert!(!job.entries.is_empty());
-                    assert!(job.entries.iter().all(|entry| matches!(
-                        entry.state,
-                        CaptureResourceState::Disabled
-                    )));
+                    assert!(
+                        job.entries.is_empty(),
+                        "disabled resources must not consume capture entries"
+                    );
                 }
                 let services = host.borrow().layout_text_services_observability_for_test();
                 assert!(services.0, "matching fonts should initialize the live text service");
