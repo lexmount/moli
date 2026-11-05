@@ -872,11 +872,11 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
             RequestCredentialsMode::SameOrigin
         };
 
-    let request_origin = worker_global_origin(scope).unwrap_or(moli_url::WebOrigin::Opaque);
+    let origin = worker_global_origin(scope).unwrap_or(moli_url::WebOrigin::Opaque);
     let timing = WorkerResourceTiming::new(
         scope,
         resolved_url.clone(),
-        request_origin,
+        origin,
         WorkerTimingRequest::Xhr {
             credentials: credentials_mode,
         },

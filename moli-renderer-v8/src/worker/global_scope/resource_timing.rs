@@ -97,12 +97,25 @@ struct WorkerResourceTimingState {
     body_size: usize,
     completed_at: Option<Instant>,
     synthetic_response_start: Option<Instant>,
+    response_is_synthetic: bool,
     awaiting_selection: bool,
     aborted: bool,
     reported: bool,
 }
 
 impl WorkerResourceTiming {
+    pub(super) fn select_streaming_response(
+        &self,
+        head: &ResponseHead,
+        filter: AsyncSubresourceFetchResponseFilter,
+    ) {
+        let mut state = self.0.state.lock();
+        // IO may already have supplied chunks or EOF. The Worker accepts the
+        // exact exposed head here without replacing those body observations.
+        state.response_is_synthetic = filter.service_worker_metadata().is_some();
+        state.response = Some((head.clone(), filter));
+        state.awaiting_selection = false;
+    }
     pub(super) fn new(
         scope: &mut v8::PinScope<'_, '_>,
         name: Url,
@@ -125,6 +138,7 @@ impl WorkerResourceTiming {
                 body_size: 0,
                 completed_at: None,
                 synthetic_response_start: None,
+                response_is_synthetic: false,
                 awaiting_selection: false,
                 aborted: false,
                 reported: false,
@@ -143,6 +157,7 @@ impl WorkerResourceTiming {
         state.body_size = 0;
         state.completed_at = None;
         state.synthetic_response_start = None;
+        state.response_is_synthetic = false;
         state.awaiting_selection = false;
         state.aborted = false;
     }
@@ -151,6 +166,7 @@ impl WorkerResourceTiming {
         let filter = self.0.request.filter(&self.0.origin, head);
         let mut state = self.0.state.lock();
         state.response = filter.map(|filter| (head.clone(), filter));
+        state.response_is_synthetic = false;
     }
 
     pub(crate) fn observe_chunk(&self, size: usize) {
@@ -174,12 +190,14 @@ impl WorkerResourceTiming {
         state.body_size = 0;
         state.completed_at = Some(Instant::now());
         state.synthetic_response_start = None;
+        state.response_is_synthetic = false;
     }
 
     pub(crate) fn begin_synthetic_response(&self) {
         self.discard_response();
         let mut state = self.0.state.lock();
         state.synthetic_response_start = state.completed_at;
+        state.response_is_synthetic = true;
     }
 
     pub(crate) fn select_streaming_response(&self, head: &ResponseHead, filter: AsyncSubresourceFetchResponseFilter) {
@@ -203,6 +221,7 @@ impl WorkerResourceTiming {
             state.completed_at = Some(now);
         }
         state.response = Some((head.clone(), filter));
+        state.response_is_synthetic = synthetic;
         state.body_size = body_size;
         state.awaiting_selection = false;
     }
@@ -273,9 +292,11 @@ impl WorkerResourceTiming {
         };
         let mode = match &self.0.request {
             WorkerTimingRequest::Fetch { mode, .. } => *mode,
-            WorkerTimingRequest::Xhr { .. } => RequestMode::Cors,
+            WorkerTimingRequest::Xhr { .. } | WorkerTimingRequest::EventSource { .. } => {
+                RequestMode::Cors
+            }
         };
-        let entry = if !rejected && let Some((head, filter)) = &state.response {
+        let mut entry = if !rejected && let Some((head, filter)) = &state.response {
             let mut entry = state.clock.completed(
                 &self.0.name,
                 &self.0.origin,
@@ -291,6 +312,9 @@ impl WorkerResourceTiming {
         } else {
             state.clock.failed(&self.0.name)
         };
+        if state.response_is_synthetic {
+            entry.clear_initiator();
+        }
         Some(state.clock.completed_at(entry, end))
     }
 }
