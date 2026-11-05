@@ -95,6 +95,8 @@ use super::global_scope::{
     prepare_worker_global_scope_templates, service_worker_fetch_handler_type,
     retire_nested_workers,
 
+    drain_service_worker_skip_waiting_result,
+
 };
 #[cfg(test)]
 use super::handle::WorkerErrorReport;
@@ -682,6 +684,7 @@ fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
             .opfs_owner_state
             .as_ref()
             .is_some_and(|opfs| opfs.has_pending_tasks())
+        || !state.pending_service_worker_skip_waiting.is_empty()
         || !state.pending_service_worker_clients_claims.is_empty()
         || !state.pending_service_worker_client_queries.is_empty()
         || !state.pending_service_worker_client_navigates.is_empty()
@@ -2007,6 +2010,8 @@ async fn worker_main(
         opfs_completion_tx,
         opfs_owner_state: None,
         pending_service_worker_periodic_sync_events: std::collections::HashMap::new(),
+        pending_service_worker_skip_waiting: std::collections::HashMap::new(),
+        service_worker_skip_waiting_request_ids: Default::default(),
         pending_service_worker_clients_claims: std::collections::HashMap::new(),
         service_worker_clients_claim_request_ids: Default::default(),
         pending_service_worker_client_queries: std::collections::HashMap::new(),
@@ -2797,6 +2802,22 @@ async fn worker_main(
                     &state,
                     &module_graph_fetch_tx,
                 );
+            }
+            WorkerLoopWake::Message(Some(WorkerMessage::ServiceWorkerSkipWaitingResult {
+                request_id,
+            })) => {
+                if pending_module_bootstrap.is_some() {
+                    pending_bootstrap_messages
+                        .push_back(WorkerMessage::ServiceWorkerSkipWaitingResult { request_id });
+                    continue;
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                drain_service_worker_skip_waiting_result(scope, &state, request_id);
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
             WorkerLoopWake::Message(Some(WorkerMessage::ServiceWorkerClientsClaimResult {
                 request_id,
