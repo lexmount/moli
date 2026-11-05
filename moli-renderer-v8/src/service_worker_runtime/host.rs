@@ -251,16 +251,6 @@ impl RendererServiceWorkerHost {
         true
     }
 
-    pub(super) fn dispatch_registration_update_found(&self) {
-        let state = self.state.lock();
-        if let RendererServiceWorkerHostState::Running {
-            handle: Some(handle),
-        } = &*state
-        {
-            handle.dispatch_service_worker_registration_update_found();
-        }
-    }
-
     pub(super) fn dispatch_fetch_event(&self, event: ServiceWorkerFetchEvent) -> bool {
         let state = self.state.lock();
         let RendererServiceWorkerHostState::Running {
@@ -1071,6 +1061,7 @@ fn spawn_service_worker(
             version_id: params.run_owner.version_id().as_u64(),
         })
         .with_service_worker_runtime(service)
+        .with_service_worker_run_owner(params.run_owner.clone())
         .with_service_worker_script_resources(
             script_map.imported_scripts,
             script_map.can_import_new_scripts,

@@ -94,6 +94,13 @@ pub(crate) struct ServiceWorkerRegistrationSnapshot {
     active: Option<ServiceWorkerVersionSnapshot>,
 }
 
+/// A registration update captured by the owner and applied on one worker loop.
+#[derive(Clone, Debug)]
+pub(crate) struct ServiceWorkerRegistrationTask {
+    pub(crate) registration: ServiceWorkerRegistrationSnapshot,
+    pub(crate) events: Vec<crate::types::ServiceWorkerLifecycleClientEvent>,
+}
+
 impl ServiceWorkerRegistrationSnapshot {
     pub(super) fn new(
         registration_id: ServiceWorkerRegistrationId,
