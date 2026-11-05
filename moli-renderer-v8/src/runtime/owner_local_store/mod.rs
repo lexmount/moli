@@ -422,9 +422,18 @@ impl LivePagePendingNavigationCompletion {
 
     pub(super) fn detach_command_observer(self) -> (Self, bool) {
         match self {
-            Self::CompletePageCreation { .. } | Self::CompletePageReplacement { .. } => {
-                (self, false)
-            }
+            Self::CompletePageCreation { .. } => (self, false),
+            Self::CompletePageReplacement {
+                navigation_reply_policy,
+            } => (
+                // The existing Page still has its original close owner after
+                // this observer is cancelled. Keep the committed Document's
+                // parser and lifecycle work on that Page.
+                Self::PublishedPageCreation {
+                    navigation_reply_policy,
+                },
+                true,
+            ),
             Self::Background
             | Self::PublishedPageCreation { .. }
             | Self::ReplyWithSnapshot { .. }
