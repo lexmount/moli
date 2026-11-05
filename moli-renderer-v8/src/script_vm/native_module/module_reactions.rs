@@ -87,63 +87,51 @@ impl ScriptVm {
                 "main module evaluation reaction has no current Document owner",
             )
         })?;
-        self.renderer_document_isolate
-            .with_entered_renderer_document_isolate(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_runtime.context);
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let reaction_id_value = v8::BigInt::new_from_u64(scope, reaction_id);
-                let data = NativeModuleScriptReactionDataDeclaration {
-                    module_script_reaction_id: reaction_id_value,
-                    scheduler_lane_id: v8::BigInt::new_from_u64(
-                        scope,
-                        document_owner.scheduler_lane_id.0,
-                    ),
-                    local_window_id: v8::BigInt::new_from_u64(
-                        scope,
-                        document_owner.local_window_id.0,
-                    ),
-                    document_id: v8::BigInt::new_from_u64(scope, document_owner.document_id.0),
-                }
-                .bind(scope)
-                .map_err(|error| {
-                    anyhow::anyhow!("failed to create native module script reaction data: {error}")
-                })?;
-                let on_fulfilled =
-                    v8::Function::builder(native_module_script_reaction_fulfilled_callback)
-                        .data(data.into())
-                        .build(scope)
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "failed to create native module script success reaction"
-                            )
-                        })?;
-                let on_rejected =
-                    v8::Function::builder(native_module_script_reaction_rejected_callback)
-                        .data(data.into())
-                        .build(scope)
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "failed to create native module script failure reaction"
-                            )
-                        })?;
-                let promise = v8::Local::new(scope, &promise);
-                promise
-                    .then2(scope, on_fulfilled, on_rejected)
-                    .map(|_| ())
+        self.with_default_context_scope(|scope, _| {
+            let reaction_id_value = v8::BigInt::new_from_u64(scope, reaction_id);
+            let data = NativeModuleScriptReactionDataDeclaration {
+                module_script_reaction_id: reaction_id_value,
+                scheduler_lane_id: v8::BigInt::new_from_u64(
+                    scope,
+                    document_owner.scheduler_lane_id.0,
+                ),
+                local_window_id: v8::BigInt::new_from_u64(scope, document_owner.local_window_id.0),
+                document_id: v8::BigInt::new_from_u64(scope, document_owner.document_id.0),
+            }
+            .bind(scope)
+            .map_err(|error| {
+                anyhow::anyhow!("failed to create native module script reaction data: {error}")
+            })?;
+            let on_fulfilled =
+                v8::Function::builder(native_module_script_reaction_fulfilled_callback)
+                    .data(data.into())
+                    .build(scope)
                     .ok_or_else(|| {
-                        anyhow::anyhow!("failed to attach native module script reactions")
+                        anyhow::anyhow!("failed to create native module script success reaction")
                     })?;
-                // `then` schedules the module-script evaluation reaction as a
-                // V8 microtask, even if the evaluation promise is already
-                // settled. Chromium runs module evaluation's error handling
-                // before the script runner advances to later pending scripts;
-                // drain this owner-lane checkpoint now so TLA rejection cannot
-                // be observed after a later dynamic module.
-                Self::perform_microtask_checkpoints(scope, None)
-            })
-            .map_err(|error| ModuleLoadError::new(ModuleLoadStage::Evaluate, error.to_string()))
+            let on_rejected =
+                v8::Function::builder(native_module_script_reaction_rejected_callback)
+                    .data(data.into())
+                    .build(scope)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("failed to create native module script failure reaction")
+                    })?;
+            let promise = v8::Local::new(scope, &promise);
+            promise
+                .then2(scope, on_fulfilled, on_rejected)
+                .map(|_| ())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("failed to attach native module script reactions")
+                })?;
+            // `then` schedules the module-script evaluation reaction as a
+            // V8 microtask, even if the evaluation promise is already
+            // settled. Chromium runs module evaluation's error handling
+            // before the script runner advances to later pending scripts;
+            // drain this owner-lane checkpoint now so TLA rejection cannot
+            // be observed after a later dynamic module.
+            Self::perform_microtask_checkpoints(scope, None)
+        })
+        .map_err(|error| ModuleLoadError::new(ModuleLoadStage::Evaluate, error.to_string()))
     }
     pub(crate) fn attach_child_parser_module_script_evaluation_reactions(
         &mut self,

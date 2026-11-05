@@ -6871,7 +6871,7 @@ fn indexed_db_request_getters_preserve_native_proxy_identity_and_reject_author_w
       nativeRequest.onupgradeneeded=()=>nativeRequest.result.createObjectStore('s');"#,
     )
     .unwrap();
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let key = crate::util::v8str(scope, "nativeRequest");

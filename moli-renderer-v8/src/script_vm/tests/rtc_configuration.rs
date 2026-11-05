@@ -28,7 +28,7 @@ fn rtc_configuration_uses_registered_native_proxy_identity() {
     let mut vm = new_storage_page_task_executor_test_vm("https://rtc-configuration.test/");
     vm.eval("globalThis.pc = new RTCPeerConnection({iceTransportPolicy:'relay'})")
         .unwrap();
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let target = global
@@ -66,7 +66,7 @@ fn rtc_configuration_uses_registered_native_proxy_identity() {
 #[test]
 fn rtc_configuration_snapshots_preserve_certificate_identity_and_immutability() {
     let mut vm = new_storage_page_task_executor_test_vm("https://rtc-configuration.test/");
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let certificate = v8::Object::new(scope);
         crate::web_api_interfaces::RTCCertificate::DESCRIPTOR

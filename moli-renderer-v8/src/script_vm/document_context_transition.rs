@@ -142,7 +142,11 @@ impl ScriptVm {
         let journal = environment.output_journal();
         let isolate = self.renderer_document_isolate.clone();
         let inspector_isolate = isolate.clone();
-        let context = &self.page_default_runtime.context;
+        let context = &self
+            .main_world
+            .current()
+            .ok_or_else(|| anyhow!("Window reuse requires its initialized realm"))?
+            .context;
         let source_document = self
             ._context_host
             .borrow()

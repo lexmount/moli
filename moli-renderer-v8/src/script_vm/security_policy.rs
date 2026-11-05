@@ -1,12 +1,9 @@
-use std::pin::pin;
-
 use anyhow::Result;
 
 use super::ScriptVm;
 use crate::{
     context_bootstrap::{TrustedTypesCodeGenerationCheck, trusted_types_code_generation_check},
     document_runtime::DocumentContentSecurityPolicyViolation,
-    native_bridge::JsContextHost,
     page_task_queue::ContentSecurityPolicyViolationEventTask,
     util::context_host_ptr_from_global_bridge,
 };
@@ -38,18 +35,11 @@ impl ScriptVm {
         &mut self,
         violation: &DocumentContentSecurityPolicyViolation,
     ) -> Result<()> {
-        self.initialize_main_world_if_needed()?;
-        self.renderer_document_isolate
-            .with_entered_renderer_document_isolate(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_runtime.context);
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let host_ptr: *mut JsContextHost = (*self._context_host).as_ptr();
-                self.document_runtime
-                    .queue_content_security_policy_violation_event(scope, host_ptr, violation)?;
-                Ok(())
-            })
+        self.with_main_world_document_scope(|scope, host_ptr, document_runtime| {
+            document_runtime
+                .queue_content_security_policy_violation_event(scope, host_ptr, violation)?;
+            Ok(())
+        })
     }
 
     #[cfg(test)]
@@ -87,20 +77,12 @@ impl ScriptVm {
         if self.current_main_document_task_owner() != Some(task.owner()) {
             return ContentSecurityPolicyViolationBodyExecution::DiscardedStaleDocument;
         }
-        let result = self
-            .renderer_document_isolate
-            .with_entered_renderer_document_isolate(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_runtime.context);
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let host_ptr: *mut JsContextHost = (*self._context_host).as_ptr();
-                self.document_runtime
-                    .dispatch_content_security_policy_violation_event_page_task(
-                        scope, host_ptr, task,
-                    )?;
-                Ok(())
-            });
+        let result = self.with_main_world_document_scope(|scope, host_ptr, document_runtime| {
+            document_runtime.dispatch_content_security_policy_violation_event_page_task(
+                scope, host_ptr, task,
+            )?;
+            Ok(())
+        });
         ContentSecurityPolicyViolationBodyExecution::DispatchAttempted(result)
     }
 

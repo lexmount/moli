@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use std::pin::pin;
 use std::time::{Duration, Instant};
 
-use super::ScriptVm;
+use super::{ScriptVm, main_world::MainWorldLifecycleTiming};
 use crate::context_bootstrap::{
     construct_original_event, construct_original_page_transition_event,
     record_performance_dom_content_loaded_event_end,
@@ -27,44 +27,20 @@ const LIFECYCLE_EVENT_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
 
 impl ScriptVm {
     fn dispatch_document_event_body(&mut self, event_type: &str) -> Result<()> {
-        if !self.main_world_is_initialized() {
-            return Ok(());
-        }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-        let context_host = self._context_host.clone();
-        let document_runtime = &mut self.document_runtime;
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                // SAFETY: as_ptr() — V8 callbacks are re-entrant; borrow_mut() panics. See util.rs.
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
-                document_runtime
-                    .dispatch_document_event(scope, host_ptr, event_type)
-                    .map_err(anyhow::Error::msg)
-            })
+        self.with_current_main_world_document_scope(|scope, host_ptr, document_runtime| {
+            document_runtime
+                .dispatch_document_event(scope, host_ptr, event_type)
+                .map_err(anyhow::Error::msg)
+        })
+        .map(|_| ())
     }
 
     pub(super) fn perform_owner_lane_task_microtask_checkpoints(&mut self) -> Result<()> {
-        if !self.main_world_is_initialized() {
-            return Ok(());
-        }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-        self.renderer_document_isolate
-            .with_entered_renderer_document_isolate(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                // SAFETY: `context_ptr` points at `self.page_default_runtime.context`, and this closure runs with
-                // the document isolate entered. `ScriptVm` owns both values, so the context belongs
-                // to the entered isolate for the full checkpoint scope.
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                Self::perform_microtask_checkpoints(scope, None)?;
-                Ok(())
-            })
-            .context("owner-lane microtask checkpoint failed")
+        self.with_current_main_world_scope(|scope, _| {
+            Self::perform_microtask_checkpoints(scope, None)
+        })
+        .map(|_| ())
+        .context("owner-lane microtask checkpoint failed")
     }
 
     /// Execute the body of one V8 foreground continuation.
@@ -122,12 +98,15 @@ impl ScriptVm {
         &mut self,
         event_type: &str,
     ) -> Result<()> {
-        if let Some(pending) = self.pending_main_world.as_mut() {
-            if event_type == "DOMContentLoaded" {
-                pending.performance.record(0);
-            }
+        let runtime = if event_type == "DOMContentLoaded" {
+            self.main_world
+                .record_lifecycle_timing(MainWorldLifecycleTiming::DomContentLoadedStart)
+        } else {
+            self.current_main_world()
+        };
+        let Some(context_ptr) = runtime.map(super::WindowRealmRuntime::context_ptr) else {
             return Ok(());
-        }
+        };
         let watchdog = self
             .renderer_document_isolate
             .with_renderer_document_isolate_mut(|isolate| {
@@ -141,7 +120,6 @@ impl ScriptVm {
             });
         let watchdog_timeout = watchdog.timeout();
         let result = {
-            let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
             self.renderer_document_isolate
                 .with_renderer_document_isolate_mut(|isolate| {
                     let scope = pin!(v8::HandleScope::new(isolate));
@@ -169,22 +147,18 @@ impl ScriptVm {
     /// Publish the event-end timing that is intentionally observable only
     /// after the owning lifecycle task's checkpoint.
     pub(super) fn record_document_lifecycle_event_end(&mut self, event_type: &str) {
-        if let Some(pending) = self.pending_main_world.as_mut() {
-            if event_type == "DOMContentLoaded" {
-                pending.performance.record(1);
-            }
+        if event_type != "DOMContentLoaded" {
             return;
         }
-        if event_type == "DOMContentLoaded" {
-            let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-            self.renderer_document_isolate
-                .with_renderer_document_isolate_mut(|isolate| {
-                    let scope = pin!(v8::HandleScope::new(isolate));
-                    let scope = &mut scope.init();
-                    let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                    let scope = &mut v8::ContextScope::new(scope, context);
-                    record_performance_dom_content_loaded_event_end(scope);
-                });
+        let context_ptr = self
+            .main_world
+            .record_lifecycle_timing(MainWorldLifecycleTiming::DomContentLoadedEnd)
+            .map(super::WindowRealmRuntime::context_ptr);
+        if let Some(context_ptr) = context_ptr {
+            let _ = self.with_context_scope_by_ptr(context_ptr, |scope, _| {
+                record_performance_dom_content_loaded_event_end(scope);
+                Ok(())
+            });
         }
     }
 
@@ -215,7 +189,7 @@ impl ScriptVm {
     }
 
     pub(super) fn queue_current_main_document_image_load_events(&mut self) -> Result<()> {
-        if !self.main_world_is_initialized() {
+        if self.current_main_world().is_none() {
             let has_resources = self
                 .document_runtime
                 .dom_host()
@@ -231,26 +205,15 @@ impl ScriptVm {
             if !has_resources {
                 return Ok(());
             }
-            self.initialize_main_world_if_needed()?;
         }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-        let context_host = self._context_host.clone();
-        let document_runtime = &mut self.document_runtime;
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                // SAFETY: as_ptr() - V8 callbacks are re-entrant; borrow_mut() panics. See util.rs.
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
-                document_runtime.queue_current_main_document_image_load_events(scope, host_ptr);
-                Ok(())
-            })
+        self.with_main_world_document_scope(|scope, host_ptr, document_runtime| {
+            document_runtime.queue_current_main_document_image_load_events(scope, host_ptr);
+            Ok(())
+        })
     }
 
     pub(super) fn queue_current_main_document_media_loads(&mut self) -> Result<()> {
-        if !self.main_world_is_initialized() {
+        if self.current_main_world().is_none() {
             let has_resources = self
                 .document_runtime
                 .dom_host()
@@ -268,36 +231,27 @@ impl ScriptVm {
             if !has_resources {
                 return Ok(());
             }
-            self.initialize_main_world_if_needed()?;
         }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-        let context_host = self._context_host.clone();
-        let document_runtime = &mut self.document_runtime;
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                // SAFETY: as_ptr() - V8 callbacks are re-entrant; borrow_mut() panics. See util.rs.
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
-                document_runtime.queue_current_main_document_media_loads(scope, host_ptr);
-                Ok(())
-            })
+        self.with_main_world_document_scope(|scope, host_ptr, document_runtime| {
+            document_runtime.queue_current_main_document_media_loads(scope, host_ptr);
+            Ok(())
+        })
     }
 
     /// Dispatch the Window `load` body without crossing the load-to-pageshow
     /// lifecycle checkpoint.
     pub(super) fn dispatch_window_load_event_body(&mut self) -> Result<()> {
         self.initialize_main_world_for_window_handler()?;
-        if let Some(pending) = self.pending_main_world.as_mut() {
-            pending.performance.record(2);
+        let Some(context_ptr) = self
+            .main_world
+            .record_lifecycle_timing(MainWorldLifecycleTiming::LoadStart)
+            .map(super::WindowRealmRuntime::context_ptr)
+        else {
             return Ok(());
-        }
+        };
         let timing_enabled = moli_trace::cdp_nav_timing_enabled();
         let task_started = timing_enabled.then(Instant::now);
         self.prune_stale_child_default_execution_contexts();
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate
@@ -393,11 +347,13 @@ impl ScriptVm {
     /// checkpoint. This method deliberately does not perform the final task-end
     /// checkpoint after pageshow.
     pub(super) fn dispatch_window_pageshow_event_body(&mut self) -> Result<()> {
-        if let Some(pending) = self.pending_main_world.as_mut() {
-            pending.performance.record(3);
+        let Some(context_ptr) = self
+            .main_world
+            .record_lifecycle_timing(MainWorldLifecycleTiming::LoadEnd)
+            .map(super::WindowRealmRuntime::context_ptr)
+        else {
             return Ok(());
-        }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
+        };
         let context_host = self._context_host.clone();
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate

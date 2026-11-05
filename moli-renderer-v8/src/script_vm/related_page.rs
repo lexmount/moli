@@ -62,8 +62,8 @@ impl ScriptVmDefaultWorldBootstrap {
                 .borrow_mut()
                 .mark_main_document_initial_empty();
         }
-        let bootstrap = bootstrap.default_world_in_entered_scope(scope, global_template)?;
-        let context = v8::Local::new(scope, &bootstrap.page_default_runtime.context);
+        let (bootstrap, context) =
+            bootstrap.default_world_in_entered_scope(scope, global_template)?;
         // A propagated origin sandbox gives the popup a fresh opaque origin.
         // Keep its unique token; copying the opener's token would bypass SOP.
         if !env.document_policy_container.sandbox.forces_opaque_origin {
@@ -86,7 +86,7 @@ impl ScriptVmDefaultWorldBootstrap {
         }
         let mut vm = bootstrap.finish_in_scope(scope);
         vm.set_initial_storage_backends_in_scope(
-            scope,
+            context,
             env.indexed_db_manager.clone(),
             env.storage_bucket_store.clone(),
         );
@@ -99,7 +99,10 @@ impl ScriptVmPageRealmBootstrap {
         self,
         scope: &mut v8::PinScope<'s, '_, ()>,
         global_template: v8::Local<'s, v8::ObjectTemplate>,
-    ) -> std::result::Result<ScriptVmDefaultWorldBootstrap, ScriptVmBootstrapError> {
+    ) -> std::result::Result<
+        (ScriptVmDefaultWorldBootstrap, v8::Local<'s, v8::Context>),
+        ScriptVmBootstrapError,
+    > {
         let Self {
             inherited_security_token: _,
             initialize_main_world: _,
@@ -186,36 +189,39 @@ impl ScriptVmPageRealmBootstrap {
                 )));
             }
         };
-        Ok(ScriptVmDefaultWorldBootstrap {
-            pending_main_world: None,
-            resource_owner_id,
-            promise_reject_dispatch,
-            page_inspector,
-            renderer_document_isolate,
-            renderer_document_isolate_teardown,
-            page_default_runtime: runtime,
-            baseline_globals,
-            document_runtime,
-            root_frame_id,
-            context_host,
-            prebootstrapped_child_default_contexts,
-            page_context_cancel_tx,
-            post_domcontentloaded_page_task_tx,
-            page_runtime_wake_tx,
-            storage_bucket_store,
-            renderer_page_script_environment,
-        })
+        Ok((
+            ScriptVmDefaultWorldBootstrap {
+                main_world: MainWorld::Ready {
+                    runtime,
+                    _baseline_globals: baseline_globals,
+                },
+                resource_owner_id,
+                promise_reject_dispatch,
+                page_inspector,
+                renderer_document_isolate,
+                renderer_document_isolate_teardown,
+                document_runtime,
+                root_frame_id,
+                context_host,
+                prebootstrapped_child_default_contexts,
+                page_context_cancel_tx,
+                post_domcontentloaded_page_task_tx,
+                page_runtime_wake_tx,
+                storage_bucket_store,
+                renderer_page_script_environment,
+            },
+            local_context,
+        ))
     }
 }
 
 impl ScriptVm {
     fn set_initial_storage_backends_in_scope(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
+        context: v8::Local<'_, v8::Context>,
         manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
         storage: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     ) {
-        let context = v8::Local::new(scope, &self.page_default_runtime.context);
         self.indexed_db_manager = manager.clone();
         self._context_host
             .borrow_mut()
@@ -254,7 +260,11 @@ impl ScriptVm {
         self.root_frame_id = root_frame_id;
         let isolate = self.renderer_document_isolate.clone();
         let inspector_isolate = isolate.clone();
-        let context = &self.page_default_runtime.context;
+        let context = &self
+            .main_world
+            .current()
+            .ok_or_else(|| anyhow!("related Page adoption requires its initialized Window realm"))?
+            .context;
         let document_url = self.document_runtime.document_url().clone();
         let root_frame_id = self.root_frame_id.as_deref();
         let source_document = self

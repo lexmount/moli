@@ -618,7 +618,7 @@ impl ScriptVm {
         &mut self,
         effects: DomMutationEffects,
     ) -> Result<()> {
-        if !self.main_world_is_initialized() {
+        if self.current_main_world().is_none() {
             self.document_runtime
                 .apply_parser_mutation_effects_without_window_realm(
                     (*self._context_host).as_ptr(),
@@ -637,7 +637,7 @@ impl ScriptVm {
         &mut self,
         mutation: crate::parser::ParserDomMutation,
     ) -> Result<()> {
-        if !self.main_world_is_initialized()
+        if self.current_main_world().is_none()
             && !self
                 .document_runtime
                 .parser_mutation_needs_window_realm(&mutation)
@@ -680,20 +680,18 @@ impl ScriptVm {
     }
 
     pub(crate) fn flush_parser_custom_element_handoff_replacements(&mut self) -> Result<()> {
-        if !self.main_world_is_initialized() {
-            return Ok(());
-        }
-        self.with_default_context_scope(|scope, host_ptr| {
+        self.with_current_main_world_scope(|scope, host_ptr| {
             custom_elements::flush_parser_custom_element_handoff_replacements(scope, host_ptr);
             Ok(())
         })
+        .map(|_| ())
     }
 
     pub(crate) fn install_session_history_position(
         &mut self,
         position: moli_session_history::SessionHistoryPosition,
     ) {
-        if let Some(pending) = self.pending_main_world.as_mut() {
+        if let Some(pending) = self.main_world.pending_mut() {
             pending.history_position = Some(position);
             return;
         }
@@ -707,7 +705,7 @@ impl ScriptVm {
         &mut self,
         entry_seed: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     ) {
-        if let Some(pending) = self.pending_main_world.as_mut() {
+        if let Some(pending) = self.main_world.pending_mut() {
             pending.history_entry = entry_seed;
             return;
         }
@@ -725,7 +723,7 @@ impl ScriptVm {
         url: &url::Url,
         position: moli_session_history::SessionHistoryPosition,
     ) -> Result<Option<crate::native_bridge::NavigationHistoryEntrySeed>> {
-        if let Some(pending) = self.pending_main_world.as_ref() {
+        if let Some(pending) = self.main_world.pending() {
             // No author realm has mutated History. Preserve the native seed
             // without materializing the outgoing Window during commit.
             return Ok(pending.history_entry.as_ref().and_then(|seed| {

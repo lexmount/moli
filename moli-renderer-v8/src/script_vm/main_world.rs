@@ -1,5 +1,64 @@
 use super::*;
 
+pub(super) enum MainWorld {
+    // The large startup seeds are released when the realm is materialized.
+    Pending(Box<PendingMainWorld>),
+    Ready {
+        runtime: WindowRealmRuntime,
+        _baseline_globals: ScriptGlobalsBaseline,
+    },
+}
+
+impl MainWorld {
+    pub(super) fn record_lifecycle_timing(
+        &mut self,
+        timing: MainWorldLifecycleTiming,
+    ) -> Option<&WindowRealmRuntime> {
+        match self {
+            Self::Pending(pending) => {
+                pending.performance.record(timing as usize);
+                None
+            }
+            Self::Ready { runtime, .. } => Some(runtime),
+        }
+    }
+
+    pub(super) fn current(&self) -> Option<&WindowRealmRuntime> {
+        match self {
+            Self::Pending(_) => None,
+            Self::Ready { runtime, .. } => Some(runtime),
+        }
+    }
+
+    pub(super) fn current_mut(&mut self) -> Option<&mut WindowRealmRuntime> {
+        match self {
+            Self::Pending(_) => None,
+            Self::Ready { runtime, .. } => Some(runtime),
+        }
+    }
+
+    pub(super) fn pending(&self) -> Option<&PendingMainWorld> {
+        match self {
+            Self::Pending(pending) => Some(pending),
+            Self::Ready { .. } => None,
+        }
+    }
+
+    pub(super) fn pending_mut(&mut self) -> Option<&mut PendingMainWorld> {
+        match self {
+            Self::Pending(pending) => Some(pending),
+            Self::Ready { .. } => None,
+        }
+    }
+}
+
+pub(super) enum MainWorldLifecycleTiming {
+    DomContentLoadedStart,
+    DomContentLoadedEnd,
+    LoadStart,
+    LoadEnd,
+}
+
 /// Native Document state is already live. These are the remaining inputs for
 /// its first main-world Context, not a second Document or bootstrap DOM.
 #[derive(Default)]
@@ -131,7 +190,7 @@ pub(super) fn initialize(
 
 impl ScriptVm {
     pub(super) fn initialize_main_world_for_window_handler(&mut self) -> Result<()> {
-        if self.main_world_is_initialized() {
+        if self.current_main_world().is_some() {
             return Ok(());
         }
         let dom = self.document_runtime.dom_host().dom();
@@ -145,39 +204,40 @@ impl ScriptVm {
                     .any(|name| body.attribute(name).is_some())
             });
         if has_handler {
-            self.initialize_main_world_if_needed()?;
+            self.ensure_main_world()?;
         }
         Ok(())
     }
 
-    pub(crate) fn main_world_is_initialized(&self) -> bool {
-        self.page_default_runtime.is_initialized()
+    pub(super) fn current_main_world(&self) -> Option<&WindowRealmRuntime> {
+        self.main_world.current()
     }
 
-    pub(crate) fn initialize_main_world_if_needed(&mut self) -> Result<()> {
-        let Some(pending) = self.pending_main_world.as_ref() else {
-            return Ok(());
-        };
-        let (runtime, baseline) = initialize(
-            &self.renderer_document_isolate,
-            &self._context_host,
-            self.resource_owner_id,
-            &self.promise_reject_dispatch,
-            self.storage_bucket_store.clone(),
-            self.indexed_db_manager.clone(),
-            self.renderer_page_script_environment.clone(),
-            self.root_frame_id.as_deref(),
-            &mut self.page_inspector,
-            pending,
-        )?;
-        self.page_default_runtime = runtime;
-        self.baseline_globals = baseline;
-        self.pending_main_world = None;
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                self.retain_native_hosts_in_scope(&mut scope.init());
-            });
-        Ok(())
+    pub(crate) fn ensure_main_world(&mut self) -> Result<&WindowRealmRuntime> {
+        if let Some(pending) = self.main_world.pending() {
+            let (runtime, baseline_globals) = initialize(
+                &self.renderer_document_isolate,
+                &self._context_host,
+                self.resource_owner_id,
+                &self.promise_reject_dispatch,
+                self.storage_bucket_store.clone(),
+                self.indexed_db_manager.clone(),
+                self.renderer_page_script_environment.clone(),
+                self.root_frame_id.as_deref(),
+                &mut self.page_inspector,
+                pending,
+            )?;
+            self.renderer_document_isolate
+                .with_renderer_document_isolate_mut(|isolate| {
+                    let scope = pin!(v8::HandleScope::new(isolate));
+                    self.retain_native_hosts_in_scope(&mut scope.init(), &runtime);
+                });
+            self.main_world = MainWorld::Ready {
+                runtime,
+                _baseline_globals: baseline_globals,
+            };
+        }
+        self.current_main_world()
+            .ok_or_else(|| anyhow!("main-world initialization did not produce a Window realm"))
     }
 }

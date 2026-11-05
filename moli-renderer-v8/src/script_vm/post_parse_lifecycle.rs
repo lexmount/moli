@@ -1,4 +1,3 @@
-use std::pin::pin;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug;
@@ -30,7 +29,6 @@ use crate::host::{
 use crate::module_script_continuation::{
     ModuleScriptContinuation, ModuleScriptEvaluationContinuation, ModuleScriptEvaluationUpdate,
 };
-use crate::native_bridge::JsContextHost;
 use crate::network::ResourceRequestClient;
 use crate::page_task_queue::PageTaskQueue;
 use crate::page_task_queue::{
@@ -2274,7 +2272,7 @@ impl ScriptVm {
         &mut self,
         ready: crate::document_runtime::ReadyConnectedStyleLoad,
     ) -> bool {
-        if !self.main_world_is_initialized() {
+        if self.current_main_world().is_none() {
             let host_ptr = (*self._context_host).as_ptr();
             if ready.load_event_binding().is_some_and(|binding| {
                 !unsafe { &*host_ptr }.main_style_load_event_is_current(binding)
@@ -2292,48 +2290,26 @@ impl ScriptVm {
                     .consume_pending_style_load(host_ptr, &ready);
                 return true;
             }
-            if let Err(error) = self.initialize_main_world_if_needed() {
-                self.record_runtime_warning(format_args!(
-                    "style handler initialization failed: {error}"
-                ));
-                return false;
-            }
         }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-        let context_host = self._context_host.clone();
-        let document_runtime = &mut self.document_runtime;
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
-                if ready.load_event_binding().is_some_and(|binding| {
-                    !unsafe { &*host_ptr }.main_style_load_event_is_current(binding)
-                }) {
-                    return false;
-                }
-                document_runtime.dispatch_pending_style_load(scope, host_ptr, ready)
-            })
+        self.with_main_world_document_scope(|scope, host_ptr, document_runtime| {
+            if ready.load_event_binding().is_some_and(|binding| {
+                !unsafe { &*host_ptr }.main_style_load_event_is_current(binding)
+            }) {
+                return Ok(false);
+            }
+            Ok(document_runtime.dispatch_pending_style_load(scope, host_ptr, ready))
+        })
+        .unwrap_or_else(|error| {
+            self.record_runtime_warning(format_args!("style handler dispatch failed: {error}"));
+            false
+        })
     }
 
     pub(crate) fn apply_pending_stylesheet_source_css_projections(&mut self) {
-        if !self.main_world_is_initialized() {
-            return;
-        }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-        let context_host = self._context_host.clone();
-        let document_runtime = &mut self.document_runtime;
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
-                document_runtime.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
-            });
+        let _ = self.with_current_main_world_document_scope(|scope, host_ptr, document_runtime| {
+            document_runtime.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
+            Ok(())
+        });
     }
 
     pub(crate) fn settle_stylesheet_link_clients(
@@ -2343,47 +2319,29 @@ impl ScriptVm {
         if clients.is_empty() {
             return;
         }
-        if let Err(error) = self.initialize_main_world_if_needed() {
-            self.record_runtime_warning(format_args!(
-                "stylesheet main world initialization failed: {error}"
-            ));
-            return;
-        }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-        let context_host = self._context_host.clone();
-        let document_runtime = &mut self.document_runtime;
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
+        if let Err(error) =
+            self.with_main_world_document_scope(|scope, host_ptr, document_runtime| {
                 document_runtime
                     .settle_stylesheet_link_clients_in_current_scope(scope, host_ptr, clients);
-            });
+                Ok(())
+            })
+        {
+            self.record_runtime_warning(format_args!(
+                "stylesheet client settlement failed: {error}"
+            ));
+        }
     }
 
     pub(crate) fn dispatch_preload_like_link_error_event(&mut self, handle: DomHandle) -> bool {
-        if let Err(error) = self.initialize_main_world_if_needed() {
-            self.record_runtime_warning(format_args!(
-                "stylesheet main world initialization failed: {error}"
-            ));
-            return false;
-        }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-        let context_host = self._context_host.clone();
-        let document_runtime = &mut self.document_runtime;
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
-                document_runtime.dispatch_preload_like_link_error_event(scope, host_ptr, handle);
-            });
-        true
+        self.with_main_world_document_scope(|scope, host_ptr, document_runtime| {
+            document_runtime.dispatch_preload_like_link_error_event(scope, host_ptr, handle);
+            Ok(())
+        })
+        .map(|_| true)
+        .unwrap_or_else(|error| {
+            self.record_runtime_warning(format_args!("stylesheet error dispatch failed: {error}"));
+            false
+        })
     }
 
     pub(crate) fn bind_prepared_script_handle_if_needed(
@@ -2494,28 +2452,18 @@ impl ScriptVm {
             return;
         }
 
-        if let Err(error) = self.initialize_main_world_if_needed() {
-            self.record_runtime_warning(format_args!(
-                "CSP main world initialization failed: {error}"
-            ));
-            return;
-        }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-        let context_host = self._context_host.clone();
-        let document_runtime = &mut self.document_runtime;
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
+        if let Err(error) =
+            self.with_main_world_document_scope(|scope, host_ptr, document_runtime| {
                 for violation in violations {
                     document_runtime.queue_content_security_policy_violation_event_best_effort(
                         scope, host_ptr, &violation,
                     );
                 }
-            });
+                Ok(())
+            })
+        {
+            self.record_runtime_warning(format_args!("CSP violation dispatch failed: {error}"));
+        }
     }
 
     pub(crate) fn record_ready_stylesheet_network_results(&mut self) {

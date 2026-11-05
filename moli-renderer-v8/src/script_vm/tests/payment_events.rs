@@ -42,7 +42,7 @@ fn payment_event_payloads_and_update_with_accept_registered_native_proxies() {
     let mut vm = new_storage_page_task_executor_test_vm("https://payment-native-proxy.test/");
     vm.eval("globalThis.paymentEvent = new PaymentMethodChangeEvent('x', {methodName:'pay', methodDetails:{token:42}})")
         .unwrap();
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let key = crate::util::v8str(scope, "paymentEvent");

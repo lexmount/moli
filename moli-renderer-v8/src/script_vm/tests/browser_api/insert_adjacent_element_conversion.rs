@@ -21,7 +21,7 @@ fn insert_adjacent_element_preserves_registered_native_alias_identity() {
         "<!doctype html><body><iframe id=child></iframe></body>",
     );
     vm.eval("globalThis.adjacentOwner=document.getElementById('child').contentWindow;globalThis.adjacentRoot=adjacentOwner.document.createElement('div');globalThis.adjacentNode=adjacentOwner.document.createElement('span');adjacentOwner.document.body.appendChild(adjacentRoot)").unwrap();
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for (name, alias) in [

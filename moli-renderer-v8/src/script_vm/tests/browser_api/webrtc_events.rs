@@ -283,7 +283,7 @@ fn webrtc_event_dictionary_snapshots_preserve_registered_native_proxy_payloads()
     "#,
     )
     .unwrap();
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for name in ["snapshotCandidate", "snapshotChannel", "snapshotError"] {

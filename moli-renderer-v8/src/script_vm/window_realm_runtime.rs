@@ -1,4 +1,4 @@
-use std::{cell::RefCell, ops::Deref, rc::Weak};
+use std::{cell::RefCell, mem::ManuallyDrop, ops::Deref, rc::Weak};
 
 use crate::native_bridge::{JsContextHost, JsContextHostBridgeRef, RuntimeObservableContextToken};
 
@@ -8,7 +8,8 @@ use super::RendererDeferredContextHostReleaseQueue;
 /// with the Context through prebootstrap and publication. Retained JS objects
 /// own their native backing separately; they never own this runtime record.
 pub(crate) struct WindowRealmRuntime {
-    state: Option<WindowRealmRuntimeState>,
+    // Always live until Drop moves it into the deferred-close queue.
+    state: ManuallyDrop<WindowRealmRuntimeState>,
     deferred_releases: RendererDeferredContextHostReleaseQueue,
     closed: bool,
 }
@@ -31,20 +32,6 @@ impl std::fmt::Debug for WindowRealmRuntimeState {
 }
 
 impl WindowRealmRuntime {
-    pub(super) fn uninitialized(
-        deferred_releases: RendererDeferredContextHostReleaseQueue,
-    ) -> Self {
-        Self {
-            state: None,
-            deferred_releases,
-            closed: false,
-        }
-    }
-
-    pub(super) fn is_initialized(&self) -> bool {
-        self.state.is_some()
-    }
-
     pub(super) fn new(
         scope: &mut v8::PinScope<'_, '_, ()>,
         context: v8::Local<'_, v8::Context>,
@@ -54,7 +41,7 @@ impl WindowRealmRuntime {
         isolated: bool,
     ) -> Self {
         Self {
-            state: Some(WindowRealmRuntimeState {
+            state: ManuallyDrop::new(WindowRealmRuntimeState {
                 context: v8::Global::new(scope, context),
                 runtime_observable_context_token,
                 bridge_ref: None,
@@ -67,7 +54,7 @@ impl WindowRealmRuntime {
     }
 
     pub(super) fn install_bridge_ref(&mut self, bridge_ref: JsContextHostBridgeRef) {
-        let previous = self.state.as_mut().unwrap().bridge_ref.replace(bridge_ref);
+        let previous = self.state.bridge_ref.replace(bridge_ref);
         assert!(
             previous.is_none(),
             "a Window realm has one native bridge owner"
@@ -79,9 +66,11 @@ impl WindowRealmRuntime {
     }
 
     pub(super) fn release_bridge_ref(&mut self) {
-        if let Some(state) = self.state.as_mut() {
-            state.bridge_ref.take();
-        }
+        self.state.bridge_ref.take();
+    }
+
+    pub(super) fn context_ptr(&self) -> *const v8::Global<v8::Context> {
+        &self.context
     }
 }
 
@@ -89,19 +78,19 @@ impl Deref for WindowRealmRuntime {
     type Target = WindowRealmRuntimeState;
 
     fn deref(&self) -> &Self::Target {
-        self.state
-            .as_ref()
-            .expect("a live runtime owns its Context")
+        &self.state
     }
 }
 
 impl Drop for WindowRealmRuntime {
     fn drop(&mut self) {
-        if !self.closed && self.state.is_some() {
+        // SAFETY: new() initializes state, no method moves it, and Drop takes
+        // it exactly once. The ManuallyDrop field never drops the moved state.
+        let mut state = unsafe { ManuallyDrop::take(&mut self.state) };
+        if !self.closed {
             // A cache replacement or bootstrap error can occur during a V8
             // callback with the host already borrowed. Drop only queues the
             // record; cleanup runs after the outer entered-isolate operation.
-            let mut state = self.state.take().unwrap();
             // Before publication this bridge token is the only native owner
             // installed in the Context. Do not defer it past recovery of the
             // bootstrap's DocumentRuntime, which the host only borrows.

@@ -4,7 +4,7 @@ use anyhow::Result;
 use moli_webapi_declare::WebApiObject;
 use url::Url;
 
-use super::ScriptVm;
+use super::{ScriptVm, WindowRealmRuntime};
 use crate::context_bootstrap::{
     ORIGINAL_WEBASSEMBLY_COMPILE_ERROR_CONSTRUCTOR_SLOT,
     ORIGINAL_WEBASSEMBLY_LINK_ERROR_CONSTRUCTOR_SLOT,

@@ -265,7 +265,7 @@ fn mutation_observer_observe_accepts_registered_native_proxy_targets_and_receive
         rv.set(proxy.into());
     }
     let mut vm = new_storage_html_test_vm("https://mutation-observer-native-proxy.test/");
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let function = v8::Function::new(scope, register_proxy).unwrap();

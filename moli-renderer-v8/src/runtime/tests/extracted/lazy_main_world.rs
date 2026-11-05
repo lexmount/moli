@@ -116,6 +116,58 @@ async fn evaluate_lazy_test(page: &RendererPageHandle, source: &str) -> serde_js
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn native_environment_updates_survive_main_world_activation() {
+    let (_runtime, mut page) = lazy_test_page(
+        "<!doctype html><p>Native environment before script</p>",
+        Default::default(),
+    )
+    .await;
+    assert_main_world_count(&page, 0).await;
+    for command in [
+        RendererPageCommand::SetNavigatorOverrides(moli_page_types::NavigatorOverrides {
+            online: Some(false),
+            max_touch_points: 7,
+            ..Default::default()
+        }),
+        RendererPageCommand::SetIdleOverride(Some(moli_page_types::EmulatedIdleOverride {
+            is_user_active: false,
+            is_screen_unlocked: false,
+        })),
+        RendererPageCommand::SetEmulatedMedia(moli_page_types::EmulatedMediaOverrides {
+            media: Some("print".to_owned()),
+            color_scheme: Some("dark".to_owned()),
+            ..Default::default()
+        }),
+    ] {
+        let (reply, _) = page.run_async_command(command).await.unwrap();
+        assert!(matches!(reply, RendererPageReply::Unit));
+        assert_main_world_count(&page, 0).await;
+    }
+    let expression = "JSON.stringify({online:navigator.onLine, touch:navigator.maxTouchPoints, print:matchMedia('print').matches, dark:matchMedia('(prefers-color-scheme: dark)').matches})";
+    assert_eq!(
+        evaluate_lazy_test(&page, expression).await,
+        r#"{"online":false,"touch":7,"print":true,"dark":true}"#
+    );
+    assert_main_world_count(&page, 1).await;
+
+    page.run_async_command(RendererPageCommand::SetNavigatorOverrides(
+        moli_page_types::NavigatorOverrides {
+            online: Some(true),
+            max_touch_points: 2,
+            ..Default::default()
+        },
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        evaluate_lazy_test(&page, expression).await,
+        r#"{"online":true,"touch":2,"print":true,"dark":true}"#
+    );
+    assert_main_world_count(&page, 1).await;
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn cold_runtime_binding_install_initializes_main_world() {
     for execution_context_id in [None, Some(0)] {
         let (_runtime, mut page) = lazy_test_page(

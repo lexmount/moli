@@ -733,7 +733,8 @@ async fn response_clone_tees_pending_network_body_after_parent_consumption() {
     let response_url = Url::parse("https://response-clone-pending-stream.test/data.json")
         .expect("response URL should parse");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -799,7 +800,8 @@ async fn response_clone_tees_pending_network_body_after_parent_consumption() {
     )
     .expect("pending fetch clone fan-out should evaluate");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -843,7 +845,8 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
     let response_url = Url::parse("https://pending-fetch-pipe-through.test/stream.txt")
         .expect("response URL should parse");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -905,7 +908,8 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
     )
     .expect("pending fetch pipeThrough setup should evaluate");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -930,7 +934,8 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
         .expect("first pending pipeThrough result should evaluate");
     assert_eq!(first, r#"["chunk:O"]"#);
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -965,7 +970,8 @@ fn materialize_response_object_preserves_redirected_slot() {
         .expect("document URL should parse");
     let final_url = Url::parse("https://response-materialize-redirected.test/final.txt")
         .expect("final URL should parse");
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
 
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -1026,7 +1032,7 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
         )
         .expect("final URL should parse");
         let context_ptr: *const v8::Global<v8::Context> =
-            &vm.page_default_runtime.context as *const _;
+            &vm.current_main_world().unwrap().context as *const _;
 
         vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
@@ -1134,7 +1140,7 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
         );
 
         let context_ptr: *const v8::Global<v8::Context> =
-            &vm.page_default_runtime.context as *const _;
+            &vm.current_main_world().unwrap().context as *const _;
         vm.renderer_document_isolate
             .with_entered_renderer_document_isolate(move |isolate| {
                 let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1186,7 +1192,8 @@ fn materialize_response_object_rejects_locked_response_body() {
         .expect("locked response setup should evaluate");
     assert_eq!(state, "true|false");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1497,7 +1504,8 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
     use crate::network_host::{FetchResponseRequest, MaterializedResponseBody};
 
     let vm = new_storage_test_vm("https://null-response.test/");
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     let host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {

@@ -607,14 +607,12 @@ impl RendererPageScriptEnvironment {
 }
 
 pub(crate) struct ScriptVmDefaultWorldBootstrap {
-    pub(super) pending_main_world: Option<Box<super::main_world::PendingMainWorld>>,
+    pub(super) main_world: super::main_world::MainWorld,
     pub(super) resource_owner_id: ResourceOwnerId,
     pub(super) promise_reject_dispatch: PromiseRejectDispatchSlot,
     pub(super) page_inspector: DocumentInspectorBinding,
     pub(super) renderer_document_isolate_teardown: RendererDocumentIsolateTeardown,
     pub(super) renderer_page_script_environment: Option<RendererPageScriptEnvironment>,
-    pub(super) page_default_runtime: super::WindowRealmRuntime,
-    pub(super) baseline_globals: super::ScriptGlobalsBaseline,
     pub(super) root_frame_id: Option<String>,
     pub(super) prebootstrapped_child_default_contexts: SharedPrebootstrappedChildDefaultContexts,
     pub(super) page_context_cancel_tx: RendererPageContextCancelSender,
