@@ -1,3 +1,4 @@
+use super::registration_jobs::remove_version_and_shutdown_host_locked;
 use super::*;
 
 impl ServiceWorkerRuntimeService {
@@ -84,7 +85,6 @@ impl ServiceWorkerRuntimeService {
                         version.lifecycle_state = ServiceWorkerVersionLifecycleState::Installed;
                         let registration_id = version.registration_id;
                         let skip_waiting_requested = version.skip_waiting_requested;
-                        state.record_target_version_updated(version_id);
                         let mut pending_register_job = None;
                         let previous_waiting_version_id = if let Some(registration) =
                             state.registrations.get_mut(&registration_id)
@@ -98,11 +98,23 @@ impl ServiceWorkerRuntimeService {
                         } else {
                             None
                         };
-                        match self.store_registration_resources_locked(
+                        let stored = self.store_registration_resources_locked(
                             &state,
                             registration_id,
                             version_id,
-                        ) {
+                        );
+                        // Persist the candidate before retiring the previous waiting worker.
+                        // Restore the live slots so its redundant statechange still observes
+                        // the old waiting worker and the new worker in the installing slot.
+                        if let Some(version) = state.versions.get_mut(&version_id) {
+                            version.lifecycle_state =
+                                ServiceWorkerVersionLifecycleState::Installing;
+                        }
+                        if let Some(registration) = state.registrations.get_mut(&registration_id) {
+                            registration.installing_version_id = Some(version_id);
+                            registration.waiting_version_id = previous_waiting_version_id;
+                        }
+                        match stored {
                             Err(register_error) => {
                                 let message = register_error.message.clone();
                                 if let Some(version) = state.versions.get_mut(&version_id) {
@@ -112,9 +124,8 @@ impl ServiceWorkerRuntimeService {
                                 }
                                 if let Some(registration) =
                                     state.registrations.get_mut(&registration_id)
-                                    && registration.waiting_version_id == Some(version_id)
                                 {
-                                    registration.waiting_version_id = previous_waiting_version_id;
+                                    registration.installing_version_id = None;
                                 }
                                 let register_failed = pending_register_job
                                     .and_then(|mut pending_job| {
@@ -161,6 +172,51 @@ impl ServiceWorkerRuntimeService {
                                 progress
                             }
                             Ok(_) => {
+                                let mut progress = Vec::new();
+                                if let Some(previous_waiting_version_id) =
+                                    previous_waiting_version_id
+                                    && previous_waiting_version_id != version_id
+                                {
+                                    if let Some(previous) =
+                                        state.versions.get_mut(&previous_waiting_version_id)
+                                    {
+                                        previous.lifecycle_state =
+                                            ServiceWorkerVersionLifecycleState::Redundant;
+                                    }
+                                    let retired_notifications =
+                                        lifecycle_notifications_for_registration_locked(
+                                            &state,
+                                            registration_id,
+                                            vec![
+                                                ServiceWorkerLifecycleClientEvent::WorkerStateChanged {
+                                                    version_id: previous_waiting_version_id,
+                                                    state: "redundant",
+                                                },
+                                            ],
+                                        );
+                                    progress.extend(remove_version_and_shutdown_host_locked(
+                                        &mut state,
+                                        previous_waiting_version_id,
+                                    ));
+                                    progress.extend(retired_notifications.into_iter().map(
+                                        |notification| {
+                                            LifecycleProgress::NotifyLifecycle(Box::new(
+                                                notification,
+                                            ))
+                                        },
+                                    ));
+                                }
+                                if let Some(registration) =
+                                    state.registrations.get_mut(&registration_id)
+                                {
+                                    registration.installing_version_id = None;
+                                    registration.waiting_version_id = Some(version_id);
+                                }
+                                if let Some(version) = state.versions.get_mut(&version_id) {
+                                    version.lifecycle_state =
+                                        ServiceWorkerVersionLifecycleState::Installed;
+                                }
+                                state.record_target_version_updated(version_id);
                                 let skip_waiting_after_install =
                                     pending_register_job.as_ref().is_some_and(|pending_job| {
                                         pending_job.skip_waiting_after_install()
@@ -201,12 +257,11 @@ impl ServiceWorkerRuntimeService {
                                 {
                                     version.skip_waiting_requested = true;
                                 }
-                                let mut progress = installed_notifications
-                                    .into_iter()
-                                    .map(|notification| {
+                                progress.extend(installed_notifications.into_iter().map(
+                                    |notification| {
                                         LifecycleProgress::NotifyLifecycle(Box::new(notification))
-                                    })
-                                    .collect::<Vec<_>>();
+                                    },
+                                ));
                                 if let Some(register_completed) = register_completed {
                                     progress.push(register_completed);
                                 }
