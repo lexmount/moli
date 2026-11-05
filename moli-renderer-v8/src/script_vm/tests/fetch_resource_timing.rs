@@ -268,6 +268,271 @@ async fn handle_timing_request(
     let _ = socket.write_all(&body).await;
 }
 
+fn exec_resource_initiator_script(vm: &mut ScriptVm, origin: &str, name: &str, source: &str) {
+    vm.exec_in_enclosing_script_turn_with_provenance(
+        source,
+        &crate::script_provenance::CompiledStringProvenance::at_url(
+            Url::parse(&format!("{origin}/{name}.js")).unwrap(),
+        ),
+        0,
+        None,
+        true,
+    )
+    .map_err(|error| error.into_anyhow())
+    .unwrap();
+}
+
+fn callback_resource_initiators(vm: &mut ScriptVm) -> serde_json::Value {
+    serde_json::from_str(
+        &vm.eval(
+            r#"JSON.stringify(Object.fromEntries(
+        performance.getEntriesByType('resource').map(entry => [
+            new URL(entry.name).searchParams.get('case'), entry.initiatorUrl
+        ])
+    ))"#,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn resource_timing_callback_timers_retain_each_registration_source() {
+    let server = timing_server().await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = new_storage_page_task_executor_test_vm_with_loader(
+        &format!("{}/page.html", server.origin),
+        &loader,
+    );
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "library",
+        r#"
+        globalThis.completed = [];
+        function requestFromShared(label) {
+            return fetch('/probe?case=' + label).then(response => response.arrayBuffer())
+                .then(() => completed.push(label));
+        }
+    "#,
+    );
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "timer-a",
+        "setTimeout(requestFromShared, 0, 'timer-a');",
+    );
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "timer-b",
+        "setTimeout(requestFromShared, 0, 'timer-b');",
+    );
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "timer-c",
+        r#"
+        const intervalId = setInterval(() => {
+            clearInterval(intervalId); requestFromShared('interval');
+        }, 0);
+        setTimeout("requestFromShared('string')", 0);
+    "#,
+    );
+    page.eval("setTimeout(requestFromShared, 0, 'unknown');")
+        .unwrap();
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "later",
+        "globalThis.laterScriptExecuted = true;",
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut page,
+        &loader,
+        "String(completed.length)",
+        "5",
+        "callback initiator timers",
+    )
+    .await;
+    assert_eq!(
+        callback_resource_initiators(&mut page),
+        serde_json::json!({
+            "timer-a": format!("{}/timer-a.js", server.origin),
+            "timer-b": format!("{}/timer-b.js", server.origin),
+            "interval": format!("{}/timer-c.js", server.origin),
+            "string": format!("{}/timer-c.js", server.origin),
+            "unknown": "",
+        })
+    );
+}
+
+#[tokio::test]
+async fn resource_timing_callback_xhr_handler_reassignment_captures_the_new_registration() {
+    let server = timing_server().await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = new_storage_page_task_executor_test_vm_with_loader(
+        &format!("{}/page.html", server.origin),
+        &loader,
+    );
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "library",
+        r#"
+        globalThis.completed = false;
+        function sharedLoadCallback() {
+            Promise.resolve().then(() => fetch('/probe?case=handler'))
+                .then(response => response.arrayBuffer()).then(() => completed = true);
+        }
+    "#,
+    );
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "request",
+        r#"
+        globalThis.seed = new XMLHttpRequest();
+        seed.onload = sharedLoadCallback;
+        seed.open('GET', '/probe?case=seed'); seed.send();
+    "#,
+    );
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "replacement",
+        "seed.onload = sharedLoadCallback;",
+    );
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "later",
+        "globalThis.laterScriptExecuted = true;",
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut page,
+        &loader,
+        "String(completed)",
+        "true",
+        "XHR handler registration initiator",
+    )
+    .await;
+    assert_eq!(
+        callback_resource_initiators(&mut page),
+        serde_json::json!({
+            "seed": format!("{}/request.js", server.origin),
+            "handler": format!("{}/replacement.js", server.origin),
+        })
+    );
+}
+
+#[tokio::test]
+async fn resource_timing_callback_synchronous_dispatch_preserves_known_and_unknown_callers() {
+    let server = timing_server().await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = new_storage_page_task_executor_test_vm_with_loader(
+        &format!("{}/page.html", server.origin),
+        &loader,
+    );
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "registration",
+        r#"
+        globalThis.completed = [];
+        globalThis.target = new EventTarget();
+        target.addEventListener('probe', () => {
+            const label = globalThis.currentLabel;
+            fetch('/probe?case=' + label).then(response => response.arrayBuffer())
+                .then(() => completed.push(label));
+        });
+    "#,
+    );
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "caller",
+        "globalThis.currentLabel = 'known'; target.dispatchEvent(new Event('probe'));",
+    );
+    page.eval("globalThis.currentLabel = 'unknown'; target.dispatchEvent(new Event('probe'));")
+        .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut page,
+        &loader,
+        "String(completed.length)",
+        "2",
+        "synchronous event caller initiators",
+    )
+    .await;
+    assert_eq!(
+        callback_resource_initiators(&mut page),
+        serde_json::json!({
+            "known": format!("{}/caller.js", server.origin),
+            "unknown": "",
+        })
+    );
+}
+
+#[tokio::test]
+async fn resource_timing_callback_interface_lookup_and_its_promises_retain_the_registration() {
+    let server = timing_server().await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = new_storage_page_task_executor_test_vm_with_loader(
+        &format!("{}/page.html", server.origin),
+        &loader,
+    );
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "library",
+        r#"
+        globalThis.completed = [];
+        globalThis.listener = {
+            get handleEvent() {
+                fetch('/probe?case=lookup').then(response => response.arrayBuffer())
+                    .then(() => completed.push('lookup'));
+                return function() {
+                    Promise.resolve().then(() => fetch('/probe?case=body'))
+                        .then(response => response.arrayBuffer()).then(() => completed.push('body'));
+                };
+            }
+        };
+    "#,
+    );
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "registration",
+        r#"
+        globalThis.seed = new XMLHttpRequest();
+        seed.addEventListener('load', listener);
+        seed.open('GET', '/probe?case=seed'); seed.send();
+    "#,
+    );
+    exec_resource_initiator_script(
+        &mut page,
+        &server.origin,
+        "later",
+        "globalThis.laterScriptExecuted = true;",
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut page,
+        &loader,
+        "String(completed.length)",
+        "2",
+        "callback-interface lookup initiator",
+    )
+    .await;
+    assert_eq!(
+        callback_resource_initiators(&mut page),
+        serde_json::json!({
+            "seed": format!("{}/registration.js", server.origin),
+            "lookup": format!("{}/registration.js", server.origin),
+            "body": format!("{}/registration.js", server.origin),
+        })
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn window_fetch_reports_native_resource_timing_at_body_terminal() {
     run_resource_timing_fixture(

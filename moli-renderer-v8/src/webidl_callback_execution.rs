@@ -22,6 +22,7 @@ pub(crate) struct PreparedWebIdlCallbackExecution {
     callback: PreparedWebIdlCallbackFunction,
     environment: CallbackExecutionEnvironment,
     binding: std::rc::Rc<CommonRuntimeBinding>,
+    resource_initiator: Option<crate::script_continuation::CallbackResourceInitiator>,
 }
 
 pub(crate) enum WebIdlCallbackExecutionOutcome<R, E> {
@@ -63,6 +64,7 @@ impl PreparedWebIdlCallbackExecution {
                 callback_identity,
             },
             binding,
+            resource_initiator: None,
         })
     }
 
@@ -81,6 +83,7 @@ impl PreparedWebIdlCallbackExecution {
                 context: v8::Global::new(scope, context),
             },
             binding,
+            resource_initiator: None,
         })
     }
 
@@ -92,7 +95,9 @@ impl PreparedWebIdlCallbackExecution {
         carrier: v8::Local<'s, v8::Object>,
     ) -> Option<Self> {
         let (binding, owner) = CommonRuntimeBinding::from_scope(scope)?;
-        let callback = V8TracedWebIdlCallbackFunction::from_object(carrier).prepare(scope);
+        let traced = V8TracedWebIdlCallbackFunction::from_object(carrier);
+        let resource_initiator = traced.resource_initiator(scope);
+        let callback = traced.prepare(scope);
         match owner {
             RuntimeExecutionContext::Window(host_ptr) => {
                 let host = unsafe { &*host_ptr };
@@ -100,6 +105,7 @@ impl PreparedWebIdlCallbackExecution {
                 let callback_identity =
                     host.window_execution_context_identity_for_v8_context(scope, context)?;
                 Self::window(scope, callback, host_ptr, None, callback_identity)
+                    .map(|execution| execution.with_resource_initiator(resource_initiator))
             }
             RuntimeExecutionContext::Worker => Some(Self {
                 callback,
@@ -107,6 +113,7 @@ impl PreparedWebIdlCallbackExecution {
                     context: v8::Global::new(scope, scope.get_current_context()),
                 },
                 binding,
+                resource_initiator: Some(resource_initiator),
             }),
         }
     }
@@ -116,6 +123,14 @@ impl PreparedWebIdlCallbackExecution {
         scope: &mut v8::PinScope<'s, '_>,
     ) -> v8::Local<'s, v8::Context> {
         self.callback.relevant_context(scope)
+    }
+
+    pub(crate) fn with_resource_initiator(
+        mut self,
+        initiator: crate::script_continuation::CallbackResourceInitiator,
+    ) -> Self {
+        self.resource_initiator = Some(initiator);
+        self
     }
 
     pub(crate) fn is_current(&self, scope: &mut v8::PinScope<'_, '_>) -> bool {
@@ -152,12 +167,22 @@ impl PreparedWebIdlCallbackExecution {
         if !self.is_current(scope) {
             return WebIdlCallbackExecutionOutcome::Unavailable;
         }
+        let initiator = crate::script_continuation::callback_resource_initiator(
+            scope,
+            self.resource_initiator.as_ref(),
+        );
         match invoke_webidl_callback_function(
             scope,
             &self.callback,
             receiver,
             arguments,
-            invoke_function,
+            |scope, callback, receiver, arguments| {
+                crate::script_continuation::with_callback_resource_initiator(
+                    scope,
+                    initiator,
+                    |scope| invoke_function(scope, callback, receiver, arguments),
+                )
+            },
         ) {
             Ok(result) => WebIdlCallbackExecutionOutcome::Returned(result),
             Err(error) => WebIdlCallbackExecutionOutcome::Failed(error),

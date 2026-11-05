@@ -16,6 +16,7 @@ pub(crate) struct EventCallbackId(u64);
 struct EventCallbackRecord {
     callback: WebIdlCallbackInterface,
     kind: EventCallbackKind,
+    resource_initiator: crate::script_continuation::CallbackResourceInitiator,
     relevant_identity: Option<WindowExecutionContextIdentity>,
     registration_identity: Option<WindowExecutionContextIdentity>,
     #[cfg(test)]
@@ -25,6 +26,7 @@ struct EventCallbackRecord {
 pub(crate) struct PreparedEventCallback {
     callback: PreparedWebIdlCallbackInterface,
     kind: EventCallbackKind,
+    resource_initiator: crate::script_continuation::CallbackResourceInitiator,
     relevant_identity: Option<WindowExecutionContextIdentity>,
     relevant_host: *mut JsContextHost,
 }
@@ -93,7 +95,8 @@ impl PreparedEventCallback {
             "handleEvent",
             arguments,
             current_event,
-        );
+        )
+        .with_resource_initiator(self.resource_initiator.clone());
         if self.kind == EventCallbackKind::Handler {
             invocation.with_legacy_event_handler()
         } else {
@@ -434,6 +437,9 @@ impl JsContextHost {
             EventCallbackRecord {
                 callback,
                 kind,
+                resource_initiator: crate::script_continuation::CallbackResourceInitiator::capture(
+                    scope,
+                ),
                 relevant_identity,
                 registration_identity,
                 #[cfg(test)]
@@ -530,6 +536,7 @@ impl JsContextHost {
         Some(PreparedEventCallback {
             callback: record.callback.prepare(scope),
             kind: record.kind,
+            resource_initiator: record.resource_initiator.clone(),
             relevant_identity: record.relevant_identity.filter(|identity| {
                 unsafe { &*relevant_host }.window_execution_context_identity_is_current(*identity)
             }),

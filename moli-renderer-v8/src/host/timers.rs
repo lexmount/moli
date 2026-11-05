@@ -44,6 +44,7 @@ struct ScheduledTimerSource {
     use_target_context: bool,
     source: String,
     provenance: CompiledStringProvenance,
+    resource_initiator: crate::script_continuation::CallbackResourceInitiator,
     // A snapshot of the initiating script, not the eventual timer caller/realm.
     script_fetch_metadata: crate::module_runtime::ModuleFetchMetadata,
 }
@@ -647,6 +648,8 @@ impl HostTimeoutScheduler {
                         source,
                         provenance,
                         script_fetch_metadata,
+                        resource_initiator:
+                            crate::script_continuation::CallbackResourceInitiator::capture(scope),
                     })),
                     owner,
                     is_interval: false,
@@ -699,6 +702,8 @@ impl HostTimeoutScheduler {
                         source,
                         provenance,
                         script_fetch_metadata,
+                        resource_initiator:
+                            crate::script_continuation::CallbackResourceInitiator::capture(scope),
                     })),
                     owner,
                     is_interval: true,
@@ -1560,7 +1565,16 @@ fn run_window_timer_source(
             stack_trace,
         )));
     };
-    if crate::script_execution::execute_compiled_script(&mut scope, script).is_some() {
+    let initiator = crate::script_continuation::callback_resource_initiator(
+        &mut scope,
+        Some(&source.resource_initiator),
+    );
+    let result = crate::script_continuation::with_callback_resource_initiator(
+        &mut scope,
+        initiator,
+        |scope| crate::script_execution::execute_compiled_script(scope, script),
+    );
+    if result.is_some() {
         Ok(())
     } else {
         let exception = scope.exception();

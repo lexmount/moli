@@ -7,6 +7,7 @@ use crate::{
     },
     util::{get_private_value, set_private_value},
 };
+use std::rc::Rc;
 
 const BASE_URL_SLOT: &str = "moli.scriptContinuationBaseURL";
 const WINDOW_SLOT: &str = "moli.scriptContinuationWindow";
@@ -20,6 +21,97 @@ const RESOURCE_INITIATOR_STATE_SLOT: &str = "moli.scriptContinuationResourceInit
 pub(crate) struct ResourceInitiator {
     pub(crate) source_url: Option<url::Url>,
     pub(crate) origin: Option<WindowOriginKey>,
+}
+
+/// Immutable attribution captured for one callback registration. Its V8
+/// anchor carries no callback or scheduling authority.
+#[derive(Clone)]
+pub(crate) struct CallbackResourceInitiator {
+    anchor: Rc<Option<v8::Global<v8::Object>>>,
+}
+
+impl CallbackResourceInitiator {
+    pub(crate) fn capture(scope: &mut v8::PinScope<'_, '_>) -> Self {
+        let anchor = resource_initiator_anchor(scope).or_else(|| unknown_resource_initiator(scope));
+        Self {
+            anchor: Rc::new(anchor.map(|anchor| v8::Global::new(scope, anchor))),
+        }
+    }
+
+    pub(crate) fn from_value<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+    ) -> Self {
+        Self {
+            anchor: Rc::new(
+                v8::Local::<v8::Object>::try_from(value)
+                    .ok()
+                    .map(|anchor| v8::Global::new(scope, anchor)),
+            ),
+        }
+    }
+
+    pub(crate) fn value<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Value> {
+        self.anchor
+            .as_ref()
+            .as_ref()
+            .map(|anchor| v8::Local::new(scope, anchor).into())
+            .unwrap_or_else(|| v8::undefined(scope).into())
+    }
+}
+
+/// Select before entering a callback Realm: a synchronous caller, including an
+/// unknown one, takes precedence over the callback's registration source.
+pub(crate) fn callback_resource_initiator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    registration: Option<&CallbackResourceInitiator>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if let Some(anchor) = resource_initiator_anchor(scope) {
+        return Some(anchor);
+    }
+    let registration = registration?;
+    if v8::StackTrace::current_stack_trace(scope, 1)
+        .is_none_or(|stack| stack.get_frame_count() != 0)
+    {
+        return unknown_resource_initiator(scope);
+    }
+    registration
+        .anchor
+        .as_ref()
+        .as_ref()
+        .map(|anchor| v8::Local::new(scope, anchor))
+}
+
+pub(crate) fn with_callback_resource_initiator<'s, R>(
+    scope: &mut v8::PinScope<'s, '_>,
+    anchor: Option<v8::Local<'s, v8::Object>>,
+    invoke: impl FnOnce(&mut v8::PinScope<'s, '_>) -> R,
+) -> R {
+    let Some(anchor) = anchor else {
+        return invoke(scope);
+    };
+    let previous = scope.get_continuation_preserved_embedder_data();
+    let base_url = base_url_value(scope);
+    let window = window_anchor(scope);
+    let data = data_with_parts(scope, base_url, window, Some(anchor));
+    scope.set_continuation_preserved_embedder_data(data);
+    let result = invoke(scope);
+    scope.set_continuation_preserved_embedder_data(previous);
+    result
+}
+
+fn unknown_resource_initiator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    // Bare callback-layer test contexts have no renderer-owned finalizers.
+    crate::common_runtime::CommonRuntimeState::from_scope(scope)?;
+    Some(new_resource_initiator_anchor(
+        scope,
+        ResourceInitiator {
+            source_url: None,
+            origin: None,
+        },
+    ))
 }
 
 #[derive(Clone)]
@@ -64,6 +156,14 @@ pub(crate) fn with_resource_initiator<'s>(
 ) -> v8::Local<'s, v8::Value> {
     let base_url = base_url_value(scope);
     let window = window_anchor(scope);
+    let anchor = new_resource_initiator_anchor(scope, initiator);
+    data_with_parts(scope, base_url, window, Some(anchor))
+}
+
+fn new_resource_initiator_anchor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    initiator: ResourceInitiator,
+) -> v8::Local<'s, v8::Object> {
     let anchor = v8::Object::new(scope);
     let mut initiator = Box::new(initiator);
     let pointer = (&mut *initiator as *mut ResourceInitiator).cast();
@@ -75,7 +175,7 @@ pub(crate) fn with_resource_initiator<'s>(
         external.into(),
     );
     crate::v8_finalizer::track_context_owned_v8_finalizer(scope, anchor, move || drop(initiator));
-    data_with_parts(scope, base_url, window, Some(anchor))
+    anchor
 }
 
 fn window_anchor<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Object>> {

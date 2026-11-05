@@ -22,6 +22,7 @@ const CALLBACK_VALUE_SLOT: &str = "__lmV8TracedWebIdlCallbackValue";
 const CALLBACK_RELEVANT_GLOBAL_SLOT: &str = "__lmV8TracedWebIdlCallbackRelevantGlobal";
 const CALLBACK_INCUMBENT_GLOBAL_SLOT: &str = "__lmV8TracedWebIdlCallbackIncumbentGlobal";
 const CALLBACK_CALLABLE_SLOT: &str = "__lmV8TracedWebIdlCallbackCallableAtConversion";
+const CALLBACK_RESOURCE_INITIATOR_SLOT: &str = "__lmV8TracedWebIdlCallbackResourceInitiator";
 
 /// Callback-interface residence owned by a JavaScript wrapper. Context extras
 /// retain the original realms even after their WindowProxies are detached.
@@ -112,6 +113,14 @@ impl<'s> V8TracedWebIdlCallbackFunction<'s> {
             .expect("a Web IDL callback function must be a callable object");
         let relevant_global = callback.relevant_context(scope).global(scope);
         let incumbent_global = callback.incumbent_context(scope).global(scope);
+        let resource_initiator =
+            crate::script_continuation::CallbackResourceInitiator::capture(scope).value(scope);
+        set_private_value(
+            scope,
+            carrier,
+            CALLBACK_RESOURCE_INITIATOR_SLOT,
+            resource_initiator,
+        );
         set_private_value(scope, carrier, CALLBACK_VALUE_SLOT, callback_value.into());
         set_private_value(
             scope,
@@ -163,5 +172,14 @@ impl<'s> V8TracedWebIdlCallbackFunction<'s> {
             incumbent_context,
         )
         .expect("a traced Web IDL callback function must remain callable")
+    }
+
+    pub(crate) fn resource_initiator(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> crate::script_continuation::CallbackResourceInitiator {
+        let value = get_private_value(scope, self.carrier, CALLBACK_RESOURCE_INITIATOR_SLOT)
+            .unwrap_or_else(|| v8::undefined(scope).into());
+        crate::script_continuation::CallbackResourceInitiator::from_value(scope, value)
     }
 }

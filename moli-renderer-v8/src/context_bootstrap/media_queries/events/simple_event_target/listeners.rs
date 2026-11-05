@@ -21,6 +21,8 @@ const SIMPLE_EVENT_TARGET_LISTENER_INCUMBENT_CONTEXT_ANCHOR_SLOT: &str =
 const SIMPLE_EVENT_TARGET_LISTENER_RELEVANT_IDENTITY_SLOT: &str =
     "__moliSimpleEventTargetListenerRelevantIdentity";
 const SIMPLE_EVENT_TARGET_LISTENER_CALLABLE_SLOT: &str = "__moliSimpleEventTargetListenerCallable";
+const SIMPLE_EVENT_TARGET_LISTENER_RESOURCE_INITIATOR_SLOT: &str =
+    "__moliSimpleEventTargetListenerResourceInitiator";
 const SIMPLE_EVENT_TARGET_LISTENER_CAPTURE_SLOT: &str = "__moliSimpleEventTargetListenerCapture";
 const SIMPLE_EVENT_TARGET_LISTENER_ONCE_SLOT: &str = "__moliSimpleEventTargetListenerOnce";
 const SIMPLE_EVENT_TARGET_LISTENER_PASSIVE_SLOT: &str = "__moliSimpleEventTargetListenerPassive";
@@ -93,6 +95,7 @@ pub(crate) struct SimpleObjectEventListenerSnapshot<'s> {
     relevant_context: v8::Local<'s, v8::Context>,
     incumbent_context: v8::Local<'s, v8::Context>,
     relevant_identity: Option<WindowExecutionContextIdentity>,
+    resource_initiator: crate::script_continuation::CallbackResourceInitiator,
     is_callable: bool,
     pub(crate) capture: bool,
     pub(crate) once: bool,
@@ -198,7 +201,8 @@ impl<'s> SimpleObjectEventListenerSnapshot<'s> {
             "handleEvent",
             arguments,
             current_event,
-        );
+        )
+        .with_resource_initiator(self.resource_initiator.clone());
         Some(if self.handler_slot.is_some() {
             invocation.with_legacy_event_handler()
         } else {
@@ -768,6 +772,7 @@ fn set_simple_object_event_ordered_handler_callback<'s>(
                     incumbent_context_anchor.into(),
                 );
                 set_simple_object_event_listener_relevant_identity(scope, entry, relevant_identity);
+                set_simple_object_event_listener_resource_initiator(scope, entry);
             }
             ensure_simple_object_event_type_order(scope, registry, event_type);
             return;
@@ -1086,6 +1091,7 @@ fn simple_object_event_listener_entry_object<'s>(
     .bind(scope)
     .expect("SimpleObject event listener entry declaration should bind");
     set_simple_object_event_listener_relevant_identity(scope, entry, relevant_identity);
+    set_simple_object_event_listener_resource_initiator(scope, entry);
     entry
 }
 
@@ -1112,7 +1118,22 @@ fn simple_object_event_handler_entry_object<'s>(
     .bind(scope)
     .expect("SimpleObject event handler entry declaration should bind");
     set_simple_object_event_listener_relevant_identity(scope, entry, relevant_identity);
+    set_simple_object_event_listener_resource_initiator(scope, entry);
     entry
+}
+
+fn set_simple_object_event_listener_resource_initiator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+) {
+    let initiator =
+        crate::script_continuation::CallbackResourceInitiator::capture(scope).value(scope);
+    set_private_value(
+        scope,
+        entry,
+        SIMPLE_EVENT_TARGET_LISTENER_RESOURCE_INITIATOR_SLOT,
+        initiator,
+    );
 }
 
 fn set_simple_object_event_listener_relevant_identity<'s>(
@@ -1240,6 +1261,16 @@ fn simple_object_event_listener_snapshot_entry<'s>(
     let passive =
         simple_object_private_bool_slot(scope, entry, SIMPLE_EVENT_TARGET_LISTENER_PASSIVE_SLOT)
             .unwrap_or(false);
+    let resource_initiator = get_private_value(
+        scope,
+        entry,
+        SIMPLE_EVENT_TARGET_LISTENER_RESOURCE_INITIATOR_SLOT,
+    )
+    .unwrap_or_else(|| v8::undefined(scope).into());
+    let resource_initiator = crate::script_continuation::CallbackResourceInitiator::from_value(
+        scope,
+        resource_initiator,
+    );
     Some(SimpleObjectEventListenerSnapshot {
         entry,
         original,
@@ -1247,6 +1278,7 @@ fn simple_object_event_listener_snapshot_entry<'s>(
         relevant_context,
         incumbent_context,
         relevant_identity,
+        resource_initiator,
         is_callable,
         capture,
         once,
