@@ -4108,7 +4108,12 @@ fn evaluate_classic_worker_bootstrap_script(
     let compiled = v8::Script::compile(&scope, source_str, Some(&origin));
     match compiled {
         Some(script) => {
+            let previous = scope.get_continuation_preserved_embedder_data();
+            let source_url = url::Url::parse(script_url).ok();
+            let data = crate::resource_initiator::classic_data(&mut scope, source_url.as_ref());
+            scope.set_continuation_preserved_embedder_data(data);
             let _result = crate::script_execution::execute_compiled_script(&mut scope, script);
+            scope.set_continuation_preserved_embedder_data(previous);
             if scope.has_caught() {
                 let exception = scope.exception();
                 let message = scope.message();

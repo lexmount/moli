@@ -249,6 +249,10 @@ pub(crate) struct ResourcePerformanceEntry {
 }
 
 impl ResourcePerformanceEntry {
+    pub(crate) fn clear_initiator(&mut self) {
+        self.initiator_url.clear();
+    }
+
     pub(crate) fn from_network_result(
         name: impl Into<String>,
         initiator_type: &'static str,
@@ -314,11 +318,6 @@ impl ResourcePerformanceEntry {
             response.cache_state,
             response.preload_state.clone(),
         )
-    }
-
-    pub(crate) fn with_initiator_url(mut self, initiator_url: String) -> Self {
-        self.initiator_url = initiator_url;
-        self
     }
 
     fn from_response_parts(
@@ -462,19 +461,6 @@ impl ResourcePerformanceEntry {
             content_encoding: String::new(),
             final_response_headers_start_unix_millis: None,
             first_interim_response_start_unix_millis: None,
-        }
-    }
-
-    pub(crate) fn mark_aborted(&mut self, transfer_complete: bool) {
-        self.response_status = 0.0;
-        self.content_type.clear();
-        self.content_encoding.clear();
-        if !transfer_complete {
-            self.encoded_body_size = 0.0;
-            self.decoded_body_size = 0.0;
-            if self.transfer_size > 0.0 {
-                self.transfer_size = 300.0;
-            }
         }
     }
 }
