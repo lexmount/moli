@@ -822,7 +822,7 @@ impl ServiceWorkerRuntimeCompletion {
                 registration_id,
                 owner,
                 request_id,
-            } => self.runtime_service.finish_worker_clients_claim_requested(
+            } => self.runtime_service.finish_clients_claim_requested(
                 registration_id,
                 owner,
                 request_id,

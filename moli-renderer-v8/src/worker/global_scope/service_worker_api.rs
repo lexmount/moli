@@ -1280,30 +1280,32 @@ pub(super) fn service_worker_clients_claim_callback<'s>(
         return;
     };
     rv.set(resolver.get_promise(scope).into());
-    if let Some((registration_id, version_id, parent_tx)) = service_worker_runtime_identity(scope)
-        && let Some(state) = get_worker_state(scope)
+    let Some((registration_id, version_id, parent_tx)) = service_worker_runtime_identity(scope)
+    else {
+        let error = crate::context_bootstrap::new_dom_exception_value(
+            scope,
+            "The Service Worker is not active.",
+            "InvalidStateError",
+        );
+        let _ = resolver.reject(scope, error);
+        return;
+    };
+    let Some(state) = get_worker_state(scope) else {
+        return;
+    };
+    let request_id = state
+        .borrow_mut()
+        .register_pending_service_worker_clients_claim(v8::Global::new(scope, resolver));
+    if parent_tx
+        .send(WorkerToParentMessage::ServiceWorkerClientsClaim {
+            request_id,
+            registration_id,
+            version_id,
+        })
+        .is_err()
     {
-        let request_id = state
-            .borrow_mut()
-            .register_pending_service_worker_client_query(
-                v8::Global::new(scope, resolver),
-                PendingServiceWorkerClientQueryType::Claim,
-            );
-        if parent_tx
-            .send(WorkerToParentMessage::ServiceWorkerClientsClaim {
-                registration_id,
-                version_id,
-                request_id,
-            })
-            .is_ok()
-        {
-            return;
-        }
-        state
-            .borrow_mut()
-            .take_pending_service_worker_client_query(request_id);
+        drain_service_worker_clients_claim_result(scope, &state, request_id, false);
     }
-    let _ = resolver.resolve(scope, v8::undefined(scope).into());
 }
 
 pub(super) fn service_worker_clients_get_callback<'s>(

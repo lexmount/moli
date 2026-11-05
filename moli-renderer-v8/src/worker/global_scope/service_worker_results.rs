@@ -63,7 +63,6 @@ pub(in crate::worker) struct PendingServiceWorkerPushUnsubscribe {
 pub(in crate::worker) enum PendingServiceWorkerClientQueryType {
     Get,
     MatchAll,
-    Claim,
 }
 
 /// Checked allocator for one operation-local Service Worker request namespace.
@@ -93,6 +92,16 @@ impl WorkerServiceWorkerRequestIdAllocator {
 }
 
 impl WorkerGlobalState {
+    pub(in crate::worker) fn register_pending_service_worker_clients_claim(
+        &mut self,
+        resolver: v8::Global<v8::PromiseResolver>,
+    ) -> u64 {
+        let request_id = self.service_worker_clients_claim_request_ids.allocate();
+        self.pending_service_worker_clients_claims
+            .insert(request_id, resolver);
+        request_id
+    }
+
     pub(in crate::worker) fn register_pending_service_worker_update(
         &mut self,
         pending: PendingServiceWorkerUpdate,
@@ -428,6 +437,32 @@ impl WorkerGlobalState {
     }
 }
 
+pub(in crate::worker) fn drain_service_worker_clients_claim_result(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    request_id: u64,
+    claimed: bool,
+) {
+    let Some(resolver) = state
+        .borrow_mut()
+        .pending_service_worker_clients_claims
+        .remove(&request_id)
+    else {
+        return;
+    };
+    let resolver = v8::Local::new(scope, &resolver);
+    if claimed {
+        let _ = resolver.resolve(scope, v8::undefined(scope).into());
+    } else {
+        let error = crate::context_bootstrap::new_dom_exception_value(
+            scope,
+            "The Service Worker is not active.",
+            "InvalidStateError",
+        );
+        let _ = resolver.reject(scope, error);
+    }
+}
+
 pub(in crate::worker) fn drain_service_worker_client_query_result(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
@@ -443,9 +478,6 @@ pub(in crate::worker) fn drain_service_worker_client_query_result(
     };
     let resolver = v8::Local::new(scope, &pending.resolver);
     match pending.query_type {
-        PendingServiceWorkerClientQueryType::Claim => {
-            let _ = resolver.resolve(scope, v8::undefined(scope).into());
-        }
         PendingServiceWorkerClientQueryType::Get => {
             let value = result
                 .clients
