@@ -185,6 +185,7 @@ self.addEventListener("message", event => {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -358,6 +359,7 @@ fn show_notification_record_enables_scope_click_dispatch() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -448,6 +450,7 @@ fn push_dispatch_for_active_scope_uses_service_lane_completion() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -521,6 +524,7 @@ fn push_subscription_store_tracks_active_scope_subscription() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -600,6 +604,7 @@ fn sync_register_for_active_scope_retains_tag_until_success_or_last_chance_failu
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -702,6 +707,7 @@ fn sync_registration_request_deduplicates_active_tag_and_refires_after_finish() 
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -839,6 +845,7 @@ fn sync_retry_marks_failed_registration_as_last_chance_event() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -970,6 +977,7 @@ fn periodic_sync_dispatch_for_registered_tag_queues_functional_event() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -1066,6 +1074,7 @@ fn periodic_sync_dispatch_deduplicates_active_tag_and_refires_after_finish() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -1185,6 +1194,7 @@ fn notification_store_filters_replaces_tagged_records_and_closes() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -1420,6 +1430,7 @@ fn notification_close_dispatch_removes_record_and_starts_event() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -1503,6 +1514,7 @@ fn notification_click_dispatch_enters_active_version_accounting() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
