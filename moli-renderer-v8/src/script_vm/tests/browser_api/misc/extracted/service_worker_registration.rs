@@ -1,6 +1,128 @@
 use super::*;
 
 #[tokio::test]
+async fn navigator_service_worker_skip_waiting_resolves_after_activate_dispatch() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        (
+            "/app/initial.js",
+            "text/javascript; charset=utf-8",
+            r#"
+            self.addEventListener("activate", event => event.waitUntil(clients.claim()));
+            "#,
+        ),
+        (
+            "/app/waiting.js",
+            "text/javascript; charset=utf-8",
+            r#"
+            let sawActivate = false;
+            self.addEventListener("activate", () => { sawActivate = true; });
+            self.addEventListener("message", event => {
+                event.waitUntil(skipWaiting().then(result => {
+                    event.ports[0].postMessage([
+                        typeof result, sawActivate,
+                        self.registration.active && self.registration.active.state
+                    ].join(":"));
+                }));
+            });
+            "#,
+        ),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+      globalThis.__skipWaitingDone = false;
+      (async () => {
+        const sw = navigator.serviceWorker;
+        await sw.register("initial.js", { scope: "./" });
+        await __moliTestActivatedServiceWorker(sw);
+        if (!sw.controller) {
+          await new Promise(resolve => sw.addEventListener("controllerchange", resolve, { once: true }));
+        }
+        const registration = await sw.register("waiting.js", { scope: "./" });
+        const worker = registration.installing || registration.waiting;
+        if (worker.state !== "installed") {
+          await new Promise(resolve => worker.addEventListener("statechange", () => {
+            if (worker.state === "installed") resolve();
+          }));
+        }
+        const channel = new MessageChannel();
+        const result = new Promise(resolve => channel.port1.onmessage = event => resolve(event.data));
+        worker.postMessage("skip", [channel.port2]);
+        globalThis.__skipWaitingResult = await result;
+        channel.port1.close();
+      })().catch(error => {
+        globalThis.__skipWaitingResult = "error:" + error.name + ":" + error.message;
+      }).finally(() => { globalThis.__skipWaitingDone = true; });
+    "#).expect("installed worker skipWaiting probe should evaluate");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(globalThis.__skipWaitingDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(globalThis.__skipWaitingResult)").unwrap(),
+        "undefined:true:activating"
+    );
+    server.await.expect("both worker scripts should be fetched");
+}
+
+#[tokio::test]
+async fn navigator_service_worker_module_bootstrap_skip_waiting_completes_install() {
+    let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![(
+        "/app/skip-bootstrap.js",
+        "text/javascript; charset=utf-8",
+        Vec::new(),
+        r#"
+        const startupSkip = skipWaiting().then(value => String(value));
+        self.addEventListener("install", event => event.waitUntil(startupSkip));
+        self.addEventListener("activate", event => event.waitUntil(clients.claim()));
+        self.addEventListener("message", event => {
+          event.waitUntil(startupSkip.then(value => event.ports[0].postMessage(value)));
+        });
+        "#,
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+      globalThis.__skipBootstrap = "pending";
+      (async () => {
+        const sw = navigator.serviceWorker;
+        await sw.register("skip-bootstrap.js", { scope: "./", type: "module" });
+        const registration = await __moliTestActivatedServiceWorker(sw);
+        const channel = new MessageChannel();
+        const result = new Promise(resolve => channel.port1.onmessage = event => resolve(event.data));
+        registration.active.postMessage("startup", [channel.port2]);
+        globalThis.__skipBootstrap = (await result) + ":" + registration.active.state + ":" + String(sw.controller !== null);
+        channel.port1.close();
+      })().catch(error => {
+        globalThis.__skipBootstrap = "error:" + error.name + ":" + error.message;
+      });
+    "#).expect("module startup skipWaiting probe should evaluate");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(globalThis.__skipBootstrap)",
+        "undefined:activated:true",
+    )
+    .await;
+    server
+        .await
+        .expect("module worker script should be fetched");
+}
+
+#[tokio::test]
 async fn navigator_service_worker_module_bootstrap_claim_rejects_and_activation_claim_completes() {
     let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![(
         "/app/claim-bootstrap.js",

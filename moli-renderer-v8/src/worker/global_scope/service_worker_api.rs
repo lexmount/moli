@@ -1283,18 +1283,32 @@ pub(super) fn service_worker_skip_waiting_callback<'s>(
     _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((registration_id, version_id, parent_tx)) = service_worker_runtime_identity(scope)
-    else {
-        let undefined: v8::Local<'_, v8::Value> = v8::undefined(scope).into();
-        rv.set(resolved_worker_promise(scope, undefined).into());
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
-    let _ = parent_tx.send(WorkerToParentMessage::ServiceWorkerSkipWaiting {
-        registration_id,
-        version_id,
-    });
-    let undefined: v8::Local<'_, v8::Value> = v8::undefined(scope).into();
-    rv.set(resolved_worker_promise(scope, undefined).into());
+    rv.set(resolver.get_promise(scope).into());
+    let Some((registration_id, version_id, parent_tx)) = service_worker_runtime_identity(scope)
+    else {
+        let _ = resolver.resolve(scope, v8::undefined(scope).into());
+        return;
+    };
+    let Some(state) = get_worker_state(scope) else {
+        let _ = resolver.resolve(scope, v8::undefined(scope).into());
+        return;
+    };
+    let request_id = state
+        .borrow_mut()
+        .register_pending_service_worker_skip_waiting(v8::Global::new(scope, resolver));
+    if parent_tx
+        .send(WorkerToParentMessage::ServiceWorkerSkipWaiting {
+            request_id,
+            registration_id,
+            version_id,
+        })
+        .is_err()
+    {
+        drain_service_worker_skip_waiting_result(scope, &state, request_id);
+    }
 }
 
 pub(super) fn service_worker_clients_claim_callback<'s>(

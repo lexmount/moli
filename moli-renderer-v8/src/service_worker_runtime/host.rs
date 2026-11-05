@@ -409,6 +409,16 @@ impl RendererServiceWorkerHost {
         true
     }
 
+    pub(super) fn dispatch_skip_waiting_result(&self, request_id: u64) {
+        let state = self.state.lock();
+        if let RendererServiceWorkerHostState::Running {
+            handle: Some(handle),
+        } = &*state
+        {
+            handle.dispatch_service_worker_skip_waiting_result(request_id);
+        }
+    }
+
     pub(super) fn dispatch_clients_claim_result(&self, request_id: u64, claimed: bool) {
         let state = self.state.lock();
         if let RendererServiceWorkerHostState::Running {
@@ -824,10 +834,18 @@ fn spawn_parent_message_pump(
                         service.enqueue_clients_open_window(open_window, source_host.run_owner());
                     }
                     WorkerToParentMessage::ServiceWorkerSkipWaiting {
+                        request_id,
                         registration_id,
                         version_id,
                     } => {
-                        service.enqueue_skip_waiting_requested(registration_id, version_id);
+                        if version_id != source_host.version_id() {
+                            continue;
+                        }
+                        service.enqueue_skip_waiting_requested(
+                            registration_id,
+                            source_host.run_owner(),
+                            request_id,
+                        );
                     }
                     WorkerToParentMessage::ServiceWorkerClientsClaim {
                         request_id,

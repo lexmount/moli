@@ -143,6 +143,10 @@ pub(crate) enum WorkerMessage {
     ServiceWorkerPushUnsubscribeResult(ServiceWorkerPushUnsubscribeResult),
     /// Resolve a Service Worker `clients.get()` / `clients.matchAll()` query in the worker.
     ServiceWorkerClientQueryResult(ServiceWorkerClientQueryResult),
+    /// Resolve skipWaiting() after its owning runtime has tried activation.
+    ServiceWorkerSkipWaitingResult {
+        request_id: u64,
+    },
     /// Settle clients.claim() after the owning runtime has applied the claim.
     ServiceWorkerClientsClaimResult {
         request_id: u64,
@@ -396,6 +400,7 @@ pub(crate) enum WorkerToParentMessage {
     ServiceWorkerClientsOpenWindow(ServiceWorkerClientsOpenWindow),
     /// A Service Worker requested `skipWaiting()`.
     ServiceWorkerSkipWaiting {
+        request_id: u64,
         registration_id: crate::runtime::ServiceWorkerRegistrationId,
         version_id: crate::runtime::ServiceWorkerVersionId,
     },
@@ -1179,6 +1184,12 @@ impl WorkerHandle {
         let _ = self
             .tx
             .send(WorkerMessage::ServiceWorkerPushUnsubscribeResult(result));
+    }
+
+    pub(crate) fn dispatch_service_worker_skip_waiting_result(&self, request_id: u64) {
+        let _ = self
+            .tx
+            .send(WorkerMessage::ServiceWorkerSkipWaitingResult { request_id });
     }
 
     pub(crate) fn dispatch_service_worker_clients_claim_result(
