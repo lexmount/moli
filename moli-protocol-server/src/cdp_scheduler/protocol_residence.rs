@@ -7,6 +7,7 @@ use moli_protocol::{
 };
 
 use super::ProtocolOutputSequence;
+use super::command_dispatch::CommandOutputFlushPredecessor;
 
 /// The next scheduler-owned transition for concrete protocol residence.
 ///
@@ -46,6 +47,7 @@ pub(super) enum ProtocolSchedulerResidence {
     ProtocolWork {
         work: ProtocolSchedulerWork,
         client_turn_predecessor: ClientTurnPredecessor,
+        command_output_predecessor: Option<CommandOutputFlushPredecessor>,
         /// Exact Page/Document scope in which a load action published by the
         /// still-pending command turn may replace the provisional
         /// client-turn predecessor with one exact load-observation identity.
@@ -147,10 +149,14 @@ impl ProtocolSchedulerResidence {
             Self::ProtocolWork {
                 work,
                 client_turn_predecessor,
+                command_output_predecessor,
                 load_predecessors,
                 ..
             } => {
                 *client_turn_predecessor == ClientTurnPredecessor::Satisfied
+                    && command_output_predecessor
+                        .as_ref()
+                        .is_none_or(CommandOutputFlushPredecessor::is_satisfied)
                     && load_predecessors.is_empty()
                     && conn.protocol_work_predecessor_is_projected(work)
             }
@@ -484,6 +490,29 @@ impl SchedulerQueues {
         load_predecessors: Vec<DeferredMainDocumentLoadObservationId>,
         future_load_predecessor: Option<DeferredMainDocumentLoadPredecessorCandidate>,
     ) {
+        self.enqueue_protocol_work_after_command_output(
+            work,
+            load_predecessors,
+            future_load_predecessor,
+            None,
+        );
+    }
+
+    pub(super) fn enqueue_command_protocol_work(
+        &mut self,
+        work: ProtocolSchedulerWork,
+        predecessor: CommandOutputFlushPredecessor,
+    ) {
+        self.enqueue_protocol_work_after_command_output(work, Vec::new(), None, Some(predecessor));
+    }
+
+    fn enqueue_protocol_work_after_command_output(
+        &mut self,
+        work: ProtocolSchedulerWork,
+        load_predecessors: Vec<DeferredMainDocumentLoadObservationId>,
+        future_load_predecessor: Option<DeferredMainDocumentLoadPredecessorCandidate>,
+        command_output_predecessor: Option<CommandOutputFlushPredecessor>,
+    ) {
         let (load_predecessors, future_load_predecessor) = work
             .renderer_output_source()
             .and_then(|cursor| self.renderer_output_order(cursor))
@@ -524,6 +553,7 @@ impl SchedulerQueues {
             ProtocolSchedulerResidence::ProtocolWork {
                 work,
                 client_turn_predecessor: ClientTurnPredecessor::Pending,
+                command_output_predecessor,
                 load_predecessors,
                 future_load_predecessor: if load_observation_id.is_none() {
                     future_load_predecessor
@@ -697,6 +727,17 @@ impl SchedulerQueues {
         &mut self,
     ) -> VecDeque<ProtocolSchedulerResidence> {
         self.take_snapshot(protocol_residence_is_command_followup_activity)
+    }
+
+    pub(super) fn take_flushed_navigation_protocol_snapshot(
+        &mut self,
+    ) -> VecDeque<ProtocolSchedulerResidence> {
+        self.take_snapshot(|residence| {
+            matches!(residence,
+                ProtocolSchedulerResidence::ProtocolWork { work, command_output_predecessor: Some(predecessor), .. }
+                    if work.kind() == ProtocolSchedulerWorkKind::NavigationProtocolCompletionOwnerAction
+                        && predecessor.is_satisfied())
+        })
     }
 
     /// Takes frozen output from the exact concrete Page stream up to one
