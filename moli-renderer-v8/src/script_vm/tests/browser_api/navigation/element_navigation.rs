@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "element_navigation/target_resolution.rs"]
+mod target_resolution;
+
 #[test]
 fn link_navigation_replaces_the_initial_top_level_document() {
     let mut vm = new_parsed_test_vm(

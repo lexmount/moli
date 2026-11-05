@@ -35,46 +35,50 @@ function append_target_frame(name) {
   return frame;
 }
 
-function append_form(target, caseName) {
-  const form = document.createElement("form");
+function append_form(sourceFrame, target, caseName) {
+  const owner = sourceFrame.contentDocument;
+  const form = owner.createElement("form");
   form.target = target;
-  form.action = "../navigation/resources/a-page.html?case=" + encodeURIComponent(caseName);
+  form.action = new URL("../navigation/resources/a-page.html", location.href).href;
 
-  const hidden = document.createElement("input");
+  const hidden = owner.createElement("input");
   hidden.type = "hidden";
   hidden.name = "case";
   hidden.value = caseName;
   form.appendChild(hidden);
 
-  document.body.appendChild(form);
+  owner.body.appendChild(form);
   return form;
 }
 
+const emptyOverrideSource = append_target_frame("empty-override-source");
 const emptyOverrideFrame = append_target_frame("empty-override-target");
-const emptyOverrideForm = append_form("empty-override-target", "empty-override");
+const emptyOverrideForm = append_form(emptyOverrideSource, "empty-override-target", "empty-override");
 let emptyOverrideSubmitCount = 0;
 emptyOverrideForm.addEventListener("submit", function () {
   emptyOverrideSubmitCount += 1;
 });
-const emptyOverrideSubmitter = document.createElement("button");
+const emptyOverrideSubmitter = emptyOverrideSource.contentDocument.createElement("button");
 emptyOverrideSubmitter.type = "submit";
 emptyOverrideSubmitter.setAttribute("formtarget", "");
 emptyOverrideForm.appendChild(emptyOverrideSubmitter);
 emptyOverrideForm.requestSubmit(emptyOverrideSubmitter);
 
+const missingOverrideSource = append_target_frame("missing-override-source");
 const missingOverrideFrame = append_target_frame("missing-override-target");
-const missingOverrideForm = append_form("missing-override-target", "missing-override");
+const missingOverrideForm = append_form(missingOverrideSource, "missing-override-target", "missing-override");
 let missingOverrideSubmitCount = 0;
 missingOverrideForm.addEventListener("submit", function () {
   missingOverrideSubmitCount += 1;
 });
-const missingOverrideSubmitter = document.createElement("input");
+const missingOverrideSubmitter = missingOverrideSource.contentDocument.createElement("input");
 missingOverrideSubmitter.type = "submit";
 missingOverrideForm.appendChild(missingOverrideSubmitter);
 missingOverrideForm.requestSubmit(missingOverrideSubmitter);
 
+const externalEmptyOverrideSource = append_target_frame("external-empty-override-source");
 const externalEmptyOverrideFrame = append_target_frame("external-empty-override-target");
-const externalEmptyOverrideForm = append_form("external-empty-override-target", "external-empty-override");
+const externalEmptyOverrideForm = append_form(externalEmptyOverrideSource, "external-empty-override-target", "external-empty-override");
 externalEmptyOverrideForm.id = "external-empty-override-form";
 let externalEmptyOverrideSubmitCount = 0;
 let externalEmptyOverrideSubmitterSeen = null;
@@ -82,15 +86,16 @@ externalEmptyOverrideForm.addEventListener("submit", function (event) {
   externalEmptyOverrideSubmitCount += 1;
   externalEmptyOverrideSubmitterSeen = event.submitter;
 });
-const externalEmptyOverrideSubmitter = document.createElement("button");
+const externalEmptyOverrideSubmitter = externalEmptyOverrideSource.contentDocument.createElement("button");
 externalEmptyOverrideSubmitter.type = "submit";
 externalEmptyOverrideSubmitter.setAttribute("form", externalEmptyOverrideForm.id);
 externalEmptyOverrideSubmitter.setAttribute("formtarget", "");
-document.body.appendChild(externalEmptyOverrideSubmitter);
+externalEmptyOverrideSource.contentDocument.body.appendChild(externalEmptyOverrideSubmitter);
 externalEmptyOverrideForm.requestSubmit(externalEmptyOverrideSubmitter);
 
+const externalMissingOverrideSource = append_target_frame("external-missing-override-source");
 const externalMissingOverrideFrame = append_target_frame("external-missing-override-target");
-const externalMissingOverrideForm = append_form("external-missing-override-target", "external-missing-override");
+const externalMissingOverrideForm = append_form(externalMissingOverrideSource, "external-missing-override-target", "external-missing-override");
 externalMissingOverrideForm.id = "external-missing-override-form";
 let externalMissingOverrideSubmitCount = 0;
 let externalMissingOverrideSubmitterSeen = null;
@@ -98,10 +103,10 @@ externalMissingOverrideForm.addEventListener("submit", function (event) {
   externalMissingOverrideSubmitCount += 1;
   externalMissingOverrideSubmitterSeen = event.submitter;
 });
-const externalMissingOverrideSubmitter = document.createElement("button");
+const externalMissingOverrideSubmitter = externalMissingOverrideSource.contentDocument.createElement("button");
 externalMissingOverrideSubmitter.type = "submit";
 externalMissingOverrideSubmitter.setAttribute("form", externalMissingOverrideForm.id);
-document.body.appendChild(externalMissingOverrideSubmitter);
+externalMissingOverrideSource.contentDocument.body.appendChild(externalMissingOverrideSubmitter);
 externalMissingOverrideForm.requestSubmit(externalMissingOverrideSubmitter);
 
 test(function () {
@@ -123,26 +128,26 @@ test(function () {
     externalMissingOverrideSubmitter,
     "external missing formtarget submit event should preserve the external submitter",
   );
-}, "Submitter target fallback starts navigation asynchronously");
+}, "Submitter targets start navigation asynchronously");
 
 promise_test(async function () {
   await wait_for_value(function () {
-    return read_frame_text(emptyOverrideFrame);
-  }, "a-page", "empty formtarget fallback load");
+    return read_frame_text(emptyOverrideSource);
+  }, "a-page", "empty formtarget source load");
   await wait_for_value(function () {
     return read_frame_text(missingOverrideFrame);
   }, "a-page", "missing formtarget fallback load");
   await wait_for_value(function () {
-    return read_frame_text(externalEmptyOverrideFrame);
-  }, "a-page", "external empty formtarget fallback load");
+    return read_frame_text(externalEmptyOverrideSource);
+  }, "a-page", "external empty formtarget source load");
   await wait_for_value(function () {
     return read_frame_text(externalMissingOverrideFrame);
   }, "a-page", "external missing formtarget fallback load");
 
   assert_equals(
-    read_frame_text(emptyOverrideFrame),
+    read_frame_text(emptyOverrideSource),
     "a-page",
-    "empty formtarget should fall back to the form target",
+    "empty formtarget should navigate the source document",
   );
   assert_equals(
     read_frame_text(missingOverrideFrame),
@@ -150,15 +155,19 @@ promise_test(async function () {
     "missing formtarget should use the form target",
   );
   assert_equals(
-    read_frame_text(externalEmptyOverrideFrame),
+    read_frame_text(externalEmptyOverrideSource),
     "a-page",
-    "external empty formtarget should fall back to the form target",
+    "external empty formtarget should navigate the source document",
   );
   assert_equals(
     read_frame_text(externalMissingOverrideFrame),
     "a-page",
     "external missing formtarget should use the form target",
   );
+  assert_equals(read_frame_text(emptyOverrideFrame), "", "empty formtarget must override the form target");
+  assert_equals(read_frame_text(externalEmptyOverrideFrame), "", "external empty formtarget must override the form target");
+  assert_equals(read_frame_text(missingOverrideSource), "", "missing formtarget must leave the source document in place");
+  assert_equals(read_frame_text(externalMissingOverrideSource), "", "external missing formtarget must leave the source document in place");
   assert_equals(emptyOverrideSubmitCount, 1, "empty formtarget submitter should submit exactly once");
   assert_equals(missingOverrideSubmitCount, 1, "missing formtarget submitter should submit exactly once");
   assert_equals(
@@ -171,5 +180,5 @@ promise_test(async function () {
     1,
     "external missing formtarget submitter should submit exactly once",
   );
-}, "Empty and missing submitter formtarget both navigate the form target");
+}, "Empty formtarget selects the source and missing formtarget uses the form target");
 </script>
