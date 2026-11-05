@@ -5,6 +5,55 @@ use crate::page_task_queue::{
 };
 use crate::runtime::PageTaskCompletion;
 
+#[tokio::test(flavor = "current_thread")]
+async fn child_modulepreload_missing_csp_context_queues_one_error_without_fetch() {
+    run_page_vm_async_test(async move {
+        use crate::module_runtime::{ModuleFetchMetadata, ModuleMapKey, NativeModuleSingleFetchRequest};
+        use crate::native_bridge::OwnerDispatchScope;
+
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _resource_source, _owner_wake_rx) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader, Url::parse("https://example.com/preload-csp-context")?,
+        );
+        page_vm.vm_mut().eval(r#"
+          globalThis.__missingPreloadContextEvents = [];
+          const frame = document.createElement('iframe'); frame.id = 'missing-preload-context-frame';
+          frame.srcdoc = `<link id="missing-preload-context-link" rel="modulepreload"
+            onerror="parent.__missingPreloadContextEvents.push(event.type + ':' + this.id)"
+            onload="parent.__missingPreloadContextEvents.push('unexpected-load')">`;
+          document.body.append(frame);
+        "#)?;
+        let child = page_vm.vm().element_handle_by_id_for_test("missing-preload-context-frame").unwrap();
+        for _ in 0..12 {
+            if page_vm.run_next_child_frame_task_source_for_semantic_test().await.is_none() { break; }
+        }
+        assert!(page_vm.vm().current_child_document_module_fetch_target(child).is_some(), "the failed admission must belong to a live Child Document and realm");
+        let source_url = Url::parse("https://example.com/missing-context.js")?;
+        let request = NativeModuleSingleFetchRequest::new(
+            source_url.clone(), source_url.clone(), Url::parse("https://example.com/preload-csp-context")?,
+            ModuleMapKey::java_script(source_url), ModuleFetchMetadata::default(),
+        );
+        let host = page_vm.vm().context_host_weak_for_test().upgrade().unwrap();
+        {
+            let mut host = host.borrow_mut();
+            let document = host.child_browsing_context_document_handle(child).unwrap();
+            let link = host.dom_host().element_handle_by_id_in_subtree(document, "missing-preload-context-link").unwrap();
+            assert!(host.module_fetch_csp_context_for_owner(OwnerDispatchScope::Child(child), request.module_key().url(), request.module_key().kind(), request.fetch_metadata()).is_some());
+            // Inject a failed policy capture while retaining the real current
+            // owner, link client and Page event route.
+            assert!(host.queue_child_modulepreload_with_csp_context(child, link, request, None));
+        }
+        let sources = page_vm.page_task_executor_sources_for_test();
+        assert!(!sources.modulepreload_start().has_ready_task(), "a missing CSP context must not publish fetch work");
+        assert_eq!(page_vm.vm_mut().eval("__missingPreloadContextEvents.join('|')")?, "", "error dispatch must use the Page task queue");
+        assert!(page_vm.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildModulepreloadEventAction, &loader).await?);
+        assert_eq!(page_vm.vm_mut().eval("__missingPreloadContextEvents.join('|')")?, "error:missing-preload-context-link");
+        assert!(!page_vm.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildModulepreloadEventAction, &loader).await?, "the error must be consumed exactly once");
+        assert!(!sources.modulepreload_start().has_ready_task());
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("missing CSP context must deliver a Child modulepreload error");
+}
+
 async fn install_child_modulepreload_event_fixture(
     page_vm: &mut PageVm,
     frame_id: &str,

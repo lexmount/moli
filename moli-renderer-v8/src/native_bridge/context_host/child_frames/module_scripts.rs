@@ -437,18 +437,32 @@ impl JsContextHost {
         &mut self,
         handle: DomHandle,
         link_handle: DomHandle,
-        mut request: NativeModuleSingleFetchRequest,
+        request: NativeModuleSingleFetchRequest,
     ) -> bool {
-        if !self.child_browsing_contexts.contains_key(&handle) {
-            return false;
-        }
-        let Some(context) = self.module_fetch_csp_context_for_owner(
+        let context = self.module_fetch_csp_context_for_owner(
             crate::native_bridge::context_host::OwnerDispatchScope::Child(handle),
             request.module_key().url(),
             request.module_key().kind(),
             request.fetch_metadata(),
-        ) else {
+        );
+        self.queue_child_modulepreload_with_csp_context(handle, link_handle, request, context)
+    }
+
+    /// Admit a preload after policy capture. Even when capture fails, a live
+    /// link still needs its owner-scoped error event rather than a silent drop.
+    pub(crate) fn queue_child_modulepreload_with_csp_context(
+        &mut self,
+        handle: DomHandle,
+        link_handle: DomHandle,
+        mut request: NativeModuleSingleFetchRequest,
+        context: Option<crate::content_security_policy::ModuleFetchCspContext>,
+    ) -> bool {
+        if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
+        }
+        let Some(context) = context else {
+            return self
+                .queue_child_modulepreload_link_error_for_current_document(handle, link_handle);
         };
         request.set_csp_context(context);
         let Some(owner) = self
