@@ -1102,7 +1102,7 @@ impl ResourceRequestClient {
             .page_network_policy
             .snapshot()
             .apply_to_request(request)?;
-        request.validate_request_mode_for_url(&request.url)?;
+        request.admit_request_url(&request.url)?;
         self.resource_runtime.client().prepare_request(&mut request);
         Ok(request)
     }

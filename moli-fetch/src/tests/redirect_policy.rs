@@ -95,9 +95,109 @@ fn caller_owned_redirect_cannot_bypass_request_policy() -> Result<()> {
         .with_redirect_policy(crate::RequestRedirectPolicy::new(|_, _ordinal| {
             anyhow::bail!("denied")
         }));
-    let redirect = crate::RedirectInfo {
-        from_url: request.url.clone(),
-        to_url: Url::parse("https://blocked.test/b")?,
+    let redirect = recorded_redirect(request.url.clone(), Url::parse("https://blocked.test/b")?);
+    assert!(request.follow_redirect(redirect).is_err());
+    assert_eq!(request.url.as_str(), "https://allowed.test/a");
+    assert!(request.redirect_chain().is_empty());
+    Ok(())
+}
+
+#[test]
+fn request_mode_validation_is_pure_and_admission_rechecks_recorded_policy() -> Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let policy_calls = Arc::clone(&calls);
+    let target = Url::parse("https://allowed.test/final")?;
+    let request = Request::get(target.as_str())?
+        .with_request_origin(moli_url::WebOrigin::from_url(&target))
+        .with_request_mode(crate::RequestMode::SameOrigin)
+        .with_redirect_chain(vec![recorded_redirect(
+            Url::parse("https://allowed.test/start")?,
+            target.clone(),
+        )])
+        .with_redirect_policy(crate::RequestRedirectPolicy::new(move |_, ordinal| {
+            assert_eq!(ordinal, 1);
+            policy_calls.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("recorded redirect denied");
+        }));
+    request.validate_request_mode_for_url(&target)?;
+    assert!(
+        request
+            .validate_request_mode_for_url(&Url::parse("https://cross.test/")?)
+            .is_err()
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "mode validation must not produce policy reports"
+    );
+    for expected in 1..=2 {
+        assert!(
+            request
+                .admit_request_url(&target)
+                .unwrap_err()
+                .to_string()
+                .contains("recorded redirect denied")
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            expected,
+            "each actual dispatch/retry must reapply policy"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorded_redirect_policy_runs_before_cache_or_dispatch_in_every_transport() -> Result<()> {
+    for transport in ["buffered", "html", "raw", "callback"] {
+        for cached in [false, true] {
+            let cache_dir = unique_test_cache_dir();
+            let mut config = FetchConfig::default();
+            config.set_http_cache_dir(Some(cache_dir.display().to_string()));
+            let target = ScriptedHttpServer::spawn(vec![
+                ScriptedResponse::ok("target").with_header("Cache-Control", "max-age=600"),
+            ]);
+            let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+            let mut request = Request::get(&target.url())?;
+            if cached {
+                client.fetch(request.clone()).await?;
+                request = request.with_cache_mode(RequestCacheMode::OnlyIfCached);
+            }
+            let redirect = recorded_redirect(request.url.join("/start")?, request.url.clone());
+            request = request
+                .with_redirect_chain(vec![redirect])
+                .with_redirect_policy(crate::RequestRedirectPolicy::new(|_, ordinal| {
+                    assert_eq!(ordinal, 1);
+                    anyhow::bail!("recorded redirect denied before dispatch");
+                }));
+            let error = fetch(&client, request, transport).await.unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("recorded redirect denied before dispatch"),
+                "{transport}, cached={cached}: {error}"
+            );
+            assert_eq!(
+                target.hits(),
+                usize::from(cached),
+                "recorded target received a forbidden request: {transport}, cached={cached}"
+            );
+            assert!(client.shutdown().is_clean());
+            target.shutdown();
+            if cache_dir.exists() {
+                fs::remove_dir_all(cache_dir)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn recorded_redirect(from_url: Url, to_url: Url) -> crate::RedirectInfo {
+    crate::RedirectInfo {
+        from_url,
+        to_url,
         status: 302,
         source: crate::RedirectSource::ServiceWorker,
         headers: Vec::new(),
@@ -109,9 +209,5 @@ fn caller_owned_redirect_cannot_bypass_request_policy() -> Result<()> {
         cookie_set_reports: Vec::new(),
         from_cache: false,
         negotiated_http_version: None,
-    };
-    assert!(request.follow_redirect(redirect).is_err());
-    assert_eq!(request.url.as_str(), "https://allowed.test/a");
-    assert!(request.redirect_chain().is_empty());
-    Ok(())
+    }
 }
