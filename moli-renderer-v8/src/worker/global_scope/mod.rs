@@ -232,7 +232,8 @@ pub(super) use service_worker_results::{
     drain_service_worker_periodic_sync_unregistration_result,
     drain_service_worker_push_get_subscription_result, drain_service_worker_push_subscribe_result,
     drain_service_worker_push_unsubscribe_result, drain_service_worker_show_notification_result,
-    drain_service_worker_sync_get_tags_result, drain_service_worker_sync_registration_result,
+    drain_service_worker_skip_waiting_result, drain_service_worker_sync_get_tags_result,
+    drain_service_worker_sync_registration_result,
 };
 use state::worker_close_callback;
 pub(crate) use state::{

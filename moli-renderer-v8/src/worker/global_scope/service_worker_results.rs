@@ -92,6 +92,16 @@ impl WorkerServiceWorkerRequestIdAllocator {
 }
 
 impl WorkerGlobalState {
+    pub(in crate::worker) fn register_pending_service_worker_skip_waiting(
+        &mut self,
+        resolver: v8::Global<v8::PromiseResolver>,
+    ) -> u64 {
+        let request_id = self.service_worker_skip_waiting_request_ids.allocate();
+        self.pending_service_worker_skip_waiting
+            .insert(request_id, resolver);
+        request_id
+    }
+
     pub(in crate::worker) fn register_pending_service_worker_clients_claim(
         &mut self,
         resolver: v8::Global<v8::PromiseResolver>,
@@ -418,6 +428,22 @@ impl WorkerGlobalState {
 
         true
     }
+}
+
+pub(in crate::worker) fn drain_service_worker_skip_waiting_result(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    request_id: u64,
+) {
+    let Some(resolver) = state
+        .borrow_mut()
+        .pending_service_worker_skip_waiting
+        .remove(&request_id)
+    else {
+        return;
+    };
+    let resolver = v8::Local::new(scope, &resolver);
+    let _ = resolver.resolve(scope, v8::undefined(scope).into());
 }
 
 pub(in crate::worker) fn drain_service_worker_clients_claim_result(

@@ -291,6 +291,11 @@ impl ServiceWorkerRuntimeService {
                         version.pending_activation_fetch_events.drain(..).collect();
                     activated_pending_events = version.pending_start_events.drain(..).collect();
                     let registration_id = version.registration_id;
+                    let skip_waiting_host = match &version.running_state {
+                        ServiceWorkerVersionRunningState::Starting { host }
+                        | ServiceWorkerVersionRunningState::Running { host } => Some(host.clone()),
+                        ServiceWorkerVersionRunningState::Stopped => None,
+                    };
                     activated_registration_id = Some(registration_id);
                     state.record_target_version_updated(version_id);
                     let _ = self.store_registration_resources_locked(
@@ -309,6 +314,9 @@ impl ServiceWorkerRuntimeService {
                     .into_iter()
                     .map(|notification| LifecycleProgress::NotifyLifecycle(Box::new(notification)))
                     .collect::<Vec<_>>();
+                    if let Some(host) = skip_waiting_host {
+                        progress.insert(0, LifecycleProgress::CompleteActivationSkipWaiting(host));
+                    }
                     progress.push(LifecycleProgress::ForceUpdatePageLoadCompleted(
                         state.take_force_update_page_load_waiters_for_version(version_id),
                     ));
@@ -363,6 +371,9 @@ impl ServiceWorkerRuntimeService {
                 for completion in completions {
                     self.finish_fetch_event_completed(completion);
                 }
+            }
+            LifecycleProgress::CompleteActivationSkipWaiting(host) => {
+                host.complete_activation_skip_waiting_requests();
             }
             LifecycleProgress::TerminateHost(host) => {
                 host.terminate_without_join();
