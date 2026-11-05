@@ -133,6 +133,7 @@ pub(crate) fn prepare_popup_target(
         source,
         disposition,
         navigation_requested,
+        navigation_generation,
         navigation_initiator,
         same_origin_with_target,
         popup_id,
@@ -154,6 +155,19 @@ pub(crate) fn prepare_popup_target(
             ..
         }
     );
+    let navigation_cancelled = navigation_generation.is_some_and(|generation| {
+        auxiliary_window
+            .as_ref()
+            .is_none_or(|window| !window.accepts_pending_navigation(generation))
+    });
+    let navigation_requested = navigation_requested && !navigation_cancelled;
+    // The Window already exists in script. Adopt that exact initial Page,
+    // while discarding the request revoked before its browser target existed.
+    let (url, document_response, blob_resource) = if navigation_cancelled {
+        ("about:blank".to_owned(), None, None)
+    } else {
+        (url, document_response, blob_resource)
+    };
     let Some(browser_context) = conn
         .browser_context_by_id(&browser_context_id)
         .filter(|context| !context.closing)

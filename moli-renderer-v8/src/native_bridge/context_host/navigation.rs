@@ -491,6 +491,9 @@ impl JsContextHost {
     }
 
     pub(crate) fn cancel_pending_location_navigation(&mut self) {
+        if let Some(window) = self.auxiliary_window() {
+            window.cancel_pending_navigation();
+        }
         self.clear_pending_location_navigation();
         // A request already handed to the browser no longer occupies the
         // renderer's pending slot. Cancel through the same ordered owner

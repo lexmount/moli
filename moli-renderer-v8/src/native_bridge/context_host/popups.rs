@@ -1906,6 +1906,9 @@ impl JsContextHost {
     }
 
     pub(crate) fn cancel_pending_lightweight_popup_navigation(&mut self, popup_id: u64) {
+        if let Some(record) = self.lightweight_popup_record(popup_id) {
+            record.auxiliary_window.cancel_pending_navigation();
+        }
         if !self.lightweight_popup_has_pending_document_load(popup_id) {
             return;
         }
@@ -5710,7 +5713,8 @@ impl JsContextHost {
                 .with_browsing_context_name(record.name.clone())
                 .with_auxiliary_window(Some(record.auxiliary_window.clone())),
             None => activation,
-        };
+        }
+        .capture_navigation_cancellation();
         let mut items = Vec::with_capacity(1 + usize::from(window_open_event.is_some()));
         if let Some(event) = window_open_event {
             items.push(crate::runtime::RendererOutputItem::Observation(

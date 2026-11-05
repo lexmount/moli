@@ -210,6 +210,96 @@ async fn sequential_form_popups_preserve_post_body_and_source_referrer() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn popup_stop_before_adoption_preserves_initial_document_requests() {
+    use axum::response::IntoResponse;
+
+    let requests = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
+    let captured = Arc::clone(&requests);
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(move |uri: axum::http::Uri| {
+            let captured = Arc::clone(&captured);
+            async move {
+                captured.lock().push(uri.path().to_owned());
+                match uri.path() {
+                    "/source" => axum::response::Html(
+                        r#"<!doctype html><meta http-equiv="Content-Security-Policy" content="img-src 'self'"><body><script>
+globalThis.stopResults=[];
+(async()=>{
+  for(let sequence=0;sequence<3;sequence++){
+    const child=window.open('/cancelled/'+sequence);
+    child.stop();
+    const doc=child.document,image=doc.createElement('img');
+    image.src='/image.svg';
+    const loaded=new Promise(resolve=>{
+      image.onload=()=>resolve(['image',sequence,doc.URL,image.naturalWidth]);
+      image.onerror=()=>resolve(['error',sequence,doc.URL]);
+    });
+    doc.body.append(image);
+    stopResults.push(await loaded);
+    child.close();
+  }
+  const old=window.open('/cancelled/reused','stopped-popup');
+  old.stop();
+  const replacement=window.open('/accepted','stopped-popup');
+  stopResults.push(['same-window',old===replacement]);
+})();
+</script>"#,
+                    )
+                    .into_response(),
+                    "/image.svg" => (
+                        [(axum::http::header::CONTENT_TYPE, "image/svg+xml")],
+                        r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1"/></svg>"#,
+                    )
+                        .into_response(),
+                    "/accepted" => axum::response::Html(
+                        "<!doctype html><script>opener.stopResults.push(['accepted']);close();</script>",
+                    )
+                    .into_response(),
+                    _ => axum::response::Html("<!doctype html><body>wrong navigation</body>")
+                        .into_response(),
+                }
+            }
+        })),
+        "popup-stop-before-adoption",
+    );
+    let (addr, server) = spawn_test_protocol_server_with_image_fetch_enabled(true).await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let parent_id = create_dynamic_target(&mut browser, 1).await;
+    let mut parent = connect_dynamic_page(addr, &parent_id).await;
+    send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(
+        &mut parent,
+        2,
+        &format!("http://{fixture_addr}/source"),
+    )
+    .await;
+    wait_for_value(&mut parent, "stopResults.length", json!(5)).await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut parent, 3, "stopResults").await,
+        json!([
+            ["image", 0, "about:blank", 1],
+            ["image", 1, "about:blank", 1],
+            ["image", 2, "about:blank", 1],
+            ["same-window", true],
+            ["accepted"],
+        ])
+    );
+    let requests = requests.lock().clone();
+    assert!(
+        requests.iter().all(|path| !path.starts_with("/cancelled/")),
+        "stop() must revoke the accepted popup navigation before adoption: {requests:?}"
+    );
+    assert_eq!(
+        requests.iter().filter(|path| *path == "/accepted").count(),
+        1
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn popup_document_access_keeps_retained_functions_and_checks_borrowed_receivers() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|uri: axum::http::Uri| async move {

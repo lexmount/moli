@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 };
 
 /// Identity and lifetime of a script-created top-level browsing context.
@@ -12,6 +12,7 @@ pub struct RendererAuxiliaryWindow(Arc<AuxiliaryWindowState>);
 struct AuxiliaryWindowState {
     id: u64,
     close_state: AtomicU8,
+    navigation_cancellation_generation: AtomicU64,
     is_popup: AtomicBool,
     frame_sandbox: crate::document_runtime::DocumentSandboxPolicy,
 }
@@ -65,6 +66,7 @@ impl RendererAuxiliaryWindow {
         Self(Arc::new(AuxiliaryWindowState {
             id,
             close_state: AtomicU8::new(AuxiliaryWindowCloseState::Open as u8),
+            navigation_cancellation_generation: AtomicU64::new(0),
             is_popup: AtomicBool::new(false),
             frame_sandbox,
         }))
@@ -72,6 +74,36 @@ impl RendererAuxiliaryWindow {
 
     pub fn id(&self) -> u64 {
         self.0.id
+    }
+
+    fn advance_navigation_cancellation_generation(&self) -> u64 {
+        self.0
+            .navigation_cancellation_generation
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |generation| {
+                generation.checked_add(1)
+            })
+            .expect("auxiliary navigation generation exhausted")
+            + 1
+    }
+
+    pub(crate) fn pending_navigation_generation(&self) -> u64 {
+        self.0
+            .navigation_cancellation_generation
+            .load(Ordering::Acquire)
+    }
+
+    pub(crate) fn cancel_pending_navigation(&self) {
+        self.advance_navigation_cancellation_generation();
+    }
+
+    /// A renderer can stop this request before the browser has
+    /// adopted its initial Page. Preserve that decision across projection.
+    pub fn accepts_pending_navigation(&self, generation: u64) -> bool {
+        self.0
+            .navigation_cancellation_generation
+            .load(Ordering::Acquire)
+            == generation
+            && !self.is_closed()
     }
 
     pub fn is_closed(&self) -> bool {
