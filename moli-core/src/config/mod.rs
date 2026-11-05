@@ -15,7 +15,6 @@ pub struct BrowserConfig {
     subframe_loading_enabled: bool,
     script_execution_disabled: bool,
     debugger_enabled: bool,
-    force_main_world_initialization: bool,
     author_styles_disabled: bool,
     wpt_extensions_enabled: bool,
 }
@@ -31,7 +30,6 @@ impl Default for BrowserConfig {
             subframe_loading_enabled: true,
             script_execution_disabled: false,
             debugger_enabled: false,
-            force_main_world_initialization: false,
             author_styles_disabled: false,
             wpt_extensions_enabled: false,
         }
@@ -162,20 +160,6 @@ impl BrowserConfig {
 
     pub fn author_styles_disabled(&self) -> bool {
         self.author_styles_disabled
-    }
-
-    /// Prebuild each Document's main Window realm for automation clients that need it.
-    pub fn force_main_world_initialization(&self) -> bool {
-        self.force_main_world_initialization
-    }
-
-    pub fn set_force_main_world_initialization(&mut self, enabled: bool) {
-        self.force_main_world_initialization = enabled;
-    }
-
-    pub fn with_force_main_world_initialization(mut self, enabled: bool) -> Self {
-        self.set_force_main_world_initialization(enabled);
-        self
     }
 
     /// Whether newly enabled Inspector Debugger agents allow pauses by default.

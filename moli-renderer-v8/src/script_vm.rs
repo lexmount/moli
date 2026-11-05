@@ -1016,6 +1016,7 @@ pub(super) struct ScriptVm {
     renderer_document_isolate_teardown: RendererDocumentIsolateTeardown,
     renderer_page_script_environment: Option<RendererPageScriptEnvironment>,
     page_default_runtime: WindowRealmRuntime,
+    // Release the sizeable History/navigator seeds after the realm is initialized.
     pending_main_world: Option<Box<main_world::PendingMainWorld>>,
     page_isolated_world_contexts: PageIsolatedWorldRegistry,
     child_frame_realm_store: child_frame_realm::ChildFrameRealmStore,
@@ -2237,8 +2238,7 @@ impl ScriptVmPageRealmBootstrap {
                 promise_reject_dispatch.clone(),
             );
 
-        let initialize_main_world = document_settings.force_main_world_initialization
-            || renderer_page_script_environment.is_none()
+        let initialize_main_world = renderer_page_script_environment.is_none()
             || reuse_main_window_proxy
             || !runtime_inspector_session_restore_snapshots.is_empty();
         Ok(Self {

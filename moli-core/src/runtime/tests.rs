@@ -200,9 +200,14 @@ async fn page_creation_diagnostics_only_report_materialized_runtime_contexts() -
     let browser = Browser::new(AppConfig::default())?;
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
     let page_url: Url = server.url("/runtime-context-diagnostics").parse()?;
-    for eager in [false, true] {
-        let html = "<!doctype html><html><body>ok</body></html>".to_owned();
-        let mut create_page_request = renderer_owner.build_create_html_page_request(
+    for (html, has_script) in [
+        ("<!doctype html><html><body>ok</body></html>", false),
+        (
+            "<!doctype html><html><body>ok<script>globalThis.hasScript = true</script></body></html>",
+            true,
+        ),
+    ] {
+        let create_page_request = renderer_owner.build_create_html_page_request(
             page_url.clone(),
             None,
             false,
@@ -215,7 +220,7 @@ async fn page_creation_diagnostics_only_report_materialized_runtime_contexts() -
                 browser.partition.session_storage_store(),
             ),
             page_url.clone(),
-            html,
+            html.to_owned(),
             vec![],
             vec![],
             vec![],
@@ -227,10 +232,6 @@ async fn page_creation_diagnostics_only_report_materialized_runtime_contexts() -
             super::PageVmInitStage::Load,
         );
 
-        create_page_request
-            .document_settings
-            .force_main_world_initialization = eager;
-
         let reply = renderer_owner
             .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
             .await?;
@@ -239,7 +240,7 @@ async fn page_creation_diagnostics_only_report_materialized_runtime_contexts() -
         assert!(pending_download.is_none());
         let _page = Page::from_attached_handle(handle, page_state);
 
-        if eager {
+        if has_script {
             let default_context = diagnostics
                 .initial_runtime_realms
                 .iter()
