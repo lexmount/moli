@@ -1,5 +1,184 @@
 use super::*;
 
+#[tokio::test(flavor = "current_thread")]
+async fn service_worker_register_after_popup_close_settles_without_admitting_work() {
+    let mut vm = new_storage_page_task_executor_test_vm(
+        "https://closed-service-worker-owner.test/page.html",
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+            globalThis.__closedPopupRegistration = "pending";
+            let popup = open("about:blank");
+            const container = popup.navigator.serviceWorker;
+            popup.close();
+            const closed = popup.closed;
+            popup = null;
+            (async () => {
+              try {
+                await container.register(
+                  "https://closed-service-worker-owner.test/worker.js"
+                );
+                __closedPopupRegistration = "resolved";
+              } catch {
+                __closedPopupRegistration = "rejected";
+              }
+            })();
+            String(closed)
+            "#,
+        )
+        .expect("retained ServiceWorkerContainer should remain callable after close"),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("__closedPopupRegistration")
+            .expect("the surviving caller should observe the rejected registration"),
+        "rejected",
+        "registration after close must settle before its owner cleanup can discard the resolver"
+    );
+    assert!(
+        vm._context_host
+            .borrow()
+            .pending_service_worker_register_owners_for_test()
+            .is_empty(),
+        "a closed popup must not admit a new service worker registration"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn service_worker_register_argument_conversion_closes_popup_before_admission() {
+    let mut vm = new_storage_page_task_executor_test_vm(
+        "https://closed-service-worker-owner.test/page.html",
+    );
+    vm.eval(
+        r#"
+        globalThis.__convertedPopupRegistration = "pending";
+        const popup = open("about:blank");
+        const container = popup.navigator.serviceWorker;
+        const script = {
+          toString() {
+            popup.close();
+            return "https://closed-service-worker-owner.test/worker.js";
+          }
+        };
+        (async () => {
+          try {
+            await container.register(script);
+            __convertedPopupRegistration = "resolved";
+          } catch {
+            __convertedPopupRegistration = "rejected";
+          }
+        })();
+        "called"
+        "#,
+    )
+    .expect("register argument conversion should be allowed to close its popup");
+    assert_eq!(
+        vm.eval("__convertedPopupRegistration")
+            .expect("the surviving caller should observe the rejected registration"),
+        "rejected",
+        "request admission must use the popup state after WebIDL conversion"
+    );
+    assert!(
+        vm._context_host
+            .borrow()
+            .pending_service_worker_register_owners_for_test()
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn service_worker_register_after_auxiliary_page_close_settles_without_admitting_work() {
+    let mut vm = new_storage_page_task_executor_test_vm(
+        "https://closed-service-worker-owner.test/page.html",
+    );
+    let auxiliary_window = vm
+        ._context_host
+        .borrow()
+        .browser_context_runtime()
+        .new_auxiliary_window();
+    vm._context_host
+        .borrow_mut()
+        .bind_auxiliary_window(Some(auxiliary_window));
+    assert_eq!(
+        vm.eval(
+            r#"
+            const container = navigator.serviceWorker;
+            close();
+            globalThis.__closedPageRegistration = "pending";
+            (async () => {
+              try {
+                await container.register(
+                  "https://closed-service-worker-owner.test/worker.js"
+                );
+                __closedPageRegistration = "resolved";
+              } catch {
+                __closedPageRegistration = "rejected";
+              }
+            })();
+            String(closed)
+            "#,
+        )
+        .expect("a renderer-owned auxiliary Page should retain its container during close"),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("__closedPageRegistration")
+            .expect("the closed Page registration should settle"),
+        "rejected",
+        "a renderer-owned popup uses its Page's top-level service worker owner"
+    );
+    assert!(
+        vm._context_host
+            .borrow()
+            .pending_service_worker_register_owners_for_test()
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn service_worker_register_during_auxiliary_beforeunload_keeps_active_request() {
+    let mut vm = new_storage_page_task_executor_test_vm(
+        "https://closed-service-worker-owner.test/page.html",
+    );
+    let auxiliary_window = vm
+        ._context_host
+        .borrow()
+        .browser_context_runtime()
+        .new_auxiliary_window();
+    vm._context_host
+        .borrow_mut()
+        .bind_auxiliary_window(Some(auxiliary_window));
+    assert_eq!(
+        vm.eval(
+            r#"
+            globalThis.__beforeunloadWasClosed = "not-called";
+            addEventListener("beforeunload", () => {
+              __beforeunloadWasClosed = String(closed);
+              navigator.serviceWorker.register(
+                "https://closed-service-worker-owner.test/worker.js"
+              );
+            });
+            close();
+            String(closed)
+            "#,
+        )
+        .expect("beforeunload should run before the auxiliary Page is closed"),
+        "true"
+    );
+    assert_eq!(vm.eval("__beforeunloadWasClosed").unwrap(), "false");
+    let pending = vm
+        ._context_host
+        .borrow()
+        .pending_service_worker_register_owners_for_test();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].1.dispatch_scope(),
+        crate::native_bridge::OwnerDispatchScope::Top,
+        "the still-active auxiliary Page must admit its own request during beforeunload"
+    );
+}
+
 #[test]
 fn isolated_realm_destruction_retires_dedicated_worker_without_retiring_local_window() {
     let mut vm = new_storage_test_vm("https://isolated-worker-owner.test/");
