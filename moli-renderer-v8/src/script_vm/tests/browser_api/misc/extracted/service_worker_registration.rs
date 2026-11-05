@@ -1310,3 +1310,72 @@ async fn navigator_service_worker_module_bootstrap_claim_rejects_and_activation_
         .await
         .expect("module worker script should be fetched");
 }
+
+#[tokio::test]
+async fn waiting_replacement_lifecycle_projects_registration_slots() {
+    let active = r#"
+      self.addEventListener('activate', event => event.waitUntil(clients.claim()));
+    "#;
+    let waiting = "self.addEventListener('install', event => event.waitUntil(Promise.resolve()));";
+    let replacement = "// replacement\nself.addEventListener('install', event => event.waitUntil(Promise.resolve()));";
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        ("/app/active.js", "text/javascript; charset=utf-8", active),
+        ("/app/waiting.js", "text/javascript; charset=utf-8", waiting),
+        (
+            "/app/replacement.js",
+            "text/javascript; charset=utf-8",
+            replacement,
+        ),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, context) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+      globalThis.replacementObservations = [];
+      globalThis.replacementFinished = false;
+      (async () => {
+        const container = navigator.serviceWorker;
+        const registration = await container.register('active.js', {scope: './'});
+        await container.ready;
+        const active = registration.active;
+        if (active.state !== 'activated') await new Promise(resolve => {
+          active.addEventListener('statechange', () => { if (active.state === 'activated') resolve(); });
+        });
+        if (!container.controller) await new Promise(resolve => {
+          container.addEventListener('controllerchange', resolve, {once: true});
+        });
+        await container.register('waiting.js', {scope: './'});
+        const previous = registration.installing || registration.waiting;
+        if (!previous) throw new Error('the controlled page must keep a candidate worker');
+        if (previous.state !== 'installed') await new Promise(resolve => {
+          previous.addEventListener('statechange', () => { if (previous.state === 'installed') resolve(); });
+        });
+        previous.addEventListener('statechange', () => {
+          if (previous.state !== 'redundant') return;
+          const installing = registration.installing;
+          replacementObservations.push([
+            'redundant', registration.waiting === previous,
+            installing && new URL(installing.scriptURL).pathname,
+            installing && installing.state, registration.active === active
+          ]);
+          if (installing) installing.addEventListener('statechange', () => {
+            if (installing.state === 'installed') replacementObservations.push([
+              'installed', registration.installing === null,
+              registration.waiting === installing, registration.active === active
+            ]);
+          });
+        });
+        await container.register('replacement.js', {scope: './'});
+        replacementFinished = true;
+      })().catch(error => { globalThis.replacementFailure = String(error); });
+    "#).unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm, &context, &loader,
+        "JSON.stringify({done: replacementFinished, events: replacementObservations, error: globalThis.replacementFailure || null})",
+        r#"{"done":true,"events":[["redundant",true,"/app/replacement.js","installing",true],["installed",true,true,true]],"error":null}"#,
+    ).await;
+    server.await.unwrap();
+}
