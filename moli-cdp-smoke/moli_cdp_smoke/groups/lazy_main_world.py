@@ -174,7 +174,53 @@ async def _check_handler_attribute_mutations(endpoint: str,
                 await client.websocket.close()
 
 
-async def run_lazy_main_world_group(endpoint: str, _fixture: str,
+async def _check_retained_window_timing(endpoint: str, fixture: str,
+                                        results: list[dict[str, Any]]) -> None:
+    client = await connect_raw_cdp(endpoint)
+    wire = _Wire(client)
+    context = None
+    try:
+        context = (await wire.call("Target.createBrowserContext"))["browserContextId"]
+        target = (await wire.call("Target.createTarget", {
+            "url": "about:blank", "browserContextId": context,
+        }))["targetId"]
+        session = (await wire.call("Target.attachToTarget", {
+            "targetId": target, "flatten": True,
+        }))["sessionId"]
+        await wire.call("Page.enable", session=session)
+        await wire.load_url(session, fixture + "/plain")
+        timing = await wire.evaluate(session, """new Promise(resolve => {
+          const popup=open('/retained-window-timing');
+          const array=popup.Array, perf=popup.performance, legacy=perf.timing, origin=perf.timeOrigin;
+          perf.mark('before-navigation');
+          popup.onload=()=>{
+            const navigation=popup.performance.getEntriesByType('navigation')[0];
+            resolve({now:popup.performance.now(), loadStart:navigation.loadEventStart,
+              legacyLoadStart:popup.performance.timing.loadEventStart, origin,
+              loadEnd:navigation.loadEventEnd, sameRealm:popup.Array===array,
+              samePerformance:popup.performance===perf, sameTiming:popup.performance.timing===legacy,
+              sameOrigin:popup.performance.timeOrigin===origin,
+              keptMark:popup.performance.getEntriesByName('before-navigation').length===1});
+            popup.close();
+          };
+        })""", awaitPromise=True, userGesture=True)
+        for identity in ("sameRealm", "samePerformance", "sameTiming", "sameOrigin", "keptMark"):
+            assert_equal(timing[identity], True, f"retained Window {identity}")
+        # The fixture holds the response for 400ms. Use a lower bound rather
+        # than equating separate clock reads or imposing a scheduling deadline.
+        if not (timing["loadStart"] >= 300
+                and timing["legacyLoadStart"] - timing["origin"] >= 299
+                and timing["now"] + 1 >= timing["loadStart"]):
+            raise SmokeError(f"lifecycle timestamps lost the retained Window clock: {timing}")
+        assert_equal(timing["loadEnd"], 0, "the new Document load has not ended in its handler")
+        record(results, "retained_window_performance_clock", timing)
+    finally:
+        if context is not None:
+            await wire.call("Target.disposeBrowserContext", {"browserContextId": context})
+        await client.websocket.close()
+
+
+async def run_lazy_main_world_group(endpoint: str, fixture: str,
                                     results: list[dict[str, Any]]) -> None:
     for activation in ("evaluate", "runtime-enable", "isolated-world", "preload",
                        "deferred-script", "inline-load", "native-io", "navigate-close",
@@ -326,3 +372,4 @@ async def run_lazy_main_world_group(endpoint: str, _fixture: str,
             await client.websocket.close()
 
     await _check_handler_attribute_mutations(endpoint, results)
+    await _check_retained_window_timing(endpoint, fixture, results)

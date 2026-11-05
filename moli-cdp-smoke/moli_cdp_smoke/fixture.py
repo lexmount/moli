@@ -660,6 +660,11 @@ class FixtureServer:
                     return
                 if route == "/plain":
                     self._send_html("<!doctype html><main>plain ok</main>")
+                elif route == "/retained-window-timing":
+                    # Measurement interval before commit, so a reset Document
+                    # clock is distinguishable from the retained Window clock.
+                    time.sleep(0.4)
+                    self._send_html("<!doctype html><main>retained Window</main>")
                 elif route == "/layout-screenshot-poc":
                     self._send_html(LAYOUT_SCREENSHOT_FIXTURE)
                 elif route == "/action-window-deadline":
