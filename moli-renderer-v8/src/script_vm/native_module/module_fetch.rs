@@ -859,30 +859,43 @@ impl ScriptVm {
             return Ok(fetched_source);
         }
         if fetched_source.redirected() {
+            let context = csp_context.ok_or_else(|| {
+                ModuleLoadError::new(
+                    ModuleLoadStage::Fetch,
+                    "Redirected module completion has no CSP request context",
+                )
+            })?;
             let redirect_status =
                 crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect;
             let request = module_fetch_csp_request(fetch_metadata);
-            if let Some(violation) = self.document_runtime.module_request_csp_violation(
-                fetched_source.final_url(),
-                kind,
-                redirect_status,
-                request,
-                crate::content_security_policy::ContentSecurityPolicyDisposition::Report,
-            ) {
+            if let Some(violation) = self
+                .document_runtime
+                .module_request_csp_violation_for_checked_url(
+                    fetched_source.final_url(),
+                    context.original_url(),
+                    kind,
+                    redirect_status,
+                    request,
+                    crate::content_security_policy::ContentSecurityPolicyDisposition::Report,
+                )
+            {
                 self.record_module_fetch_csp_violation(csp_context, violation);
             }
-            if let Some(violation) = self.document_runtime.module_request_csp_violation(
-                fetched_source.final_url(),
-                kind,
-                redirect_status,
-                request,
-                crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
-            ) {
+            if let Some(violation) = self
+                .document_runtime
+                .module_request_csp_violation_for_checked_url(
+                    fetched_source.final_url(),
+                    context.original_url(),
+                    kind,
+                    redirect_status,
+                    request,
+                    crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
+                )
+            {
                 let error = ModuleLoadError::new(
                     ModuleLoadStage::Fetch,
                     format!(
-                        "native module graph fetch completion {load_id} blocked by document Content Security Policy for `{}`",
-                        violation.blocked_uri
+                        "native module graph fetch completion {load_id} blocked by document Content Security Policy"
                     ),
                 );
                 self.record_module_fetch_csp_violation(csp_context, violation);

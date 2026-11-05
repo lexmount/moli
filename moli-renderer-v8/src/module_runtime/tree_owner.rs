@@ -301,7 +301,7 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeDocumentOwner<'_> 
         Some(
             self.vm
                 .document_runtime
-                .module_fetch_csp_context(key.kind(), metadata),
+                .module_fetch_csp_context(key.url(), key.kind(), metadata),
         )
     }
     fn compile_module_record(
@@ -480,6 +480,7 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeFrameDocumentOwner
         self.vm.module_fetch_csp_context_for_child_owner(
             self.document_owner,
             self.realm_id,
+            key.url(),
             key.kind(),
             metadata,
         )

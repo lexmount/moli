@@ -343,7 +343,14 @@ fn module_graph_redirect_final_url_obeys_script_src_csp() {
         "#,
     )
     .expect("install module CSP listener");
-    let final_url = Url::parse("https://cdn.test/dependency.js").unwrap();
+    let final_url = Url::parse("https://cdn.test/dependency.js?token=SECRET").unwrap();
+    let original_url = Url::parse("https://app.test/dependency.js").unwrap();
+    let metadata = crate::module_runtime::ModuleFetchMetadata::default();
+    let csp_context = vm.document_runtime.module_fetch_csp_context(
+        &original_url,
+        crate::module_runtime::ModuleKind::JavaScript,
+        &metadata,
+    );
     let fetched_source = crate::module_runtime::ModuleGraphFetchedSource::new(
         final_url.clone(),
         true,
@@ -355,11 +362,13 @@ fn module_graph_redirect_final_url_obeys_script_src_csp() {
             7,
             fetched_source,
             crate::module_runtime::ModuleKind::JavaScript,
-            &crate::module_runtime::ModuleFetchMetadata::default(),
-            None,
+            &metadata,
+            Some(&csp_context),
         )
         .expect_err("redirected module final URL should be blocked by script-src");
     assert!(error.message().contains("Content Security Policy"));
+    assert!(!error.message().contains("cdn.test"));
+    assert!(!error.message().contains("SECRET"));
     assert_eq!(
         drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
         2
@@ -369,7 +378,7 @@ fn module_graph_redirect_final_url_obeys_script_src_csp() {
             .expect("read module CSP events"),
         format!(
             r#"[{{"blockedURI":"{}","effectiveDirective":"script-src-elem","disposition":"report","instance":true}},{{"blockedURI":"{}","effectiveDirective":"script-src-elem","disposition":"enforce","instance":true}}]"#,
-            final_url, final_url
+            original_url, original_url
         )
     );
 }

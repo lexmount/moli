@@ -444,6 +444,7 @@ impl JsContextHost {
         }
         let Some(context) = self.module_fetch_csp_context_for_owner(
             crate::native_bridge::context_host::OwnerDispatchScope::Child(handle),
+            request.module_key().url(),
             request.module_key().kind(),
             request.fetch_metadata(),
         ) else {
@@ -892,6 +893,7 @@ impl JsContextHost {
         let request = child_parser_module_root_fetch_request(&fetch_start.script);
         let csp_context = self.module_fetch_csp_context_for_owner(
             crate::native_bridge::context_host::OwnerDispatchScope::Child(target.child_handle()),
+            request.source_url(),
             request.kind(),
             request.fetch_metadata(),
         );

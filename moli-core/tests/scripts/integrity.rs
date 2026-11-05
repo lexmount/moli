@@ -23,11 +23,13 @@ struct IntegrityServers {
     origin: String,
     cross_origin: String,
     requests: Arc<Mutex<Vec<IntegrityRequest>>>,
+    requests_changed: Arc<tokio::sync::Notify>,
     tasks: Vec<JoinHandle<()>>,
 }
 
 #[derive(Debug)]
 struct IntegrityRequest {
+    body: String,
     method: String,
     path: String,
     origin: Option<String>,
@@ -53,12 +55,14 @@ impl IntegrityServers {
         let origin = format!("http://{}", main.local_addr()?);
         let cross_origin = format!("http://{}", cross.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let requests_changed = Arc::new(tokio::sync::Notify::new());
         let tasks = [main, cross]
             .into_iter()
             .map(|listener| {
                 let origin = origin.clone();
                 let cross_origin = cross_origin.clone();
                 let requests = Arc::clone(&requests);
+                let requests_changed = Arc::clone(&requests_changed);
                 tokio::spawn(async move {
                     let mut connections = JoinSet::new();
                     loop {
@@ -68,6 +72,7 @@ impl IntegrityServers {
                                 let origin = origin.clone();
                                 let cross_origin = cross_origin.clone();
                                 let requests = Arc::clone(&requests);
+                                let requests_changed = Arc::clone(&requests_changed);
                                 connections.spawn(async move {
                                     let mut request = Vec::new();
                                     while !request.ends_with(b"\r\n\r\n") && request.len() < 16384 {
@@ -79,7 +84,11 @@ impl IntegrityServers {
                                     let header = |name: &str| request.lines().filter_map(|line| line.split_once(':'))
                                         .find(|(key, _)| key.eq_ignore_ascii_case(name))
                                         .map(|(_, value)| value.trim().to_owned());
+                                    let body_len = header("Content-Length").and_then(|value| value.parse().ok()).unwrap_or(0);
+                                    let mut body = vec![0; body_len];
+                                    if stream.read_exact(&mut body).await.is_err() { return; }
                                     let incoming = IntegrityRequest {
+                                        body: String::from_utf8_lossy(&body).into_owned(),
                                         method: request.split_whitespace().next().unwrap_or("GET").to_owned(),
                                         path: path.to_owned(), origin: header("Origin"), cookie: header("Cookie"),
                                         referer: header("Referer"),
@@ -89,6 +98,7 @@ impl IntegrityServers {
                                     };
                                     let (status, headers, body) = fixture_response(&incoming, &origin, &cross_origin);
                                     requests.lock().push(incoming);
+                                    requests_changed.notify_one();
                                     let response = format!(
                                         "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                                         body.len(),
@@ -106,6 +116,7 @@ impl IntegrityServers {
             origin,
             cross_origin,
             requests,
+            requests_changed,
             tasks,
         })
     }
@@ -149,7 +160,7 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
-        "/module-csp.html" | "/module-csp.text" | "/module-csp.json" | "/module-csp.css" | "/module-csp.js" | "/module-csp.wasm" => {
+        "/module-csp.html" | "/module-csp-privacy.html" | "/module-csp-report-uri" | "/module-csp-report-to" | "/module-csp.text" | "/module-csp.json" | "/module-csp.css" | "/module-csp.js" | "/module-csp.wasm" => {
             module_csp::fixture_response(path, query, origin, cross)
         }
         "/child-sri-frame.html"

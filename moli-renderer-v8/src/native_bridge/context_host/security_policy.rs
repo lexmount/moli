@@ -134,6 +134,7 @@ impl JsContextHost {
     pub(crate) fn module_fetch_csp_context_for_owner(
         &self,
         owner: OwnerDispatchScope,
+        request_url: &url::Url,
         kind: crate::module_runtime::ModuleKind,
         metadata: &crate::module_runtime::ModuleFetchMetadata,
     ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
@@ -145,6 +146,7 @@ impl JsContextHost {
                 &snapshot.policy_container,
                 kind,
                 metadata,
+                request_url,
                 Some(owner),
             ),
         )

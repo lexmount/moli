@@ -7,6 +7,7 @@ use super::{ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyUrlViolati
 
 type Check = dyn Fn(
         &Url,
+        &Url,
         ContentSecurityPolicyRedirectStatus,
     ) -> (
         Option<ContentSecurityPolicyUrlViolation>,
@@ -21,6 +22,7 @@ pub(crate) struct ModuleFetchCspContext(Arc<Inner>);
 
 struct Inner {
     check: Box<Check>,
+    original_url: Url,
     owner_scope: Option<crate::native_bridge::OwnerDispatchScope>,
     state: Mutex<State>,
 }
@@ -48,8 +50,10 @@ impl Eq for ModuleFetchCspContext {}
 
 impl ModuleFetchCspContext {
     pub(crate) fn new(
+        original_url: Url,
         owner_scope: Option<crate::native_bridge::OwnerDispatchScope>,
         check: impl Fn(
+            &Url,
             &Url,
             ContentSecurityPolicyRedirectStatus,
         ) -> (
@@ -61,6 +65,7 @@ impl ModuleFetchCspContext {
     ) -> Self {
         Self(Arc::new(Inner {
             check: Box::new(check),
+            original_url,
             owner_scope,
             state: Mutex::new(State::default()),
         }))
@@ -68,6 +73,10 @@ impl ModuleFetchCspContext {
 
     pub(crate) fn owner_scope(&self) -> Option<crate::native_bridge::OwnerDispatchScope> {
         self.0.owner_scope
+    }
+
+    pub(crate) fn original_url(&self) -> &Url {
+        &self.0.original_url
     }
 
     pub(crate) fn check_initial_request(&self, url: &Url) -> anyhow::Result<()> {
@@ -89,6 +98,7 @@ impl ModuleFetchCspContext {
     fn check_redirect(&self, url: &Url, ordinal: usize) -> anyhow::Result<()> {
         let (report, enforce) = (self.0.check)(
             url,
+            self.original_url(),
             if ordinal == 0 {
                 ContentSecurityPolicyRedirectStatus::NoRedirect
             } else {
@@ -99,7 +109,7 @@ impl ModuleFetchCspContext {
         if state.checked_redirects.contains(&(ordinal, url.clone())) {
             if let Some(enforce) = enforce {
                 anyhow::bail!(
-                    "Module redirect to `{url}` blocked by Content Security Policy directive `{}`",
+                    "Module request blocked by Content Security Policy directive `{}`",
                     enforce.effective_directive
                 );
             }
@@ -111,7 +121,7 @@ impl ModuleFetchCspContext {
         }
         if let Some(enforce) = enforce {
             let message = format!(
-                "Module redirect to `{url}` blocked by Content Security Policy directive `{}`",
+                "Module request blocked by Content Security Policy directive `{}`",
                 enforce.effective_directive
             );
             state.violations.push(enforce);
@@ -132,6 +142,7 @@ impl ModuleFetchCspContext {
         if response.redirected {
             let (report, enforce) = (self.0.check)(
                 &response.final_url,
+                self.original_url(),
                 ContentSecurityPolicyRedirectStatus::FollowedRedirect,
             );
             if let Some(report) = report {

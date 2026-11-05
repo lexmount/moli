@@ -23,6 +23,7 @@ impl ScriptVm {
         &self,
         owner: crate::frame_owner_model::FrameDocumentOwner,
         realm: crate::frame_owner_model::FrameRealmId,
+        request_url: &url::Url,
         kind: crate::module_runtime::ModuleKind,
         metadata: &crate::module_runtime::ModuleFetchMetadata,
     ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
@@ -31,6 +32,7 @@ impl ScriptVm {
         let target = host.current_child_module_fetch_target_for_realm(task_owner, realm)?;
         host.module_fetch_csp_context_for_owner(
             crate::native_bridge::OwnerDispatchScope::Child(target.child_handle()),
+            request_url,
             kind,
             metadata,
         )
