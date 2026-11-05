@@ -113,7 +113,6 @@ fn wasm_compile_error_survives_module_graph_and_rejection() {
             &requests.pop().unwrap(),
             Ok(ModuleGraphFetchedSource::new(
                 url,
-                false,
                 ModuleSource::binary(vec![0]),
             )),
         )

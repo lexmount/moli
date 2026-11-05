@@ -253,7 +253,6 @@ fn child_dynamic_import_owner_module_fetch_completion_followup_returns_fetch_com
         .inflight;
     let source = Ok(ModuleGraphFetchedSource::new(
         source_url.clone(),
-        false,
         ModuleSource::text("export const value = 1;".to_owned()),
     ));
 

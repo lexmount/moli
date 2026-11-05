@@ -30,7 +30,7 @@ async fn child_modulepreload_missing_csp_context_queues_one_error_without_fetch(
         assert!(page_vm.vm().current_child_document_module_fetch_target(child).is_some(), "the failed admission must belong to a live Child Document and realm");
         let source_url = Url::parse("https://example.com/missing-context.js")?;
         let request = NativeModuleSingleFetchRequest::new(
-            source_url.clone(), source_url.clone(), Url::parse("https://example.com/preload-csp-context")?,
+            source_url.clone(), Url::parse("https://example.com/preload-csp-context")?,
             ModuleMapKey::java_script(source_url), ModuleFetchMetadata::default(),
         );
         let host = page_vm.vm().context_host_weak_for_test().upgrade().unwrap();
