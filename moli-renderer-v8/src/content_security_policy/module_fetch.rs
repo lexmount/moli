@@ -75,7 +75,7 @@ impl ModuleFetchCspContext {
         self.0.owner_scope
     }
 
-    pub(crate) fn original_url(&self) -> &Url {
+    fn original_url(&self) -> &Url {
         &self.0.original_url
     }
 
@@ -160,7 +160,7 @@ impl ModuleFetchCspContext {
         Ok(())
     }
 
-    pub(crate) fn record_final_violation(&self, violation: ContentSecurityPolicyUrlViolation) {
+    fn record_final_violation(&self, violation: ContentSecurityPolicyUrlViolation) {
         let mut state = self.0.state.lock();
         if !state.violations.contains(&violation) {
             state.violations.push(violation);

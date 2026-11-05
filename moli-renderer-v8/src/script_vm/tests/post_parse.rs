@@ -325,60 +325,78 @@ fn external_script_redirect_final_url_obeys_script_src_csp() {
 }
 
 #[test]
-fn module_graph_redirect_final_url_obeys_script_src_csp() {
+fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
     let mut vm = new_storage_test_vm("https://app.test/page.html");
     vm.set_response_content_security_report_only_policies(&["script-src 'self'".to_owned()]);
     vm.set_response_content_security_policies(&["script-src 'self'".to_owned()]);
     vm.eval(
         r#"
-        globalThis.__moduleCspEvents = [];
-        document.addEventListener("securitypolicyviolation", event => {
-            globalThis.__moduleCspEvents.push({
-                blockedURI: event.blockedURI,
-                effectiveDirective: event.effectiveDirective,
-                disposition: event.disposition,
-                instance: event instanceof SecurityPolicyViolationEvent,
-            });
-        });
-        "#,
+      globalThis.__moduleCspEvents = [];
+      document.addEventListener('securitypolicyviolation', event => {
+        __moduleCspEvents.push({blockedURI:event.blockedURI, disposition:event.disposition});
+      });
+    "#,
     )
-    .expect("install module CSP listener");
-    let final_url = Url::parse("https://cdn.test/dependency.js?token=SECRET").unwrap();
-    let original_url = Url::parse("https://app.test/dependency.js").unwrap();
-    let metadata = crate::module_runtime::ModuleFetchMetadata::default();
-    let csp_context = vm.document_runtime.module_fetch_csp_context(
-        &original_url,
+    .unwrap();
+    let original = Url::parse("https://app.test/dependency.js").unwrap();
+    let middle = Url::parse("https://cdn.test/private.js?token=SECRET").unwrap();
+    let final_url = Url::parse("https://app.test/final.js").unwrap();
+    let context = vm.document_runtime.module_fetch_csp_context(
+        &original,
         crate::module_runtime::ModuleKind::JavaScript,
-        &metadata,
+        &crate::module_runtime::ModuleFetchMetadata::default(),
     );
-    let fetched_source = crate::module_runtime::ModuleGraphFetchedSource::new(
-        final_url.clone(),
-        true,
-        crate::module_runtime::ModuleSource::text("export default 1;".to_owned()),
+    // A cache/coalesced consumer has no transport-time checks of its own. Its
+    // captured policy still governs every hop after the live policy changes.
+    vm.set_response_content_security_report_only_policies(&["script-src *".to_owned()]);
+    vm.set_response_content_security_policies(&["script-src *".to_owned()]);
+    let redirect = |from: &Url, to: &Url| moli_fetch::RedirectInfo {
+        from_url: from.clone(),
+        to_url: to.clone(),
+        status: 302,
+        source: moli_fetch::RedirectSource::Network,
+        headers: Vec::new(),
+        network_extra_info_available: false,
+        request_extra_info: None,
+        response_extra_info: None,
+        redirect_has_extra_info: false,
+        request_cookie_report: None,
+        cookie_set_reports: Vec::new(),
+        from_cache: true,
+        negotiated_http_version: None,
+    };
+    let response = moli_fetch::Response::from_head_and_text_body(
+        moli_fetch::ResponseHead {
+            final_url: final_url.clone(),
+            status: 200,
+            status_text: None,
+            headers: Vec::new(),
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: true,
+            redirect_chain: vec![redirect(&original, &middle), redirect(&middle, &final_url)],
+            from_cache: true,
+            cache_state: moli_fetch::ResponseCacheState::Local,
+            negotiated_http_version: None,
+        },
+        "export default 1;".to_owned(),
     );
-
-    let error = vm
-        .module_graph_fetched_source_or_csp_error(
-            7,
-            fetched_source,
-            crate::module_runtime::ModuleKind::JavaScript,
-            &metadata,
-            Some(&csp_context),
-        )
-        .expect_err("redirected module final URL should be blocked by script-src");
-    assert!(error.message().contains("Content Security Policy"));
-    assert!(!error.message().contains("cdn.test"));
-    assert!(!error.message().contains("SECRET"));
+    let error = context
+        .check_response(&response)
+        .expect_err("cached middle hop must be checked by the captured policy");
+    assert!(error.to_string().contains("Content Security Policy"));
+    assert!(!error.to_string().contains("SECRET"));
+    assert!(!error.to_string().contains("cdn.test"));
+    vm.dispatch_module_fetch_redirect_csp_violations(Some(&context));
+    vm.dispatch_module_fetch_redirect_csp_violations(Some(&context));
     assert_eq!(
         drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
         2
     );
     assert_eq!(
-        vm.eval("JSON.stringify(globalThis.__moduleCspEvents)")
-            .expect("read module CSP events"),
+        vm.eval("JSON.stringify(__moduleCspEvents)").unwrap(),
         format!(
-            r#"[{{"blockedURI":"{}","effectiveDirective":"script-src-elem","disposition":"report","instance":true}},{{"blockedURI":"{}","effectiveDirective":"script-src-elem","disposition":"enforce","instance":true}}]"#,
-            original_url, original_url
+            r#"[{{"blockedURI":"{original}","disposition":"report"}},{{"blockedURI":"{original}","disposition":"enforce"}}]"#,
         )
     );
 }

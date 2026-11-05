@@ -477,6 +477,10 @@ impl NativeModuleGraphFetchRequest {
                     .to_owned()
                 })
                 .and_then(|response| {
+                    // Main/child parser, runtime, dynamic import and modulepreload
+                    // all convert responses here, including cached/coalesced results.
+                    // Decide CSP from the admitted request snapshot before source
+                    // construction; owner completions only dispatch its reports.
                     if let Some(context) = &csp_context {
                         context.check_response(&response).map_err(|error| error.to_string())?;
                     }
