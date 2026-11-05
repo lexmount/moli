@@ -85,6 +85,84 @@ async fn independent_command(ctx: &mut TestContext, id: u64) {
 }
 
 #[tokio::test]
+async fn beforeunload_reaches_active_document_before_replacement_adoption() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let CommitFixture {
+                ctx,
+                token,
+                navigation,
+                prepared,
+                ..
+            } = commit_fixture(true).await;
+            let old_agent = ctx.with_fixture(|conn| {
+                conn.loaded_page_mut_for_owner(&navigation.owner)
+                    .unwrap()
+                    .renderer_devtools_agent_token()
+            });
+            let commit = crate::conn::PreparedDocumentCommitState::new();
+            let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+            let mut pending_commit =
+                Box::pin(commit.commit_using(&mut driver, token, &navigation, prepared));
+            assert!(futures_util::poll!(&mut pending_commit).is_pending());
+
+            // A direct owner command runs behind the native commit. Keep the
+            // commit future unpolled so protocol cannot yet adopt its new agent.
+            let native_barrier = ctx.with_fixture(|conn| {
+                conn.loaded_page_mut_for_owner(&navigation.owner)
+                    .unwrap()
+                    .start_runtime_realm_inventory()
+                    .unwrap()
+            });
+            let native_barrier =
+                tokio::time::timeout(std::time::Duration::from_secs(10), native_barrier.wait())
+                    .await
+                    .expect("native commit must reach its Page owner")
+                    .unwrap();
+            assert_eq!(
+                native_barrier
+                    .into_output()
+                    .completion()
+                    .page_state()
+                    .final_url
+                    .as_str(),
+                "https://example.test/prepared",
+                "the native Document must be installed before cancellation"
+            );
+            // A newer navigation cancels the old task before its ready native
+            // result is adopted. This is the Page.navigate overlap window.
+            let successor = ctx.with_fixture(|conn| {
+                conn.start_document_navigation_for_owner(&navigation.owner, "LID-successor".into())
+                    .unwrap()
+            });
+            drop(pending_commit);
+            let beforeunload = ctx.with_fixture(|conn| {
+                let page = conn.loaded_page_mut_for_owner(&navigation.owner).unwrap();
+                assert_eq!(page.renderer_devtools_agent_token(), old_agent);
+                assert!(page.renderer_agent_attachment_id().is_some());
+                page.start_check_main_document_beforeunload().unwrap()
+            });
+            let completed = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                beforeunload.wait(),
+            )
+            .await
+            .expect("beforeunload cannot wait on the previous document's retired DevTools agent")
+            .unwrap();
+            assert_eq!(completed.bool_reply_value(), Some(true));
+            ctx.with_fixture(|conn| {
+                assert!(
+                    conn.accepts_pending_document_navigation_for_owner(
+                        &navigation.owner,
+                        &successor,
+                    )
+                );
+            });
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn prepared_network_policy_reaches_native_document_before_commit_publication() {
     tokio::task::LocalSet::new()
         .run_until(async {
