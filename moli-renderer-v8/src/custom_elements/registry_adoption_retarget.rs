@@ -8,6 +8,24 @@ use crate::{
     native_bridge::JsContextHost,
 };
 
+pub(crate) fn roots_need_registry_retargets(host: &JsContextHost, roots: &[DomHandle]) -> bool {
+    // Insertion roots share a node document; removal does not adopt them.
+    // Without root preservation, only explicit associations in these subtrees
+    // can produce retargets. Unrelated clones must not force an adoption plan.
+    if roots
+        .iter()
+        .any(|&root| should_preserve_same_document_registry_association(host, root))
+    {
+        return true;
+    }
+    host.has_explicit_custom_element_registry_associations()
+        && roots.iter().any(|&root| {
+            super::traversal::shadow_including_subtree_handles(host as *const _ as *mut _, root)
+                .into_iter()
+                .any(|handle| host.custom_element_registry_association(handle).is_some())
+        })
+}
+
 pub(crate) fn adoption_plan_before_adoption(
     host_ptr: *mut JsContextHost,
     adoption_targets: &[DomAdoptionTarget],
@@ -26,7 +44,7 @@ pub(crate) fn adoption_plan_before_adoption(
             .map(|parent| descendant_policies[parent])
             .unwrap_or_else(|| {
                 (
-                    should_preserve_same_document_registry_association(host_ptr, handle),
+                    should_preserve_same_document_registry_association(host, handle),
                     false,
                 )
             });
@@ -77,10 +95,9 @@ pub(crate) fn adoption_plan_before_adoption(
 }
 
 fn should_preserve_same_document_registry_association(
-    host_ptr: *mut JsContextHost,
+    runtime: &JsContextHost,
     root: DomHandle,
 ) -> bool {
-    let runtime = unsafe { &*host_ptr };
     let host = runtime.dom_host();
     if host
         .owner_document_handle(root)
