@@ -84,6 +84,13 @@ impl ScriptVmDefaultWorldBootstrap {
             )
             .map_err(|error| Box::new((error, bootstrap.document_runtime.dom_host().clone())))?;
         }
+        let proxy = context.global(scope);
+        bootstrap
+            .renderer_page_script_environment
+            .as_ref()
+            .expect("a related Page retains its script environment")
+            .install_initial_main_window_proxy(v8::Global::new(scope, proxy))
+            .map_err(|error| Box::new((error, bootstrap.document_runtime.dom_host().clone())))?;
         let mut vm = bootstrap.finish_in_scope(scope);
         vm.set_initial_storage_backends_in_scope(
             context,

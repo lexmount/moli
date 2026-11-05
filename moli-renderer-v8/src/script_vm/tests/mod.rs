@@ -2269,6 +2269,7 @@ mod import_meta;
 mod indexed_db;
 mod indexed_db_gc;
 mod inspector_unwrap;
+mod lazy_main_world_recovery;
 mod lazy_storage;
 
 mod svg_matrix_native_receivers;

@@ -2436,6 +2436,7 @@ impl ScriptVmDefaultWorldBootstrap {
         let default_context = v8::Global::new(scope.as_ref(), local_context);
         let registered_context = v8::Global::new(scope.as_ref(), local_context);
         let scope = &mut v8::ContextScope::new(scope, local_context);
+        let baseline = Self::capture_baseline_globals_in_scope(scope)?;
         page_inspector.attach_context(
             renderer_document_isolate,
             inspector,
@@ -2446,7 +2447,7 @@ impl ScriptVmDefaultWorldBootstrap {
             root_frame_id,
         );
 
-        Self::capture_baseline_globals_in_scope(scope)
+        Ok(baseline)
     }
 
     fn capture_baseline_globals_in_scope(
@@ -2460,6 +2461,12 @@ impl ScriptVmDefaultWorldBootstrap {
 
         #[cfg(any(test, feature = "test-support"))]
         {
+            #[cfg(test)]
+            if scope.remove_slot::<main_world::MainWorldBootstrapFailureForTest>()
+                == Some(main_world::MainWorldBootstrapFailureForTest::Baseline)
+            {
+                anyhow::bail!("forced main-world bootstrap failure during baseline");
+            }
             let baseline_source = v8_string(
                 scope,
                 "JSON.stringify(Object.getOwnPropertyNames(globalThis))",
