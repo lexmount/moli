@@ -7,6 +7,7 @@ pub(crate) struct EventCallbackId(u64);
 
 struct EventCallbackRecord {
     callback: WebIdlCallbackInterface,
+    resource_initiator: Option<crate::resource_initiator::CallbackInitiator>,
     relevant_identity: Option<WindowExecutionContextIdentity>,
     #[cfg(test)]
     incumbent_identity: Option<WindowExecutionContextIdentity>,
@@ -14,6 +15,7 @@ struct EventCallbackRecord {
 
 pub(crate) struct PreparedEventCallback {
     callback: PreparedWebIdlCallbackInterface,
+    resource_initiator: Option<crate::resource_initiator::CallbackInitiator>,
     relevant_identity: Option<WindowExecutionContextIdentity>,
 }
 
@@ -37,6 +39,12 @@ impl PreparedEventCallback {
         scope: &mut v8::PinScope<'s, '_>,
     ) -> v8::Local<'s, v8::Context> {
         self.callback.incumbent_context(scope)
+    }
+
+    pub(crate) fn resource_initiator(
+        &self,
+    ) -> Option<&crate::resource_initiator::CallbackInitiator> {
+        self.resource_initiator.as_ref()
     }
 
     pub(crate) fn relevant_identity(&self) -> Option<WindowExecutionContextIdentity> {
@@ -117,6 +125,7 @@ impl JsContextHost {
 
         let callback_id =
             self.register_event_callback(scope, callback, relevant_context, incumbent_context);
+        self.capture_event_callback_initiator(scope, callback_id);
         match target {
             crate::document_runtime::EventTargetHandle::ChildWindow(target) => {
                 self.insert_child_window_event_listener(
@@ -295,6 +304,7 @@ impl JsContextHost {
             id,
             EventCallbackRecord {
                 callback,
+                resource_initiator: None,
                 relevant_identity,
                 #[cfg(test)]
                 incumbent_identity,
@@ -302,6 +312,17 @@ impl JsContextHost {
         );
         debug_assert!(previous.is_none());
         id
+    }
+
+    pub(crate) fn capture_event_callback_initiator(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        id: EventCallbackId,
+    ) {
+        let initiator = crate::resource_initiator::CallbackInitiator::capture(scope);
+        if let Some(record) = self.event_callbacks.records.get_mut(&id) {
+            record.resource_initiator = Some(initiator);
+        }
     }
 
     pub(crate) fn release_event_callback(&mut self, id: EventCallbackId) {
@@ -387,6 +408,7 @@ impl JsContextHost {
         }
         Some(PreparedEventCallback {
             callback: record.callback.prepare(scope),
+            resource_initiator: record.resource_initiator.clone(),
             relevant_identity: record.relevant_identity,
         })
     }
