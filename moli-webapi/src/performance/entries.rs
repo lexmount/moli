@@ -667,6 +667,7 @@ pub fn resource_timing_json_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    crate::embedding::refresh_performance_entry(scope, entry);
     let snapshot = PerformanceResourceTimingJsonSnapshotDeclaration::from_entry(scope, entry)?;
     Some(
         snapshot
@@ -714,6 +715,7 @@ fn performance_resource_timing_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    crate::embedding::refresh_performance_entry(scope, args.this());
     let Some(slot) = callback_data_item(
         scope,
         &args,

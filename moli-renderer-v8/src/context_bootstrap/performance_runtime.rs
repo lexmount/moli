@@ -13,6 +13,9 @@ mod marks_measures;
 use moli_webapi::performance::memory;
 use moli_webapi::performance::name;
 mod measurement_interfaces;
+mod navigation_timing;
+pub(in crate::context_bootstrap) use navigation_timing::refresh_navigation_timing;
+
 pub(in crate::context_bootstrap) use name::PerformanceEntryName;
 mod resource_buffer;
 mod window_state;

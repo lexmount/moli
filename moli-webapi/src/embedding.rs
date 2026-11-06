@@ -2,6 +2,18 @@
 
 use std::rc::Rc;
 
+type ObjectCallback = for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>);
+type ObjectPredicate = for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>) -> bool;
+type InterfaceFactory =
+    for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, &str) -> Option<v8::Local<'s, v8::Object>>;
+type ScriptCall = for<'s, 'i> fn(
+    &mut v8::PinScope<'s, 'i>,
+    v8::Local<'s, v8::Function>,
+    v8::Local<'s, v8::Value>,
+    &[v8::Local<'s, v8::Value>],
+    &str,
+) -> Option<v8::Local<'s, v8::Value>>;
+
 pub type WebIdlCallbackResult<'s> =
     Result<Option<v8::Local<'s, v8::Value>>, v8::Local<'s, v8::Value>>;
 pub type WebIdlCallbackInvocation<'s> = for<'i> fn(
@@ -14,13 +26,14 @@ pub type WebIdlCallbackInvocation<'s> = for<'i> fn(
 /// Bridges value bindings to the embedder without retaining its host or V8 handles.
 /// Callbacks execute in the current (callee) realm, including for borrowed methods.
 pub struct RealmCallbacks {
-    pub new_interface_instance: Option<for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, &str) -> Option<v8::Local<'s, v8::Object>>>,
-    pub call_function: Option<for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Function>, v8::Local<'s, v8::Value>, &[v8::Local<'s, v8::Value>], &str) -> Option<v8::Local<'s, v8::Value>>>,
-    pub is_window_named_properties_object: Option<for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>) -> bool>,
+    pub refresh_performance_entry: Option<ObjectCallback>,
+    pub new_interface_instance: Option<InterfaceFactory>,
+    pub call_function: Option<ScriptCall>,
+    pub is_window_named_properties_object: Option<ObjectPredicate>,
     /// Synchronizes a live SVG point from its owner before reading or writing it.
-    pub point_accessed: for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>),
+    pub point_accessed: ObjectCallback,
     /// Writes a live SVG point back to its owner; ordinary points need no action.
-    pub point_mutated: for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>),
+    pub point_mutated: ObjectCallback,
     /// Reads the native source of a live MediaQueryListEvent without invoking script.
     pub media_query_matches:
         for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>) -> Option<bool>,
@@ -94,10 +107,7 @@ pub(crate) fn read_media_query_matches<'s>(
     (callbacks.media_query_matches)(scope, list)
 }
 
-pub(crate) fn sync_point<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    point: v8::Local<'s, v8::Object>,
-) {
+pub(crate) fn sync_point<'s>(scope: &mut v8::PinScope<'s, '_>, point: v8::Local<'s, v8::Object>) {
     if let Some(callbacks) = scope.get_current_context().get_slot::<RealmCallbacks>() {
         (callbacks.point_accessed)(scope, point);
     }
@@ -110,7 +120,11 @@ pub(crate) fn call_script_visible_function<'s>(
     args: &[v8::Local<'s, v8::Value>],
     action: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    if let Some(callback) = scope.get_current_context().get_slot::<RealmCallbacks>().and_then(|callbacks| callbacks.call_function) {
+    if let Some(callback) = scope
+        .get_current_context()
+        .get_slot::<RealmCallbacks>()
+        .and_then(|callbacks| callbacks.call_function)
+    {
         callback(scope, function, receiver, args, action)
     } else {
         let callback = match moli_webidl::convert::<moli_webidl::WebIdlCallbackFunction>(
@@ -131,6 +145,26 @@ pub(crate) fn call_script_visible_function<'s>(
     }
 }
 
-pub(crate) fn is_window_named_properties_object<'s>(scope: &mut v8::PinScope<'s, '_>, object: v8::Local<'s, v8::Object>) -> bool {
-    scope.get_current_context().get_slot::<RealmCallbacks>().and_then(|callbacks| callbacks.is_window_named_properties_object).is_some_and(|callback| callback(scope, object))
+pub(crate) fn is_window_named_properties_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    scope
+        .get_current_context()
+        .get_slot::<RealmCallbacks>()
+        .and_then(|callbacks| callbacks.is_window_named_properties_object)
+        .is_some_and(|callback| callback(scope, object))
+}
+
+pub(crate) fn refresh_performance_entry<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+) {
+    if let Some(callback) = scope
+        .get_current_context()
+        .get_slot::<RealmCallbacks>()
+        .and_then(|callbacks| callbacks.refresh_performance_entry)
+    {
+        callback(scope, entry);
+    }
 }
