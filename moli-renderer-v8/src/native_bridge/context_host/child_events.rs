@@ -213,6 +213,7 @@ impl JsContextHost {
             callback_relevant_context,
             incumbent_context,
         );
+        self.capture_event_callback_initiator(scope, callback_id);
         let previous_callback_id = self
             .child_window_event_listeners
             .get_mut(&handle)

@@ -205,6 +205,8 @@ impl JsContextHost {
         event_type: &str,
         handler: Option<v8::Local<'s, v8::Function>>,
     ) {
+        let resource_initiator =
+            handler.map(|_| crate::resource_initiator::CallbackInitiator::capture(scope));
         let relevant_context = handler
             .and_then(|handler| v8::Local::<v8::Object>::from(handler).get_creation_context(scope))
             .unwrap_or_else(|| scope.get_current_context());
@@ -218,6 +220,7 @@ impl JsContextHost {
             handler,
             relevant_context,
             incumbent_context,
+            resource_initiator,
         );
     }
 
@@ -236,6 +239,7 @@ impl JsContextHost {
             handler,
             target_context,
             target_context,
+            None,
         );
     }
 
@@ -247,10 +251,16 @@ impl JsContextHost {
         handler: Option<v8::Local<'s, v8::Function>>,
         relevant_context: v8::Local<'s, v8::Context>,
         incumbent_context: v8::Local<'s, v8::Context>,
+        resource_initiator: Option<crate::resource_initiator::CallbackInitiator>,
     ) {
         let callback_id = handler.map(|handler| {
             self.register_event_callback(scope, handler.into(), relevant_context, incumbent_context)
         });
+        if let Some(id) = callback_id
+            && let Some(record) = self.event_callbacks.records.get_mut(&id)
+        {
+            record.resource_initiator = resource_initiator;
+        }
         if let Some(previous) = self.set_event_handler_property(target, event_type, callback_id) {
             self.release_event_callback(previous);
         }
