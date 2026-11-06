@@ -304,21 +304,16 @@ Moli는 Chromium 래퍼가 아닌 독립형 브라우저 커널입니다. Rust�
 
 ## 벤치마크
 
-다음 측정값은 Moli의 현재 기능 범위를 보여 줍니다. 실제 웹사이트, 자동화 클라이언트,
-Chromium/WPT 동작 검사, 대규모 nextest 회귀 테스트 모음을 다룹니다.
+### 공개 테스트셋
 
-### 혼합 공개 웹 크롤 테스트
+| 평가 방식 | 벤치마크 | 지표 |
+| --- | --- | --- |
+| 웹 표준 및 회귀 테스트 | 선택된 [WPT](https://github.com/web-platform-tests/wpt) 및 [Moli](https://github.com/lexmount/moli/blob/main/.github/workflows/ci.yml) 테스트 | 통과한 테스트 및 기능 회귀 |
+| 브라우저 자동화 | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser) · 1,308개 브라우저 및 웹 테스트 | 작업 및 기능 테스트 통과율 |
+| CPU 및 메모리 | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) · 557개 작업 중 네 로컬 브라우저가 모두 완료한 작업 | CPU 시간과 최대 메모리 |
+| Web Fetch | [lexbench-webfetch](https://github.com/lexmount/lexbench-webfetch) · 실제 웹사이트 430개 과제, [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · HTML 스냅샷 545개 | 실제 웹사이트 과제 통과율, 저장된 페이지의 추출 품질 |
 
-이 테스트는 중국과 국제 주요 사이트의 공개 URL 192개를 다룹니다. JavaScript 실행 뒤
-의미 있는 콘텐츠를 생성해야만 페이지를 성공으로 계산합니다. HTTP 200, 챌린지 페이지,
-로그인 차단벽, 빈 응답, 셸만 있는 애플리케이션은 성공으로 계산하지 않습니다.
-
-| 브라우저 | 유효 페이지 | 성공률 | 중앙 시간 | 중앙 RSS |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43초** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43초 | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97초 | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30초 | 39 MiB |
+### 웹 콘텐츠 추출
 
 ### 에이전트 워크로드 예시
 
@@ -366,6 +361,33 @@ Kitesurf는 원격 서비스이므로 CPU, 메모리, 프로세스 수를 측정
 Moli는 Chrome CPU 시간의 약 15%, 최대 메모리의 약 13%를 사용했습니다. 방법론은
 [리소스 카드](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)를
 참조하세요.
+
+### Web Fetch 벤치마크
+
+[`lexbench-webfetch`](https://github.com/lexmount/lexbench-webfetch)는 실제 웹사이트에서 430개 과제를 실행하므로 통과율에는 사이트 접근과 정확한 콘텐츠 추출이 모두 반영됩니다. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main)는 저장된 HTML 페이지 545개를 처리하며 실제 사이트 접근을 제외한 추출 품질만 평가합니다. [벤치마크 보고서 보기](https://browser.lexmount.com/blog/webfetch-benchmark).
+
+| 방법 | 종합 | 정적 페이지 /100 | 봇 차단 /100 | 인기 사이트 /100 | 동적 사이트 /100 | 문서 및 미디어 /30 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | **386/430 · 89.8%** | 97 | **88** | **91** | **90** | **20** |
+| Chromium | 234/430 · 54.4% | **99** | 5 | 58 | 58 | 14 |
+| Lightpanda | 228/430 · 53.0% | 92 | 37 | 38 | 44 | 17 |
+| Obscura | 223/430 · 51.9% | 94 | 16 | 53 | 43 | 17 |
+| Kitesurf | 192/430 · 44.7% | 90 | 10 | 40 | 41 | 11 |
+
+각 셀은 통과한 과제 수입니다. 마지막 열은 문서 내용, 직접 미디어 파일, 웹페이지에 삽입된 미디어를 합친 값이며, 표 전체에서 일곱 범주를 모두 다룹니다.
+
+<details>
+<summary><strong>WebMainBench · 저장된 545개 페이지의 추출 품질</strong></summary>
+
+| 방법 | 본문 추출 | 종합 | 본문 | 코드 | 수식 | 표 내용 | 표 구조 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
+| Lightpanda | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
+| Obscura | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
+| Chromium | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
+| Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+</details>
 
 ## 프로젝트 범위
 

@@ -248,18 +248,16 @@ El documento y los estilos tienen una única fuente de verdad: la integración d
 
 ## Datos de las pruebas
 
-Las siguientes mediciones muestran las capacidades actuales de Moli. Cubren sitios web reales, clientes de automatización, verificaciones del comportamiento de Chromium/WPT y una batería grande de regresión con nextest.
+### Conjuntos de pruebas públicos
 
-### Prueba de rastreo mixto de la web pública
+| Evaluación | Pruebas | Métricas |
+| --- | --- | --- |
+| Estándares y regresiones | Pruebas [WPT](https://github.com/web-platform-tests/wpt) seleccionadas; pruebas de regresión de [Moli](https://github.com/lexmount/moli/blob/main/.github/workflows/ci.yml) | Pruebas superadas y regresiones |
+| Automatización del navegador | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser) · 1.308 pruebas de acciones y funciones web | Tasa de éxito de las pruebas de acciones y funciones |
+| CPU y memoria | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) · trabajo completado por todos en 557 tareas CDP/web | Tiempo de CPU y memoria máxima |
+| Web Fetch | [lexbench-webfetch](https://github.com/lexmount/lexbench-webfetch) · 430 tareas en sitios web activos; [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 instantáneas HTML | Tasa de éxito en sitios activos; calidad de extracción en páginas guardadas |
 
-La prueba cubre 192 URLs públicas de sitios importantes de China y del resto del mundo. Para contar como éxito, una página tiene que generar contenido realmente útil después de ejecutar JavaScript: un simple 200 OK, una página de verificación, un muro de login, una respuesta vacía o una interfaz de aplicación que solo muestre su esqueleto básico no cuentan como resultado válido.
-
-| Navegador | Páginas útiles | Tasa de éxito | Tiempo mediano | RSS mediana |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+### Extracción de contenido web
 
 ### Ejemplo de carga de trabajo de un agente
 
@@ -291,6 +289,33 @@ El conjunto completo de [Lexbench-Headless-Browser](https://github.com/lexmount/
 </picture>
 
 Kitesurf es un servicio remoto, por lo que no se pueden medir su CPU, memoria ni número de procesos. La comparación de recursos solo cubre los cuatro motores locales. Una ejecución independiente de 557 tareas cuenta únicamente el trabajo que completaron los cuatro. La mediana de Moli fue de **100,6 ms de CPU** y **92 MiB de memoria pico** por tarea; Chrome registró **687 ms** y **697 MiB**, respectivamente. Moli utilizó alrededor del 15 % del tiempo de CPU y del 13 % de la memoria pico de Chrome. La metodología y los datos completos están en la [ficha de recursos](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) del benchmark.
+
+### Benchmarks de Web Fetch
+
+[`lexbench-webfetch`](https://github.com/lexmount/lexbench-webfetch) ejecuta 430 tareas en sitios web activos, por lo que la tasa de éxito refleja tanto el acceso al sitio como la extracción correcta del contenido. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) procesa 545 páginas HTML guardadas y puntúa únicamente la calidad de extracción. [Leer el informe del benchmark](https://browser.lexmount.com/blog/webfetch-benchmark).
+
+| Método | Global | Estáticas /100 | Antibot /100 | Sitios populares /100 | Sitios dinámicos /100 | Documentos y medios /30 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | **386/430 · 89,8 %** | 97 | **88** | **91** | **90** | **20** |
+| Chromium | 234/430 · 54,4 % | **99** | 5 | 58 | 58 | 14 |
+| Lightpanda | 228/430 · 53,0 % | 92 | 37 | 38 | 44 | 17 |
+| Obscura | 223/430 · 51,9 % | 94 | 16 | 53 | 43 | 17 |
+| Kitesurf | 192/430 · 44,7 % | 90 | 10 | 40 | 41 | 11 |
+
+Las celdas muestran las tareas superadas. La última columna reúne el contenido de documentos, los archivos multimedia directos y los medios incrustados en páginas web; así, la tabla cubre las siete categorías.
+
+<details>
+<summary><strong>WebMainBench · calidad de extracción en 545 páginas guardadas</strong></summary>
+
+| Método | Contenido principal generado | Global | Texto | Código | Fórmulas | Contenido de tablas | Estructura de tablas |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39,27 %** | 40,73 % | **91,06 %** | 28,20 % | 22,62 % | 13,75 % |
+| Lightpanda | 545/545 | 35,00 % | 41,52 % | 84,71 % | 12,97 % | 21,81 % | **14,00 %** |
+| Obscura | 543/545 | 31,03 % | **41,88 %** | 81,82 % | **31,39 %** | 0,03 % | 0,00 % |
+| Chromium | 545/545 | 27,02 % | 39,40 % | 35,86 % | 21,12 % | **25,01 %** | 13,73 % |
+| Kitesurf | 524/545 | 33,43 % | 36,99 % | 80,70 % | 19,32 % | 18,25 % | 11,87 % |
+
+</details>
 
 ## Alcance del proyecto
 
