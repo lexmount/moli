@@ -11,6 +11,7 @@ mod dom;
 mod file_input;
 mod forms;
 mod json_response;
+mod local_tasks;
 mod misc;
 mod no_cors_redirect;
 mod receivers;
