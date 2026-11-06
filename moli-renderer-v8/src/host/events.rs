@@ -1,8 +1,8 @@
 use super::*;
 use crate::{
     context_bootstrap::{
-        CHILD_BROWSING_CONTEXT_HANDLE_SLOT, clear_event_composed_path, event_is_error_event,
-        mark_event_trusted, set_event_composed_path,
+        CHILD_BROWSING_CONTEXT_HANDLE_SLOT, clear_event_composed_path,
+        error_event_handler_arguments, mark_event_trusted, set_event_composed_path,
     },
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
     util::{get_private_object, get_private_value, serialize_v8_iter_array},
@@ -419,24 +419,8 @@ fn invoke_event_handler_property<'s>(
     let timing_started = moli_trace::cdp_nav_timing_enabled().then(Instant::now);
     if target == EventTargetHandle::Window
         && event_type == "error"
-        && event_is_error_event(scope, event)
+        && let Some(arguments) = error_event_handler_arguments(scope, event)
     {
-        let message = crate::context_bootstrap::event_backing(scope, event)
-            .get(scope, v8str(scope, "message").into())
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        let source = crate::context_bootstrap::event_backing(scope, event)
-            .get(scope, v8str(scope, "filename").into())
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        let lineno = crate::context_bootstrap::event_backing(scope, event)
-            .get(scope, v8str(scope, "lineno").into())
-            .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
-        let colno = crate::context_bootstrap::event_backing(scope, event)
-            .get(scope, v8str(scope, "colno").into())
-            .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
-        let error = crate::context_bootstrap::event_backing(scope, event)
-            .get(scope, v8str(scope, "error").into())
-            .unwrap_or_else(|| v8::null(scope).into());
-
         let returned = invoke_prepared_event_callback(
             scope,
             host_ptr,
@@ -446,7 +430,7 @@ fn invoke_event_handler_property<'s>(
             prepared,
             target,
             event,
-            &[message, source, lineno, colno, error],
+            &arguments,
         );
         if temporary {
             unsafe { &mut *host_ptr }.release_event_callback(callback_id);
