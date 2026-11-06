@@ -295,6 +295,7 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
     moli_webapi::install_realm_callbacks(
         scope,
         moli_webapi::RealmCallbacks {
+            refresh_performance_entry: Some(crate::context_bootstrap::performance_runtime::refresh_navigation_timing),
             new_interface_instance: Some(|scope, name| super::build_intrinsic_interface_instance(scope, name).ok()),
             call_function: Some(crate::util::call_script_visible_function),
             is_window_named_properties_object: Some(crate::context_bootstrap::window_template::is_window_named_properties_object),

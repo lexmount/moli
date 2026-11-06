@@ -19,6 +19,7 @@ pub struct DocumentFetchContextSeed {
     page_network_policy: PageNetworkPolicy,
     browser_site_context: Option<Arc<BrowserCookieFacadeContext>>,
     resource_task_runner: RendererResourceTaskRunner,
+    timing: super::NavigationTiming,
 }
 
 impl DocumentFetchContextSeed {
@@ -29,6 +30,7 @@ impl DocumentFetchContextSeed {
         page_network_policy: PageNetworkPolicy,
         browser_site_context: Option<Arc<BrowserCookieFacadeContext>>,
         resource_task_runner: RendererResourceTaskRunner,
+        timing: super::NavigationTiming,
     ) -> Self {
         Self {
             requested_url,
@@ -37,11 +39,16 @@ impl DocumentFetchContextSeed {
             page_network_policy,
             browser_site_context,
             resource_task_runner,
+            timing,
         }
     }
 
     pub fn requested_url(&self) -> &Url {
         &self.requested_url
+    }
+
+    pub(crate) fn navigation_timing(&self) -> super::NavigationTiming {
+        self.timing.clone()
     }
 
     pub fn final_url(&self) -> &Url {

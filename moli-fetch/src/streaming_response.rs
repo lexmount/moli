@@ -227,6 +227,28 @@ pub struct StreamingRawResponse {
 }
 
 impl StreamingRawResponse {
+    /// Exposes an already materialized body as a completed local stream.
+    /// Encoded sizes, when known, belong to the retained representation; this
+    /// does not record a network request or receipt of new transport bytes.
+    pub fn from_materialized_body(
+        head: ResponseHead,
+        body: Vec<u8>,
+        body_sizes: Option<crate::FetchResponseBodySizes>,
+    ) -> Self {
+        let (body_tx, body_rx) = mpsc::unbounded_channel();
+        if !body.is_empty() {
+            body_tx.send(body).expect("new body receiver is open");
+        }
+        drop(body_tx);
+        let cancel_handle = FetchCancelHandle::new();
+        cancel_handle
+            .response_progress()
+            .mark_materialized_response_available(body_sizes);
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let _ = completion_tx.send(Ok(()));
+        Self::new_with_head(head, body_rx, cancel_handle, completion_rx)
+    }
+
     pub fn response_timing(&self) -> crate::FetchResponseTiming {
         self.cancel_handle.response_timing()
     }
@@ -594,6 +616,44 @@ mod tests {
             cache_state: Default::default(),
             preload_state: Default::default(),
             negotiated_http_version: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn materialized_raw_response_records_local_completion_and_retained_sizes() {
+        for (body, sizes) in [
+            (
+                b"decoded body".to_vec(),
+                Some(crate::FetchResponseBodySizes {
+                    encoded: 7,
+                    decoded: 12,
+                }),
+            ),
+            (b"unknown encoded size".to_vec(), None),
+            (Vec::new(), Some(crate::FetchResponseBodySizes::default())),
+        ] {
+            let before = std::time::Instant::now();
+            let response = StreamingRawResponse::from_materialized_body(
+                sample_response_head(),
+                body.clone(),
+                sizes,
+            );
+            let after = std::time::Instant::now();
+            let cancel = response.cancellation_handle();
+            let timing = response.response_timing();
+            let start = timing
+                .response_started_at()
+                .expect("local response available");
+            let end = timing.response_end_at().expect("local body complete");
+            assert!(before <= start && start <= end && end <= after);
+            assert_eq!(timing.body_sizes(), sizes);
+            assert_eq!(timing.request_started_at(), None);
+            assert!(!timing.body_bytes_received());
+            assert!(!cancel.cancel_if_response_pending());
+            let materialized = response.into_materialized_raw_response().await.unwrap();
+            assert_eq!(materialized.body_bytes(), body);
+            assert_eq!(materialized.body_sizes(), sizes);
+            assert!(!cancel.is_cancelled());
         }
     }
 

@@ -20,7 +20,8 @@ struct PerformanceGetEntriesByNameArgs {
 }
 
 pub(in crate::context_bootstrap) use moli_webapi::performance::entries::{
-    create_performance_entry, initialize_performance_entry_slots, initialize_resource_timing_slots,
+    create_performance_entry, initialize_performance_entry_slots,
+    initialize_resource_timing_response_metadata, initialize_resource_timing_slots,
     install_performance_entry_template_bindings, performance_entry_slot_number,
     performance_entry_slot_string, set_performance_entry_slot_number,
 };
@@ -194,4 +195,3 @@ pub(super) fn append_performance_entry<'s>(
     };
     let _ = entries.set_index(scope, entries.length(), entry.into());
 }
-

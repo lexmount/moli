@@ -117,6 +117,12 @@ async fn raw_memory_cache_revalidates_request_controls_and_preserves_wire_observ
             let local = fetch(&client, request(&url)?, observe).await?;
             assert_eq!(local.0.cache_state, ResponseCacheState::Local);
             assert!(local.1.is_empty());
+            let local_timing = local.2.response_timing();
+            assert!(local_timing.response_started_at().is_some());
+            assert!(local_timing.response_end_at().is_some());
+            assert!(local_timing.request_started_at().is_none());
+            assert!(!local_timing.body_bytes_received());
+            assert_eq!(local_timing.body_sizes(), first.body_sizes());
             let mut validation = request(&url)?;
             if let Some((name, value)) = control {
                 validation.request_headers = vec![(name.to_owned(), value.to_owned())].into();
@@ -142,6 +148,7 @@ async fn raw_memory_cache_revalidates_request_controls_and_preserves_wire_observ
             assert!(cancel.response_timing().response_started_at().is_some());
             assert!(cancel.response_timing().response_end_at().is_some());
             assert!(!cancel.response_timing().body_bytes_received());
+            assert_eq!(validated.body_sizes(), first.body_sizes());
             if observe {
                 assert_eq!(journal.exchanges().len(), 1);
                 assert_eq!(journal.final_response_observation().unwrap().status(), 304);
