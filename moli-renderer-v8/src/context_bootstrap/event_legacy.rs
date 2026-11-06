@@ -179,9 +179,7 @@ struct LegacyTextEventInitDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct LegacyMouseEventBaseInitDeclaration<'scope> {
-    view: v8::Local<'scope, v8::Value>,
-    detail: i32,
+struct LegacyMouseEventBaseInitDeclaration {
     screen_x: i32,
     screen_y: i32,
     client_x: i32,
@@ -325,10 +323,6 @@ pub(super) fn mouse_event_init_callback<'s>(
     let Some(parsed) = webidl::parse_args::<InitMouseEventArgs>(scope, &args) else {
         return;
     };
-    let view = parsed
-        .view
-        .map(Into::into)
-        .unwrap_or_else(|| v8::null(scope).into());
     let related_target = parsed
         .related_target
         .map(Into::into)
@@ -342,9 +336,8 @@ pub(super) fn mouse_event_init_callback<'s>(
     ) {
         return;
     }
+    super::events::initialize_legacy_ui_event(scope, event, parsed.view, parsed.detail);
     LegacyMouseEventBaseInitDeclaration::new(
-        view,
-        parsed.detail,
         parsed.screen_x,
         parsed.screen_y,
         parsed.client_x,
