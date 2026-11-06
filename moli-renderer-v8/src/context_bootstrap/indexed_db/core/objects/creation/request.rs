@@ -1,8 +1,5 @@
 use super::*;
-use crate::context_bootstrap::{
-    SIMPLE_EVENT_TARGET_LISTENERS_SLOT, simple_event_target_handler_getter_callback,
-    simple_event_target_handler_setter_callback,
-};
+use crate::context_bootstrap::SIMPLE_EVENT_TARGET_LISTENERS_SLOT;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
@@ -11,55 +8,11 @@ use moli_webapi_declare::WebApiObject;
 struct IdbRequestObjectDeclaration {
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
-
-    #[webapi(
-        accessor_property = "onsuccess",
-        getter = simple_event_target_handler_getter_callback,
-        setter = simple_event_target_handler_setter_callback,
-        data = v8str(scope, "onsuccess"),
-        setter_data = v8str(scope, "onsuccess"),
-        enumerable,
-        receiver = web_api_interfaces::IDBRequest::is_instance
-    )]
-    onsuccess: (),
-
-    #[webapi(
-        accessor_property = "onerror",
-        getter = simple_event_target_handler_getter_callback,
-        setter = simple_event_target_handler_setter_callback,
-        data = v8str(scope, "onerror"),
-        setter_data = v8str(scope, "onerror"),
-        enumerable,
-        receiver = web_api_interfaces::IDBRequest::is_instance
-    )]
-    onerror: (),
 }
 
 #[derive(Default, WebApiObject)]
 #[webapi(prototype = "Object", interface = web_api_interfaces::IDBOpenDBRequest)]
-struct IdbOpenRequestHandlersDeclaration {
-    #[webapi(
-        accessor_property = "onupgradeneeded",
-        getter = simple_event_target_handler_getter_callback,
-        setter = simple_event_target_handler_setter_callback,
-        data = v8str(scope, "onupgradeneeded"),
-        setter_data = v8str(scope, "onupgradeneeded"),
-        enumerable,
-        receiver = web_api_interfaces::IDBOpenDBRequest::is_instance
-    )]
-    onupgradeneeded: (),
-
-    #[webapi(
-        accessor_property = "onblocked",
-        getter = simple_event_target_handler_getter_callback,
-        setter = simple_event_target_handler_setter_callback,
-        data = v8str(scope, "onblocked"),
-        setter_data = v8str(scope, "onblocked"),
-        enumerable,
-        receiver = web_api_interfaces::IDBOpenDBRequest::is_instance
-    )]
-    onblocked: (),
-}
+struct IdbOpenRequestHandlersDeclaration {}
 
 pub(in crate::context_bootstrap::indexed_db) fn create_request_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,

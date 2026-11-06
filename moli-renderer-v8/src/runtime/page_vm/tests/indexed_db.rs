@@ -162,8 +162,7 @@ async fn prepare_indexed_db_event_task_for_test(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_selected_completion()
- {
+async fn indexed_db_task_body_runs_callback_cleanup_but_defers_runtime_followup_to_completion() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
@@ -218,8 +217,8 @@ async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_
                 .eval_without_microtask_checkpoint_for_test(
                     "globalThis.__indexedDbTaskBodyBoundary.join('|')",
                 )?,
-            "upgrade|success",
-            "the IndexedDB body must leave Promise reactions and transaction deactivation for selected-task completion"
+            "upgrade|success|microtask-active",
+            "native event callback cleanup must run reactions while the transaction is still active"
         );
         assert!(
             !has_ready_runtime_script_continuation_for_test(&page_vm),

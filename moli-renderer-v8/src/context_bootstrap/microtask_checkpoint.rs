@@ -1,3 +1,9 @@
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum MicrotaskCheckpointKind {
+    Callback,
+    Task,
+}
+
 #[derive(Default)]
 // One queue per V8 isolate/Agent. Tasks may retain exact realm objects, but the
 // queue itself must not be hidden in any individual realm's runtime table.
@@ -68,6 +74,14 @@ fn enqueue_checkpoint_task(scope: &mut v8::PinScope<'_, '_>, task: AgentMicrotas
 }
 
 pub(crate) fn run_end_of_microtask_checkpoint_tasks(scope: &mut v8::PinScope<'_, '_>) {
+    run_checkpoint_tasks(scope, MicrotaskCheckpointKind::Task);
+}
+
+pub(crate) fn run_callback_microtask_checkpoint_tasks(scope: &mut v8::PinScope<'_, '_>) {
+    run_checkpoint_tasks(scope, MicrotaskCheckpointKind::Callback);
+}
+
+fn run_checkpoint_tasks(scope: &mut v8::PinScope<'_, '_>, kind: MicrotaskCheckpointKind) {
     // Tasks enqueued while this batch runs belong to the next checkpoint.
     let Some(tasks) = scope
         .get_slot_mut::<AgentMicrotaskCheckpointTasks>()
@@ -76,7 +90,20 @@ pub(crate) fn run_end_of_microtask_checkpoint_tasks(scope: &mut v8::PinScope<'_,
         return;
     };
 
+    let mut retained = Vec::new();
     for task in tasks {
+        // Listener cleanup deactivates transactions created by that callback,
+        // but connection algorithms wait for every listener and its microtasks.
+        if kind == MicrotaskCheckpointKind::Callback
+            && matches!(
+                task,
+                AgentMicrotaskCheckpointTask::IndexedDbVersionChange(_)
+                    | AgentMicrotaskCheckpointTask::IndexedDbConnectionRequest(_)
+            )
+        {
+            retained.push(task);
+            continue;
+        }
         match task {
             AgentMicrotaskCheckpointTask::IndexedDbVersionChange(completion) => drop(completion),
             AgentMicrotaskCheckpointTask::IndexedDbConnectionRequest(request) => drop(request),
@@ -85,6 +112,13 @@ pub(crate) fn run_end_of_microtask_checkpoint_tasks(scope: &mut v8::PinScope<'_,
                 transaction,
             } => run_indexed_db_transaction_deactivation(scope, context, transaction),
         }
+    }
+    if !retained.is_empty() {
+        let state = scope
+            .get_slot_mut::<AgentMicrotaskCheckpointTasks>()
+            .expect("checkpoint state remains installed");
+        retained.append(&mut state.tasks);
+        state.tasks = retained;
     }
 }
 
@@ -101,3 +135,6 @@ fn run_indexed_db_transaction_deactivation(
         transaction,
     );
 }
+
+#[cfg(test)]
+mod tests;
