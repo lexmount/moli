@@ -28,12 +28,6 @@ impl ServiceWorkerPendingClearPhase {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ServiceWorkerPendingClearAction {
-    DeleteRegistration,
-    KeepRegistrationForQueuedJob,
-}
-
 pub(super) fn registration_ready_to_delete_locked(
     state: &ServiceWorkerRuntimeState,
     registration: &ServiceWorkerRegistration,
@@ -70,31 +64,12 @@ pub(super) fn pending_clear_phase_for_registration_locked(
 pub(super) fn execute_pending_clear_locked(
     state: &mut ServiceWorkerRuntimeState,
     registration_id: ServiceWorkerRegistrationId,
-    action: ServiceWorkerPendingClearAction,
 ) -> Vec<LifecycleProgress> {
-    match action {
-        ServiceWorkerPendingClearAction::DeleteRegistration => {
-            if state.registrations.remove(&registration_id).is_none() {
-                return Vec::new();
-            }
-        }
-        ServiceWorkerPendingClearAction::KeepRegistrationForQueuedJob => {
-            if !state.registrations.contains_key(&registration_id) {
-                return Vec::new();
-            }
-        }
+    if state.registrations.remove(&registration_id).is_none() {
+        return Vec::new();
     }
     let mut progress = clear_registration_owner_state_locked(state, registration_id);
     progress.extend(clear_registration_versions_locked(state, registration_id));
-    if action == ServiceWorkerPendingClearAction::KeepRegistrationForQueuedJob
-        && let Some(registration) = state.registrations.get_mut(&registration_id)
-    {
-        registration.installing_version_id = None;
-        registration.waiting_version_id = None;
-        registration.active_version_id = None;
-        registration.pending_register_jobs.clear();
-        registration.controlled_client_ids.clear();
-    }
     progress
 }
 

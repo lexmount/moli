@@ -28,6 +28,41 @@ fn same_registration_options_fast_path_snapshot(
 }
 
 impl ServiceWorkerRuntimeService {
+    fn registration_for_register_job_locked(
+        &self,
+        state: &mut ServiceWorkerRuntimeState,
+        job: &ServiceWorkerQueuedRegisterJob,
+    ) -> ServiceWorkerRegistrationId {
+        let key = job.registration_key();
+        if let Some(registration) = state
+            .registrations
+            .values()
+            .find(|registration| !registration.pending_unregistration && registration.key() == key)
+        {
+            return registration.id;
+        }
+        let id = self.next_unused_registration_id_locked(state);
+        state.registrations.insert(
+            id,
+            ServiceWorkerRegistration {
+                id,
+                storage_key: key.storage_key,
+                scope_url: job.scope_url.clone(),
+                script_url: job.script_url.clone(),
+                installing_version_id: None,
+                waiting_version_id: None,
+                active_version_id: None,
+                pending_unregistration: false,
+                update_via_cache: job.update_via_cache,
+                navigation_preload_state: ServiceWorkerNavigationPreloadState::default(),
+                last_update_check_time_ms: None,
+                pending_register_jobs: HashMap::new(),
+                controlled_client_ids: HashSet::new(),
+            },
+        );
+        id
+    }
+
     fn record_force_update_page_load_devtools_message_locked(
         &self,
         state: &mut ServiceWorkerRuntimeState,
@@ -139,57 +174,24 @@ impl ServiceWorkerRuntimeService {
             let mut state = self.inner.state.lock();
             let registration_key = queued_job.registration_key();
             self.restore_stored_registration_for_queued_job_locked(&mut state, &queued_job);
-            let registration_id = state
-                .registrations
-                .values()
-                .find(|registration| registration.key() == registration_key)
-                .map(|registration| registration.id)
-                .unwrap_or_else(|| {
-                    ServiceWorkerRegistrationId(
-                        self.inner
-                            .next_registration_id
-                            .fetch_add(1, Ordering::Relaxed),
-                    )
-                });
-            state
-                .registrations
-                .entry(registration_id)
-                .or_insert_with(|| ServiceWorkerRegistration {
-                    id: registration_id,
-                    storage_key: registration_key.storage_key.clone(),
-                    scope_url: queued_job.scope_url.clone(),
-                    script_url: queued_job.script_url.clone(),
-                    installing_version_id: None,
-                    waiting_version_id: None,
-                    active_version_id: None,
-                    pending_unregistration: false,
-                    update_via_cache: queued_job.update_via_cache,
-                    navigation_preload_state: ServiceWorkerNavigationPreloadState::default(),
-                    last_update_check_time_ms: None,
-                    pending_register_jobs: HashMap::new(),
-                    controlled_client_ids: HashSet::new(),
-                });
-            let (
-                installing_version_id,
-                pending_unregistration,
-                registration_scope_url,
-                registration_update_via_cache,
-            ) = {
+            if state.job_coordinator.has_jobs(&registration_key) {
+                state
+                    .job_coordinator
+                    .enqueue_register(registration_key, queued_job);
+                return;
+            }
+            let registration_id =
+                self.registration_for_register_job_locked(&mut state, &queued_job);
+            let (installing_version_id, registration_scope_url, registration_update_via_cache) = {
                 let Some(registration) = state.registrations.get(&registration_id) else {
                     return;
                 };
                 (
                     registration.installing_version_id,
-                    registration.pending_unregistration,
                     registration.scope_url.clone(),
                     registration.update_via_cache,
                 )
             };
-            if pending_unregistration
-                && let Some(registration) = state.registrations.get_mut(&registration_id)
-            {
-                registration.pending_unregistration = false;
-            }
             let can_coalesce_with_installing = installing_version_id
                 .and_then(|version_id| state.versions.get(&version_id))
                 .is_some_and(|version| {
@@ -372,22 +374,23 @@ impl ServiceWorkerRuntimeService {
             let Some(registration_id) = state
                 .registrations
                 .values()
-                .find(|registration| registration.key() == registration_key)
+                .find(|registration| {
+                    !registration.pending_unregistration && registration.key() == registration_key
+                })
                 .map(|registration| registration.id)
             else {
-                return ServiceWorkerUnregisterStart::Completed(false);
+                return ServiceWorkerUnregisterStart::complete(job, false);
             };
             let Some(registration) = state.registrations.get(&registration_id) else {
-                return ServiceWorkerUnregisterStart::Completed(false);
+                return ServiceWorkerUnregisterStart::complete(job, false);
             };
             let register_job_in_progress = registration.installing_version_id.is_some()
                 || state
                     .pending_main_script_update_checks
                     .contains_key(&registration_id);
-            if registration.pending_unregistration
-                || state
-                    .job_coordinator
-                    .has_queued_unregistration(&registration_key)
+            if state
+                .job_coordinator
+                .has_queued_unregistration(&registration_key)
             {
                 if register_job_in_progress && job.is_some() {
                     state
@@ -395,7 +398,7 @@ impl ServiceWorkerRuntimeService {
                         .enqueue_unregister(registration_key, job);
                     return ServiceWorkerUnregisterStart::Queued;
                 }
-                return ServiceWorkerUnregisterStart::Completed(false);
+                return ServiceWorkerUnregisterStart::complete(job, false);
             }
             if register_job_in_progress {
                 state
@@ -404,14 +407,18 @@ impl ServiceWorkerRuntimeService {
                 (ServiceWorkerUnregisterStart::Queued, Vec::new())
             } else {
                 let Some(registration) = state.registrations.get_mut(&registration_id) else {
-                    return ServiceWorkerUnregisterStart::Completed(false);
+                    return ServiceWorkerUnregisterStart::complete(job, false);
                 };
                 registration.pending_unregistration = true;
+                // Unregister removes the registration-map entry immediately;
+                // controlled clients retain only the in-memory registration.
+                self.delete_registration_resources_for_key_locked(&registration_key);
+                let start = ServiceWorkerUnregisterStart::complete(job, true);
                 let progress = self.unregistration_progress_for_registration_if_ready_locked(
                     &mut state,
                     registration_id,
                 );
-                (ServiceWorkerUnregisterStart::Completed(true), progress)
+                (start, progress)
             }
         };
         for progress in progress {
@@ -441,21 +448,10 @@ impl ServiceWorkerRuntimeService {
         };
 
         self.delete_registration_resources_for_key_locked(&registration_key);
-        if state.job_coordinator.has_jobs(&registration_key) {
-            let mut progress = execute_pending_clear_locked(
-                state,
-                registration_id,
-                ServiceWorkerPendingClearAction::KeepRegistrationForQueuedJob,
-            );
-            progress.extend(self.advance_registration_job_queue_locked(state, registration_id));
-            return progress;
-        }
-
-        execute_pending_clear_locked(
-            state,
-            registration_id,
-            ServiceWorkerPendingClearAction::DeleteRegistration,
-        )
+        let mut progress = self.clear_registration_locked(state, registration_id);
+        progress
+            .extend(self.advance_registration_job_queue_for_key_locked(state, &registration_key));
+        progress
     }
 
     #[cfg(test)]
@@ -745,7 +741,6 @@ impl ServiceWorkerRuntimeService {
         registration.scope_url = queued_job.scope_url.clone();
         registration.update_via_cache = queued_job.update_via_cache;
         registration.installing_version_id = Some(version_id);
-        registration.pending_unregistration = false;
         let launch_config = ServiceWorkerVersionLaunchConfig::from_queued_register_job(queued_job);
         let host = RendererServiceWorkerHost::new_loading(&owner);
         let should_pause_on_start_for_devtools = self
@@ -816,27 +811,43 @@ impl ServiceWorkerRuntimeService {
         state: &mut ServiceWorkerRuntimeState,
         registration_id: ServiceWorkerRegistrationId,
     ) -> Vec<LifecycleProgress> {
+        let Some(key) = state
+            .registrations
+            .get(&registration_id)
+            .map(ServiceWorkerRegistration::key)
+        else {
+            return Vec::new();
+        };
+        self.advance_registration_job_queue_for_key_locked(state, &key)
+    }
+
+    fn advance_registration_job_queue_for_key_locked(
+        &self,
+        state: &mut ServiceWorkerRuntimeState,
+        registration_key: &ServiceWorkerRegistrationKey,
+    ) -> Vec<LifecycleProgress> {
         let mut progress = Vec::new();
         loop {
-            let registration_key = {
-                let Some(registration) = state.registrations.get(&registration_id) else {
-                    return progress;
-                };
-                if registration.installing_version_id.is_some()
+            let current = state.registrations.values().find(|registration| {
+                !registration.pending_unregistration && registration.key() == *registration_key
+            });
+            if current.is_some_and(|registration| {
+                registration.installing_version_id.is_some()
                     || state
                         .pending_main_script_update_checks
-                        .contains_key(&registration_id)
-                {
-                    return progress;
-                }
-                registration.key()
-            };
-            let Some(queued_job) = state.job_coordinator.pop_next(&registration_key) else {
+                        .contains_key(&registration.id)
+            }) {
+                return progress;
+            }
+            let current_id = current.map(|registration| registration.id);
+            let Some(queued_job) = state.job_coordinator.pop_next(registration_key) else {
                 return progress;
             };
             match queued_job {
                 ServiceWorkerQueuedJob::Register(queued_job) => {
                     let queued_job = *queued_job;
+                    let registration_id =
+                        self.registration_for_register_job_locked(state, &queued_job);
                     if let Some(update_check) = self.start_main_script_update_check_locked(
                         state,
                         registration_id,
@@ -856,24 +867,24 @@ impl ServiceWorkerRuntimeService {
                     return progress;
                 }
                 ServiceWorkerQueuedJob::Unregister(mut queued_job) => {
-                    let Some(registration) = state.registrations.get_mut(&registration_id) else {
-                        return progress;
-                    };
                     queued_job.mark_pending();
-                    registration.pending_unregistration = true;
-                    progress.push(LifecycleProgress::UnregisterCompleted(queued_job));
-                    progress.extend(
-                        self.unregistration_progress_for_registration_if_ready_locked(
-                            state,
-                            registration_id,
-                        ),
-                    );
-                    if state
-                        .registrations
-                        .get(&registration_id)
-                        .is_some_and(|registration| registration.pending_unregistration)
-                    {
-                        return progress;
+                    progress.push(LifecycleProgress::UnregisterCompleted(
+                        queued_job,
+                        current_id.is_some(),
+                    ));
+                    if let Some(registration_id) = current_id {
+                        state
+                            .registrations
+                            .get_mut(&registration_id)
+                            .expect("current registration")
+                            .pending_unregistration = true;
+                        self.delete_registration_resources_for_key_locked(registration_key);
+                        progress.extend(
+                            self.unregistration_progress_for_registration_if_ready_locked(
+                                state,
+                                registration_id,
+                            ),
+                        );
                     }
                 }
             }

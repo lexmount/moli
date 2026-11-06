@@ -127,11 +127,9 @@ impl ServiceWorkerRuntimeService {
             scope_url: stored.scope_url.clone(),
             storage_key: stored.storage_key.clone(),
         };
-        if let Some(registration) = state
-            .registrations
-            .values()
-            .find(|registration| registration.key() == registration_key)
-        {
+        if let Some(registration) = state.registrations.values().find(|registration| {
+            !registration.pending_unregistration && registration.key() == registration_key
+        }) {
             return Some(registration.id);
         }
         if !matches!(
@@ -204,7 +202,7 @@ impl ServiceWorkerRuntimeService {
         Some(registration_id)
     }
 
-    fn next_unused_registration_id_locked(
+    pub(super) fn next_unused_registration_id_locked(
         &self,
         state: &ServiceWorkerRuntimeState,
     ) -> ServiceWorkerRegistrationId {
