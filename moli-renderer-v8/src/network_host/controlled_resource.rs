@@ -295,6 +295,9 @@ impl ControlledResourceLoad {
         }
         if headers_changed {
             self.preflight_headers = self.request.request_headers.to_byte_strings();
+            if self.info.resource_type == crate::types::SubresourceResourceType::EventSource {
+                self.preflight_headers.retain(|(name, _)| !name.eq_ignore_ascii_case("Last-Event-ID"));
+            }
         }
         self.sync_info();
         if request_changed && self.interception.is_worker() {
@@ -817,6 +820,9 @@ impl ControlledResourceLoad {
                 owner.admit(&self.cancel).await?;
             }
             self.preflight_headers = self.request.request_headers.to_byte_strings();
+            if self.info.resource_type == crate::types::SubresourceResourceType::EventSource {
+                self.preflight_headers.retain(|(name, _)| !name.eq_ignore_ascii_case("Last-Event-ID"));
+            }
             // ExtraInfo describes the first on-wire request of the current hop.
             // Authentication retries retain it; a redirect starts a new hop.
             network_request_headers = None;

@@ -35,6 +35,7 @@ pub(crate) struct ControlledFetchStream {
     delivered: usize,
     timing: crate::worker::WorkerResourceTiming,
     response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    event_source_parser: Option<crate::network_host::EventSourceParser>,
 }
 
 struct StreamedFetchResponse {
@@ -45,6 +46,10 @@ struct StreamedFetchResponse {
 }
 
 impl ControlledFetchStream {
+    fn with_event_source_parser(mut self, parser: Option<crate::network_host::EventSourceParser>) -> Self {
+        self.event_source_parser = parser;
+        self
+    }
     pub(super) fn set_response_filter(&mut self, filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>) {
         self.response_filter = filter;
     }
@@ -88,6 +93,7 @@ impl ControlledFetchStream {
             delivered: 0,
             timing,
             response_filter: None,
+            event_source_parser: None,
         }
     }
 
@@ -191,6 +197,13 @@ impl ControlledFetchStream {
             ));
         // A detached JS consumer does not cancel a keepalive transport. Its
         // resource lease, rather than this delivery channel, owns cancellation.
+        if let Some(parser) = &mut self.event_source_parser {
+            let messages = parser.push(&bytes);
+            let _ = self.completion.send(WorkerFetchEvent::EventSourceState { fetch_id: self.fetch_id, body_source_id: self.body_source_id.unwrap(), last_event_id: parser.last_event_id().to_owned(), reconnect_delay_ms: parser.reconnect_delay_ms() });
+            for message in messages {
+                let _ = self.completion.send(WorkerFetchEvent::EventSourceMessage { fetch_id: self.fetch_id, body_source_id: self.body_source_id.unwrap(), message });
+            }
+        } else {
         let _ = self.completion.send(WorkerFetchEvent::StreamingChunk(
             WorkerFetchStreamingChunk {
                 fetch_id: self.fetch_id,
@@ -198,6 +211,7 @@ impl ControlledFetchStream {
                 bytes,
             },
         ));
+        }
         Ok(())
     }
 
@@ -255,6 +269,7 @@ impl super::ControlledResourceLoad {
         resource_timing: FetchResourceTiming,
         integrity: String,
         timing: crate::worker::WorkerResourceTiming,
+        event_source_parser: Option<crate::network_host::EventSourceParser>,
     ) {
         // Network/CDP correlation follows redirects; Resource Timing names
         // the original request, including when interception rewrites its URL.
@@ -280,7 +295,7 @@ impl super::ControlledResourceLoad {
             self.load.clone(),
             resource_timing.clone(),
             timing.clone(),
-        ));
+        ).with_event_source_parser(event_source_parser));
         let result = self.run_inner((integrity.is_empty() && self.info.resource_type != crate::types::SubresourceResourceType::Font).then_some(&mut stream)).await;
         let result = self.normalize_cancellation(result);
         stream.policy_violations(std::mem::take(&mut self.csp_violations));

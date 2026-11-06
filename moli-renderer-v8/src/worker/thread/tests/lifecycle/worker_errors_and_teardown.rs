@@ -165,7 +165,7 @@ async fn worker_unsupported_worker_related_constructors_throw_not_supported() {
         postMessage({
             eventSource: describeUnsupported(
                 "EventSource",
-                () => new EventSource("/events")
+                () => { const source = new EventSource("/events"); source.close(); }
             ),
             sharedWorker: typeof SharedWorker
         });
@@ -181,7 +181,7 @@ async fn worker_unsupported_worker_related_constructors_throw_not_supported() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"eventSource":"function|EventSource|1|true|true|[object EventSource]|NotSupportedError|9|This constructor is not implemented in dedicated workers yet.","sharedWorker":"undefined"}"#
+        r#"{"eventSource":"function|EventSource|1|true|true|[object EventSource]||0|","sharedWorker":"undefined"}"#
     );
 }
 

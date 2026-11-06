@@ -68,7 +68,10 @@ impl ControlledXhrContext {
         cancel: moli_fetch::FetchCancelHandle,
         policy: crate::types::SubresourcePolicyContext,
     ) -> super::ControlledResourceLoad {
-        let headers = request.request_headers.to_byte_strings();
+        let mut headers = request.request_headers.to_byte_strings();
+        if info.resource_type == crate::types::SubresourceResourceType::EventSource {
+            headers.retain(|(name, _)| !name.eq_ignore_ascii_case("Last-Event-ID"));
+        }
         self.load(request, info, load, cancel, headers)
             .with_fetch_policy(policy)
     }

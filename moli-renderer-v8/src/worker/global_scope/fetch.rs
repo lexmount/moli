@@ -1,5 +1,6 @@
 use super::*;
 mod native_load;
+pub(super) use native_load::{NativeWorkerFetchRequest, start as start_native};
 use std::sync::atomic::AtomicU64;
 
 use crate::network::interception_output::ResourceInterceptionContext;
@@ -18,22 +19,26 @@ use crate::types::{
 pub(in crate::worker) enum WorkerFetchKind {
     Fetch,
     Font,
+    EventSource { reconnect_delay_ms: u64 },
 }
 
 impl WorkerFetchKind {
-    fn resource_type(self) -> SubresourceResourceType {
+    pub(super) fn resource_type(self) -> SubresourceResourceType {
         match self {
             Self::Fetch => SubresourceResourceType::Fetch,
             Self::Font => SubresourceResourceType::Font,
+            Self::EventSource { .. } => SubresourceResourceType::EventSource,
         }
     }
 
-    fn csp_resource_kind(
+    pub(super) fn csp_resource_kind(
         self,
     ) -> crate::content_security_policy::ContentSecurityPolicyResourceKind {
         use crate::content_security_policy::ContentSecurityPolicyResourceKind;
         match self {
-            Self::Fetch => ContentSecurityPolicyResourceKind::WorkerConnect,
+            Self::Fetch | Self::EventSource { .. } => {
+                ContentSecurityPolicyResourceKind::WorkerConnect
+            }
             Self::Font => ContentSecurityPolicyResourceKind::DocumentFont,
         }
     }
@@ -42,6 +47,7 @@ impl WorkerFetchKind {
         match self {
             Self::Fetch => BrowserRequestMetadata::Fetch,
             Self::Font => BrowserRequestMetadata::Font,
+            Self::EventSource { .. } => BrowserRequestMetadata::EventSource,
         }
     }
 }
@@ -1198,6 +1204,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
             Ok(mut request) => {
                 if let Some(metadata) = metadata {
                     request = request.with_script_fetch_metadata(metadata);
+
                 }
                 request
             }
@@ -1209,7 +1216,7 @@ pub(super) fn start_worker_resource_fetch<'s>(
         native_load::start(
             scope,
             &state,
-            native_load::NativeWorkerFetchRequest { request, blob_url_entry, kind, font_face, timing, body_stream, body_stream_locked, signal },
+            native_load::NativeWorkerFetchRequest { request, blob_url_entry, kind, font_face, timing, body_stream, body_stream_locked, signal, event_source: None, admission_error: None },
 
 
 
@@ -1257,9 +1264,10 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
         pending.load.cancel();
         if let Some(body_source_id) = pending.streaming_body_source_id {
 
+
             crate::network_host::abort_pending_network_body_stream(scope, body_source_id, reason);
         } else {
-            let resolver = v8::Local::new(scope, &pending.resolver);
+            let resolver = v8::Local::new(scope, pending.client.resolver());
             let _ = resolver.reject(scope, reason);
 
         }
@@ -1276,6 +1284,40 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
     event: WorkerFetchEvent,
 ) {
     match event {
+        WorkerFetchEvent::BrowserTimeout { timer_id } => {
+            super::timers::run_worker_browser_timeout(scope, state, timer_id);
+        }
+
+        WorkerFetchEvent::EventSourceState {
+            fetch_id,
+            body_source_id,
+            last_event_id,
+            reconnect_delay_ms,
+        } => {
+            super::event_source::apply_state(
+                scope,
+                state,
+                fetch_id,
+                body_source_id,
+                &last_event_id,
+                reconnect_delay_ms,
+            );
+        }
+        WorkerFetchEvent::EventSourceMessage {
+            fetch_id,
+            body_source_id,
+            message,
+        } => {
+            super::event_source::apply_message(scope, state, fetch_id, body_source_id, &message);
+        }
+        WorkerFetchEvent::EventSourceFailure {
+            fetch_id,
+            error,
+            mode,
+        } => {
+            super::event_source::fail_request(scope, state, fetch_id, error, mode);
+        }
+
         WorkerFetchEvent::RequestBodyProducer {
             fetch_id,
             mut producer,
@@ -1288,7 +1330,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
                     .filter(|pending| !pending.load.is_cancelled())
                     .map(|pending| {
                         (
-                            pending.resolver.clone(),
+                            pending.client.resolver().clone(),
                             pending.load.task_runner(),
                             state.fetch_completion_tx.clone(),
                         )
@@ -1415,18 +1457,20 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
     }
 }
 
+
 pub(in crate::worker) fn start_worker_streaming_fetch(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
     started: WorkerFetchStreamingStarted,
 ) {
+    if super::event_source::start_response(scope, state, &started) { return; }
     let (resolver, method) = {
         let mut state = state.borrow_mut();
         let Some(pending) = state.pending_fetches.get_mut(&started.fetch_id) else {
             return;
         };
         pending.streaming_body_source_id = Some(started.body_source_id);
-        (pending.resolver.clone(), pending.request_method.clone())
+        (pending.client.resolver().clone(), pending.request_method.clone())
     };
     // Security checks, exposed headers and immutable metadata belong to the
     // native load. This task only constructs the Response in its Worker realm.
@@ -1456,6 +1500,10 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
     else {
         return;
     };
+    if pending.client.event_source().is_some() {
+        super::event_source::finish_response(scope, state, pending, finished);
+        return;
+    }
     pending.load.finish();
     match finished.result {
         Ok(entry) => {
@@ -1484,6 +1532,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
 ) {
 
 
+
     let Some(pending) = state
         .borrow_mut()
         .pending_fetches
@@ -1492,14 +1541,18 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
         return;
     };
     pending.load.finish();
-    let resolver = v8::Local::new(scope, &pending.resolver);
+    if pending.client.event_source().is_some() {
+        super::event_source::complete_response(scope, state, pending, completion);
+        return;
+    }
+    let resolver = v8::Local::new(scope, pending.client.resolver());
     match completion.result {
         Ok(response) => {
             crate::context_bootstrap::record_resource_performance_entry(
                 scope,
                 response.resource_timing,
             );
-            if let Some(face) = pending.font_face.as_ref() {
+            if let Some(face) = pending.client.font_face() {
                 let usable = (200..300).contains(&response.head.status)
                     && response.metadata.response_type.is_readable();
                 let bytes = usable.then(|| response.body.as_materialized_bytes()).flatten();
