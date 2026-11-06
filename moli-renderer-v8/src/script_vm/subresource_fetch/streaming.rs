@@ -5,7 +5,7 @@ use crate::types::AsyncSubresourceFetchEventTarget;
 
 // Header policy checks have accepted this response. A later body error
 // retains its HTTP status and body information for both Fetch and XHR timing.
-fn window_streaming_response_timing(
+pub(super) fn window_streaming_response_timing(
     pending: &mut PendingSubresourceFetchState,
     head: &moli_fetch::ResponseHead,
     method: &str,
@@ -1167,6 +1167,12 @@ impl ScriptVm {
                     crate::network_host::event_source_response_error(&started.head)
             {
                 pending.load.cancel();
+                if let Some(entry) = window_streaming_response_timing(
+                    &mut pending, &started.head, &started.request_method,
+                    started.response_filter.as_ref(), 0,
+                ) {
+                    crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+                }
                 if let Some(handle) = pending.info.network_request_handle {
                     self._context_host
                         .borrow_mut()
@@ -2032,6 +2038,21 @@ impl ScriptVm {
                         );
                     }
                     let response_body = streaming.body_writer.finish();
+                    if let Some(native) = streaming.pending.load.response_timing()
+                        && let Some(timing) =
+                            streaming.pending.continuation.window_resource_timing_mut()
+                    {
+                        timing.observe_native_timing(native);
+                    }
+                    if let Some(entry) = window_streaming_response_timing(
+                        &mut streaming.pending,
+                        &streaming.head,
+                        &streaming.request_method,
+                        streaming.response_filter.as_ref(),
+                        response_body.len(),
+                    ) {
+                        crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+                    }
                     if let Some(handle) = streaming.pending.info.network_request_handle {
                         let body = match result {
                             Ok(()) => crate::types::SubresourceBodyFinished::ready_after_streaming(

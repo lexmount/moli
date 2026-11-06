@@ -1066,6 +1066,8 @@ impl JsContextHost {
         } else {
             self.push_pending_subresource_fetch_info(info.clone());
         }
+        let mut timing = crate::context_bootstrap::FetchResourceTiming::for_initiator_type("other");
+        timing.capture_window_initiator(scope, self);
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1079,7 +1081,11 @@ impl JsContextHost {
                 network_partition_key,
                 policy_context,
                 continuation: PendingSubresourceContinuation::EventSource(Box::new(
-                    crate::types::PendingEventSourceRequest { event_source, csp },
+                    crate::types::PendingEventSourceRequest {
+                        event_source,
+                        csp,
+                        timing,
+                    },
                 )),
                 deferred_request_started: false,
                 blob_url_entry: None,
@@ -2751,7 +2757,11 @@ impl JsContextHost {
         }
     }
 
-    pub(crate) fn abort_event_source_fetch(&mut self, internal_id: u64) -> bool {
+    pub(crate) fn abort_event_source_fetch(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        internal_id: u64,
+    ) -> bool {
         if self
             .streaming_subresource_fetches
             .get(&internal_id)
@@ -2762,10 +2772,53 @@ impl JsContextHost {
             // queued completion, rather than close(), determines CDP's terminal.
             return true;
         }
+        let entry = self
+            .subresource_fetch_states()
+            .find(|pending| pending.info.internal_id == internal_id)
+            .and_then(|pending| {
+                let PendingSubresourceContinuation::EventSource(request) = &pending.continuation
+                else {
+                    return None;
+                };
+                let target = pending
+                    .execution_context
+                    .window_realm_binding()?
+                    .resolve_identity(self)?;
+                let entry =
+                    if let Some(streaming) = self.streaming_subresource_fetches.get(&internal_id) {
+                        let filter = streaming.response_filter.clone().unwrap_or_else(|| {
+                            crate::network_host::FetchResponseRequest {
+                                method: &streaming.request_method,
+                                mode: pending.request_mode,
+                                redirect_mode: moli_fetch::RequestRedirectMode::Follow,
+                            }
+                            .network_response_filter(
+                                &pending.request_origin,
+                                &streaming.head,
+                                pending.credentials_mode,
+                            )
+                        });
+                        request.timing.aborted_response(
+                            &pending.info.url,
+                            &pending.request_origin,
+                            &streaming.head,
+                            &filter,
+                            0,
+                            false,
+                        )
+                    } else {
+                        request.timing.failure(&pending.info.url)
+                    };
+                Some((target, entry))
+            });
         let _ = self
             .browser_context_runtime
             .abort_service_worker_fetch(internal_id);
-        self.abort_subresource_fetch(internal_id)
+        let aborted = self.abort_subresource_fetch(internal_id);
+        if aborted && let Some((target, entry)) = entry {
+            self.record_window_resource_timing(scope, target, entry);
+        }
+        aborted
     }
 
     /// A delayed XHR timer must not replace a completed transport result while
