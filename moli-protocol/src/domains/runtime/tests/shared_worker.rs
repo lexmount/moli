@@ -853,18 +853,25 @@ async fn runtime_enable_replays_page_and_shared_worker_contexts_to_their_own_ses
         90_020,
         "context-replay-isolation",
         r#"
-onconnect = event => {
-  event.ports[0].postMessage('ready');
-};
+globalThis.sharedWorkerBootReady = new Promise(resolve => {
+  onconnect = event => {
+    console.warn('worker boot warning');
+    resolve('booted');
+    event.ports[0].postMessage('ready');
+  };
+});
 "#,
     )
     .await;
-    record_shared_worker_console(
-        &mut ctx,
-        &shared_worker_session_id,
-        "warn: worker boot warning",
-    );
-    record_shared_worker_runtime_context(&mut ctx, &shared_worker_session_id, 90_021);
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 90_024,
+        "method": "Runtime.evaluate",
+        "sessionId": shared_worker_session_id,
+        "params": {"expression":"sharedWorkerBootReady", "awaitPromise":true, "returnByValue":true}
+    }))
+    .await;
+    let ready = take_response_by_id(&mut ctx, 90_024);
+    assert_eq!(ready["result"]["result"]["value"], json!("booted"));
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -972,14 +979,8 @@ onconnect = event => {
         worker_console["params"]["args"][0]["value"],
         json!("worker boot warning")
     );
-    assert_ne!(
-        worker_console["params"]["executionContextId"],
-        json!(page_context_id),
-        "worker console replay must not use the page execution context id"
-    );
     assert_eq!(
-        worker_console["params"]["executionContextId"],
-        json!(90_021),
+        worker_console["params"]["executionContextId"], worker_context["params"]["context"]["id"],
         "worker console replay should use the real shared worker execution context id"
     );
     assert!(
@@ -988,6 +989,24 @@ onconnect = event => {
                 && message["params"]["context"]["auxData"]["frameId"] != json!("TID-page")
         }),
         "shared worker Runtime.enable must not replay page context or console output: {worker_messages:?}"
+    );
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 90_025,
+        "method": "Runtime.evaluate",
+        "sessionId": shared_worker_session_id,
+        "params": {
+            "expression": "sharedWorkerBootReady",
+            "contextId": worker_console["params"]["executionContextId"],
+            "awaitPromise": true,
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let worker_context_roundtrip = take_response_by_id(&mut ctx, 90_025);
+    assert_eq!(
+        worker_context_roundtrip["result"]["result"]["value"],
+        json!("booted"),
+        "the replayed context must address the real Worker in its session"
     );
 }
 
