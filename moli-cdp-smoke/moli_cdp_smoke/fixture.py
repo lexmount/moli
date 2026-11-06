@@ -660,6 +660,19 @@ class FixtureServer:
                     return
                 if route == "/plain":
                     self._send_html("<!doctype html><main>plain ok</main>")
+                elif route == "/fetch-font.woff2":
+                    outer._increment_request_count(self.path)
+                    self._send_common(
+                        HTTPStatus.OK, "font/woff2",
+                        (REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes(),
+                    )
+                elif route == "/fetch-font/status":
+                    case = query.get("case", [""])[0]
+                    self._send_json({"requests": outer.request_count(f"/fetch-font.woff2?case={case}")})
+                elif route == "/fetch-font/style.css":
+                    image_query = urllib.parse.urlencode({"case": query.get("case", [""])[0]})
+                    self._send_css('body{background-image:url("/chromium-resource-image.png?'
+                                   + image_query + '")}')
                 elif route == "/retained-window-timing":
                     # Measurement interval before commit, so a reset Document
                     # clock is distinguishable from the retained Window clock.
