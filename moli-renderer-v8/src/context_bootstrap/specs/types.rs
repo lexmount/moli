@@ -200,6 +200,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     BaseAudioContext,
     AudioDestinationNode,
     OscillatorNode,
+    GainNode,
+    MediaElementAudioSourceNode,
     DynamicsCompressorNode,
     AnalyserNode,
     BiquadFilterNode,

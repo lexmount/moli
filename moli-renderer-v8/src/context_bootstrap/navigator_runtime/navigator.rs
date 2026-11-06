@@ -1059,7 +1059,9 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
         }
         NavigatorSubobject::Clipboard => build_clipboard_object(scope)?.into(),
         NavigatorSubobject::Credentials => super::credentials::build_container(scope)?.into(),
-        NavigatorSubobject::MediaSession => super::media_session::build(scope)?.into(),
+        NavigatorSubobject::MediaSession => {
+            super::media_session::build(scope, backing, owner_child, owner_popup)?.into()
+        }
         NavigatorSubobject::UserActivation => build_user_activation(scope)?.into(),
         NavigatorSubobject::StorageBuckets => {
             build_storage_bucket_manager(scope, owner_child, owner_popup)?.into()

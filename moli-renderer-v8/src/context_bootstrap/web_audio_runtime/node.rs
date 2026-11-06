@@ -196,7 +196,7 @@ fn channel_count_setter<'s>(
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
 #[webidl(name = "ChannelCountMode")]
-enum ChannelCountMode {
+pub(super) enum ChannelCountMode {
     #[webidl(token = "max")]
     Max,
     #[webidl(token = "clamped-max")]
@@ -258,11 +258,63 @@ fn channel_mode_setter<'s>(
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
 #[webidl(name = "ChannelInterpretation")]
-enum ChannelInterpretation {
+pub(super) enum ChannelInterpretation {
     #[webidl(token = "speakers")]
     Speakers,
     #[webidl(token = "discrete")]
     Discrete,
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "AudioNodeOptions")]
+pub(super) struct AudioNodeOptions {
+    channel_count: Option<u32>,
+    #[webidl(converter = "enum")]
+    channel_count_mode: Option<ChannelCountMode>,
+    #[webidl(converter = "enum")]
+    channel_interpretation: Option<ChannelInterpretation>,
+}
+
+impl AudioNodeOptions {
+    pub(super) fn apply<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        node: v8::Local<'s, v8::Object>,
+    ) -> bool {
+        if let Some(count) = self.channel_count {
+            if !(1..=32).contains(&count) {
+                throw_dom_exception(
+                    scope,
+                    "NotSupportedError",
+                    9,
+                    "Audio node channel count exceeds its limit.",
+                );
+                return false;
+            }
+            set_web_audio_number_slot(scope, node, CHANNEL_COUNT, f64::from(count));
+        }
+        if let Some(mode) = self.channel_count_mode {
+            set_private_value(
+                scope,
+                node,
+                CHANNEL_MODE,
+                v8str(scope, webidl::WebIdlEnumSnapshot::snapshot_token(&mode)).into(),
+            );
+        }
+        if let Some(interpretation) = self.channel_interpretation {
+            set_private_value(
+                scope,
+                node,
+                INTERPRETATION,
+                v8str(
+                    scope,
+                    webidl::WebIdlEnumSnapshot::snapshot_token(&interpretation),
+                )
+                .into(),
+            );
+        }
+        true
+    }
 }
 
 #[derive(webidl::WebIdlArgs)]
