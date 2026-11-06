@@ -73,3 +73,7 @@ class RealtimeWorkloadTests(unittest.TestCase):
     def test_unknown_container_cannot_silently_run_the_block_case(self):
         with self.assertRaises(ValueError):
             fixture(64, container="unknown")
+
+
+if __name__ == "__main__":
+    unittest.main()
