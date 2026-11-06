@@ -341,29 +341,19 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         }
     }
 
-    dispatch_worker_content_security_policy_report_only_violation_for_state(
+    // XHR reaches the report-only pre-request check before enforced CSP;
+    // Fetch's separate preliminary allow check has the opposite order.
+    let csp_error = queue_worker_request_csp_violations(
         scope,
         &state,
         &prepared.document_url,
         &prepared.resolved_url,
         crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
+        "xhr",
+        crate::content_security_policy::ContentSecurityPolicyDisposition::Report,
     );
-    let csp_violation = {
-        let state_ref = state.borrow();
-        worker_content_security_policy_violation(
-            &state_ref,
-            &prepared.document_url,
-            &prepared.resolved_url,
-            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
-        )
-    };
-    let request_error = if let Some(violation) = csp_violation {
-        dispatch_worker_content_security_policy_violation_event_for_state(
-            scope, &state, &violation,
-        );
-        Some(worker_content_security_policy_error_message(
-            &violation, "xhr",
-        ))
+    let request_error = if csp_error.is_some() {
+        csp_error
     } else if let Err(error) = url_policy {
         Some(error.to_string())
     } else if should_request_be_blocked_due_to_bad_port(&prepared.resolved_url) {
@@ -477,11 +467,21 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     if let Some(result) = local_response {
         // Local responses and network errors still complete asynchronously, so
         // abort(), open() and timeout processing use the ordinary pending XHR.
-        let _ = state.borrow().xhr_completion_tx.send(WorkerXhrCompletion {
-            xhr_id,
-            network_request_headers: None,
-            result: result.map(|response| WorkerXhrResponse::Materialized(Box::new(response))),
-        });
+        let state = state.borrow();
+        match result {
+            Ok(response) => {
+                let _ = state.xhr_completion_tx.send(WorkerXhrCompletion {
+                    xhr_id,
+                    network_request_headers: None,
+                    result: Ok(WorkerXhrResponse::Materialized(Box::new(response))),
+                });
+            }
+            Err(error_text) => {
+                let _ = state.worker_wake_tx.send(
+                    crate::worker::handle::WorkerMessage::DispatchXhrFailure { xhr_id, error_text },
+                );
+            }
+        }
         return true;
     }
 

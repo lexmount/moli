@@ -1123,12 +1123,14 @@ pub(in crate::worker) fn dispatch_worker_csp_violation_event_for_state<'s>(
 
 /// Capture policy and source information in the request turn, while author
 /// events run as later tasks on this exact Worker run's existing channel.
-pub(super) fn queue_worker_fetch_csp_violations(
+pub(super) fn queue_worker_request_csp_violations(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
     protected_url: &Url,
     request_url: &Url,
     kind: ContentSecurityPolicyResourceKind,
+    operation: &'static str,
+    first_disposition: ContentSecurityPolicyDisposition,
 ) -> Option<String> {
     let (enforced, report_only, wake_tx) = {
         let state = state.borrow();
@@ -1159,9 +1161,13 @@ pub(super) fn queue_worker_fetch_csp_violations(
     }
     let message = enforced
         .first()
-        .map(|violation| worker_content_security_policy_error_message(violation, "fetch"));
+        .map(|violation| worker_content_security_policy_error_message(violation, operation));
     let location = crate::content_security_policy::current_script_violation_location(scope);
-    for mut violation in enforced.into_iter().chain(report_only) {
+    let (first, second) = match first_disposition {
+        ContentSecurityPolicyDisposition::Enforce => (enforced, report_only),
+        ContentSecurityPolicyDisposition::Report => (report_only, enforced),
+    };
+    for mut violation in first.into_iter().chain(second) {
         if let Some((source_file, line, column)) = &location {
             violation.source_file.clone_from(source_file);
             violation.line_number = *line;
