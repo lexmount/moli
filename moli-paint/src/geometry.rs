@@ -268,6 +268,89 @@ pub(crate) fn to_backend_rect(rect: PaintRect) -> Option<Rect> {
     ))
 }
 
+/// An integer device-pixel rectangle clipped to a raster surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DeviceRegion {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+impl DeviceRegion {
+    /// Straight-alpha RGBA8 bytes needed to hold the region.
+    pub(crate) fn byte_len(self) -> usize {
+        (self.width as usize)
+            .saturating_mul(self.height as usize)
+            .saturating_mul(4)
+    }
+}
+
+/// Device-pixel bounds of `shape`, rounded outward and clipped to the
+/// `surface_width` x `surface_height` raster. `None` when nothing is visible.
+pub(crate) fn device_region(
+    shape: &PaintShape,
+    transform: PaintTransform2D,
+    scale: f64,
+    surface_width: u32,
+    surface_height: u32,
+) -> Option<DeviceRegion> {
+    use peniko::kurbo::Shape as _;
+    let bounds = device_transform(transform, scale)
+        .transform_rect_bbox(to_backend_shape(shape).bounding_box());
+    let clamp = |value: f64, max: u32| value.clamp(0.0, f64::from(max));
+    let x0 = clamp(bounds.x0.floor(), surface_width);
+    let y0 = clamp(bounds.y0.floor(), surface_height);
+    let x1 = clamp(bounds.x1.ceil(), surface_width);
+    let y1 = clamp(bounds.y1.ceil(), surface_height);
+    // NaN bounds fail these comparisons as well.
+    if !(x1 > x0 && y1 > y0) {
+        return None;
+    }
+    Some(DeviceRegion {
+        x: x0 as u32,
+        y: y0 as u32,
+        width: (x1 - x0) as u32,
+        height: (y1 - y0) as u32,
+    })
+}
+
+/// Bound device-space blur work even for very large public snapshot radii.
+pub(crate) fn backdrop_blur_sigma(radius: f32, scale: f64, region: DeviceRegion) -> f32 {
+    (finite_nonnegative(radius) * scale as f32)
+        .min(region.width.max(region.height) as f32)
+        .min(128.0)
+}
+
+/// Source/output RGBA plus Vello's expanded filter pixmap and scratch buffer.
+/// The reflected input extends 3 sigma + 4px, Vello adds another 3 sigma,
+/// and its 4px tiles can round either edge outwards.
+pub(crate) fn backdrop_workspace_bytes(
+    region: DeviceRegion,
+    filters: &[moli_layout::PaintFilter],
+    scale: f64,
+) -> usize {
+    filters
+        .iter()
+        .fold(region.byte_len().saturating_mul(2), |bytes, filter| {
+            let moli_layout::PaintFilter::Blur(radius) = *filter else {
+                return bytes;
+            };
+            let sigma = backdrop_blur_sigma(radius, scale, region);
+            if sigma == 0.0 {
+                return bytes;
+            }
+            let padding = (sigma.ceil() as usize)
+                .saturating_mul(12)
+                .saturating_add(32);
+            let expanded = (region.width as usize)
+                .saturating_add(padding)
+                .saturating_mul((region.height as usize).saturating_add(padding))
+                .saturating_mul(8);
+            bytes.max(expanded.saturating_add(region.byte_len()))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -799,6 +799,32 @@ pub enum PaintFragment {
     Image(PaintImage),
     /// One parsed vector image backed by a snapshot-local SVG resource table.
     SvgImage(PaintSvgImage),
+    /// CSS `backdrop-filter` (Filter Effects 2).
+    ///
+    /// Raster backends read the pixels painted since the nearest enclosing
+    /// Backdrop Root (a `PushLayer` with opacity, blend, composite, or filter
+    /// effects, a scope followed by [`PaintFragment::BackdropRoot`], else the
+    /// canvas), crop them to `shape`'s device bounds, apply
+    /// `filters` in order with mirrored edges, and draw the result clipped to
+    /// `shape`. Vector backends do not implement it.
+    BackdropFilter {
+        /// Border-box shape, including corner radii.
+        shape: PaintShape,
+        /// Maps `shape` to viewport CSS pixels.
+        transform: PaintTransform2D,
+        /// Supported filter functions in list order (no `url()` or `drop-shadow()`).
+        filters: Vec<PaintFilter>,
+        /// Number of innermost open scopes that wrap this fragment without
+        /// being its Backdrop Root: the element's own clip-path, mask and
+        /// opacity/blend layers, plus the ancestor overflow clips applied
+        /// around the filtered backdrop.
+        own_scopes: u16,
+    },
+    /// Marks the innermost scope opened immediately before it (a clip-path
+    /// clip or an isolation layer) as a Backdrop Root for descendants'
+    /// `backdrop-filter`. It paints nothing and is emitted only in documents
+    /// that use `backdrop-filter`.
+    BackdropRoot,
 }
 
 impl PaintFragment {
@@ -1176,7 +1202,19 @@ fn rebase_embedded_fragment(
             shape,
             transform: parent.concatenate(transform),
         },
+        PaintFragment::BackdropFilter {
+            shape,
+            transform,
+            filters,
+            own_scopes,
+        } => PaintFragment::BackdropFilter {
+            shape,
+            transform: parent.concatenate(transform),
+            filters,
+            own_scopes,
+        },
         PaintFragment::PopLayer => PaintFragment::PopLayer,
+        PaintFragment::BackdropRoot => PaintFragment::BackdropRoot,
         PaintFragment::Fill {
             shape,
             brush,

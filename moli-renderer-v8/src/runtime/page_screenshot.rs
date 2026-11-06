@@ -50,6 +50,8 @@ impl PaintFragmentProfile {
                 }
                 moli_layout::PaintFragment::Image(_) => profile.image += 1,
                 moli_layout::PaintFragment::SvgImage(_) => profile.svg_image += 1,
+                moli_layout::PaintFragment::BackdropFilter { .. }
+                | moli_layout::PaintFragment::BackdropRoot => {}
             }
         }
         profile
@@ -360,7 +362,18 @@ impl PageVm {
         }
 
         let raster_started = profile_enabled.then(Instant::now);
-        let mut raster = moli_paint::raster_snapshot(&snapshot)?;
+        let moli_paint::RasterOutput {
+            image: mut raster,
+            diagnostics,
+        } = moli_paint::raster_snapshot_with_diagnostics(&snapshot)?;
+        for diagnostic in diagnostics {
+            tracing::warn!(
+                target: "moli_paint",
+                code = %diagnostic.code,
+                "{}",
+                diagnostic.message
+            );
+        }
         let raster_us = raster_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();

@@ -999,3 +999,241 @@ document.body.innerHTML = '<div id=a>A</div><div id=b>B</div><div id=c>C</div>';
     .await
     .expect("text stroke fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn backdrop_filter_projects_a_fragment_inside_the_elements_own_layers() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/backdrop-filter.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = '<style>html,body{margin:0}div{position:absolute;width:20px;height:20px}#glass{left:0;opacity:.5;filter:invert(1);backdrop-filter:blur(3px) drop-shadow(1px 1px red) saturate(2)}#plain{left:30px;backdrop-filter:grayscale(1)}</style>';
+document.body.innerHTML = '<div id=glass></div><div id=plain></div>';
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(60, 30, 1.0))?
+            .expect("backdrop fixture must retain a layout root");
+        let codes: Vec<_> = snapshot
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect();
+        assert!(codes.contains(&"backdrop-filter-drop-shadow-unsupported"), "{codes:?}");
+        assert!(!codes.contains(&"backdrop-filter-unsupported"), "{codes:?}");
+
+        let backdrops: Vec<_> = snapshot
+            .fragments
+            .iter()
+            .enumerate()
+            .filter_map(|(index, fragment)| match fragment {
+                moli_layout::PaintFragment::BackdropFilter {
+                    filters,
+                    own_scopes,
+                    ..
+                } => Some((index, filters.clone(), *own_scopes)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(backdrops.len(), 2);
+        let (glass, filters, own_scopes) = &backdrops[0];
+        assert_eq!(
+            filters,
+            &vec![
+                moli_layout::PaintFilter::Blur(3.0),
+                moli_layout::PaintFilter::Saturate(2.0),
+            ]
+        );
+        // Its own opacity layer wraps the backdrop ...
+        assert_eq!(*own_scopes, 1);
+        assert!(matches!(
+            snapshot.fragments[glass - 1],
+            moli_layout::PaintFragment::PushLayer { opacity, filter: None, .. } if opacity == 0.5
+        ));
+        // ... then it becomes a Backdrop Root for its descendants, and only
+        // then does its own filter layer start (known limitation).
+        assert!(matches!(
+            snapshot.fragments[glass + 1],
+            moli_layout::PaintFragment::PushLayer { filter: None, .. }
+        ));
+        assert!(matches!(
+            snapshot.fragments[glass + 2],
+            moli_layout::PaintFragment::BackdropRoot
+        ));
+        assert!(matches!(
+            snapshot.fragments[glass + 3],
+            moli_layout::PaintFragment::PushLayer {
+                filter: Some(moli_layout::PaintFilter::Invert(_)),
+                ..
+            }
+        ));
+        assert_eq!(backdrops[1].1, vec![moli_layout::PaintFilter::Grayscale(1.0)]);
+        assert_eq!(backdrops[1].2, 0);
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .expect("backdrop filter fixture should run");
+}
+
+/// Renders `body` over a red canvas at 120x60 and returns the RGBA at `(x, y)`
+/// samples plus the projected snapshot.
+async fn backdrop_fixture_pixels(
+    css: &str,
+    body: &str,
+    samples: &[(u32, u32)],
+) -> anyhow::Result<(Vec<[u8; 4]>, moli_layout::PaintSnapshot)> {
+    let loader =
+        crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+    let mut page_vm = test_page_vm_with_loader_and_document_url(
+        &loader,
+        Vec::new(),
+        Url::parse("https://example.com/backdrop-roots.html")?,
+    );
+    page_vm.vm_mut().eval(&format!(
+        r#"
+document.head.innerHTML = `<style>html,body{{margin:0;background:rgb(255,0,0)}}div{{position:absolute}}{css}</style>`;
+document.body.innerHTML = `{body}`;
+'installed'
+"#
+    ))?;
+    page_vm.vm_mut().sync_live_document_style_sources();
+    let snapshot = page_vm
+        .vm_mut()
+        .screenshot_layout_snapshot(moli_layout::PaintViewport::new(120, 60, 1.0))?
+        .expect("backdrop fixture must retain a layout root");
+    let image = moli_paint::raster_snapshot(&snapshot)?;
+    let pixels = samples
+        .iter()
+        .map(|&(x, y)| {
+            let offset = ((y * image.width + x) * 4) as usize;
+            [
+                image.rgba[offset],
+                image.rgba[offset + 1],
+                image.rgba[offset + 2],
+                image.rgba[offset + 3],
+            ]
+        })
+        .collect();
+    Ok((pixels, snapshot))
+}
+
+fn backdrop_fragment_count(snapshot: &moli_layout::PaintSnapshot) -> usize {
+    snapshot
+        .fragments
+        .iter()
+        .filter(|fragment| matches!(fragment, moli_layout::PaintFragment::BackdropFilter { .. }))
+        .count()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn backdrop_filter_is_not_painted_for_visibility_hidden_elements() {
+    run_page_vm_async_test(async move {
+        // invert(1) turns the red canvas cyan wherever a backdrop is painted.
+        let (pixels, snapshot) = backdrop_fixture_pixels(
+            "#glass{left:10px;top:10px;width:40px;height:40px;backdrop-filter:invert(1)}",
+            // A visible descendant keeps the hidden element's stacking context
+            // in the paint plan, which is where its backdrop used to leak.
+            "<div id=glass style='visibility:hidden'><div style='visibility:visible;left:0;top:0;width:4px;height:4px;background:rgb(0,0,255)'></div></div>",
+            &[(30, 30)],
+        )
+        .await?;
+        assert_eq!(backdrop_fragment_count(&snapshot), 0);
+        assert_eq!(pixels[0], [255, 0, 0, 255]);
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .expect("hidden backdrop fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn backdrop_filter_is_clipped_by_ancestor_overflow() {
+    run_page_vm_async_test(async move {
+        let (pixels, snapshot) = backdrop_fixture_pixels(
+            "#box{left:10px;top:10px;width:40px;height:40px;overflow:hidden}#glass{left:0;top:0;width:100px;height:40px;backdrop-filter:invert(1)}",
+            "<div id=box><div id=glass></div></div>",
+            &[(30, 30), (80, 30)],
+        )
+        .await?;
+        // Inverted inside the overflow box, untouched outside it.
+        assert_eq!(pixels[0], [0, 255, 255, 255]);
+        assert_eq!(pixels[1], [255, 0, 0, 255]);
+        // The clip wraps the backdrop and counts among the scopes it skips.
+        let own_scopes = snapshot
+            .fragments
+            .iter()
+            .find_map(|fragment| match fragment {
+                moli_layout::PaintFragment::BackdropFilter { own_scopes, .. } => Some(*own_scopes),
+                _ => None,
+            })
+            .expect("one backdrop fragment");
+        assert!(own_scopes >= 1, "{own_scopes}");
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .expect("overflow backdrop fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn backdrop_filter_ancestor_is_a_backdrop_root_for_descendant_backdrops() {
+    run_page_vm_async_test(async move {
+        // The parent's backdrop-filter is a Backdrop Root, so the larger child
+        // reads only the parent's content: nothing is inverted outside it.
+        let (pixels, snapshot) = backdrop_fixture_pixels(
+            "#parent{left:10px;top:10px;width:40px;height:40px;backdrop-filter:brightness(1)}#child{left:0;top:0;width:100px;height:40px;backdrop-filter:invert(1)}",
+            "<div id=parent><div id=child></div></div>",
+            &[(30, 30), (80, 30)],
+        )
+        .await?;
+        assert_eq!(backdrop_fragment_count(&snapshot), 2);
+        assert_eq!(pixels[1], [255, 0, 0, 255]);
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .expect("nested backdrop fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn clip_path_ancestor_is_a_backdrop_root_for_descendant_backdrops() {
+    run_page_vm_async_test(async move {
+        // Inside the clip-path element the child's backdrop is that element's
+        // own (empty) content, so the red canvas behind it is not inverted.
+        let (pixels, _) = backdrop_fixture_pixels(
+            "#parent{left:10px;top:10px;width:40px;height:40px;clip-path:inset(0)}#child{left:0;top:0;width:40px;height:40px;backdrop-filter:invert(1)}",
+            "<div id=parent><div id=child></div></div>",
+            &[(30, 30)],
+        )
+        .await?;
+        assert_eq!(pixels[0], [255, 0, 0, 255]);
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .expect("clip-path backdrop fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn documents_without_backdrop_filter_emit_no_backdrop_root_markers() {
+    run_page_vm_async_test(async move {
+        let (_, snapshot) = backdrop_fixture_pixels(
+            "#parent{left:10px;top:10px;width:40px;height:40px;clip-path:inset(0)}",
+            "<div id=parent></div>",
+            &[(30, 30)],
+        )
+        .await?;
+        assert!(
+            !snapshot
+                .fragments
+                .iter()
+                .any(|fragment| matches!(fragment, moli_layout::PaintFragment::BackdropRoot))
+        );
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .expect("marker-free fixture should run");
+}

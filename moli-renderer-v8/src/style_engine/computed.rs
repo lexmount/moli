@@ -1408,7 +1408,7 @@ fn populate_inline_style_attributes_for_resolution(
             let declarations = parse_style_attribute(
                 &style_attribute,
                 &url_data,
-                None,
+                Some(&super::filter_diagnostics::FILTER_PARSE_DIAGNOSTICS),
                 quirks_mode,
                 CssRuleType::Style,
             );

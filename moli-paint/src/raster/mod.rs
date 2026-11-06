@@ -9,6 +9,7 @@
 
 //! Vello CPU pixel rendering, RGBA readback and bounded software-filter surfaces.
 
+mod backdrop;
 mod filters;
 #[cfg(test)]
 mod tests;
@@ -20,8 +21,9 @@ use crate::{PaintError, RasterImage};
 use anyrender::ImageRenderer;
 use anyrender::PaintScene;
 use anyrender_vello_cpu::VelloCpuImageRenderer;
+use backdrop::{BackdropCache, StreamMode};
 use filters::{apply_software_color_filter, is_software_color_filter};
-use moli_layout::{PaintCaptureSurface, PaintColor, PaintFragment, PaintSnapshot};
+use moli_layout::{PaintCaptureSurface, PaintColor, PaintDiagnostic, PaintFragment, PaintSnapshot};
 use peniko::kurbo::{Affine, Rect};
 use peniko::{
     Blob, Extend, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality,
@@ -29,8 +31,8 @@ use peniko::{
 };
 use std::sync::Arc;
 
-/// Maximum estimated RGBA bytes simultaneously owned by the output and nested
-/// filter surfaces in one raster call.
+/// Maximum estimated RGBA bytes simultaneously owned by the output, nested
+/// filter surfaces, and backdrop-filter captures in one raster call.
 pub const MAX_TRANSIENT_RASTER_BYTES: usize = 256 * 1024 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RasterDimensions {
@@ -39,22 +41,74 @@ struct RasterDimensions {
     byte_len: usize,
 }
 
+/// Raster pixels plus diagnostics for effects the raster backend degraded.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RasterOutput {
+    pub image: RasterImage,
+    /// Backend-side fallbacks, in addition to `PaintSnapshot::diagnostics`.
+    pub diagnostics: Vec<PaintDiagnostic>,
+}
+
 /// Rasterizes an owned snapshot to row-major, straight-alpha RGBA8 pixels with Vello CPU.
 pub fn raster_snapshot(snapshot: &PaintSnapshot) -> Result<RasterImage, PaintError> {
+    raster_snapshot_with_diagnostics(snapshot).map(|output| output.image)
+}
+
+/// Like [`raster_snapshot`], also returning raster-backend diagnostics such as
+/// `backdrop-filter-budget-exceeded`.
+pub fn raster_snapshot_with_diagnostics(
+    snapshot: &PaintSnapshot,
+) -> Result<RasterOutput, PaintError> {
+    raster_with_budget(snapshot, MAX_TRANSIENT_RASTER_BYTES)
+}
+
+/// Read-only inputs shared by the final pass and backdrop captures.
+struct RasterContext<'a> {
+    snapshot: &'a PaintSnapshot,
+    scale: f64,
+    dimensions: RasterDimensions,
+}
+
+fn raster_with_budget(
+    snapshot: &PaintSnapshot,
+    max_bytes: usize,
+) -> Result<RasterOutput, PaintError> {
     let dimensions = validate_dimensions(snapshot.surface)?;
     let stream = validate_fragment_stream(snapshot)?;
-    validate_resource_budget(dimensions, stream)?;
-    let scale = f64::from(snapshot.surface.device_scale);
+    validate_resource_budget_within(dimensions, stream, max_bytes)?;
+    let ctx = RasterContext {
+        snapshot,
+        scale: f64::from(snapshot.surface.device_scale),
+        dimensions,
+    };
 
+    let mut diagnostics = Vec::new();
+    let mut backdrops = if stream.backdrop_count == 0 {
+        BackdropCache::default()
+    } else {
+        BackdropCache::plan(
+            &ctx,
+            backdrop_allowance(dimensions, stream, max_bytes),
+            &mut diagnostics,
+        )
+    };
     let mut renderer = VelloCpuImageRenderer::new(dimensions.width, dimensions.height);
     let mut rgba = Vec::new();
     renderer.render_to_vec(
         |scene| {
             paint_canvas(scene, snapshot.canvas_color, dimensions);
-            paint_fragment_stream(scene, snapshot, &snapshot.fragments, scale, dimensions);
+            paint_fragment_stream(
+                scene,
+                &ctx,
+                &snapshot.fragments,
+                0,
+                &mut backdrops,
+                StreamMode::Final,
+            );
         },
         &mut rgba,
     );
+    drop(backdrops);
 
     if rgba.len() != dimensions.byte_len {
         return Err(PaintError::UnexpectedBufferLength {
@@ -64,10 +118,13 @@ pub fn raster_snapshot(snapshot: &PaintSnapshot) -> Result<RasterImage, PaintErr
     }
     unpremultiply_rgba(&mut rgba);
 
-    Ok(RasterImage {
-        width: dimensions.width,
-        height: dimensions.height,
-        rgba,
+    Ok(RasterOutput {
+        image: RasterImage {
+            width: dimensions.width,
+            height: dimensions.height,
+            rgba,
+        },
+        diagnostics,
     })
 }
 
@@ -86,22 +143,57 @@ fn unpremultiply_rgba(rgba: &mut [u8]) {
     }
 }
 
+#[cfg(test)]
 fn validate_resource_budget(
     dimensions: RasterDimensions,
     stream: PaintStreamMetrics,
 ) -> Result<(), PaintError> {
+    validate_resource_budget_within(dimensions, stream, MAX_TRANSIENT_RASTER_BYTES)
+}
+
+/// Surfaces owned by the output and nested filters, excluding backdrops.
+fn base_surface_bytes(dimensions: RasterDimensions, stream: PaintStreamMetrics) -> usize {
     // Backend filters may crop allocations to content bounds, whereas the
     // software color-filter fallback uses a complete surface. Charging every
     // nested filter as a complete surface is conservative and backend-neutral.
     let surface_count = stream.max_filter_depth.saturating_add(1);
-    let required_bytes = dimensions.byte_len.saturating_mul(surface_count);
-    if required_bytes > MAX_TRANSIENT_RASTER_BYTES {
+    dimensions.byte_len.saturating_mul(surface_count)
+}
+
+fn validate_resource_budget_within(
+    dimensions: RasterDimensions,
+    stream: PaintStreamMetrics,
+    max_bytes: usize,
+) -> Result<(), PaintError> {
+    let required_bytes = base_surface_bytes(dimensions, stream);
+    if required_bytes > max_bytes {
         return Err(PaintError::TransientRasterBudgetExceeded {
             required_bytes,
-            max_bytes: MAX_TRANSIENT_RASTER_BYTES,
+            max_bytes,
         });
     }
     Ok(())
+}
+
+/// Bytes left for cached backdrop regions. Backdrops degrade instead of
+/// failing the capture: regions beyond this allowance are skipped.
+///
+/// A capture is resolved while the final pass may be inside every nested
+/// filter surface, and renders its own full surface plus up to the same
+/// filter depth again; blur source, output, expanded pixmap and scratch
+/// buffers are charged by the stream metrics.
+fn backdrop_allowance(
+    dimensions: RasterDimensions,
+    stream: PaintStreamMetrics,
+    max_bytes: usize,
+) -> usize {
+    let capture = base_surface_bytes(dimensions, stream);
+    let blur = stream.max_backdrop_workspace_bytes;
+    max_bytes.saturating_sub(
+        base_surface_bytes(dimensions, stream)
+            .saturating_add(capture)
+            .saturating_add(blur),
+    )
 }
 
 fn validate_dimensions(surface: PaintCaptureSurface) -> Result<RasterDimensions, PaintError> {
@@ -175,14 +267,21 @@ fn paint_canvas(
 
 fn paint_fragment_stream(
     scene: &mut impl PaintScene,
-    snapshot: &PaintSnapshot,
+    ctx: &RasterContext<'_>,
     fragments: &[PaintFragment],
-    scale: f64,
-    dimensions: RasterDimensions,
+    base: usize,
+    backdrops: &mut BackdropCache,
+    mode: StreamMode,
 ) {
+    let (snapshot, scale, dimensions) = (ctx.snapshot, ctx.scale, ctx.dimensions);
     let mut index = 0usize;
     while index < fragments.len() {
         let fragment = &fragments[index];
+        if let PaintFragment::BackdropFilter { .. } = fragment {
+            backdrops.paint(scene, ctx, base + index, mode);
+            index += 1;
+            continue;
+        }
         let isolated_filter = match fragment {
             PaintFragment::PushLayer {
                 filter: Some(filter),
@@ -219,10 +318,11 @@ fn paint_fragment_stream(
             |filtered_scene| {
                 paint_fragment_stream(
                     filtered_scene,
-                    snapshot,
+                    ctx,
                     &fragments[index + 1..end],
-                    scale,
-                    dimensions,
+                    base + index + 1,
+                    backdrops,
+                    mode,
                 );
             },
             &mut filtered_rgba,
