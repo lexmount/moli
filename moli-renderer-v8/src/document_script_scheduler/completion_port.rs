@@ -40,6 +40,7 @@ mod tests {
 
     fn outcome() -> PreparedScriptSourceLoadOutcome {
         PreparedScriptSourceLoadOutcome {
+            fetch_timing: None,
             source_result: Ok("ready".to_owned()),
             source_bytes: None,
             network_result: None,

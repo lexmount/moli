@@ -1781,6 +1781,7 @@ pub(super) enum ParseTimeLiveExecution {
     PageOwnedDocumentScript {
         lane: crate::document_script_scheduler::DocumentScriptExecutionLane,
         script: Box<PreparedScript>,
+        source_network_result: Option<crate::types::SharedNavigationResponseResult>,
         load_delay_binding: Option<crate::frame_owner_model::MainDocumentScriptLoadDelayLease>,
     },
     PageOwnedWork {
@@ -3816,6 +3817,7 @@ impl PageVm {
                     ParseTimeLiveExecution::PageOwnedDocumentScript {
                         lane,
                         script,
+                        source_network_result,
                         load_delay_binding,
                     } => {
                         let execution =
@@ -3827,6 +3829,7 @@ impl PageVm {
                                 crate::document_script_scheduler::PageOwnedDocumentScriptWork::parser_async_script(
                                     lane,
                                     *script,
+                                    source_network_result,
                                     load_delay_binding,
                                 ),
                             )

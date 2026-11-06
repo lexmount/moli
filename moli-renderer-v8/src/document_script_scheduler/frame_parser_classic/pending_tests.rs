@@ -293,6 +293,7 @@ fn source_failure_payload(
 
 fn external_script(script_handle: DomHandle, script_url: Url) -> PreparedScript {
     PreparedScript {
+        source_fetch_timing: None,
         resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position: 0,

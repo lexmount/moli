@@ -196,9 +196,12 @@ impl<
     ) {
         match task {
             ParseTimeDocumentScriptTask::ClassicAsyncScript(script) => {
-                let (script, load_delay_binding) = script.into_parts();
-                self.async_fallback_queue
-                    .push_with_load_delay_binding(script, load_delay_binding);
+                let (script, network_result, load_delay_binding) = script.into_parts();
+                self.async_fallback_queue.push_with_network_result(
+                    script,
+                    network_result,
+                    load_delay_binding,
+                );
             }
             ParseTimeDocumentScriptTask::AsyncScriptFailure(task) => {
                 self.async_fallback_queue.push_failed_parse_time_task(

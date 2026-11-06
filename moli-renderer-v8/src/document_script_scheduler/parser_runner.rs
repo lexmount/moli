@@ -124,6 +124,7 @@ impl<Owner: Copy> ParserDeferredClassicSourceLoadRequest<Owner> {
         ParserDeferredClassicSourceLoadCompletion::new(
             self.pending_script_id,
             PreparedScriptSourceLoadOutcome {
+                fetch_timing: None,
                 source_result: Err(message.into()),
                 source_bytes: None,
                 network_result: None,
