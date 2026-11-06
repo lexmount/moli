@@ -1929,6 +1929,9 @@ impl PageScriptHost {
         use crate::types::AsyncSubresourceFetchEventTarget;
 
         match target {
+            AsyncSubresourceFetchEventTarget::ResourceTiming { target } => {
+                self.window_execution_context_identity_is_current(target)
+            }
             AsyncSubresourceFetchEventTarget::ResponseLinks { owner, loader } => {
                 self.window_document_owner_is_current(owner)
                     && self
