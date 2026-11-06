@@ -242,7 +242,7 @@ pub async fn run_cli_with_config<W: Write>(
             finalize_fetch_browser(browser, args.cookie_jar.as_deref(), stdout, result)
                 .map_err(|error| with_fetch_context(error, &args.url))?;
         }
-        Commands::Serve(_) => {
+        Commands::Serve(args) => {
             let additional_cookies = cookie_header_from_args(&config)?;
             config
                 .browser
@@ -265,6 +265,15 @@ pub async fn run_cli_with_config<W: Write>(
                 storage_partition,
                 NavigationRuntimeConfig::from(&config.browser),
             );
+            #[cfg(unix)]
+            if args.remote_debugging_pipe {
+                let (input, output) = take_inherited_pipe_descriptors()?;
+                server
+                    .serve_pipe(input, output)
+                    .await
+                    .context("protocol pipe failed")?;
+                return Ok(());
+            }
             server.serve().await.context("protocol server failed")?;
         }
         Commands::Import(args) => {
@@ -520,6 +529,27 @@ fn finalize_fetch_browser<W: Write>(
     // export failure does not replace the transfer's result.
     drop(browser);
     result
+}
+
+/// Claims descriptors 3 and 4, which Chromium's pipe protocol makes the parent
+/// pass to the child, as the CDP input and output.
+#[cfg(unix)]
+fn take_inherited_pipe_descriptors() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+
+    for fd in [3, 4] {
+        // SAFETY: `fstat` only writes to the zeroed buffer it is given.
+        let mut status: libc::stat = unsafe { std::mem::zeroed() };
+        let kind =
+            (unsafe { libc::fstat(fd, &mut status) } == 0).then_some(status.st_mode & libc::S_IFMT);
+        anyhow::ensure!(
+            matches!(kind, Some(libc::S_IFIFO | libc::S_IFSOCK)),
+            "--remote-debugging-pipe needs the parent to pass pipes as file descriptors 3 and 4"
+        );
+    }
+    // SAFETY: both descriptors are open pipes or sockets (checked above) and
+    // this runs once per process, so each gets exactly one owner.
+    Ok(unsafe { (OwnedFd::from_raw_fd(3), OwnedFd::from_raw_fd(4)) })
 }
 
 #[cfg(test)]
