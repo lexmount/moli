@@ -2195,6 +2195,7 @@ mod credential_signals;
 
 mod audio_param_native_receivers;
 
+mod close_watchers;
 mod css_keyframes_mutations;
 mod css_keyframes_receivers;
 mod device_events;
