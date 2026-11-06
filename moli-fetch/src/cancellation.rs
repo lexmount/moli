@@ -100,6 +100,8 @@ impl ResponseProgress {
 /// Native response boundaries shared with observers of the selected transfer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FetchResponseTiming {
+    service_worker_started_at: Option<Instant>,
+    service_worker_dispatched_at: Option<Instant>,
     request_started_at: Option<Instant>,
     first_interim_response_started_at: Option<Instant>,
     body_bytes_received: bool,
@@ -108,6 +110,14 @@ pub struct FetchResponseTiming {
 }
 
 impl FetchResponseTiming {
+    pub fn service_worker_started_at(self) -> Option<Instant> {
+        self.service_worker_started_at
+    }
+
+    pub fn service_worker_dispatched_at(self) -> Option<Instant> {
+        self.service_worker_dispatched_at
+    }
+
     pub fn body_bytes_received(self) -> bool {
         self.body_bytes_received
     }
@@ -138,6 +148,8 @@ impl CachedResponseBodyTiming {
 #[derive(Debug, Default)]
 struct FetchLifecycleState {
     cancellation: CancellationToken,
+    // Worker readiness belongs to this request rather than a selected HTTP hop.
+    service_worker_timing: Mutex<(Option<Instant>, Option<Instant>)>,
     // This lock protects selection, while the selected token arbitrates
     // transport completion and consumer cancellation without taking the lock.
     response_progress: Mutex<ResponseProgress>,
@@ -251,7 +263,32 @@ impl FetchCancelHandle {
     }
 
     pub fn response_timing(&self) -> FetchResponseTiming {
-        *self.response_progress().inner.timing.lock()
+        let mut timing = *self.response_progress().inner.timing.lock();
+        let worker = self.state.service_worker_timing.lock();
+        timing.service_worker_started_at = worker.0;
+        timing.service_worker_dispatched_at = worker.1;
+        timing
+    }
+
+    /// Called after selecting a controlling worker, before activation/startup.
+    pub fn mark_service_worker_start(&self) {
+        if !self.is_cancelled() {
+            self.state
+                .service_worker_timing
+                .lock()
+                .0
+                .get_or_insert_with(Instant::now);
+        }
+    }
+
+    /// Called when the selected worker is ready to receive its fetch event.
+    pub fn mark_service_worker_dispatch(&self) {
+        if !self.is_cancelled() {
+            let mut timing = self.state.service_worker_timing.lock();
+            if timing.0.is_some() {
+                timing.1.get_or_insert_with(Instant::now);
+            }
+        }
     }
 
     #[cfg(test)]
@@ -283,6 +320,78 @@ impl FetchCancelHandle {
 mod tests {
     use super::FetchCancelHandle;
     use std::time::Instant;
+
+    #[test]
+    fn service_worker_clock_survives_response_selection_without_leaking_to_hops() {
+        let request = FetchCancelHandle::new();
+        request.mark_service_worker_start();
+        let start = request
+            .response_timing()
+            .service_worker_started_at()
+            .unwrap();
+        assert!(
+            request
+                .response_timing()
+                .service_worker_dispatched_at()
+                .is_none()
+        );
+        let hop = request.child_for_subrequest();
+        assert!(hop.response_timing().service_worker_started_at().is_none());
+        hop.mark_response_started();
+        request.mark_service_worker_dispatch();
+        let dispatch = request
+            .response_timing()
+            .service_worker_dispatched_at()
+            .unwrap();
+        request.adopt_response_progress(&hop);
+        let selected = request.response_timing();
+        assert_eq!(selected.service_worker_started_at(), Some(start));
+        assert_eq!(selected.service_worker_dispatched_at(), Some(dispatch));
+        assert_eq!(
+            selected.response_started_at(),
+            hop.response_timing().response_started_at()
+        );
+        assert!(start <= dispatch && dispatch <= Instant::now());
+        request.begin_response_progress();
+        request.mark_service_worker_start();
+        request.mark_service_worker_dispatch();
+        assert_eq!(
+            request.response_timing().service_worker_started_at(),
+            Some(start)
+        );
+        assert_eq!(
+            request.response_timing().service_worker_dispatched_at(),
+            Some(dispatch)
+        );
+        assert!(request.response_timing().response_started_at().is_none());
+    }
+
+    #[test]
+    fn cancelled_or_unselected_worker_dispatch_does_not_create_a_clock() {
+        let request = FetchCancelHandle::new();
+        request.mark_service_worker_dispatch();
+        assert!(
+            request
+                .response_timing()
+                .service_worker_dispatched_at()
+                .is_none()
+        );
+        request.cancel();
+        request.mark_service_worker_start();
+        request.mark_service_worker_dispatch();
+        assert!(
+            request
+                .response_timing()
+                .service_worker_started_at()
+                .is_none()
+        );
+        assert!(
+            request
+                .response_timing()
+                .service_worker_dispatched_at()
+                .is_none()
+        );
+    }
 
     #[test]
     fn response_completion_commit_is_shared_and_resettable() {
