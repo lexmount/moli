@@ -4,6 +4,7 @@ mod error_reporting_guard;
 mod geometry_matrix_constructor_union;
 mod indexed_db_gc;
 
+mod exception_constructor_strings;
 mod native_exception_data;
 
 mod event_target_prototype;
