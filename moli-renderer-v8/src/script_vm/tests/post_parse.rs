@@ -63,6 +63,7 @@ fn test_post_parse_lifecycle_driver_for(
 
 fn ready_dynamic_runtime_script(position: usize) -> PreparedScript {
     PreparedScript {
+        source_fetch_timing: None,
         resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position,
@@ -205,6 +206,7 @@ async fn muted_classic_script_exceptions_expose_only_cross_origin_safe_details()
             source.to_owned(),
             None,
             true,
+            None,
         );
 
         let outcome = vm
@@ -287,6 +289,7 @@ fn post_parse_owner_step_for_lifecycle_work(
 
 fn ready_dynamic_runtime_module_script(position: usize, node_id: NodeId) -> PreparedScript {
     PreparedScript {
+        source_fetch_timing: None,
         resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position,
@@ -339,6 +342,7 @@ async fn external_script_redirect_final_url_obeys_script_src_csp() {
     )
     .expect("install CSP listener");
     let script = PreparedScript {
+        source_fetch_timing: None,
         resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position: 1,
@@ -4026,6 +4030,7 @@ fn runtime_owned_inline_importmap_bypasses_dcl_gate() {
         .set_script_handle_waits_until_dom_content_loaded(&handle);
 
     let script = PreparedScript {
+        source_fetch_timing: None,
         resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position: 1,
@@ -4257,6 +4262,7 @@ fn document_write_owned_inline_normal_defers_already_started_until_execution_wit
     .finish()
     .expect("script vm finish");
     let mut prepared = PreparedScript {
+        source_fetch_timing: None,
         resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position: 0,

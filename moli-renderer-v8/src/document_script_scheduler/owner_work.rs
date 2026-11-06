@@ -152,13 +152,14 @@ impl PageOwnedDocumentScriptWork {
     pub(crate) fn parser_async_script(
         lane: DocumentScriptExecutionLane,
         script: PreparedScript,
+        source_network_result: Option<SharedNavigationResponseResult>,
         load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
     ) -> Self {
         Self::Script {
             lane,
             script: Box::new(script),
             runtime_script_claim: None,
-            source_network_result: None,
+            source_network_result,
             load_delay_binding,
         }
     }
@@ -347,7 +348,10 @@ fn page_owned_document_script_work_from_source_load_outcome(
         source_bytes,
         network_result,
         muted_errors,
+        fetch_timing,
     } = outcome;
+    let mut script = script;
+    script.source_fetch_timing = fetch_timing.clone();
     match source_result {
         Ok(source) => PageOwnedDocumentScriptWork::Script {
             lane,
@@ -356,6 +360,7 @@ fn page_owned_document_script_work_from_source_load_outcome(
                 source,
                 source_bytes,
                 muted_errors,
+                fetch_timing,
             )),
             runtime_script_claim,
             source_network_result: network_result,

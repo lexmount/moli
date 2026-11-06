@@ -186,6 +186,7 @@ mod tests {
         DynamicScriptEntry {
             id: DynamicScriptOwnerId::from_u64(id),
             script: PreparedScript {
+                source_fetch_timing: None,
                 resource_timing_initiator_url: None,
                 document_referrer_policy: None,
                 position,

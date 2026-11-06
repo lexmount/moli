@@ -73,6 +73,9 @@ mod lifecycle_task_order;
 #[path = "scripts/post_parse_async.rs"]
 mod post_parse_async;
 
+#[path = "scripts/async_resource_timing.rs"]
+mod async_resource_timing;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,

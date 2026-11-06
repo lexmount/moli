@@ -2760,6 +2760,7 @@ mod tests {
         url: Url,
     ) -> PreparedScript {
         PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: node_id.index(),

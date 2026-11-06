@@ -725,6 +725,7 @@ mod tests {
         let script_url = url::Url::parse("https://child-frame-source.test/root.mjs")
             .expect("parser module URL should parse");
         let script = PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: 3,
@@ -760,6 +761,7 @@ mod tests {
         let document_url = url::Url::parse("https://child-frame-source.test/document")
             .expect("inline parser module document URL should parse");
         let script = PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: 3,

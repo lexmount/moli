@@ -1425,6 +1425,7 @@ async fn prepared_parser_inline_script_csp_blocks_before_v8_execution_and_report
 
     let document_url = Url::parse("https://parser-inline-csp.test/page.html").unwrap();
     let script = PreparedScript {
+        source_fetch_timing: None,
         resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position: 0,
@@ -1521,6 +1522,7 @@ document.addEventListener("securitypolicyviolation", event => {
 
         let script_url = Url::parse(script_url).expect("external script URL");
         let script = PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: index,

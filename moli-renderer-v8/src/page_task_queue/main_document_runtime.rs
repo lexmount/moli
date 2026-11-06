@@ -925,6 +925,7 @@ mod tests {
     fn prepared_script() -> PreparedScript {
         let url = Url::parse("https://main-runtime.test/async.js").expect("script URL");
         PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: 1,

@@ -108,7 +108,9 @@ impl ResolvedDeferPhaseScript {
             source_bytes,
             network_result,
             muted_errors,
+            fetch_timing,
         } = outcome;
+        self.script.source_fetch_timing = fetch_timing.clone();
         match source_result {
             Ok(source) => {
                 self.script = prepared_script_with_loaded_source(
@@ -116,6 +118,7 @@ impl ResolvedDeferPhaseScript {
                     source,
                     source_bytes,
                     muted_errors,
+                    fetch_timing,
                 );
                 self.classic_source_state = ParserDeferredClassicSourceState::Ready(network_result);
             }

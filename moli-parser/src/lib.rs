@@ -38,7 +38,8 @@ pub use live_target::{
 pub use script_planning::{
     ParserPlanningReadView, ParserScriptRead, PrepareScriptOutcome, PreparedImportMap,
     PreparedImportMapSource, PreparedScript, ScriptFetchMetadata, ScriptFilterSkipReason,
-    ScriptSource, build_prepared_import_map, build_prepared_script, classify_parser_script,
+    ScriptSource, ScriptSourceFetchTiming, build_prepared_import_map, build_prepared_script,
+    classify_parser_script,
 };
 pub use xml::{ParsedXmlFragment, XmlFragmentParseError, XmlParser};
 pub use xml_stream::XmlDocumentStream;

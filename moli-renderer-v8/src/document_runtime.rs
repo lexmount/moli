@@ -3671,6 +3671,7 @@ mod tests {
         let script_work = PageOwnedDocumentScriptWork::script(
             DocumentScriptExecutionLane::ClassicDefer,
             crate::planning::PreparedScript {
+                source_fetch_timing: None,
                 resource_timing_initiator_url: None,
                 document_referrer_policy: None,
                 position: 0,

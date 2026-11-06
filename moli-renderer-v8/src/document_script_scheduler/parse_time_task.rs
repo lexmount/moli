@@ -26,6 +26,7 @@ pub(crate) enum ParseTimeDocumentScriptTask {
 #[derive(Debug)]
 pub(crate) struct ParseTimeAsyncScript {
     script: PreparedScript,
+    source_network_result: Option<SharedNavigationResponseResult>,
     load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
 }
 
@@ -58,9 +59,14 @@ impl ParseTimeAsyncCompletion {
 impl ParseTimeDocumentScriptTask {
     pub(super) fn classic_async_script(
         script: PreparedScript,
+        source_network_result: Option<SharedNavigationResponseResult>,
         load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
     ) -> Self {
-        Self::ClassicAsyncScript(ParseTimeAsyncScript::new(script, load_delay_binding))
+        Self::ClassicAsyncScript(ParseTimeAsyncScript::new(
+            script,
+            source_network_result,
+            load_delay_binding,
+        ))
     }
 
     pub(super) fn async_script_failure(
@@ -70,24 +76,26 @@ impl ParseTimeDocumentScriptTask {
         load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
     ) -> Self {
         Self::AsyncScriptFailure(ParseTimeAsyncScriptFailure {
-            script: ParseTimeAsyncScript::new(script, load_delay_binding),
+            script: ParseTimeAsyncScript::new(script, None, load_delay_binding),
             error,
             source_network_result,
         })
     }
     #[cfg(test)]
     pub(crate) fn classic_async_script_for_test(script: PreparedScript) -> Self {
-        Self::classic_async_script(script, None)
+        Self::classic_async_script(script, None, None)
     }
 }
 
 impl ParseTimeAsyncScript {
     fn new(
         script: PreparedScript,
+        source_network_result: Option<SharedNavigationResponseResult>,
         load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
     ) -> Self {
         Self {
             script,
+            source_network_result,
             load_delay_binding,
         }
     }
@@ -97,8 +105,18 @@ impl ParseTimeAsyncScript {
         &self.script
     }
 
-    pub(crate) fn into_parts(self) -> (PreparedScript, Option<MainDocumentScriptLoadDelayLease>) {
-        (self.script, self.load_delay_binding)
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        PreparedScript,
+        Option<SharedNavigationResponseResult>,
+        Option<MainDocumentScriptLoadDelayLease>,
+    ) {
+        (
+            self.script,
+            self.source_network_result,
+            self.load_delay_binding,
+        )
     }
 }
 
@@ -124,7 +142,7 @@ impl ParseTimeAsyncScriptFailure {
         Option<SharedNavigationResponseResult>,
         Option<MainDocumentScriptLoadDelayLease>,
     ) {
-        let (script, load_delay_binding) = self.script.into_parts();
+        let (script, _, load_delay_binding) = self.script.into_parts();
         (
             script,
             self.error,

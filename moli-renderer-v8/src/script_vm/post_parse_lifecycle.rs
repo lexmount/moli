@@ -2199,6 +2199,7 @@ impl ScriptVm {
     #[cfg(test)]
     pub(super) fn test_pending_runtime_source_load_script(&self) -> PreparedScript {
         PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: 0,
@@ -2251,6 +2252,7 @@ impl ScriptVm {
         self.document_runtime
             .bind_runtime_owned_script_handle_for_node(node_id, &host_script_handle);
         let script = PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: node_id.index(),
@@ -2881,7 +2883,6 @@ impl ScriptVm {
             request_url,
             request_initiator_type,
             None,
-            None,
             result,
         );
     }
@@ -2891,48 +2892,106 @@ impl ScriptVm {
         document_url: Url,
         request_url: Url,
         request_initiator_type: SubresourceRequestInitiatorType,
-        fetch_metadata: Option<&crate::planning::ScriptFetchMetadata>,
-        resource_timing_initiator_url: Option<&str>,
+        script: Option<&PreparedScript>,
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) {
-        let mut performance_entry =
+        let origin = self
+            ._context_host
+            .borrow()
+            .document_resource_loader_for_dispatch_scope(
+                crate::native_bridge::OwnerDispatchScope::Top,
+            )
+            .map(|loader| loader.fetch_context().request_origin());
+        let head = result.as_ref().ok().map(|response| response.head());
+        let readable = match (origin.as_ref(), head.as_ref()) {
+            (Some(origin), Some(head)) => {
+                let cors = script.filter(|script| {
+                    script.kind == crate::types::ScriptKind::Module
+                        || script.fetch_metadata.cross_origin.is_some()
+                });
+                let cors_readable = if let Some(script) = cors {
+                    crate::network_host::validate_cors_response_chain(
+                        origin,
+                        head,
+                        crate::planning::external_script_credentials_mode(
+                            script.kind,
+                            &script.fetch_metadata,
+                        ),
+                    )
+                    .is_ok()
+                } else {
+                    !head.url_list().has_cross_origin_url(origin)
+                };
+                cors_readable
+                    && head
+                        .preload_state
+                        .response_filter()
+                        .is_none_or(|filter| filter.is_readable())
+            }
+            _ => false,
+        };
+        let mut performance_entry = if let (Some(fetch), Some(origin)) = (
+            script.and_then(|script| script.source_fetch_timing.as_deref()),
+            origin.as_ref(),
+        ) {
+            let mut timing = crate::context_bootstrap::FetchResourceTiming::from_start(
+                "script",
+                fetch.started,
+                fetch.start_unix_millis,
+            );
+            if let Some(native) = fetch.native {
+                timing.observe_native_timing(native);
+            }
+            let entry = match (result, head.as_ref()) {
+                (Ok(response), Some(head)) => {
+                    if let Some(filter) = head.preload_state.response_filter() {
+                        timing.response(
+                            &request_url,
+                            origin,
+                            head,
+                            filter,
+                            response.body_bytes().len(),
+                        )
+                    } else if readable {
+                        timing.response(
+                            &request_url,
+                            origin,
+                            head,
+                            &moli_fetch::FetchResponseFilter::Basic,
+                            response.body_bytes().len(),
+                        )
+                    } else {
+                        timing.classic_script_response(
+                            &request_url,
+                            origin,
+                            head,
+                            response.body_bytes().len(),
+                        )
+                    }
+                }
+                _ => timing.failure(&request_url),
+            };
+            // Capture belongs to the source fetch. An owner or stylesheet gate
+            // may have delayed publication until well after the body ended.
+            let end = fetch
+                .native
+                .and_then(|native| native.response_end_at())
+                .unwrap_or(fetch.completed);
+            timing.completed_at(entry, end)
+        } else {
             crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
                 request_url.as_str(),
                 "script",
                 None,
                 result,
-            );
-        if let Ok(response) = result {
-            let origin = self
-                ._context_host
-                .borrow()
-                .document_resource_loader_for_dispatch_scope(
-                    crate::native_bridge::OwnerDispatchScope::Top,
-                )
-                .map(|loader| loader.fetch_context().request_origin());
-            if let Some(origin) = origin {
-                let head = response.head();
-                let readable = if let Some(metadata) =
-                    fetch_metadata.filter(|metadata| metadata.cross_origin.is_some())
-                {
-                    crate::network_host::validate_cors_response_chain(
-                        &origin,
-                        &head,
-                        crate::planning::external_script_credentials_mode(
-                            crate::types::ScriptKind::Classic,
-                            metadata,
-                        ),
-                    )
-                    .is_ok()
-                } else {
-                    !head.url_list().has_cross_origin_url(&origin)
-                };
-                let source = resource_timing_initiator_url.unwrap_or(document_url.as_str());
-                crate::context_bootstrap::ResourceTimingInitiator::from_captured_url(
-                    source.to_owned(),
-                )
-                .apply(&mut performance_entry, &head, readable);
-            }
+            )
+        };
+        if let Some(head) = head.as_ref() {
+            let source = script
+                .and_then(|script| script.resource_timing_initiator_url.as_deref())
+                .unwrap_or(document_url.as_str());
+            crate::context_bootstrap::ResourceTimingInitiator::from_captured_url(source.to_owned())
+                .apply(&mut performance_entry, head, readable);
         }
         self._context_host
             .borrow_mut()

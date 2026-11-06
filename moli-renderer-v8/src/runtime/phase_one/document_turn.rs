@@ -133,11 +133,12 @@ impl<'driver> DocumentTurnContext<'driver> {
     ) -> Result<PageTaskTurnResult> {
         let outcome = match task {
             ParseTimeDocumentScriptTask::ClassicAsyncScript(script) => {
-                let (script, load_delay_binding) = script.into_parts();
+                let (script, network_result, load_delay_binding) = script.into_parts();
                 execute_page_owned_document_script_turn_on_local_task(
                     page_vm,
                     DocumentScriptExecutionLane::ParseTimeAsync,
                     script,
+                    network_result,
                     load_delay_binding,
                 )
                 .await?

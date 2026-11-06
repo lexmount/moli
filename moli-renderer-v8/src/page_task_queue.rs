@@ -844,6 +844,7 @@ mod tests {
 
     fn prepared_script(position: usize) -> PreparedScript {
         PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position,
@@ -907,6 +908,7 @@ mod tests {
 
     fn source_load_outcome_ok(source: impl Into<String>) -> PreparedScriptSourceLoadOutcome {
         PreparedScriptSourceLoadOutcome {
+            fetch_timing: None,
             source_result: Ok(source.into()),
             source_bytes: None,
             network_result: None,

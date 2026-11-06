@@ -2147,6 +2147,7 @@ impl DynamicScriptOwner {
         let Some(entry) = queue.iter_mut().find(|entry| entry.id == completion.id) else {
             return false;
         };
+        entry.script.source_fetch_timing = completion.outcome.fetch_timing.clone();
         match completion.outcome.source_result.clone() {
             Ok(source) => {
                 entry.script = prepared_script_with_loaded_source(
@@ -2154,6 +2155,7 @@ impl DynamicScriptOwner {
                     source,
                     completion.outcome.source_bytes.clone(),
                     completion.outcome.muted_errors,
+                    completion.outcome.fetch_timing.clone(),
                 );
                 entry.ready_state = DynamicScriptReadyState::Ready {
                     order,
@@ -2249,6 +2251,7 @@ mod tests {
 
     fn prepared_script(position: usize, mode: ScriptMode) -> PreparedScript {
         PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position,
@@ -2332,6 +2335,7 @@ mod tests {
         DynamicScriptLoadCompletion {
             id: owner_id(id),
             outcome: PreparedScriptSourceLoadOutcome {
+                fetch_timing: None,
                 source_result: Ok(source.into()),
                 source_bytes: None,
                 network_result: None,
@@ -2344,6 +2348,7 @@ mod tests {
         DynamicScriptLoadCompletion {
             id: owner_id(id),
             outcome: PreparedScriptSourceLoadOutcome {
+                fetch_timing: None,
                 source_result: Err(error.into()),
                 source_bytes: None,
                 network_result: None,

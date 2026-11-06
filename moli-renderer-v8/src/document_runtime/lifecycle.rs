@@ -763,6 +763,7 @@ mod tests {
 
     fn prepared_script(position: usize, mode: ScriptMode) -> crate::planning::PreparedScript {
         crate::planning::PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position,

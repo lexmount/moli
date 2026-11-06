@@ -628,6 +628,7 @@ impl BufferedDocumentPreloadState {
                     source,
                     outcome.source_bytes,
                     outcome.muted_errors,
+                    outcome.fetch_timing,
                 );
                 ParserBlockingPreloadDisposition::Ready(AppliedPreloadedScriptSource {
                     network_result: script_preload_network_result(outcome.network_result),
@@ -706,6 +707,7 @@ impl BufferedDocumentPreloadState {
                         source,
                         outcome.source_bytes,
                         outcome.muted_errors,
+                        outcome.fetch_timing,
                     );
                     Some(AppliedPreloadedScriptSource {
                         network_result: script_preload_network_result(outcome.network_result),
@@ -1099,6 +1101,7 @@ impl BufferedScriptPreloadRequest {
 
     pub(crate) fn to_preload_script(&self) -> PreparedScript {
         PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             position: 0,
             node_id: crate::dom::NodeId::new(0),

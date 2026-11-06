@@ -31,6 +31,7 @@ pub(super) struct AsyncFallbackEntry {
     pub(super) load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
     pub(super) awaiting_completion: bool,
     pub(super) source_load: Option<SharedScriptSourceLoad>,
+    pub(super) source_network_result: Option<crate::types::SharedNavigationResponseResult>,
     pub(super) load_failure: Option<PreparedScriptSourceLoadOutcome>,
 }
 
@@ -320,11 +321,21 @@ impl AsyncFallbackQueue {
         script: PreparedScript,
         load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
     ) {
+        self.push_with_network_result(script, None, load_delay_binding);
+    }
+
+    pub(super) fn push_with_network_result(
+        &mut self,
+        script: PreparedScript,
+        source_network_result: Option<crate::types::SharedNavigationResponseResult>,
+        load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
+    ) {
         self.entries.push(AsyncFallbackEntry {
             script,
             load_delay_binding,
             awaiting_completion: false,
             source_load: None,
+            source_network_result,
             load_failure: None,
         });
     }
@@ -343,7 +354,9 @@ impl AsyncFallbackQueue {
             load_delay_binding,
             awaiting_completion: false,
             source_load: None,
+            source_network_result: None,
             load_failure: Some(PreparedScriptSourceLoadOutcome {
+                fetch_timing: None,
                 source_result: Err(error),
                 source_bytes: None,
                 network_result,
@@ -367,8 +380,8 @@ impl AsyncFallbackQueue {
         for task in tasks {
             match task {
                 ParseTimeDocumentScriptTask::ClassicAsyncScript(script) => {
-                    let (script, load_delay_binding) = script.into_parts();
-                    self.push_with_load_delay_binding(script, load_delay_binding);
+                    let (script, network_result, load_delay_binding) = script.into_parts();
+                    self.push_with_network_result(script, network_result, load_delay_binding);
                 }
                 ParseTimeDocumentScriptTask::AsyncScriptFailure(_) => {
                     self.push_failed_parse_time_task(task)
@@ -383,6 +396,7 @@ impl AsyncFallbackQueue {
             .iter_mut()
             .find(|entry| entry.awaiting_completion && entry.script.node_id == completion.node_id)
         {
+            entry.script.source_fetch_timing = completion.outcome.fetch_timing.clone();
             match completion.outcome.source_result {
                 Ok(source) => {
                     entry.script = prepared_script_with_loaded_source(
@@ -390,11 +404,14 @@ impl AsyncFallbackQueue {
                         source,
                         completion.outcome.source_bytes,
                         completion.outcome.muted_errors,
+                        completion.outcome.fetch_timing,
                     );
                     entry.load_failure = None;
+                    entry.source_network_result = completion.outcome.network_result;
                 }
                 Err(error) => {
                     entry.load_failure = Some(PreparedScriptSourceLoadOutcome {
+                        fetch_timing: None,
                         source_result: Err(error),
                         source_bytes: completion.outcome.source_bytes,
                         network_result: completion.outcome.network_result,
@@ -430,7 +447,11 @@ impl AsyncFallbackQueue {
                         entry.load_delay_binding,
                     );
                 }
-                PostParseDocumentScriptTask::async_script(entry.script, entry.load_delay_binding)
+                PostParseDocumentScriptTask::async_script(
+                    entry.script,
+                    entry.source_network_result,
+                    entry.load_delay_binding,
+                )
             })
             .collect()
     }
@@ -451,9 +472,11 @@ fn resolve_remaining_async_phase_entries(
                 outcome,
                 entry.load_delay_binding,
             ),
-            None => {
-                PostParseDocumentScriptTask::async_script(entry.original, entry.load_delay_binding)
-            }
+            None => PostParseDocumentScriptTask::async_script(
+                entry.original,
+                None,
+                entry.load_delay_binding,
+            ),
         });
     }
     resolved
@@ -464,8 +487,8 @@ fn async_phase_task_from_parse_time_task(
 ) -> PostParseDocumentScriptTask {
     match task {
         ParseTimeDocumentScriptTask::ClassicAsyncScript(script) => {
-            let (script, load_delay_binding) = script.into_parts();
-            PostParseDocumentScriptTask::async_script(script, load_delay_binding)
+            let (script, network_result, load_delay_binding) = script.into_parts();
+            PostParseDocumentScriptTask::async_script(script, network_result, load_delay_binding)
         }
         ParseTimeDocumentScriptTask::AsyncScriptFailure(failure) => {
             let (script, error, source_network_result, load_delay_binding) = failure.into_parts();
@@ -489,10 +512,20 @@ fn parse_time_task_from_load_outcome(
         source_bytes,
         network_result,
         muted_errors,
+        fetch_timing,
     } = outcome;
+    let mut script = script;
+    script.source_fetch_timing = fetch_timing.clone();
     match source_result {
         Ok(source) => ParseTimeDocumentScriptTask::classic_async_script(
-            prepared_script_with_loaded_source(script, source, source_bytes, muted_errors),
+            prepared_script_with_loaded_source(
+                script,
+                source,
+                source_bytes,
+                muted_errors,
+                fetch_timing,
+            ),
+            network_result,
             load_delay_binding,
         ),
         Err(error) => ParseTimeDocumentScriptTask::async_script_failure(
@@ -514,10 +547,20 @@ fn async_phase_page_task_from_load_outcome(
         source_bytes,
         network_result,
         muted_errors,
+        fetch_timing,
     } = outcome;
+    let mut script = script;
+    script.source_fetch_timing = fetch_timing.clone();
     match source_result {
         Ok(source) => PostParseDocumentScriptTask::async_script(
-            prepared_script_with_loaded_source(script, source, source_bytes, muted_errors),
+            prepared_script_with_loaded_source(
+                script,
+                source,
+                source_bytes,
+                muted_errors,
+                fetch_timing,
+            ),
+            network_result,
             load_delay_binding,
         ),
         Err(error) => PostParseDocumentScriptTask::async_script_load_failure(
@@ -529,23 +572,29 @@ fn async_phase_page_task_from_load_outcome(
     }
 }
 
-fn fallback_entry_from_parse_time_entry(entry: ParseTimeAsyncEntry) -> AsyncFallbackEntry {
+fn fallback_entry_from_parse_time_entry(mut entry: ParseTimeAsyncEntry) -> AsyncFallbackEntry {
+    if let Some(outcome) = entry.completion.as_ref() {
+        entry.original.source_fetch_timing = outcome.fetch_timing.clone();
+    }
     match entry.completion {
         Some(PreparedScriptSourceLoadOutcome {
             source_result: Ok(source),
             source_bytes,
-            network_result: _,
+            network_result,
             muted_errors,
+            fetch_timing,
         }) => AsyncFallbackEntry {
             script: prepared_script_with_loaded_source(
                 entry.original,
                 source,
                 source_bytes,
                 muted_errors,
+                fetch_timing,
             ),
             load_delay_binding: entry.load_delay_binding,
             awaiting_completion: false,
             source_load: None,
+            source_network_result: network_result,
             load_failure: None,
         },
         Some(outcome) => AsyncFallbackEntry {
@@ -553,6 +602,7 @@ fn fallback_entry_from_parse_time_entry(entry: ParseTimeAsyncEntry) -> AsyncFall
             load_delay_binding: entry.load_delay_binding,
             awaiting_completion: false,
             source_load: None,
+            source_network_result: None,
             load_failure: Some(outcome),
         },
         None => AsyncFallbackEntry {
@@ -560,6 +610,7 @@ fn fallback_entry_from_parse_time_entry(entry: ParseTimeAsyncEntry) -> AsyncFall
             load_delay_binding: entry.load_delay_binding,
             awaiting_completion: true,
             source_load: entry.source_load,
+            source_network_result: None,
             load_failure: None,
         },
     }

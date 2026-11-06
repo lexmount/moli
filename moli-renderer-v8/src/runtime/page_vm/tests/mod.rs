@@ -746,6 +746,7 @@ fn prepared_external_module_for_page_vm_test_with_node(
     url: Url,
 ) -> PreparedScript {
     PreparedScript {
+        source_fetch_timing: None,
         resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position: node as usize,
@@ -977,6 +978,7 @@ fn prepared_inline_module_for_page_vm_test(
     source: &str,
 ) -> PreparedScript {
     PreparedScript {
+        source_fetch_timing: None,
         resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position: node as usize,
@@ -999,6 +1001,7 @@ fn prepared_loaded_classic_for_page_vm_test(
     source: &str,
 ) -> PreparedScript {
     PreparedScript {
+        source_fetch_timing: None,
         resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position: node as usize,
@@ -1053,6 +1056,7 @@ fn append_parser_owned_external_classic_defer_for_page_vm_test(
         .document_runtime
         .bind_parser_owned_script_handle_for_node(script_node);
     PreparedScript {
+        source_fetch_timing: None,
         resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position,

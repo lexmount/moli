@@ -98,6 +98,7 @@ pub(super) async fn execute_page_owned_document_script_turn_on_local_task(
     page_vm: &mut PageVm,
     lane: DocumentScriptExecutionLane,
     script: PreparedScript,
+    source_network_result: Option<SharedNavigationResponseResult>,
     load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
 ) -> Result<PageTaskTurnResult> {
     let outcome = page_vm
@@ -105,6 +106,7 @@ pub(super) async fn execute_page_owned_document_script_turn_on_local_task(
             ParseTimeLiveExecution::PageOwnedDocumentScript {
                 lane,
                 script: Box::new(script),
+                source_network_result,
                 load_delay_binding,
             },
         )

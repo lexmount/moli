@@ -1205,10 +1205,11 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 let shared_preload = self
                     .buffered_document_preloads
                     .shared_preload_for_script(&script);
-                if let Some(applied) = self
-                    .buffered_document_preloads
-                    .apply_preloaded_source_to_script_if_available(&mut script, false)
-                    .await
+                if script.kind == crate::types::ScriptKind::Module
+                    && let Some(applied) = self
+                        .buffered_document_preloads
+                        .apply_preloaded_source_to_script_if_available(&mut script, false)
+                        .await
                     && let Some(network_result) = applied.network_result.as_deref()
                 {
                     page_vm.vm_mut().record_script_subresource_network_result(

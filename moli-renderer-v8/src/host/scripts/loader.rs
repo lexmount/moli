@@ -207,6 +207,7 @@ pub(crate) fn build_runtime_prepared_script(
     };
 
     Ok(PreparedScript {
+        source_fetch_timing: None,
         resource_timing_initiator_url: preparation.resource_timing_initiator_url.clone(),
         position,
         node_id: crate::dom::NodeId::new(node.index()),

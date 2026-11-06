@@ -54,8 +54,7 @@ impl PageOwnedDocumentScriptHooks for MainPageOwnedDocumentScriptHooks<'_, '_> {
         initiator_url: Url,
         script_url: Url,
         request_initiator_type: crate::types::SubresourceRequestInitiatorType,
-        fetch_metadata: &crate::planning::ScriptFetchMetadata,
-        resource_timing_initiator_url: Option<&str>,
+        script: &PreparedScript,
         network_result: &std::result::Result<NavigationResponse, String>,
     ) {
         self.page_vm
@@ -64,8 +63,7 @@ impl PageOwnedDocumentScriptHooks for MainPageOwnedDocumentScriptHooks<'_, '_> {
                 initiator_url,
                 script_url,
                 request_initiator_type,
-                Some(fetch_metadata),
-                resource_timing_initiator_url,
+                Some(script),
                 network_result,
             );
     }

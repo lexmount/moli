@@ -122,13 +122,16 @@ impl ParserPreparedClassicScript {
             source_bytes,
             network_result,
             muted_errors,
+            fetch_timing,
         } = outcome;
+        self.script.source_fetch_timing = fetch_timing.clone();
         let source = source_result?;
         *self.script = prepared_script_with_loaded_source(
             (*self.script).clone(),
             source,
             source_bytes,
             muted_errors,
+            fetch_timing,
         );
         Ok(network_result)
     }
@@ -271,6 +274,7 @@ impl ParserClassicScriptSourceResult {
         Self::from_identity(
             identity,
             PreparedScriptSourceLoadOutcome {
+                fetch_timing: None,
                 source_result: result,
                 source_bytes: None,
                 network_result: None,

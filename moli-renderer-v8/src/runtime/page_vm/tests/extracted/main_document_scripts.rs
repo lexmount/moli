@@ -83,7 +83,7 @@ async fn main_parser_async_classic_owns_load_delay_from_discovery_through_settle
         else {
             panic!("ready shared source should produce classic execution work");
         };
-        let (script, binding) = ready.into_parts();
+        let (script, network_result, binding) = ready.into_parts();
         let binding = binding.expect("parse-time work must retain its discovery binding");
         assert_eq!(binding.owner(), owner);
 
@@ -94,6 +94,7 @@ async fn main_parser_async_classic_owns_load_delay_from_discovery_through_settle
                     PageOwnedDocumentScriptWork::parser_async_script(
                         DocumentScriptExecutionLane::ParseTimeAsync,
                         script,
+                        network_result,
                         Some(binding),
                     ),
                 ),

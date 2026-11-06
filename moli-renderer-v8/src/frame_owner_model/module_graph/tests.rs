@@ -144,6 +144,7 @@ fn dynamic_tree_fetch_request(
 
 fn parser_root_script(handle: usize, url: &Url) -> PreparedScript {
     PreparedScript {
+        source_fetch_timing: None,
         resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position: handle,

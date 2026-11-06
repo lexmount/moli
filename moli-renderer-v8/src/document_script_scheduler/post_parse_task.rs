@@ -11,6 +11,7 @@ pub(super) enum PostParseDocumentScriptTask {
 pub(super) enum PostParseAsyncScriptTask {
     Ready {
         script: PreparedScript,
+        source_network_result: Option<SharedNavigationResponseResult>,
         load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
     },
     WaitingForSource {
@@ -29,10 +30,12 @@ pub(super) enum PostParseAsyncScriptTask {
 impl PostParseDocumentScriptTask {
     pub(super) fn async_script(
         script: PreparedScript,
+        source_network_result: Option<SharedNavigationResponseResult>,
         load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
     ) -> Self {
         Self::AsyncScript(Box::new(PostParseAsyncScriptTask::Ready {
             script,
+            source_network_result,
             load_delay_binding,
         }))
     }

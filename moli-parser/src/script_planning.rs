@@ -264,7 +264,18 @@ pub struct PreparedScript {
     /// Request attribution is separate from the fetch option reuse key.
     /// Some("") preserves an explicitly unknown initiating script.
     pub resource_timing_initiator_url: Option<String>,
+    pub source_fetch_timing: Option<std::sync::Arc<ScriptSourceFetchTiming>>,
     pub host_script_handle: Option<String>,
+}
+
+/// Observations of the source fetch, retained independently of when a script
+/// becomes eligible to execute. These fields carry no execution authority.
+#[derive(Clone, Debug)]
+pub struct ScriptSourceFetchTiming {
+    pub started: std::time::Instant,
+    pub start_unix_millis: f64,
+    pub completed: std::time::Instant,
+    pub native: Option<moli_fetch::FetchResponseTiming>,
 }
 
 #[derive(Debug, Clone)]
@@ -523,6 +534,7 @@ pub fn build_prepared_script(
         }
         match document_base_url.join(src) {
             Ok(url) => PrepareScriptOutcome::Prepared(Box::new(PreparedScript {
+                source_fetch_timing: None,
                 resource_timing_initiator_url: None,
                 position,
                 node_id: NodeId::new(node_id.index()),
@@ -545,6 +557,7 @@ pub fn build_prepared_script(
         match classification.script.script_text.clone() {
             Some(source) if !source.is_empty() => {
                 PrepareScriptOutcome::Prepared(Box::new(PreparedScript {
+                    source_fetch_timing: None,
                     resource_timing_initiator_url: None,
                     position,
                     node_id: NodeId::new(node_id.index()),
