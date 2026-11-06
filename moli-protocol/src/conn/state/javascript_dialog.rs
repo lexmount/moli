@@ -241,7 +241,7 @@ pub(crate) struct TargetJavaScriptDialog {
     pending_prompt_text: Option<String>,
     /// Connection-wide Page subscription generations that observed the opening.
     /// Enabling Page after the dialog opens does not grant its pending callback.
-    page_subscriptions: Vec<u64>,
+    opening_subscription_generations: Vec<u64>,
 }
 
 impl TargetJavaScriptDialog {
@@ -255,7 +255,7 @@ impl TargetJavaScriptDialog {
             source_frame_id,
             renderer_dialog,
             pending_prompt_text: None,
-            page_subscriptions: Vec::new(),
+            opening_subscription_generations: Vec::new(),
         }
     }
 
@@ -283,15 +283,15 @@ impl TargetJavaScriptDialog {
         self.renderer_dialog.finish(accepted, user_input)
     }
 
-    pub(crate) fn set_page_subscriptions(&mut self, generations: Vec<u64>) {
-        self.page_subscriptions = generations;
+    pub(crate) fn set_opening_subscription_generations(&mut self, generations: Vec<u64>) {
+        self.opening_subscription_generations = generations;
     }
 
-    pub(crate) fn has_page_subscription(&self, generation: u64) -> bool {
-        self.page_subscriptions.contains(&generation)
+    pub(crate) fn was_opened_for_subscription(&self, generation: u64) -> bool {
+        self.opening_subscription_generations.contains(&generation)
     }
 
-    fn set_prompt_text(&mut self, prompt_text: String) {
+    pub(crate) fn set_prompt_text(&mut self, prompt_text: String) {
         self.pending_prompt_text = Some(prompt_text);
     }
 
@@ -337,12 +337,8 @@ impl TargetJavaScriptDialogState {
         self.pending_dialogs.first()
     }
 
-    pub(crate) fn set_next_prompt_text(&mut self, prompt_text: String) -> bool {
-        let Some(dialog) = self.pending_dialogs.first_mut() else {
-            return false;
-        };
-        dialog.set_prompt_text(prompt_text);
-        true
+    pub(crate) fn peek_next_mut(&mut self) -> Option<&mut TargetJavaScriptDialog> {
+        self.pending_dialogs.first_mut()
     }
 
     pub(crate) fn pop_next_with_prompt_text(
@@ -415,43 +411,63 @@ mod tests {
 
     #[test]
     fn dropping_uninstalled_prepared_dialog_dismisses_its_one_shot_completion() {
-        let page_id = PageId::new_for_testing(1);
-        let source_document = RendererDocumentLifecycleIdentity {
-            frame: RendererFrameToken { page_id },
-            document: RendererDocumentToken::new_for_testing(page_id, 1),
-            epoch: RendererLifecycleEpoch(1),
-        };
-        let completion = RendererJavaScriptDialogCompletion::pending();
-        let scope = TargetJavaScriptDialogScope::default();
-        let prepared = TargetPreparedJavaScriptDialog::capture(
-            TargetPageProtocolAttachmentIdentity::new(
-                TargetPageResidenceIdentity::new_for_test(
-                    "BID-dialog-drop".to_owned(),
-                    Some("TID-dialog-drop".to_owned()),
-                    1,
+        for missing_target in [false, true] {
+            let page_id = PageId::new_for_testing(1);
+            let source_document = RendererDocumentLifecycleIdentity {
+                frame: RendererFrameToken { page_id },
+                document: RendererDocumentToken::new_for_testing(page_id, 1),
+                epoch: RendererLifecycleEpoch(1),
+            };
+            let completion = RendererJavaScriptDialogCompletion::pending();
+            let scope = TargetJavaScriptDialogScope::default();
+            let prepared = TargetPreparedJavaScriptDialog::capture(
+                TargetPageProtocolAttachmentIdentity::new(
+                    TargetPageResidenceIdentity::new_for_test(
+                        "BID-dialog-drop".to_owned(),
+                        Some("TID-dialog-drop".to_owned()),
+                        1,
+                    ),
+                    Some("SID-dialog-drop".to_owned()),
                 ),
-                Some("SID-dialog-drop".to_owned()),
-            ),
-            scope.observe(),
-            "TID-dialog-drop",
-            RendererPendingJavaScriptDialog::new(
-                RendererJavaScriptDialogId::new(1),
-                source_document,
-                RendererJavaScriptDialogSource::LightweightPopup {
-                    popup_id: 3,
-                    popup_document_id: 4,
-                },
-                "about:blank".to_owned(),
-                "alert".to_owned(),
-                "dismiss on drop".to_owned(),
-                String::new(),
-                Some(completion.clone()),
-            ),
-        );
+                scope.observe(),
+                "TID-dialog-drop",
+                RendererPendingJavaScriptDialog::new(
+                    RendererJavaScriptDialogId::new(1),
+                    source_document,
+                    RendererJavaScriptDialogSource::LightweightPopup {
+                        popup_id: 3,
+                        popup_document_id: 4,
+                    },
+                    "about:blank".to_owned(),
+                    "alert".to_owned(),
+                    "dismiss on drop".to_owned(),
+                    String::new(),
+                    Some(completion.clone()),
+                ),
+            );
 
-        drop(prepared);
+            if missing_target {
+                let mut conn = crate::conn::CdpConnection::default();
+                let owner = crate::conn::CommandOwnerScope::for_page_attachment(
+                    prepared.source_attachment(),
+                );
+                let destination = prepared.source_attachment().page_owner().clone();
+                let installed =
+                    conn.with_target_javascript_dialog_state_for_owner_mut(&owner, move |state| {
+                        state.push(
+                            prepared.into_target_dialog(destination, "TID-dialog-drop".to_owned()),
+                        );
+                    });
+                assert!(
+                    installed.is_none(),
+                    "an absent target cannot install its prepared dialog"
+                );
+            } else {
+                drop(prepared);
+            }
 
-        assert!(!completion.finish(true, String::new()));
-        assert!(!completion.wait().accepted);
+            assert!(!completion.finish(true, String::new()));
+            assert!(!completion.wait().accepted);
+        }
     }
 }
