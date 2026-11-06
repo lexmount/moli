@@ -84,6 +84,7 @@ MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
 COMMON_REDIRECT_PATH = "/common/redirect.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 COMMON_ECHO_PATH = "/common/echo.py"
+EVENTSOURCE_MESSAGE_PATH = "/eventsource/resources/message.py"
 IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.py"
 DISPATCHER_PATH = "/common/dispatcher/dispatcher.py"
 REMOTE_CONTEXT_EXECUTOR_PATH = (
@@ -2394,6 +2395,22 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path == EVENTSOURCE_MESSAGE_PATH:
+                params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+                mime = params.get("mime", ["text/event-stream"])[0]
+                message = params.get("message", ["data: data"])[0].encode("latin-1")
+                newline = b"" if params.get("newline", [None])[0] == "none" else b"\n\n"
+                try:
+                    delay = int(params.get("sleep", ["0"])[0]) / 1000
+                    if delay < 0:
+                        raise ValueError("negative sleep")
+                except ValueError:
+                    self.send_error(500)
+                    return
+                if delay and stopping.wait(delay):
+                    return
+                self._send_bytes(mime, message + newline + b"\n", emit_body=emit_body, cache_control=None)
+                return
             if path == NAVIGATION_SECOND_VISIT_PATH:
                 self._serve_navigation_second_visit()
                 return
