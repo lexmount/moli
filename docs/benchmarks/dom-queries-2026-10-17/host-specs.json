@@ -1,0 +1,6 @@
+{
+  "kernel": "Linux 6.6.87.2-microsoft-standard-WSL2 x86_64 GNU/Linux",
+  "cpu": "Intel(R) Core(TM) Ultra 7 265",
+  "memory": "MemTotal:       16092316 kB",
+  "rustc": "rustc 1.96.1 (31fca3adb 2026-06-26)"
+}
