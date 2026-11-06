@@ -3,6 +3,7 @@
 //! permanent Rust-to-JavaScript reference cycle.
 
 use crate::{
+    resource_initiator::CallbackInitiator,
     util::{get_private_value, set_private_value},
     v8_traced_webidl_callback::V8TracedWebIdlCallbackFunction,
 };
@@ -85,14 +86,17 @@ fn callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     watch: v8::Local<'s, v8::Object>,
     slot: &str,
-) -> Option<WebIdlCallbackFunction> {
+) -> Option<(WebIdlCallbackFunction, CallbackInitiator)> {
     let carrier = get_private_value(scope, watch, slot)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let prepared = V8TracedWebIdlCallbackFunction::from_object(carrier).prepare(scope);
+    let traced = V8TracedWebIdlCallbackFunction::from_object(carrier);
+    let initiator = traced.resource_initiator(scope);
+    let prepared = traced.prepare(scope);
     let callback = prepared.callback(scope);
     let relevant_context = prepared.relevant_context(scope);
     let incumbent_context = prepared.incumbent_context(scope);
     WebIdlCallbackFunction::try_new(scope, callback, relevant_context, incumbent_context)
+        .map(|callback| (callback, initiator))
 }
 
 fn queue<'s>(
@@ -101,10 +105,15 @@ fn queue<'s>(
     id: i32,
     watch: v8::Local<'s, v8::Object>,
 ) {
-    let success = callback(scope, watch, SUCCESS_SLOT).expect("watch success callback");
-    let error = callback(scope, watch, ERROR_SLOT);
+    let (success, initiator) =
+        callback(scope, watch, SUCCESS_SLOT).expect("watch success callback");
+    let error = callback(scope, watch, ERROR_SLOT).map(|(callback, _)| callback);
     let timeout = get_private_value(scope, watch, TIMEOUT_SLOT)
         .and_then(|value| value.uint32_value(scope))
         .expect("watch timeout");
-    super::queue_geolocation_result(scope, geolocation, success, error, timeout, Some(id));
+    // Both callbacks share the watchPosition registration. A native override
+    // update must not replace its source with the notification's caller.
+    initiator.with_current(scope, |scope| {
+        super::queue_geolocation_result(scope, geolocation, success, error, timeout, Some(id));
+    });
 }
