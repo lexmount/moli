@@ -824,13 +824,6 @@ pub(in crate::context_bootstrap) fn build_profiled_exposed_interface_template<'s
             );
             template
         }
-        "EventSource" => build_constructor_template_with_callback(
-            scope,
-            spec,
-            1,
-            profile,
-            worker_unsupported_constructor_callback,
-        )?,
         _ => build_constructor_template_for_profile(scope, spec, profile)?,
     };
     if profile == exposed_interfaces::TemplateBuildProfile::DedicatedWorker
@@ -839,19 +832,6 @@ pub(in crate::context_bootstrap) fn build_profiled_exposed_interface_template<'s
         opfs::install_file_system_file_handle_sync_template_binding(scope, template);
     }
     Ok(template)
-}
-
-fn worker_unsupported_constructor_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments<'_>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let exception = crate::native_bridge::abort::dom_exception_value(
-        scope,
-        "This constructor is not implemented in dedicated workers yet.",
-        "NotSupportedError",
-    );
-    scope.throw_exception(exception);
 }
 
 #[derive(Default, WebApiObject)]

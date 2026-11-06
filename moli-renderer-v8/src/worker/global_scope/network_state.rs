@@ -2,14 +2,46 @@
 
 use super::*;
 
+pub(in crate::worker) enum WorkerFetchClient {
+    Promise {
+        resolver: v8::Global<v8::PromiseResolver>,
+        font_face: Option<v8::Global<v8::Object>>,
+    },
+    EventSource(v8::Global<v8::Object>),
+}
+
+impl WorkerFetchClient {
+    pub(super) fn resolver(&self) -> &v8::Global<v8::PromiseResolver> {
+        match self {
+            Self::Promise { resolver, .. } => resolver,
+            Self::EventSource(_) => {
+                unreachable!("EventSource is delivered through networking tasks, not a Promise")
+            }
+        }
+    }
+
+    pub(super) fn font_face(&self) -> Option<&v8::Global<v8::Object>> {
+        match self {
+            Self::Promise { font_face, .. } => font_face.as_ref(),
+            Self::EventSource(_) => None,
+        }
+    }
+
+    pub(super) fn event_source(&self) -> Option<&v8::Global<v8::Object>> {
+        match self {
+            Self::EventSource(source) => Some(source),
+            Self::Promise { .. } => None,
+        }
+    }
+}
+
 pub(in crate::worker) struct PendingWorkerFetch {
     pub(in crate::worker) upload: Option<crate::network_host::RequestUpload>,
     pub(super) timing: WorkerResourceTiming,
     pub(in crate::worker) kind: fetch::WorkerFetchKind,
-    pub(in crate::worker) font_face: Option<v8::Global<v8::Object>>,
+    pub(in crate::worker) client: WorkerFetchClient,
     pub(in crate::worker) connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
     pub(in crate::worker) redirect_csp_state: crate::network_host::FetchCspRedirectState,
-    pub(in crate::worker) resolver: v8::Global<v8::PromiseResolver>,
     pub(in crate::worker) document_url: Url,
     /// Effective network credentials; the input Request and FetchEvent retain
     /// the author's original credentials mode.
@@ -35,6 +67,25 @@ pub(in crate::worker) struct PendingWorkerFetch {
 }
 
 pub(in crate::worker) enum WorkerFetchEvent {
+    BrowserTimeout {
+        timer_id: u32,
+    },
+    EventSourceState {
+        fetch_id: u32,
+        body_source_id: NetworkBodySourceId,
+        last_event_id: String,
+        reconnect_delay_ms: u64,
+    },
+    EventSourceMessage {
+        fetch_id: u32,
+        body_source_id: NetworkBodySourceId,
+        message: crate::network_host::EventSourceMessage,
+    },
+    EventSourceFailure {
+        fetch_id: u32,
+        error: String,
+        mode: crate::network_host::EventSourceTerminalMode,
+    },
     RequestBodyProducer {
         fetch_id: u32,
         producer: crate::context_bootstrap::RequestBodyProducer,

@@ -74,6 +74,34 @@ pub(crate) fn event_source_constructor_callback<'s>(
         None => return,
     };
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        if let Some(base_url) = crate::worker::worker_current_script_url(scope) {
+            let resolved_url = match resolve_context_url(&base_url, &parsed.url, None) {
+                Ok(url) => url,
+                Err(_) => {
+                    throw_dom_exception(
+                        scope,
+                        "SyntaxError",
+                        12,
+                        "Failed to construct 'EventSource': The URL is invalid.",
+                    );
+                    return;
+                }
+            };
+            let event_source = args.this();
+            initialize_event_source_object(
+                scope,
+                event_source,
+                resolved_url.as_str(),
+                options.with_credentials,
+            );
+            if !schedule_event_source_connect(scope, event_source, 0)
+                && !crate::worker::worker_global_is_closed(scope)
+            {
+                fail_event_source_connection(scope, event_source, EventSourceTerminalMode::Close);
+            }
+            rv.set(event_source.into());
+            return;
+        }
         throw_type_error(
             scope,
             "Failed to construct 'EventSource': runtime is unavailable.",
@@ -156,6 +184,9 @@ pub(crate) fn start_event_source_request<'s>(
         return;
     }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        if crate::worker::start_worker_event_source_request(scope, event_source) {
+            return;
+        }
         fail_event_source_connection(scope, event_source, EventSourceTerminalMode::Close);
         return;
     };

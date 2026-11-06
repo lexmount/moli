@@ -107,8 +107,10 @@ pub(crate) struct WorkerGlobalState {
         Option<SubresourceResourceType>,
     /// Async fetch completions routed back onto the worker event loop.
     pub(in crate::worker) fetch_completion_tx: mpsc::UnboundedSender<WorkerFetchEvent>,
-    /// Promise resolvers pending async fetch completion.
+    /// Fetch promises, font loads and EventSource connections pending network work.
     pub(in crate::worker) pending_fetches: HashMap<u32, PendingWorkerFetch>,
+    pub(in crate::worker) browser_timeouts: HashMap<u32, super::timers::WorkerBrowserTimeout>,
+    pub(in crate::worker) next_browser_timeout_id: u32,
     /// Worker-local pending body sources for headers-first worker fetch.
     pub(crate) pending_network_body_sources:
         HashMap<NetworkBodySourceId, crate::network_host::PendingNetworkBodySourceState>,

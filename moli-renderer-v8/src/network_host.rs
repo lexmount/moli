@@ -103,10 +103,12 @@ pub(crate) use self::csp_reports::{
 };
 pub(crate) use self::dictionary::start_response_dictionary_loads;
 pub(crate) use self::event_source::{
-    EVENT_SOURCE_CLOSED, EventSourceMessage, EventSourceParser, EventSourceTerminalMode,
-    dispatch_event_source_message, event_source_constructor_callback, event_source_last_event_id,
+    EVENT_SOURCE_CLOSED, EVENT_SOURCE_OPEN, EventSourceMessage, EventSourceParser,
+    EventSourceTerminalMode, dispatch_event_source_message, event_source_active_request_id,
+    event_source_connection_url, event_source_constructor_callback, event_source_last_event_id,
     event_source_ready_state, event_source_reconnect_delay_ms, event_source_response_error,
-    fail_event_source_connection, install_event_source_bindings, open_event_source_connection,
+    event_source_with_credentials, fail_event_source_connection, install_event_source_bindings,
+    open_event_source_connection, set_event_source_active_request_id,
     update_event_source_stream_state,
 };
 pub(crate) use self::fetch::{

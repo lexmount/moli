@@ -3,6 +3,80 @@ use super::*;
 use crate::timer_nesting::{TimerNestingLevel, TimerNestingOwner};
 use std::collections::HashSet;
 
+/// Browser-owned delayed networking work has a private id namespace, separate
+/// from author setTimeout/clearTimeout ids and author timer nesting.
+pub(in crate::worker) struct WorkerBrowserTimeout {
+    callback: WorkerTimerCallback,
+    load: ResourceLoadLease,
+}
+
+pub(crate) fn queue_worker_browser_timeout<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    callback: v8::Local<'s, v8::Function>,
+    delay_ms: u64,
+) -> Option<u32> {
+    let state = get_worker_state(scope)?;
+    let mut state = state.borrow_mut();
+    if !state.callback_task_delivery_allowed() {
+        return None;
+    }
+    state.next_browser_timeout_id = state.next_browser_timeout_id.checked_add(1)?;
+    let id = state.next_browser_timeout_id;
+    let cancel = FetchCancelHandle::new();
+    let load = state.loader.register_load(
+        crate::network::loads::ResourceLoadKind::EventSource,
+        ResourceLoadDisposition::Ordinary,
+        Some(cancel.clone()),
+    )?;
+    state.browser_timeouts.insert(
+        id,
+        WorkerBrowserTimeout {
+            callback: WorkerTimerCallback::browser_function(scope, callback),
+            load: load.clone(),
+        },
+    );
+    let completion = state.fetch_completion_tx.clone();
+    load.task_runner().spawn(async move {
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_millis(delay_ms)) => {
+                load.finish();
+                let _ = completion.send(WorkerFetchEvent::BrowserTimeout { timer_id: id });
+            }
+            _ = cancel.cancelled() => {}
+        }
+    });
+    Some(id)
+}
+
+pub(crate) fn cancel_worker_browser_timeout(scope: &mut v8::PinScope<'_, '_>, id: u32) {
+    if let Some(state) = get_worker_state(scope)
+        && let Some(timer) = state.borrow_mut().browser_timeouts.remove(&id)
+    {
+        timer.load.cancel();
+    }
+}
+
+pub(super) fn run_worker_browser_timeout(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    id: u32,
+) {
+    let timer = state.borrow_mut().browser_timeouts.remove(&id);
+    let allowed = state.borrow().callback_task_delivery_allowed();
+    if let Some(timer) = timer
+        && allowed
+        && !timer.load.is_cancelled()
+    {
+        let context = timer.callback.target_context(scope);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        if let super::super::timer_callback::WorkerTimerCallbackOutcome::Threw(report) =
+            timer.callback.invoke(scope, &[])
+        {
+            crate::worker::dispatch_current_worker_callback_exception(scope, *report);
+        }
+    }
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "DedicatedWorkerGlobalScope.requestAnimationFrame")]
 struct WorkerRequestAnimationFrameArgs {

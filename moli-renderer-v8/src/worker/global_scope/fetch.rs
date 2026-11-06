@@ -15,22 +15,26 @@ use crate::types::{AsyncSubresourceNetworkContext, SubresourcePolicyContext};
 pub(in crate::worker) enum WorkerFetchKind {
     Fetch,
     Font,
+    EventSource { reconnect_delay_ms: u64 },
 }
 
 impl WorkerFetchKind {
-    fn resource_type(self) -> SubresourceResourceType {
+    pub(super) fn resource_type(self) -> SubresourceResourceType {
         match self {
             Self::Fetch => SubresourceResourceType::Fetch,
             Self::Font => SubresourceResourceType::Font,
+            Self::EventSource { .. } => SubresourceResourceType::EventSource,
         }
     }
 
-    fn csp_resource_kind(
+    pub(super) fn csp_resource_kind(
         self,
     ) -> crate::content_security_policy::ContentSecurityPolicyResourceKind {
         use crate::content_security_policy::ContentSecurityPolicyResourceKind;
         match self {
-            Self::Fetch => ContentSecurityPolicyResourceKind::WorkerConnect,
+            Self::Fetch | Self::EventSource { .. } => {
+                ContentSecurityPolicyResourceKind::WorkerConnect
+            }
             Self::Font => ContentSecurityPolicyResourceKind::DocumentFont,
         }
     }
@@ -39,6 +43,7 @@ impl WorkerFetchKind {
         match self {
             Self::Fetch => BrowserRequestMetadata::Fetch,
             Self::Font => BrowserRequestMetadata::Font,
+            Self::EventSource { .. } => BrowserRequestMetadata::EventSource,
         }
     }
 }
@@ -177,7 +182,7 @@ fn worker_network_result_parts<R>(
     )
 }
 
-fn worker_fetch_redirect_check(
+pub(super) fn worker_fetch_redirect_check(
     state: &WorkerGlobalState,
     fetch_id: u32,
 ) -> Option<moli_fetch::RequestRedirectCheck> {
@@ -259,6 +264,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
     redirect_check: Option<moli_fetch::RequestRedirectCheck>,
     upload_body: Option<moli_fetch::UploadBody>,
 ) {
+    let mut event_source_parser = super::event_source::parser_for_request(kind, &headers);
     timing.begin_transport(cancel_handle.clone());
     // Resolve local URLs before scheduling: fetch(url) already parsed and
     // captured its entry when JavaScript regains control and may revoke it.
@@ -272,11 +278,13 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
         blob_url_entry.as_ref(),
     );
     let redirect_owner = match kind {
-        WorkerFetchKind::Fetch => Some(RedirectOwner::Worker(WorkerRedirectOwner::fetch(
-            completion_tx.clone(),
-            fetch_id,
-            load.clone(),
-        ))),
+        WorkerFetchKind::Fetch | WorkerFetchKind::EventSource { .. } => {
+            Some(RedirectOwner::Worker(WorkerRedirectOwner::fetch(
+                completion_tx.clone(),
+                fetch_id,
+                load.clone(),
+            )))
+        }
         WorkerFetchKind::Font => None,
     };
     // IO holds only native state. The lease cancels ordinary work at teardown
@@ -296,7 +304,12 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                 None,
             )
         } else {
-            let cors_preflight_request_headers = headers.to_byte_strings();
+            let cors_preflight_request_headers =
+                if matches!(kind, WorkerFetchKind::EventSource { .. }) {
+                    Vec::new() // EventSource fields are user-agent headers, not author headers.
+                } else {
+                    headers.to_byte_strings()
+                };
             match Request::new_browser_bytes(
                 &method,
                 resolved_url.as_str(),
@@ -438,13 +451,13 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                                 while let Some(chunk) = response.next_chunk().await {
                                     timing.observe_chunk(chunk.len());
                                     body_writer.append(&chunk);
-                                    let _ = completion_tx.send(WorkerFetchEvent::StreamingChunk(
-                                        WorkerFetchStreamingChunk {
-                                            fetch_id,
-                                            body_source_id,
-                                            bytes: chunk,
-                                        },
-                                    ));
+                                    super::event_source::send_stream_chunk(
+                                        &completion_tx,
+                                        &mut event_source_parser,
+                                        fetch_id,
+                                        body_source_id,
+                                        chunk,
+                                    );
                                 }
                                 let result = response
                                     .finish()
@@ -508,7 +521,7 @@ fn worker_fetch_script_metadata(
     })
 }
 
-fn worker_service_worker_controller(
+pub(super) fn worker_service_worker_controller(
     state: &WorkerGlobalState,
     resolved_url: &Url,
 ) -> Option<(ServiceWorkerRuntimeService, ServiceWorkerClientId)> {
@@ -522,7 +535,7 @@ fn worker_service_worker_controller(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_worker_fetch_service_worker(
+pub(super) fn spawn_worker_fetch_service_worker(
     kind: WorkerFetchKind,
     runtime: ServiceWorkerRuntimeService,
     client_id: ServiceWorkerClientId,
@@ -548,6 +561,7 @@ fn spawn_worker_fetch_service_worker(
     request_metadata: ServiceWorkerFetchRequestMetadata,
     redirect_check: Option<moli_fetch::RequestRedirectCheck>,
 ) {
+    let mut event_source_parser = super::event_source::parser_for_request(kind, &headers);
     let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
     let dispatch = ServiceWorkerFetchDispatch {
         request_body_owner: Some(request_body_owner),
@@ -562,7 +576,9 @@ fn spawn_worker_fetch_service_worker(
             headers: headers.to_byte_strings(),
             body: body.clone(),
             destination: match kind {
-                WorkerFetchKind::Fetch => ServiceWorkerRequestDestination::Empty,
+                WorkerFetchKind::Fetch | WorkerFetchKind::EventSource { .. } => {
+                    ServiceWorkerRequestDestination::Empty
+                }
                 WorkerFetchKind::Font => ServiceWorkerRequestDestination::Font,
             },
             request_mode,
@@ -572,7 +588,11 @@ fn spawn_worker_fetch_service_worker(
             is_reload: false,
             metadata: request_metadata.clone(),
         },
-        cors_preflight_request_headers: headers.to_byte_strings(),
+        cors_preflight_request_headers: if matches!(kind, WorkerFetchKind::EventSource { .. }) {
+            Vec::new()
+        } else {
+            headers.to_byte_strings()
+        },
         request_cookie_report: None,
         network_context: AsyncSubresourceNetworkContext {
             frame_id: None,
@@ -670,13 +690,13 @@ fn spawn_worker_fetch_service_worker(
                         Some(ServiceWorkerDirectFetchStreamEvent::Chunk(bytes)) => {
                             timing.observe_chunk(bytes.len());
                             body.append(&bytes);
-                            let _ = completion_tx.send(WorkerFetchEvent::StreamingChunk(
-                                WorkerFetchStreamingChunk {
-                                    fetch_id,
-                                    body_source_id,
-                                    bytes,
-                                },
-                            ));
+                            super::event_source::send_stream_chunk(
+                                &completion_tx,
+                                &mut event_source_parser,
+                                fetch_id,
+                                body_source_id,
+                                bytes,
+                            );
                         }
                         Some(ServiceWorkerDirectFetchStreamEvent::Finished(result)) => {
                             break result;
@@ -2734,8 +2754,10 @@ pub(super) fn start_worker_resource_fetch<'s>(
                     upload: None,
                     timing: timing.clone(),
                     kind,
-                    font_face: font_face.map(|face| v8::Global::new(scope, face)),
-                    resolver: v8::Global::new(scope, resolver),
+                    client: WorkerFetchClient::Promise {
+                        resolver: v8::Global::new(scope, resolver),
+                        font_face: font_face.map(|face| v8::Global::new(scope, face)),
+                    },
                     document_url: document_url.clone(),
                     redirect_csp_state: crate::network_host::FetchCspRedirectState::new(
                         &connect_policy,
@@ -2841,8 +2863,10 @@ pub(super) fn start_worker_resource_fetch<'s>(
                     upload: None,
                     timing: timing.clone(),
                     kind,
-                    font_face: font_face.map(|face| v8::Global::new(scope, face)),
-                    resolver: v8::Global::new(scope, resolver),
+                    client: WorkerFetchClient::Promise {
+                        resolver: v8::Global::new(scope, resolver),
+                        font_face: font_face.map(|face| v8::Global::new(scope, face)),
+                    },
                     document_url: document_url.clone(),
                     redirect_csp_state: crate::network_host::FetchCspRedirectState::new(
                         &connect_policy,
@@ -3046,7 +3070,7 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
                 rejected.push((
                     pending.timing,
                     fetch_id,
-                    pending.resolver,
+                    pending.client.resolver().clone(),
                     pending.load,
                     pending.document_url,
                     pending.network_record,
@@ -3144,6 +3168,40 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
     event: WorkerFetchEvent,
 ) {
     match event {
+        WorkerFetchEvent::BrowserTimeout { timer_id } => {
+            super::timers::run_worker_browser_timeout(scope, state, timer_id);
+        }
+
+        WorkerFetchEvent::EventSourceState {
+            fetch_id,
+            body_source_id,
+            last_event_id,
+            reconnect_delay_ms,
+        } => {
+            super::event_source::apply_state(
+                scope,
+                state,
+                fetch_id,
+                body_source_id,
+                &last_event_id,
+                reconnect_delay_ms,
+            );
+        }
+        WorkerFetchEvent::EventSourceMessage {
+            fetch_id,
+            body_source_id,
+            message,
+        } => {
+            super::event_source::apply_message(scope, state, fetch_id, body_source_id, &message);
+        }
+        WorkerFetchEvent::EventSourceFailure {
+            fetch_id,
+            error,
+            mode,
+        } => {
+            super::event_source::fail_request(scope, state, fetch_id, error, mode);
+        }
+
         WorkerFetchEvent::RequestBodyProducer {
             fetch_id,
             mut producer,
@@ -3156,7 +3214,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
                     .filter(|pending| !pending.load.is_cancelled())
                     .map(|pending| {
                         (
-                            pending.resolver.clone(),
+                            pending.client.resolver().clone(),
                             pending.load.task_runner(),
                             state.fetch_completion_tx.clone(),
                         )
@@ -3280,7 +3338,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
     }
 }
 
-fn worker_fetch_response_csp_violations(
+pub(super) fn worker_fetch_response_csp_violations(
     state: &WorkerGlobalState,
     pending: &PendingWorkerFetch,
     head: &moli_fetch::ResponseHead,
@@ -3330,6 +3388,9 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
     state: &Rc<RefCell<WorkerGlobalState>>,
     started: WorkerFetchStreamingStarted,
 ) {
+    if super::event_source::start_response(scope, state, &started) {
+        return;
+    }
     let mut reject = None;
     if let Some(network_request_headers) = started.network_request_headers.as_ref()
         && let Some(record) = state
@@ -3363,7 +3424,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
                 return;
             };
             pending.load.cancel();
-            pending.resolver.clone()
+            pending.client.resolver().clone()
         };
         dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
         let message = worker_content_security_policy_error_message(&violation, "fetch");
@@ -3388,7 +3449,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         };
         if let Err(message) = validation {
             pending.load.cancel();
-            reject = Some((pending.resolver.clone(), message));
+            reject = Some((pending.client.resolver().clone(), message));
             None
         } else {
             pending.streaming_needs_orb_body_validation = !started.skip_fetch_security_validation
@@ -3413,7 +3474,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
             });
             pending.streaming_body_source_id = Some(started.body_source_id);
             Some((
-                pending.resolver.clone(),
+                pending.client.resolver().clone(),
                 request_origin,
                 pending.request_mode,
                 pending.request_method.clone(),
@@ -3483,6 +3544,10 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
     else {
         return;
     };
+    if pending.client.event_source().is_some() {
+        super::event_source::finish_response(scope, state, pending, finished);
+        return;
+    }
     pending.load.finish();
     let head = finished.head;
     match finished.result {
@@ -3632,7 +3697,17 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
             };
             pending.load.finish();
             pending.timing.reject(scope);
-            let resolver = v8::Local::new(scope, &pending.resolver);
+            if let Some(source) = pending.client.event_source() {
+                record_worker_fetch_failure(&state.borrow(), &pending, message);
+                let source = v8::Local::new(scope, source);
+                crate::network_host::fail_event_source_connection(
+                    scope,
+                    source,
+                    crate::network_host::EventSourceTerminalMode::Close,
+                );
+                return;
+            }
+            let resolver = v8::Local::new(scope, pending.client.resolver());
             record_worker_fetch_failure(&state.borrow(), &pending, message.clone());
             if let Some(message) = v8_string(scope, &message) {
                 let _ = resolver.reject(scope, v8::Exception::type_error(scope, message));
@@ -3749,7 +3824,11 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
         return;
     };
     pending.load.finish();
-    let resolver = v8::Local::new(scope, &pending.resolver);
+    if pending.client.event_source().is_some() {
+        super::event_source::complete_response(scope, state, pending, completion);
+        return;
+    }
+    let resolver = v8::Local::new(scope, pending.client.resolver());
     match completion.result {
         Ok(response) => {
             let response_head = response.head();
@@ -3883,7 +3962,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     },
                 ));
             }
-            if let Some(face) = pending.font_face.as_ref() {
+            if let Some(face) = pending.client.font_face() {
                 let usable = !opaque_response_blocked
                     && (200..300).contains(&response_head.status)
                     && !matches!(

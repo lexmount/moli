@@ -29,6 +29,10 @@ pub(super) enum WorkerTimingRequest {
     Xhr {
         credentials: RequestCredentialsMode,
     },
+    EventSource {
+        credentials: RequestCredentialsMode,
+        policy: SubresourcePolicyContext,
+    },
 }
 
 impl WorkerTimingRequest {
@@ -54,6 +58,25 @@ impl WorkerTimingRequest {
                     RequestRedirectMode::Follow,
                 )
             }
+            Self::EventSource {
+                credentials,
+                policy,
+            } => {
+                validate_fetch_response_headers(
+                    origin,
+                    head,
+                    RequestMode::Cors,
+                    *credentials,
+                    *policy,
+                )
+                .ok()?;
+                (
+                    "GET",
+                    RequestMode::Cors,
+                    *credentials,
+                    RequestRedirectMode::Follow,
+                )
+            }
         };
         Some(
             FetchResponseRequest {
@@ -70,6 +93,7 @@ impl WorkerTimingRequest {
             Self::Fetch { font: true, .. } => "css",
             Self::Fetch { font: false, .. } => "fetch",
             Self::Xhr { .. } => "xmlhttprequest",
+            Self::EventSource { .. } => "other",
         }
     }
 }
