@@ -1,6 +1,117 @@
 use super::*;
 
 #[tokio::test]
+async fn idle_callbacks_preserve_period_cohorts_across_tasks_and_microtasks() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for scenario in [
+        "queued",
+        "callback",
+        "microtask",
+        "timer",
+        "child",
+        "timeout",
+    ] {
+        let mut page = new_storage_page_task_executor_test_vm_with_loader(
+            "https://idle-period-cohorts.test/",
+            &loader,
+        );
+        page.eval(
+            "document.open();document.write('<!doctype html><body><iframe></iframe>');document.close();",
+        )
+        .expect("idle cohort document should initialize");
+        page.eval(include_str!("idle_period_cohorts.js"))
+            .expect("idle cohort probe should initialize");
+        page.eval(&format!("runIdleCohortProbe({scenario:?})"))
+            .expect("idle cohort probe should schedule");
+        advance_page_task_executor_until_eval_equals(
+            &mut page,
+            &loader,
+            "String(__idleCohortProbe.done)",
+            "true",
+            "idle callback period cohorts",
+        )
+        .await;
+        let row: serde_json::Value = serde_json::from_str(
+            &page
+                .eval("JSON.stringify(__idleCohortProbe)")
+                .expect("idle cohort observations should evaluate"),
+        )
+        .expect("idle cohort observations should be JSON");
+        let previous = row["previous"].as_f64().expect("previous period budget");
+        let current = row["current"].as_f64().expect("current period budget");
+        assert!((0.0..=50.0).contains(&current), "{scenario}: {row}");
+        assert_eq!(
+            row["didTimeout"],
+            scenario == "timeout",
+            "{scenario}: {row}"
+        );
+        if scenario == "timeout" {
+            assert_eq!(current, 0.0, "{scenario}: {row}");
+            assert_eq!(row["markerBeforeCallback"], false, "{scenario}: {row}");
+        } else if scenario == "queued" {
+            assert!(previous == 0.0 || current <= previous, "{scenario}: {row}");
+        } else {
+            assert_eq!(previous, 0.0, "{scenario}: {row}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn idle_deadline_recomputes_pending_timer_and_render_work() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    // RAF uses whole-millisecond timers. Allow upward rounding of a 60 Hz
+    // frame and one 100 microsecond DOM clock bucket in the public budget.
+    let animation_cap = (1000.0_f64 / 60.0).ceil() + 0.1;
+    for (variant, cap) in [
+        ("empty", 50.0),
+        ("timeout", 10.0),
+        ("interval", 10.0),
+        ("source", 10.0),
+        ("animation", animation_cap),
+        ("pending-animation", animation_cap),
+        ("child-animation", animation_cap),
+        ("child-timeout", 10.0),
+        ("borrowed-method", 10.0),
+        ("cancelled", 50.0),
+        ("cancelled-animation", 50.0),
+        ("idle-only", 50.0),
+    ] {
+        let mut page = new_storage_page_task_executor_test_vm_with_loader(
+            "https://idle-deadline-budget.test/",
+            &loader,
+        );
+        page.eval(
+            "document.open();document.write('<!doctype html><body><iframe></iframe>');document.close();",
+        )
+        .expect("idle budget document should initialize");
+        page.eval(include_str!("idle_deadline_budget.js"))
+            .expect("idle budget probe should initialize");
+        page.eval(&format!("runIdleBudgetProbe({variant:?})"))
+            .expect("idle budget probe should schedule");
+        advance_page_task_executor_until_eval_equals(
+            &mut page,
+            &loader,
+            "String(__idleBudgetProbe.done)",
+            "true",
+            "idle deadline budget probe",
+        )
+        .await;
+        let row: serde_json::Value = serde_json::from_str(
+            &page
+                .eval("JSON.stringify(__idleBudgetProbe)")
+                .expect("idle budget observations should evaluate"),
+        )
+        .expect("idle budget observations should be JSON");
+        assert_eq!(row["variant"], variant);
+        assert_eq!(row["didTimeout"], false, "{variant}: {row}");
+        let before = row["before"].as_f64().expect("initial budget");
+        let after = row["after"].as_f64().expect("updated budget");
+        assert!((0.0..=50.0).contains(&before), "{variant}: {row}");
+        assert!((0.0..=cap).contains(&after), "{variant}: {row}");
+    }
+}
+
+#[tokio::test]
 async fn idle_callback_options_use_webidl_conversion_and_positive_timeouts() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm("https://idle-options-conversion.test/");
