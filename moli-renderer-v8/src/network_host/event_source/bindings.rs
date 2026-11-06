@@ -423,7 +423,7 @@ fn event_source_close_callback<'s>(
     clear_event_source_reconnect_timer(scope, event_source);
     if let Some(internal_id) = event_source_active_request_id(scope, event_source) {
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-            let _ = unsafe { &mut *host_ptr }.abort_event_source_fetch(internal_id);
+            let _ = unsafe { &mut *host_ptr }.abort_event_source_fetch(scope, internal_id);
         } else {
             crate::worker::abort_worker_event_source(scope, internal_id);
         }
