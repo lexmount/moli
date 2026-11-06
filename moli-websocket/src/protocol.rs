@@ -137,7 +137,7 @@ pub fn close_info_code_from_number(value: f64) -> Result<u16, WebSocketCloseVali
     if !value.is_finite() {
         return Err(WebSocketCloseValidationError::InvalidCode);
     }
-    let code = value.round().clamp(0.0, u16::MAX as f64) as u16;
+    let code = value.trunc().clamp(0.0, u16::MAX as f64) as u16;
     if is_valid_close_code(code) {
         Ok(code)
     } else {

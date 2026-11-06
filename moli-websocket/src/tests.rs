@@ -146,7 +146,15 @@ fn websocket_close_info_validation_matches_web_api_rules() {
     );
 
     assert_eq!(close_info_code_from_number(3000.4), Ok(3000));
-    assert_eq!(close_info_code_from_number(3000.5), Ok(3001));
+    assert_eq!(close_info_code_from_number(3000.5), Ok(3000));
+    assert_eq!(close_info_code_from_number(3001.5), Ok(3001));
+    assert_eq!(close_info_code_from_number(1000.5), Ok(1000));
+    for code in [999.5, 68_536.0, -62_536.0, 4_294_970_296.0] {
+        assert_eq!(
+            close_info_code_from_number(code),
+            Err(WebSocketCloseValidationError::InvalidCode)
+        );
+    }
     assert_eq!(
         close_info_code_from_number(f64::NAN),
         Err(WebSocketCloseValidationError::InvalidCode)
