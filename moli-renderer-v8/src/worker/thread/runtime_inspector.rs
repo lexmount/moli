@@ -176,10 +176,18 @@ impl WorkerInspectorOutbound {
                     target: "moli::cdp::worker_inspector",
                     %error,
                     %raw,
+                    call_id,
                     message_units,
                     message_width,
-                    "failed to decode worker inspector protocol response; dropping"
+                    "failed to decode worker inspector protocol response; returning protocol error"
                 );
+                self.push_response_value(session_key, call_id, json!({
+                    "id": call_id,
+                    "error": {
+                        "code": -32603,
+                        "message": format!("Failed to decode Worker Inspector response: {error}"),
+                    },
+                }));
             }
         }
     }
@@ -1457,6 +1465,50 @@ mod tests {
             second_completion.output.protocol_response(7),
             Some(&json!({"id": 7, "result": "second"}))
         );
+    }
+
+    #[test]
+    fn worker_inspector_outbound_decode_error_settles_only_the_matching_session() {
+        let outbound = WorkerInspectorOutbound::default();
+        let (first_tx, mut first_rx) = tokio::sync::oneshot::channel();
+        let (second_tx, mut second_rx) = tokio::sync::oneshot::channel();
+        outbound.register_response_callback(
+            "SID-1",
+            RendererRuntimeInspectorResponseSender::new(7, first_tx),
+        );
+        outbound.register_response_callback(
+            "SID-2",
+            RendererRuntimeInspectorResponseSender::new(7, second_tx),
+        );
+
+        let raw = br#"{"id":7,"result":]}"#;
+        let message =
+            v8::inspector::StringBuffer::create(v8::inspector::StringView::from(&raw[..]));
+        outbound.push_response_message("SID-1", 7, message);
+        let completion = first_rx
+            .try_recv()
+            .expect("a malformed response must settle its callback");
+        assert_eq!(
+            completion.output.protocol_response(7).unwrap()["error"]["code"],
+            -32603
+        );
+        assert!(matches!(
+            second_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+
+        let raw = br#"{"id":7,"result":{"value":42}}"#;
+        let message =
+            v8::inspector::StringBuffer::create(v8::inspector::StringView::from(&raw[..]));
+        outbound.push_response_message("SID-2", 7, message);
+        let completion = second_rx
+            .try_recv()
+            .expect("the peer session must remain usable");
+        assert_eq!(
+            completion.output.protocol_response(7).unwrap()["result"]["value"],
+            42
+        );
+        assert!(outbound.take_all().is_empty());
     }
 
     #[test]

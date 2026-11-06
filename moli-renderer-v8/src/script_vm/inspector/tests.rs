@@ -141,6 +141,39 @@ fn inspector_outbound_registered_response_callback_wins_over_dispatch_capture() 
 }
 
 #[test]
+fn inspector_outbound_decode_error_completes_its_callback_and_allows_later_requests() {
+    let outbound = InspectorOutbound::default();
+    for (call_id, raw) in [
+        (7, r#"{"id":7,"result":]}"#),
+        (8, r#"{"id":8,"result":{"value":42}}"#),
+    ] {
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        outbound
+            .register_response_callback(RendererRuntimeInspectorResponseSender::new(call_id, tx));
+        let message =
+            v8::inspector::StringBuffer::create(v8::inspector::StringView::from(raw.as_bytes()));
+        outbound.push_response_message(call_id, message);
+        let completion = rx
+            .try_recv()
+            .expect("every owned response must settle its callback");
+        let response = completion.output.protocol_response(call_id).unwrap();
+        if call_id == 7 {
+            assert_eq!(response["error"]["code"], -32603);
+            assert!(
+                response["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("decode")
+            );
+        } else {
+            assert_eq!(response["result"]["value"], 42);
+        }
+        assert_eq!(outbound.response_callback_counts(), (0, 0));
+        assert!(outbound.take_pending_messages().is_empty());
+    }
+}
+
+#[test]
 fn deferred_inspector_response_preserves_protocol_attachment() {
     let outbound = InspectorOutbound::default();
     let attachment_id = moli_page_types::RendererAgentAttachmentId::allocate();

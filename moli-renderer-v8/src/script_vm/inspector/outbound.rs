@@ -208,8 +208,18 @@ impl InspectorOutbound {
             Err(error) => {
                 let raw = moli_v8_util::inspector_protocol_message_text(view);
                 tracing::warn!(target: "moli::cdp::inspector",
-                    %error, %raw, message_units, message_width,
-                    "failed to decode inspector protocol response; dropping");
+                    %error, %raw, call_id, message_units, message_width,
+                    "failed to decode inspector protocol response; returning protocol error");
+                self.push_response_value(
+                    call_id,
+                    serde_json::json!({
+                        "id": call_id,
+                        "error": {
+                            "code": -32603,
+                            "message": format!("Failed to decode Inspector response: {error}"),
+                        },
+                    }),
+                );
             }
         }
     }
