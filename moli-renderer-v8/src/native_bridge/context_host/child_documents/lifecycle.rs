@@ -133,11 +133,25 @@ impl JsContextHost {
                         .dom_host()
                         .node(*handle)
                         .and_then(crate::dom::native::Node::as_element)
-                        .is_some_and(|element| element.is_image_resource_element())
+                        .is_some_and(|element| {
+                            element.is_image_resource_element()
+                                || (element.is_html_input()
+                                    && element.input_type().as_ref() == "image")
+                        })
             })
             .collect::<Vec<_>>();
         let host_ptr = self as *mut JsContextHost;
         for image_handle in image_handles {
+            if self.dom_host().is_html_element_named(image_handle, "input") {
+                crate::network_host::update_input_image(
+                    scope,
+                    host_ptr,
+                    image_handle,
+                    false,
+                    crate::types::SubresourceRequestInitiatorType::Parser,
+                );
+                continue;
+            }
             crate::native_bridge::element::queue_image_load_event_if_needed_with_initiator(
                 scope,
                 host_ptr,

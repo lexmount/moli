@@ -851,6 +851,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::EventSource(_) => "event_source",
         PendingSubresourceContinuation::Fetch(_) => "fetch",
         PendingSubresourceContinuation::Image { .. } => "image",
+        PendingSubresourceContinuation::InputImage(_) => "input_image",
         PendingSubresourceContinuation::Media { .. } => "media",
         PendingSubresourceContinuation::TextTrack { .. } => "text_track",
         PendingSubresourceContinuation::FontFace(_) => "font_face",

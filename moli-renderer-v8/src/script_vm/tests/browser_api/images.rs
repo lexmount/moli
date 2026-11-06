@@ -1,4 +1,5 @@
 use super::*;
+mod input_image;
 mod natural_dimensions;
 mod picture_types;
 mod source_sizes;

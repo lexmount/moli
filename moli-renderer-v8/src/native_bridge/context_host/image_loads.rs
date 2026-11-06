@@ -67,27 +67,7 @@ impl JsContextHost {
             let _ = self.settle_pending_image_load_event(previous, true);
         }
 
-        let owner = if is_main_document {
-            PendingImageLoadEventOwner::Main(
-                self.accept_current_main_image_load_delay(image_handle)?,
-            )
-        } else {
-            let child_handle =
-                self.child_browsing_context_host_for_document_handle(owner_document_handle)?;
-            let snapshot = self.frame_owner_current_child_snapshot(child_handle)?;
-            if snapshot.document_handle != owner_document_handle {
-                return None;
-            }
-            let owner = FrameDocumentTaskOwner::new(
-                snapshot.scheduler_lane_id,
-                snapshot.local_window_id,
-                snapshot.document_id,
-            );
-            PendingImageLoadEventOwner::Child(
-                self.frame_owner_store
-                    .accept_current_child_image_load_event(child_handle, owner, image_handle)?,
-            )
-        };
+        let owner = self.accept_image_load_delay(image_handle)?;
         let pending = PendingImageLoadEvent::new(
             self.next_image_load_event_id(),
             owner_document_handle,
@@ -117,6 +97,34 @@ impl JsContextHost {
             ),
         }
         Some(pending)
+    }
+
+    pub(super) fn accept_image_load_delay(
+        &mut self,
+        image_handle: DomHandle,
+    ) -> Option<PendingImageLoadEventOwner> {
+        let owner_document_handle = self.dom_host().owner_document_handle(image_handle)?;
+        Some(if owner_document_handle == self.document_handle() {
+            PendingImageLoadEventOwner::Main(
+                self.accept_current_main_image_load_delay(image_handle)?,
+            )
+        } else {
+            let child_handle =
+                self.child_browsing_context_host_for_document_handle(owner_document_handle)?;
+            let snapshot = self.frame_owner_current_child_snapshot(child_handle)?;
+            if snapshot.document_handle != owner_document_handle {
+                return None;
+            }
+            let owner = FrameDocumentTaskOwner::new(
+                snapshot.scheduler_lane_id,
+                snapshot.local_window_id,
+                snapshot.document_id,
+            );
+            PendingImageLoadEventOwner::Child(
+                self.frame_owner_store
+                    .accept_current_child_image_load_event(child_handle, owner, image_handle)?,
+            )
+        })
     }
 
     pub(crate) fn pending_image_load_event_is_current(
@@ -414,7 +422,7 @@ impl JsContextHost {
         self.settle_pending_image_load_owner(pending.owner(), queue_lifecycle_followup)
     }
 
-    fn settle_pending_image_load_owner(
+    pub(super) fn settle_pending_image_load_owner(
         &mut self,
         owner: PendingImageLoadEventOwner,
         queue_lifecycle_followup: bool,
@@ -479,6 +487,7 @@ impl JsContextHost {
         &mut self,
         document_handle: DomHandle,
     ) -> usize {
+        self.retire_input_images_for_document(document_handle);
         let handles = self
             .pending_image_load_events
             .iter()

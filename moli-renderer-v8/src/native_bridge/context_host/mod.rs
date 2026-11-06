@@ -113,6 +113,8 @@ mod image_decodes;
 mod image_documents;
 pub(crate) use image_documents::{NavigationImageDocumentCompletion, NavigationImageDocumentLoad};
 mod image_loads;
+mod input_images;
+pub(crate) use input_images::InputImageRequestId;
 mod image_resources;
 mod promise_rejection_tasks;
 mod script_preparation_errors;
@@ -1025,6 +1027,7 @@ pub(crate) struct JsContextHost {
     lazy_media_load_candidates: HashSet<DomHandle>,
     canvas_resources: canvas_resources::CanvasResourceStore,
     image_resources: image_resources::ImageResourceStore,
+    input_images: input_images::InputImageStateStore,
     next_image_decode_id: u64,
     pending_image_decode_requests: HashMap<ImageDecodeRequestId, PendingImageDecodeRequest>,
     resource_timing_buffers: SharedResourceTimingBufferRegistry,

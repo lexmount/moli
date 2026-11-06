@@ -573,6 +573,16 @@ impl DocumentRuntime {
             let Some(element) = node.as_element() else {
                 continue;
             };
+            if element.is_html_input() && element.input_type().as_ref() == "image" {
+                crate::network_host::update_input_image(
+                    scope,
+                    host_ptr,
+                    handle,
+                    false,
+                    crate::types::SubresourceRequestInitiatorType::Parser,
+                );
+                continue;
+            }
             if !element.is_image_resource_element() || element.image_load_dispatched() {
                 continue;
             }

@@ -14,6 +14,11 @@ use super::{JsContextHost, WindowDocumentTaskTarget};
 pub(crate) enum PendingUserInteractionTaskPayload {
     EventTarget(DomHandle),
     DataTransferString(DataTransferStringCallbackTask),
+    InputImage {
+        element: DomHandle,
+        request_id: super::InputImageRequestId,
+        kind: crate::page_task_queue::RendererPageImageLoadEventKind,
+    },
 }
 
 pub(super) type UserInteractionTaskState = ExactWindowDocumentTaskLedger<
@@ -23,6 +28,24 @@ pub(super) type UserInteractionTaskState = ExactWindowDocumentTaskLedger<
 >;
 
 impl JsContextHost {
+    pub(crate) fn queue_input_image_event_task(
+        &mut self,
+        target: WindowDocumentTaskTarget,
+        element: DomHandle,
+        request_id: super::InputImageRequestId,
+        kind: crate::page_task_queue::RendererPageImageLoadEventKind,
+    ) -> bool {
+        self.publish_user_interaction_task(
+            target,
+            RendererPageUserInteractionTaskKind::InputImage,
+            PendingUserInteractionTaskPayload::InputImage {
+                element,
+                request_id,
+                kind,
+            },
+        )
+    }
+
     /// Queue one event on the stable HTML user-interaction task source.
     ///
     /// The event target determines exact Document ownership. A Document
@@ -166,6 +189,16 @@ impl JsContextHost {
         let dispatch_scope = target.dispatch_scope();
         let previous_scope = dispatch_scope.enter(scope);
         let effect = match (kind, payload) {
+            (
+                RendererPageUserInteractionTaskKind::InputImage,
+                PendingUserInteractionTaskPayload::InputImage {
+                    element,
+                    request_id,
+                    kind,
+                },
+            ) => self.dispatch_input_image_event_if_current(
+                scope, host_ptr, target, element, request_id, kind,
+            ),
             (
                 RendererPageUserInteractionTaskKind::Event(event_kind),
                 PendingUserInteractionTaskPayload::EventTarget(event_target),

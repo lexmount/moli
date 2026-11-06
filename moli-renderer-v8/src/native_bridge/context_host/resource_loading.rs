@@ -1403,6 +1403,69 @@ impl JsContextHost {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_async_input_image_fetch(
+        &mut self,
+        execution_context: super::WindowExecutionContextBinding,
+        resource_loader: &crate::network::context::DocumentResourceLoader,
+        input: crate::types::PendingInputImageFetch,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+        network_partition_key: Option<String>,
+        policy_context: crate::types::SubresourcePolicyContext,
+        mut info: PendingSubresourceFetchInfo,
+        intercepted: bool,
+    ) -> Option<u64> {
+        if !execution_context.is_current(self)
+            || !self.input_image_request_is_current(input.element, input.id, input.target)
+        {
+            return None;
+        }
+        let request_origin = resource_loader.fetch_context().request_origin();
+        let load = resource_loader.register_load(
+            ResourceLoadKind::Image,
+            ResourceLoadDisposition::Ordinary,
+            Some(cancel_handle),
+        )?;
+        self.assign_pending_subresource_fetch_identity(&mut info);
+        let internal_id = info.internal_id;
+        if !self.bind_input_image_network_request(
+            input.element,
+            input.id,
+            input.target,
+            internal_id,
+        ) {
+            return None;
+        }
+        if intercepted {
+            self.push_pending_subresource_fetch_info(info.clone());
+        } else {
+            self.record_pending_subresource_request_started_with_initiator(
+                &info,
+                input.request_initiator_type,
+                load.disposition(),
+            );
+        }
+        self.pending_subresource_fetches.insert(
+            internal_id,
+            PendingSubresourceFetchState {
+                redirect_headers: None,
+                request_origin,
+                info,
+                load,
+                execution_context: PendingSubresourceExecutionContext::window(execution_context),
+                credentials_mode: moli_fetch::RequestCredentialsMode::Include,
+                request_mode: moli_fetch::RequestMode::NoCors,
+                network_partition_key,
+                policy_context,
+                continuation: PendingSubresourceContinuation::InputImage(Box::new(input)),
+                deferred_request_started: false,
+                blob_url_entry: None,
+            },
+        );
+        self.note_subresource_activity();
+        Some(internal_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_async_font_face_fetch(
         &mut self,
         execution_context: super::WindowExecutionContextBinding,
@@ -2656,6 +2719,32 @@ impl JsContextHost {
                 )
                 .with_request_body_bytes(streaming.pending.info.request_body_bytes.clone()),
             );
+        }
+    }
+
+    pub(crate) fn abort_input_image_fetch(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        internal_id: u64,
+    ) {
+        let entry = self
+            .pending_subresource_fetches
+            .get(&internal_id)
+            .or_else(|| {
+                self.running_subresource_fetches
+                    .get(&internal_id)
+                    .map(|state| &state.pending)
+            })
+            .and_then(|pending| match &pending.continuation {
+                PendingSubresourceContinuation::InputImage(input) => {
+                    Some((input.target, input.timing.failure(&pending.info.url)))
+                }
+                _ => None,
+            });
+        if self.abort_subresource_fetch(internal_id)
+            && let Some((target, entry)) = entry
+        {
+            self.record_document_resource_timing(scope, target, entry);
         }
     }
 

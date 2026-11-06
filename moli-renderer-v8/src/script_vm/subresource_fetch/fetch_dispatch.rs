@@ -807,6 +807,38 @@ impl ScriptVm {
                                 response_status_text.as_deref(),
                             );
                         }
+                        PendingSubresourceContinuation::InputImage(mut input) => {
+                            if let Some(native) = pending.load.response_timing() {
+                                input.timing.observe_native_timing(native);
+                            }
+                            let body_size = parkable_image.as_ref().map_or_else(
+                                || observable_response.body_bytes().len(),
+                                |encoded| encoded.len(),
+                            );
+                            let successful = parkable_image.as_ref().is_some_and(|encoded| {
+                                crate::network_host::image_response_descriptor_from_parkable(
+                                    &observable_response, encoded, false,
+                                ).is_some()
+                            });
+                            let response_request = crate::network_host::FetchResponseRequest {
+                                method: &response_request_method,
+                                mode: pending.request_mode,
+                                redirect_mode: moli_fetch::RequestRedirectMode::Follow,
+                            };
+                            let filter = response_filter.unwrap_or_else(|| {
+                                response_request.network_response_filter(
+                                    &pending.request_origin, &observable_response.head(),
+                                    pending.credentials_mode,
+                                )
+                            });
+                            crate::context_bootstrap::record_resource_performance_entry(scope,
+                                input.timing.response(&pending.info.url, &pending.request_origin,
+                                    &observable_response.head(), &filter, body_size),
+                            );
+                            context_host.borrow_mut().finish_input_image_request(
+                                input.element, input.id, input.target, successful,
+                            );
+                        }
                         PendingSubresourceContinuation::Image {
                             image_handle,
                             sequence,
@@ -996,6 +1028,11 @@ impl ScriptVm {
                         PendingSubresourceContinuation::Xhr { xhr, .. } => {
                             let xhr = v8::Local::new(scope, &xhr);
                             crate::network_host::apply_xhr_failure(scope, xhr);
+                        }
+                        PendingSubresourceContinuation::InputImage(input) => {
+                            context_host.borrow_mut().finish_input_image_request(
+                                input.element, input.id, input.target, false,
+                            );
                         }
                         PendingSubresourceContinuation::Image {
                             image_handle,

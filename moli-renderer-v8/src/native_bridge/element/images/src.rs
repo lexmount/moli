@@ -595,6 +595,7 @@ pub(crate) fn image_selected_request_key(
 #[derive(Default)]
 pub(crate) struct ImageAttributeMutationPlan {
     targets: Vec<DomHandle>,
+    input_image: Option<(DomHandle, bool)>,
 }
 
 pub(crate) fn plan_image_attribute_mutation(
@@ -611,6 +612,7 @@ pub(crate) fn plan_image_attribute_mutation(
             element.is_html_element("img")
                 || element.is_svg_element("image")
                 || element.is_html_element("source")
+                || element.is_html_input()
         })
     else {
         return ImageAttributeMutationPlan::default();
@@ -655,10 +657,18 @@ pub(crate) fn plan_image_attribute_ns_mutation(
                 .then_some(handle)
                 .into_iter()
                 .collect(),
+            ..Default::default()
         };
     }
     if !namespace.is_empty() {
         return ImageAttributeMutationPlan::default();
+    }
+    if element.is_html_input() {
+        return ImageAttributeMutationPlan {
+            input_image: matches!(local_name, "src" | "type")
+                .then_some((handle, local_name == "src")),
+            ..Default::default()
+        };
     }
     if element.is_html_element("img") {
         let changes_referrer_policy = local_name == "referrerpolicy"
@@ -672,6 +682,7 @@ pub(crate) fn plan_image_attribute_ns_mutation(
             || changes_referrer_policy;
         return ImageAttributeMutationPlan {
             targets: reloads_image.then_some(handle).into_iter().collect(),
+            ..Default::default()
         };
     }
     if !element.is_html_element("source")
@@ -697,6 +708,7 @@ pub(crate) fn plan_image_attribute_ns_mutation(
             .skip(1)
             .filter(|child| runtime.dom_host().is_html_element_named(*child, "img"))
             .collect(),
+        ..Default::default()
     }
 }
 
@@ -711,6 +723,15 @@ pub(crate) fn apply_image_attribute_mutation_plan(
         &plan.targets,
         SubresourceRequestInitiatorType::Script,
     );
+    if let Some((element, source_was_set)) = plan.input_image {
+        crate::network_host::update_input_image(
+            scope,
+            runtime_ptr,
+            element,
+            source_was_set,
+            SubresourceRequestInitiatorType::Script,
+        );
+    }
 }
 
 pub(crate) fn apply_image_relevant_mutations(
