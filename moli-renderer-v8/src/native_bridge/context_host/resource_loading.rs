@@ -1470,6 +1470,7 @@ impl JsContextHost {
         execution_context: super::WindowExecutionContextBinding,
         xhr: v8::Global<v8::Object>,
         use_cors_preflight: bool,
+        initiator_url: String,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
@@ -1499,6 +1500,7 @@ impl JsContextHost {
                 continuation: PendingSubresourceContinuation::Xhr {
                     xhr,
                     use_cors_preflight,
+                    initiator_url,
                 },
                 deferred_request_started: false,
             },
@@ -1585,6 +1587,7 @@ impl JsContextHost {
         execution_context: super::WindowExecutionContextBinding,
         xhr: v8::Global<v8::Object>,
         use_cors_preflight: bool,
+        initiator_url: String,
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         network_partition_key: Option<String>,
@@ -1615,6 +1618,7 @@ impl JsContextHost {
                 continuation: PendingSubresourceContinuation::Xhr {
                     xhr,
                     use_cors_preflight,
+                    initiator_url,
                 },
                 deferred_request_started: false,
             },

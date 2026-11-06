@@ -231,6 +231,13 @@ fn execute_source_text_on_current_stack_with_completion(
     {
         scope.set_continuation_preserved_embedder_data(value);
     }
+    if crate::resource_initiator::anchor(&mut scope).is_none() {
+        let data = crate::resource_initiator::classic_data(
+            &mut scope,
+            provenance.map(CompiledStringProvenance::source_url),
+        );
+        scope.set_continuation_preserved_embedder_data(data);
+    }
     let watchdog = V8ExecutionWatchdog::arm(
         V8ExecutionWatchdogKind::ScriptTurn,
         scope.thread_safe_handle(),

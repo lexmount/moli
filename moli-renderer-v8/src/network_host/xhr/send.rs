@@ -461,7 +461,13 @@ fn send_synchronous_network_xhr(
                     "xmlhttprequest",
                     None,
                     &response,
-                ),
+                )
+                .with_initiator_url(crate::resource_initiator::response_url(
+                    prepared.initiator_url.clone(),
+                    &prepared.request_origin,
+                    &response.final_url,
+                    response.cache_state,
+                )),
             );
             let observable_headers = crate::network_host::filter_cors_exposed_response_headers(
                 &prepared.request_origin,

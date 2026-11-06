@@ -29,6 +29,7 @@ pub(super) struct PreparedXhrSendRequest {
     pub(super) send_body: Option<bytes::Bytes>,
     pub(super) credentials_mode: moli_fetch::RequestCredentialsMode,
     pub(super) use_cors_preflight: bool,
+    pub(super) initiator_url: String,
 }
 
 pub(super) enum XhrSendPrepareError {
@@ -93,6 +94,7 @@ pub(super) fn prepare_xhr_send_request<'s>(
             moli_fetch::RequestCredentialsMode::SameOrigin
         };
 
+    let initiator_url = crate::resource_initiator::current_url(scope, &request_origin);
     Ok(PreparedXhrSendRequest {
         frame_id,
         owner,
@@ -110,6 +112,7 @@ pub(super) fn prepare_xhr_send_request<'s>(
         send_body: prepared_body.body,
         credentials_mode,
         use_cors_preflight: super::xhr_has_upload_listeners(scope, xhr),
+        initiator_url,
     })
 }
 

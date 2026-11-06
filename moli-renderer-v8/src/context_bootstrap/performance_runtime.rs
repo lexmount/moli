@@ -316,6 +316,11 @@ impl ResourcePerformanceEntry {
         )
     }
 
+    pub(crate) fn with_initiator_url(mut self, initiator_url: String) -> Self {
+        self.initiator_url = initiator_url;
+        self
+    }
+
     fn from_response_parts(
         name: impl Into<String>,
         initiator_type: &'static str,

@@ -543,7 +543,7 @@ fn script_host_defined_options_as_fixed_array<'s>(
 pub(crate) fn script_base_url_from_continuation_data(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<Url> {
-    let value = scope.get_continuation_preserved_embedder_data();
+    let value = crate::resource_initiator::base_url_value(scope);
     let value = v8::Local::<v8::String>::try_from(value).ok()?;
     Url::parse(&value.to_rust_string_lossy(scope)).ok()
 }
@@ -552,7 +552,8 @@ pub(crate) fn script_base_url_continuation_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     base_url: &Url,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    v8_string(scope, base_url.as_str()).map(Into::into)
+    let base = v8_string(scope, base_url.as_str())?.into();
+    Some(crate::resource_initiator::with_base_url(scope, base))
 }
 
 pub(crate) fn script_host_defined_options_with_base_url_and_nonce<'s>(
