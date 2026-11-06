@@ -960,13 +960,13 @@ impl JsContextHost {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record_async_media_subresource_fetch(
+    pub(crate) fn record_media_subresource_fetch(
         &mut self,
         context: v8::Global<v8::Context>,
         media_handle: crate::document_runtime::DomHandle,
         sequence: crate::native_bridge::MediaLoadSequenceId,
         owner: OwnerDispatchScope,
-        cancel_handle: moli_fetch::FetchCancelHandle,
+        registration: SubresourceFetchRegistration,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
         network_partition_key: Option<String>,
@@ -986,13 +986,20 @@ impl JsContextHost {
             owner,
             info.resource_type,
             ResourceLoadDisposition::Ordinary,
-            Some(cancel_handle.clone()),
+            registration.cancel_handle(),
         );
-        self.record_pending_subresource_request_started_with_initiator(
-            &info,
-            SubresourceRequestInitiatorType::Other,
-            load.disposition(),
-        );
+        match registration {
+            SubresourceFetchRegistration::Intercepted => {
+                self.push_pending_subresource_fetch_info(info.clone());
+            }
+            SubresourceFetchRegistration::Dispatched(_) => {
+                self.record_pending_subresource_request_started_with_initiator(
+                    &info,
+                    SubresourceRequestInitiatorType::Other,
+                    load.disposition(),
+                );
+            }
+        }
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1142,13 +1149,13 @@ impl JsContextHost {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record_async_text_track_subresource_fetch(
+    pub(crate) fn record_text_track_subresource_fetch(
         &mut self,
         context: v8::Global<v8::Context>,
         track_handle: crate::document_runtime::DomHandle,
         sequence: crate::native_bridge::TextTrackLoadSequenceId,
         owner: OwnerDispatchScope,
-        cancel_handle: moli_fetch::FetchCancelHandle,
+        registration: SubresourceFetchRegistration,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
         network_partition_key: Option<String>,
@@ -1168,13 +1175,20 @@ impl JsContextHost {
             owner,
             info.resource_type,
             ResourceLoadDisposition::Ordinary,
-            Some(cancel_handle.clone()),
+            registration.cancel_handle(),
         );
-        self.record_pending_subresource_request_started_with_initiator(
-            &info,
-            SubresourceRequestInitiatorType::Other,
-            load.disposition(),
-        );
+        match registration {
+            SubresourceFetchRegistration::Intercepted => {
+                self.push_pending_subresource_fetch_info(info.clone());
+            }
+            SubresourceFetchRegistration::Dispatched(_) => {
+                self.record_pending_subresource_request_started_with_initiator(
+                    &info,
+                    SubresourceRequestInitiatorType::Other,
+                    load.disposition(),
+                );
+            }
+        }
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {

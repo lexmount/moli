@@ -1,5 +1,31 @@
 use super::*;
 
+fn with_subresource_request_metadata(
+    request: moli_fetch::Request,
+    resource_type: SubresourceResourceType,
+) -> moli_fetch::Request {
+    use moli_fetch::BrowserRequestMetadata;
+
+    match resource_type {
+        SubresourceResourceType::Image => {
+            request.with_browser_request_metadata(BrowserRequestMetadata::Image)
+        }
+        SubresourceResourceType::Font => {
+            request.with_browser_request_metadata(BrowserRequestMetadata::Font)
+        }
+        SubresourceResourceType::Audio => {
+            request.with_browser_request_metadata(BrowserRequestMetadata::Audio)
+        }
+        SubresourceResourceType::Video => {
+            request.with_browser_request_metadata(BrowserRequestMetadata::Video)
+        }
+        SubresourceResourceType::TextTrack => {
+            request.with_browser_request_metadata(BrowserRequestMetadata::TextTrack)
+        }
+        _ => request,
+    }
+}
+
 impl ScriptVm {
     pub(crate) fn continue_pending_subresource_fetch_body(
         &mut self,
@@ -403,6 +429,7 @@ impl ScriptVm {
             }
             SubresourceResourceType::WebSocket | SubresourceResourceType::Document => request,
         };
+        request = with_subresource_request_metadata(request, pending.info.resource_type);
         let cancel_handle = moli_fetch::FetchCancelHandle::new();
         pending.load.attach_cancel_handle(cancel_handle.clone());
         self.spawn_running_subresource_fetch(
@@ -764,6 +791,7 @@ impl ScriptVm {
             }
             SubresourceResourceType::WebSocket | SubresourceResourceType::Document => request,
         };
+        request = with_subresource_request_metadata(request, pending_fetch.info.resource_type);
         let request_headers = original_request_headers;
         if self._context_host.borrow().network_offline() {
             let activity = self.resolve_pending_subresource_fetch_body(

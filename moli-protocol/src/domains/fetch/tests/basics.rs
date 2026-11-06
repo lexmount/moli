@@ -1059,34 +1059,67 @@ async fn enable_with_other_resource_type_filter_sets_other_filter() {
 }
 
 #[tokio::test]
-async fn enable_rejects_unimplemented_parser_discovered_resource_type_filters() {
-    for resource_type in ["Stylesheet", "Media", "TextTrack"] {
+async fn enable_rejects_unsupported_stylesheet_and_text_track_filters() {
+    for resource_type in ["Stylesheet", "TextTrack"] {
         let mut ctx = TestContext::new();
-        {
-            let fixture_value = Some(BrowserContext::new_with_page_for_test(
+        ctx.with_fixture(|conn| {
+            conn.browser_context = Some(BrowserContext::new_with_page_for_test(
                 format!("BID-{resource_type}"),
                 "TID-1",
             ));
-            ctx.with_fixture(|conn| {
-                conn.browser_context = fixture_value;
-            });
-        }
-
+        });
         ctx.process_async(json!({
             "id": 20,
             "method": "Fetch.enable",
             "params": {
-                "patterns": [{ "urlPattern": "*", "requestStage": "Request", "resourceType": resource_type }]
+                "patterns": [{ "resourceType": resource_type }]
             }
         }))
         .await;
         ctx.expect_error(20, -32602, "InvalidParams");
-
         ctx.with_fixture(|conn| {
             let bc = conn.browser_context.as_ref().unwrap();
             assert!(!bc.active_page_target().fetch_owner.is_enabled());
         });
     }
+}
+
+#[tokio::test]
+async fn enable_accepts_mixed_image_media_and_font_patterns() {
+    let mut ctx = TestContext::new();
+    ctx.with_fixture(|conn| {
+        conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    });
+    ctx.process_async(json!({
+        "id": 20,
+        "method": "Fetch.enable",
+        "params": {
+            "patterns": [
+                { "resourceType": "Image" },
+                { "resourceType": "Media" },
+                { "resourceType": "Font" }
+            ]
+        }
+    }))
+    .await;
+    ctx.expect_result(20, json!({}), None);
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().unwrap();
+        let config = bc.active_page_target().fetch_owner.config_snapshot();
+        assert!(config.is_enabled());
+        assert_eq!(
+            config
+                .patterns()
+                .iter()
+                .map(|pattern| pattern.resource_type_filter)
+                .collect::<Vec<_>>(),
+            vec![
+                Some(FetchResourceTypeFilter::Image),
+                Some(FetchResourceTypeFilter::Media),
+                Some(FetchResourceTypeFilter::Font),
+            ]
+        );
+    });
 }
 
 #[tokio::test]
