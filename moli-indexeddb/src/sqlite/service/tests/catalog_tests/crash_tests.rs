@@ -9,7 +9,14 @@ use std::{
 const ROOT_ENV: &str = "MOLI_TEST_IDB_CRASH_ROOT";
 const CASE_ENV: &str = "MOLI_TEST_IDB_CRASH_CASE";
 const READY: &str = "MOLI_IDB_CRASH_READY ";
+const PROGRESS: &str = "MOLI_IDB_CRASH_PROGRESS ";
 const NAME: &str = "crash-recovery";
+
+fn report_progress(stage: &str) {
+    let mut output = std::io::stdout().lock();
+    writeln!(output, "{PROGRESS}{stage}").unwrap();
+    output.flush().unwrap();
+}
 
 fn preparation_boundary(case: &str) -> Option<Boundary> {
     match case {
@@ -21,7 +28,9 @@ fn preparation_boundary(case: &str) -> Option<Boundary> {
 }
 
 fn crash_child(root: PathBuf, case: &str) {
+    report_progress("child started");
     let service = Service::on_disk(root, config()).unwrap();
+    report_progress("catalog opened");
     if let Some(boundary) = preparation_boundary(case) {
         service.catalog.as_ref().unwrap().interrupt_at(boundary);
     }
@@ -36,15 +45,18 @@ fn crash_child(root: PathBuf, case: &str) {
         completion.result.is_err(),
         preparation_boundary(case).is_some()
     );
+    report_progress("database resolved");
     // Keep a real Web connection open for the committed-WAL crash case.
     // An idle disk owner can now checkpoint and close before shutdown.
     let _connection = completion
         .result
         .is_ok()
         .then(|| client.open_connection_for_test(Arc::new(|| {})).unwrap());
+    report_progress("connection opened");
     let mut active = None;
     if preparation_boundary(case).is_none() && case != "unpublished" {
         seed(&client);
+        report_progress("seed committed");
         match case {
             "committed" => {}
             "write" | "prepared-write" => {
@@ -55,6 +67,7 @@ fn crash_child(root: PathBuf, case: &str) {
                     TransactionMode::ReadWrite,
                     active.as_ref().unwrap(),
                 );
+                report_progress("transaction started");
                 if case == "write" {
                     write(&client, &[9; 8192]);
                 } else {
@@ -148,23 +161,37 @@ fn kill_at_boundary(root: &std::path::Path, case: &str) -> (String, u64) {
     let output = child.stdout.take().unwrap();
     let (sender, receiver) = mpsc::channel();
     let reader = std::thread::spawn(move || {
-        let ready = BufReader::new(output).lines().find_map(|line| {
-            line.ok()?
-                .split_once(READY)
-                .map(|(_, ready)| ready.to_owned())
-        });
-        let _ = sender.send(ready);
+        for line in BufReader::new(output).lines().map_while(Result::ok) {
+            if (line.contains(PROGRESS) || line.contains(READY)) && sender.send(line).is_err() {
+                break;
+            }
+        }
     });
-    let ready = receiver.recv_timeout(Duration::from_secs(10));
+    // Each stage can include durable filesystem work. Keep the same bounded
+    // inactivity watchdog rather than charging process startup and every SQL
+    // operation against one shared ten-second preparation budget. Only real
+    // completed stages extend it; a stuck child still times out and is reaped.
+    let mut stage = "process startup".to_owned();
+    let ready = loop {
+        match receiver.recv_timeout(Duration::from_secs(10)) {
+            Ok(line) => {
+                if let Some((_, ready)) = line.split_once(READY) {
+                    break Ok(ready.to_owned());
+                }
+                if let Some((_, progress)) = line.split_once(PROGRESS) {
+                    stage = progress.to_owned();
+                }
+            }
+            Err(error) => break Err(format!("{case}: waiting after {stage}: {error}")),
+        }
+    };
     // Reap the child even when it failed before reaching the handshake.
     let killed = child.kill();
     let status = child.wait().unwrap();
     reader.join().unwrap();
     assert!(killed.is_ok(), "{case}: child exited before kill: {status}");
     assert!(!status.success(), "{case}: expected forced termination");
-    let ready = ready
-        .expect("bounded crash boundary")
-        .expect("child reached boundary");
+    let ready = ready.expect("bounded crash boundary");
     let (generation, usage) = ready.split_once(' ').unwrap();
     (generation.into(), usage.parse().unwrap())
 }
