@@ -2347,6 +2347,7 @@ mod webidl_fetch;
 
 mod idb_object_store_native_receivers;
 
+mod exception_constructor_strings;
 mod webidl_receivers;
 mod webidl_trusted_types;
 mod websocket;
