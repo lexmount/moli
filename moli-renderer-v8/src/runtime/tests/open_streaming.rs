@@ -640,6 +640,11 @@ async fn assert_open_stream_work_executes_before_eof(html: &str, work_label: &st
         .unwrap_or_else(|_| panic!("{work_label} should execute while the stream remains open"))
         .unwrap_or_else(|_| panic!("{work_label} effect signal should remain open"));
 
+    assert!(
+        !page.body_tx.is_closed(),
+        "the main-Document stream must remain open until the work effect is observed"
+    );
+
     page.finish().await;
     server.await.expect("open-stream server should finish");
 }
@@ -786,6 +791,9 @@ async fn spawn_open_stream_work_effect_server() -> (
             .write_all(work_response.as_bytes())
             .await
             .expect("write open-stream work response");
+        // Finish the advertised Connection: close response before waiting for
+        // its side effect. Only the main-Document stream should remain open.
+        drop(work_stream);
 
         let (mut effect_stream, _) = listener
             .accept()
@@ -857,6 +865,7 @@ async fn spawn_open_stream_module_graph_server() -> (
             .write_all(root_response.as_bytes())
             .await
             .expect("write open-stream module root response");
+        drop(root_stream);
 
         let (mut dependency_stream, _) = listener
             .accept()
@@ -931,6 +940,7 @@ async fn spawn_open_stream_child_document_server() -> (
             .write_all(child_response.as_bytes())
             .await
             .expect("write open-stream child Document response");
+        drop(child_stream);
 
         let (mut effect_stream, _) = listener
             .accept()
