@@ -1154,6 +1154,9 @@ impl DocumentRuntime {
                     &url,
                     host_ptr,
                     csp_source_location.clone(),
+                    resource_timing_initiator
+                        .as_ref()
+                        .map(|source| source.as_str().to_owned()),
                 )
             {
                 return result;
@@ -1197,6 +1200,9 @@ impl DocumentRuntime {
                 } else {
                     preload
                 };
+                let preload = preload.with_resource_timing_initiator(
+                    resource_timing_initiator.map(|source| source.as_str().to_owned()),
+                );
                 result.push_modulepreload_start(ConnectedModulepreloadStart::new(preload, client));
                 return result;
             }
@@ -2114,6 +2120,7 @@ impl DocumentRuntime {
         url: &url::Url,
         host_ptr: *mut JsContextHost,
         csp_source_location: Option<ContentSecurityPolicySourceLocation>,
+        resource_timing_initiator: Option<String>,
     ) -> bool {
         let Some(document) = self.dom_host.owner_document_handle(handle) else {
             return false;
@@ -2161,6 +2168,7 @@ impl DocumentRuntime {
             } else {
                 candidate.request
             };
+            let request = request.with_resource_timing_initiator(resource_timing_initiator);
             let _ =
                 host.queue_child_modulepreload_fetch_for_current_document(child, handle, request);
         }

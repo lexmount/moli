@@ -104,6 +104,7 @@ impl ResolvedDeferPhaseScript {
             return false;
         }
         let PreparedScriptSourceLoadOutcome {
+            response_provenance: _,
             source_result,
             source_bytes,
             network_result,

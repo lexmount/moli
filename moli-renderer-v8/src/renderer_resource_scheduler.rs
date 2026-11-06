@@ -185,6 +185,7 @@ impl RendererResourceScheduler {
     ) {
         let schedule = MainModuleFetchSchedule::Runtime(target);
         let fetch_context = request.fetch_context().cloned();
+        let resource_initiator = request.resource_timing_initiator();
         let blob_resource = request.blob_resource().cloned();
         let attribution = MainModuleFetchNetworkAttribution::new(
             service_worker.document_url.clone(),
@@ -242,6 +243,7 @@ impl RendererResourceScheduler {
             );
             return;
         };
+        let observed_request = request.clone();
         let completion_tx = self.completion_tx.clone();
         let request_client = load.request_client();
         let runner = load.task_runner();
@@ -284,6 +286,26 @@ impl RendererResourceScheduler {
                 }
                 _ => None,
             };
+            if let Some(context) = &fetch_context {
+                match outcome.network_result.as_deref() {
+                    Some(Ok(response)) if policy_error.is_none() => {
+                        let (filter, from_service_worker) = match &outcome.response_provenance {
+                            crate::planning::ClassicScriptResponseProvenance::Network => (None, false),
+                            crate::planning::ClassicScriptResponseProvenance::ServiceWorker { filter } => (filter.as_ref(), true),
+                        };
+                        context.record_response(
+                            &observed_request,
+                            response,
+                            filter,
+                            outcome.fetch_timing.as_ref().and_then(|timing| timing.native),
+                            &resource_initiator,
+                            from_service_worker,
+                        );
+                    }
+                    Some(Err(_)) => context.record_failure(&script.url),
+                    _ => {}
+                }
+            }
             let result = outcome.source_result.and_then(|source| {
                 if let Some(error) = policy_error {
                     return Err(error);

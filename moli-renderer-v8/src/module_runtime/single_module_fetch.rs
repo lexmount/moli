@@ -10,6 +10,7 @@ pub(crate) struct NativeModuleSingleFetchRequest {
     source_url: Url,
     base_url: Url,
     initiator_url: Url,
+    resource_timing_initiator: Option<String>,
     // Fetch-client defaults belong to this request, not the module's persistent options.
     document_referrer_policy: Option<String>,
     csp_source_location:
@@ -30,6 +31,7 @@ impl NativeModuleSingleFetchRequest {
             source_url,
             base_url,
             initiator_url,
+            resource_timing_initiator: None,
             document_referrer_policy: None,
             csp_source_location: None,
             module_key,
@@ -39,6 +41,11 @@ impl NativeModuleSingleFetchRequest {
 
     pub(crate) fn with_document_referrer_policy(mut self, policy: Option<String>) -> Self {
         self.document_referrer_policy = policy;
+        self
+    }
+
+    pub(crate) fn with_resource_timing_initiator(mut self, initiator: Option<String>) -> Self {
+        self.resource_timing_initiator = initiator;
         self
     }
 
@@ -93,6 +100,7 @@ impl NativeModuleSingleFetchRequest {
             self.module_key.kind(),
         )
         .with_document_referrer_policy(self.document_referrer_policy.clone())
+        .with_resource_timing_initiator(self.resource_timing_initiator.clone())
         .with_csp_source_location(self.csp_source_location.clone())
     }
 }

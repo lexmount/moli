@@ -40,6 +40,7 @@ mod tests {
 
     fn outcome() -> PreparedScriptSourceLoadOutcome {
         PreparedScriptSourceLoadOutcome {
+            response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
             fetch_timing: None,
             source_result: Ok("ready".to_owned()),
             source_bytes: None,

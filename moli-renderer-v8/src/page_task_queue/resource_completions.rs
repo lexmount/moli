@@ -870,6 +870,7 @@ mod tests {
         MainParserDeferredClassicSourceLoadCompletion::new(
             pending_script_id,
             PreparedScriptSourceLoadOutcome {
+                response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                 fetch_timing: None,
                 source_result: Ok(format!("window.defer{parser_position} = true")),
                 source_bytes: None,

@@ -3290,6 +3290,7 @@ document.body.appendChild(replacementFrame);
                             MainParserDeferredClassicSourceLoadCompletion::new(
                                 pending_script_id,
                                 PreparedScriptSourceLoadOutcome {
+                                    response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                                     fetch_timing: None,
                                     source_result: Ok(
                                         "globalThis.__oldNamespaceDeferRan = true".to_owned(),

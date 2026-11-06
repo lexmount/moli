@@ -172,6 +172,8 @@ impl NativeModuleFetchContext {
         response: &NavigationResponse,
         filter: Option<&FetchResponseFilter>,
         native: Option<moli_fetch::FetchResponseTiming>,
+        initiator: &crate::context_bootstrap::ResourceTimingInitiator,
+        from_service_worker: bool,
     ) {
         let mut timing = self.timing.lock();
         if let Some(native) = native {
@@ -189,13 +191,18 @@ impl NativeModuleFetchContext {
                 request.credentials_mode,
             )
         });
-        *self.entry.lock() = Some(timing.response(
+        let head = response.head();
+        let mut entry = timing.response(
             &request.url,
             &self.request_origin,
-            &response.head(),
+            &head,
             &filter,
             response.body_bytes().len(),
-        ));
+        );
+        if !from_service_worker {
+            initiator.apply(&mut entry, &head, filter.is_readable());
+        }
+        *self.entry.lock() = Some(entry);
     }
 
     pub(crate) fn record_failure(&self, url: &Url) {

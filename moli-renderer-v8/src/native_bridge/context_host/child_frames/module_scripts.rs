@@ -890,6 +890,8 @@ impl JsContextHost {
             url = %network_attribution.request_url(),
             "starting child module dependency fetch through owner module map"
         );
+        let fetch_context = request.fetch_context().cloned();
+        let callback_context = fetch_context.clone();
         let send_completion = move |result, network_result| {
             let _ = completion_tx.send_child_module_dependency_fetch(
                 ChildModuleDependencyFetchCompletion::new(
@@ -899,6 +901,9 @@ impl JsContextHost {
                     result,
                     network_result,
                     completion_network_attribution,
+                )
+                .with_performance_entry(
+                    callback_context.and_then(|context| context.take_performance_entry()),
                 ),
             );
         };
@@ -906,14 +911,19 @@ impl JsContextHost {
             let message = error.to_string();
             let _ = self
                 .resource_completion_tx
-                .send_child_module_dependency_fetch(ChildModuleDependencyFetchCompletion::new(
-                    child_handle,
-                    request_id,
-                    task,
-                    Err(message.clone()),
-                    Some(std::sync::Arc::new(Err(message))),
-                    network_attribution,
-                ));
+                .send_child_module_dependency_fetch(
+                    ChildModuleDependencyFetchCompletion::new(
+                        child_handle,
+                        request_id,
+                        task,
+                        Err(message.clone()),
+                        Some(std::sync::Arc::new(Err(message))),
+                        network_attribution,
+                    )
+                    .with_performance_entry(
+                        fetch_context.and_then(|context| context.take_performance_entry()),
+                    ),
+                );
         }
     }
 
@@ -951,6 +961,8 @@ impl JsContextHost {
             url = %network_attribution.request_url(),
             "starting child parser module root fetch through child document modulator reservation"
         );
+        let fetch_context = request.fetch_context().cloned();
+        let callback_context = fetch_context.clone();
         let send_completion = move |result, network_result| {
             let _ = completion_tx.send_child_parser_module_root_fetch(
                 ChildParserModuleRootFetchCompletion::new(
@@ -960,6 +972,9 @@ impl JsContextHost {
                     result,
                     network_result,
                     completion_network_attribution,
+                )
+                .with_performance_entry(
+                    callback_context.and_then(|context| context.take_performance_entry()),
                 ),
             );
         };
@@ -967,14 +982,19 @@ impl JsContextHost {
             let message = error.to_string();
             let _ = self
                 .resource_completion_tx
-                .send_child_parser_module_root_fetch(ChildParserModuleRootFetchCompletion::new(
-                    target,
-                    request_id,
-                    request_key,
-                    Err(message.clone()),
-                    Some(std::sync::Arc::new(Err(message))),
-                    network_attribution,
-                ));
+                .send_child_parser_module_root_fetch(
+                    ChildParserModuleRootFetchCompletion::new(
+                        target,
+                        request_id,
+                        request_key,
+                        Err(message.clone()),
+                        Some(std::sync::Arc::new(Err(message))),
+                        network_attribution,
+                    )
+                    .with_performance_entry(
+                        fetch_context.and_then(|context| context.take_performance_entry()),
+                    ),
+                );
         }
     }
 

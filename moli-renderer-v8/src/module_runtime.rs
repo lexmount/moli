@@ -241,6 +241,7 @@ pub(crate) async fn execute_external_module_script_graph(
     initiator_url: &Url,
     fetch_metadata: &ScriptFetchMetadata,
     completion_owner: ModuleScriptCompletionOwner,
+    resource_timing_initiator: Option<String>,
 ) -> std::result::Result<ModuleScriptExecutionOutcome, ModuleLoadError> {
     graph::execute_external_native_module_script_graph(
         vm,
@@ -248,6 +249,7 @@ pub(crate) async fn execute_external_module_script_graph(
         initiator_url,
         fetch_metadata,
         completion_owner,
+        resource_timing_initiator,
     )
     .await
 }
@@ -327,6 +329,11 @@ pub(crate) fn parser_owned_module_script_graph_job_for_prepared_script(
             )?))
         }
     }
+    .map(|job| {
+        job.map(|job| {
+            job.with_resource_timing_initiator(script.resource_timing_initiator_url.clone())
+        })
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

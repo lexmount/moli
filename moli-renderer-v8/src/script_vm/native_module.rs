@@ -582,6 +582,7 @@ fn runtime_owned_module_script_graph_job_for_prepared_script(
             )
         }
     }
+    .map(|job| job.with_resource_timing_initiator(script.resource_timing_initiator_url.clone()))
 }
 
 const DYNAMIC_MODULE_REACTION_ID_SLOT: &str = "reactionId";

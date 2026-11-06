@@ -234,6 +234,12 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
             key.kind(),
         )
         .with_document_referrer_policy(referrer_policy)
+        .with_resource_timing_initiator(Some(
+            root.script()
+                .resource_timing_initiator_url
+                .clone()
+                .unwrap_or_else(|| loader.fetch_context().document_url().as_str().to_owned()),
+        ))
         .with_csp_source_location(Some(Default::default()));
         let context = match self.vm.capture_child_module_graph_fetch_context(
             root.owner().document_owner(),

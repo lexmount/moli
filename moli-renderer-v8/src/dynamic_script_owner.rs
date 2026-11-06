@@ -2335,6 +2335,7 @@ mod tests {
         DynamicScriptLoadCompletion {
             id: owner_id(id),
             outcome: PreparedScriptSourceLoadOutcome {
+                response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                 fetch_timing: None,
                 source_result: Ok(source.into()),
                 source_bytes: None,
@@ -2348,6 +2349,7 @@ mod tests {
         DynamicScriptLoadCompletion {
             id: owner_id(id),
             outcome: PreparedScriptSourceLoadOutcome {
+                response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                 fetch_timing: None,
                 source_result: Err(error.into()),
                 source_bytes: None,

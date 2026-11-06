@@ -118,6 +118,7 @@ impl ParserPreparedClassicScript {
         outcome: PreparedScriptSourceLoadOutcome,
     ) -> Result<Option<SharedNavigationResponseResult>, String> {
         let PreparedScriptSourceLoadOutcome {
+            response_provenance: _,
             source_result,
             source_bytes,
             network_result,
@@ -274,6 +275,7 @@ impl ParserClassicScriptSourceResult {
         Self::from_identity(
             identity,
             PreparedScriptSourceLoadOutcome {
+                response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                 fetch_timing: None,
                 source_result: result,
                 source_bytes: None,

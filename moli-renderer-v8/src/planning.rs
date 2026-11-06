@@ -188,6 +188,7 @@ impl SharedScriptSourceLoad {
     pub(crate) fn ready_ok(source: impl Into<String>) -> Self {
         let load = Self::pending();
         load.finish(PreparedScriptSourceLoadOutcome {
+            response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
             fetch_timing: None,
             source_result: Ok(source.into()),
             source_bytes: None,
@@ -201,6 +202,7 @@ impl SharedScriptSourceLoad {
     pub(crate) fn ready_err(error: impl Into<String>) -> Self {
         let load = Self::pending();
         load.finish(PreparedScriptSourceLoadOutcome {
+            response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
             fetch_timing: None,
             source_result: Err(error.into()),
             source_bytes: None,
@@ -217,6 +219,7 @@ impl SharedScriptSourceLoad {
     ) -> Self {
         let load = Self::pending();
         load.finish(PreparedScriptSourceLoadOutcome {
+            response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
             source_result,
             fetch_timing: None,
             source_bytes: None,
@@ -235,6 +238,7 @@ impl SharedScriptSourceLoad {
         let load_for_task = load.clone();
         tokio::spawn(async move {
             load_for_task.finish(PreparedScriptSourceLoadOutcome {
+                response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                 fetch_timing: None,
                 source_result: task.await,
                 source_bytes: None,
@@ -302,6 +306,7 @@ pub(crate) fn is_webassembly_module_script_url(url: &url::Url) -> bool {
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedScriptSourceLoadOutcome {
+    pub(crate) response_provenance: ClassicScriptResponseProvenance,
     pub(crate) source_result: std::result::Result<String, String>,
     pub(crate) source_bytes: Option<Vec<u8>>,
     pub(crate) network_result: Option<SharedNavigationResponseResult>,
@@ -345,6 +350,7 @@ async fn load_prepared_script_source_outcome_with_request(
     match &script.source {
         ScriptSource::Inline(source) | ScriptSource::Loaded(source) => {
             PreparedScriptSourceLoadOutcome {
+                response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                 fetch_timing: None,
                 source_result: Ok(source.clone()),
                 source_bytes: None,
@@ -353,6 +359,7 @@ async fn load_prepared_script_source_outcome_with_request(
             }
         }
         ScriptSource::LoadedBinary { source, bytes } => PreparedScriptSourceLoadOutcome {
+            response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
             fetch_timing: None,
             source_result: Ok(source.clone()),
             source_bytes: Some(bytes.clone()),
@@ -409,6 +416,7 @@ async fn load_external_script_request_source_outcome(
             let consumed_preload = error.is::<crate::network::preloads::ConsumedPreloadError>();
             let error = format!("failed to fetch script `{}`: {error}", script.url);
             PreparedScriptSourceLoadOutcome {
+                response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                 fetch_timing: None,
                 source_result: Err(error.clone()),
                 source_bytes: None,
@@ -544,6 +552,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome_wit
             let consumed_preload = error.is::<crate::network::preloads::ConsumedPreloadError>();
             let message = format!("failed to fetch script `{}`: {error}", script.url);
             PreparedScriptSourceLoadOutcome {
+                response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                 fetch_timing: None,
                 source_result: Err(message.clone()),
                 source_bytes: None,
@@ -594,6 +603,7 @@ fn local_or_unsupported_external_script_source_load_outcome(
 ) -> Option<PreparedScriptSourceLoadOutcome> {
     match script.url.scheme() {
         "data" => Some(PreparedScriptSourceLoadOutcome {
+            response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
             fetch_timing: None,
             source_result: decode_data_url_script_source(&script.url)
                 .map_err(|error| error.to_string()),
@@ -641,6 +651,7 @@ pub(crate) fn immediate_external_script_source_load_outcome(
 
 fn failed_external_script_source_load_outcome(message: String) -> PreparedScriptSourceLoadOutcome {
     PreparedScriptSourceLoadOutcome {
+        response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
         fetch_timing: None,
         source_result: Err(message.clone()),
         source_bytes: None,
@@ -683,7 +694,7 @@ pub(crate) fn spawn_service_worker_aware_external_script_source_load(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum ClassicScriptResponseProvenance {
+pub(crate) enum ClassicScriptResponseProvenance {
     Network,
     ServiceWorker {
         filter: Option<AsyncSubresourceFetchResponseFilter>,
@@ -787,7 +798,7 @@ fn external_script_source_load_outcome_from_response_inner(
     cors_error: Option<String>,
     provenance: ClassicScriptResponseProvenance,
 ) -> PreparedScriptSourceLoadOutcome {
-    let muted_errors = classic_script_errors_are_muted(script, &response, provenance);
+    let muted_errors = classic_script_errors_are_muted(script, &response, provenance.clone());
     let response_bytes = response.body_bytes().to_vec();
     let opaque_status_zero = response_filter
         == Some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque)
@@ -821,6 +832,7 @@ fn external_script_source_load_outcome_from_response_inner(
         ))
     };
     PreparedScriptSourceLoadOutcome {
+        response_provenance: provenance,
         source_result,
         fetch_timing: None,
         source_bytes: Some(response_bytes),
@@ -980,6 +992,7 @@ mod tests {
         let load = SharedScriptSourceLoad::spawn_outcome_with_owner_wake(
             async {
                 PreparedScriptSourceLoadOutcome {
+                    response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                     fetch_timing: None,
                     source_result: Ok("window.ready = true;".to_owned()),
                     source_bytes: None,
