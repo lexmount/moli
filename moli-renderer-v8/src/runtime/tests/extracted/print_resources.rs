@@ -1,6 +1,7 @@
 use super::*;
 use moli_page_types::LayoutPolicy;
 
+mod font_order;
 mod lifecycle;
 
 #[derive(Clone, Copy, Debug)]
