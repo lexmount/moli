@@ -149,6 +149,17 @@ impl CallbackInitiator {
     fn local<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::String> {
         v8::Local::new(scope, self.0.as_ref())
     }
+
+    /// Reuse an existing registration's attribution while enqueueing its next
+    /// notification. This neither enters nor authorizes the callback Realm.
+    pub(crate) fn with_current<'s, R>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        enqueue: impl FnOnce(&mut v8::PinScope<'s, '_>) -> R,
+    ) -> R {
+        let anchor = self.local(scope);
+        with_callback_anchor(scope, Some(anchor), enqueue)
+    }
 }
 
 /// Choose before entering a callback Realm. An active caller, including an
