@@ -40,11 +40,13 @@ pub(in crate::native_bridge) fn body_onmessageerror_getter_function<'s>(
         rv.set_null();
         return;
     };
-    runtime.set_registered_event_handler_property(
+    let target_context = scope.get_current_context();
+    runtime.set_registered_content_attribute_event_handler_property(
         scope,
         EventTargetHandle::Window,
         MESSAGEERROR_EVENT_TYPE,
         Some(handler),
+        target_context,
     );
     rv.set(handler.into());
 }
