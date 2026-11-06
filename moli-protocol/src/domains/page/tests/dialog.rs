@@ -61,7 +61,7 @@ fn push_dialog_for_session(
     let mut dialog = crate::conn::TargetJavaScriptDialog::new(page_owner, source_frame_id, dialog);
     ctx.with_fixture(|conn| {
         let owner = crate::conn::CommandOwnerScope::capture(conn, session_id);
-        dialog.set_page_subscriptions(
+        dialog.set_opening_subscription_generations(
             conn.subscribed_page_event_session_ids_for_owner(&owner)
                 .iter()
                 .filter_map(|session_id| {
@@ -1830,7 +1830,7 @@ async fn handle_javascript_dialog_rejects_dialog_without_current_page_residence(
             "",
             None,
         );
-        dialog.set_page_subscriptions(vec![generation]);
+        dialog.set_opening_subscription_generations(vec![generation]);
         conn.with_target_javascript_dialog_state_for_owner_mut(
             &crate::conn::CommandOwnerScope::capture(conn, None),
             |state| {
