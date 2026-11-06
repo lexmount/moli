@@ -1614,6 +1614,7 @@ impl HostScriptScheduler {
         let position = self.next_dynamic_position();
         Ok(FailedDynamicScript {
             script: PreparedScript {
+                source_fetch_timing: None,
                 resource_timing_initiator_url: None,
                 document_referrer_policy: preparation.document_referrer_policy.clone(),
                 position,

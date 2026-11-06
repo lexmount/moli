@@ -193,6 +193,7 @@ impl SharedScriptSourceLoad {
     pub(crate) fn ready_ok(source: impl Into<String>) -> Self {
         let load = Self::pending();
         load.finish(PreparedScriptSourceLoadOutcome {
+            fetch_timing: None,
             source_result: Ok(source.into()),
             source_bytes: None,
             network_result: None,
@@ -206,6 +207,7 @@ impl SharedScriptSourceLoad {
     pub(crate) fn ready_err(error: impl Into<String>) -> Self {
         let load = Self::pending();
         load.finish(PreparedScriptSourceLoadOutcome {
+            fetch_timing: None,
             source_result: Err(error.into()),
             source_bytes: None,
             network_result: None,
@@ -223,6 +225,7 @@ impl SharedScriptSourceLoad {
         let load = Self::pending();
         load.finish(PreparedScriptSourceLoadOutcome {
             source_result,
+            fetch_timing: None,
             source_bytes: None,
             network_result,
             muted_errors: false,
@@ -240,6 +243,7 @@ impl SharedScriptSourceLoad {
         let load_for_task = load.clone();
         tokio::spawn(async move {
             load_for_task.finish(PreparedScriptSourceLoadOutcome {
+                fetch_timing: None,
                 source_result: task.await,
                 source_bytes: None,
                 network_result: None,
@@ -288,7 +292,9 @@ pub(crate) fn prepared_script_with_loaded_source(
     source: String,
     source_bytes: Option<Vec<u8>>,
     muted_errors: bool,
+    fetch_timing: Option<Arc<moli_parser::ScriptSourceFetchTiming>>,
 ) -> PreparedScript {
+    script.source_fetch_timing = fetch_timing;
     debug_assert!(
         !muted_errors
             || (script.kind == ScriptKind::Classic
@@ -318,6 +324,7 @@ pub(crate) struct PreparedScriptSourceLoadOutcome {
     pub(crate) source_bytes: Option<Vec<u8>>,
     pub(crate) network_result: Option<SharedNavigationResponseResult>,
     pub(crate) muted_errors: bool,
+    pub(crate) fetch_timing: Option<Arc<moli_parser::ScriptSourceFetchTiming>>,
     pub(crate) network_request_handle: Option<crate::types::SubresourceNetworkRequestHandle>,
 }
 
@@ -359,6 +366,7 @@ async fn load_prepared_script_source_outcome_with_request(
     match &script.source {
         ScriptSource::Inline(source) | ScriptSource::Loaded(source) => {
             PreparedScriptSourceLoadOutcome {
+                fetch_timing: None,
                 source_result: Ok(source.clone()),
                 source_bytes: None,
                 network_result: None,
@@ -367,6 +375,7 @@ async fn load_prepared_script_source_outcome_with_request(
             }
         }
         ScriptSource::LoadedBinary { source, bytes } => PreparedScriptSourceLoadOutcome {
+            fetch_timing: None,
             source_result: Ok(source.clone()),
             source_bytes: Some(bytes.clone()),
             network_result: None,
@@ -405,14 +414,19 @@ async fn load_external_script_request_source_outcome(
     request: moli_fetch::Request,
     resource_load: Option<crate::network::loads::ResourceLoadLease>,
 ) -> PreparedScriptSourceLoadOutcome {
+    let started = std::time::Instant::now();
+    let start_unix_millis = moli_time::unix_epoch_millis();
+    let cancel = moli_fetch::FetchCancelHandle::new();
     // Box the streaming fetch future so parser/script planning does not
     // inherit the chunk collector's larger state machine across awaits.
     let response = if let Some(load) = resource_load {
-        Box::pin(loader.fetch_cacheable_script_text_stream_with_load(request, load)).await
+        Box::pin(loader.fetch_cacheable_script_text_stream_with_load(request, load, cancel.clone()))
+            .await
     } else {
-        Box::pin(loader.fetch_cacheable_script_text_stream(request)).await
+        Box::pin(loader.fetch_cacheable_script_text_stream_with_cancel(request, cancel.clone()))
+            .await
     };
-    match response {
+    let mut outcome = match response {
         Ok(response) => external_script_source_load_outcome_from_response(
             script,
             request_origin,
@@ -424,6 +438,7 @@ async fn load_external_script_request_source_outcome(
             let consumed_preload = error.is::<crate::network::preloads::ConsumedPreloadError>();
             let error = format!("failed to fetch script `{}`: {error}", script.url);
             PreparedScriptSourceLoadOutcome {
+                fetch_timing: None,
                 source_result: Err(error.clone()),
                 source_bytes: None,
                 network_result: (!consumed_preload).then(|| Arc::new(Err(error))),
@@ -431,7 +446,14 @@ async fn load_external_script_request_source_outcome(
                 network_request_handle: None,
             }
         }
-    }
+    };
+    outcome.fetch_timing = Some(Arc::new(moli_parser::ScriptSourceFetchTiming {
+        started,
+        start_unix_millis,
+        completed: std::time::Instant::now(),
+        native: Some(cancel.response_timing()),
+    }));
+    outcome
 }
 
 pub(crate) fn external_script_request(
@@ -502,6 +524,8 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome_wit
     document_url: Url,
     resource_load: Option<crate::network::loads::ResourceLoadLease>,
 ) -> PreparedScriptSourceLoadOutcome {
+    let started = std::time::Instant::now();
+    let start_unix_millis = moli_time::unix_epoch_millis();
     if let Some(outcome) = local_or_unsupported_external_script_source_load_outcome(
         script,
         request_origin,
@@ -532,7 +556,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome_wit
     } else {
         fetch.await
     };
-    match response {
+    let mut outcome = match response {
         Ok(Some(response)) => {
             let provenance = if response.from_network_fallback {
                 ClassicScriptResponseProvenance::Network
@@ -566,6 +590,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome_wit
             let consumed_preload = error.is::<crate::network::preloads::ConsumedPreloadError>();
             let message = format!("failed to fetch script `{}`: {error}", script.url);
             PreparedScriptSourceLoadOutcome {
+                fetch_timing: None,
                 source_result: Err(message.clone()),
                 source_bytes: None,
                 network_result: (!consumed_preload).then(|| Arc::new(Err(message))),
@@ -573,7 +598,16 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome_wit
                 network_request_handle: None,
             }
         }
+    };
+    if outcome.fetch_timing.is_none() && outcome.network_result.is_some() {
+        outcome.fetch_timing = Some(Arc::new(moli_parser::ScriptSourceFetchTiming {
+            started,
+            start_unix_millis,
+            completed: std::time::Instant::now(),
+            native: None,
+        }));
     }
+    outcome
 }
 
 pub(crate) async fn load_captured_blob_script_source_outcome(
@@ -607,6 +641,7 @@ fn local_or_unsupported_external_script_source_load_outcome(
 ) -> Option<PreparedScriptSourceLoadOutcome> {
     match script.url.scheme() {
         "data" => Some(PreparedScriptSourceLoadOutcome {
+            fetch_timing: None,
             source_result: decode_data_url_script_source(&script.url)
                 .map_err(|error| error.to_string()),
             source_bytes: None,
@@ -655,6 +690,7 @@ pub(crate) fn immediate_external_script_source_load_outcome(
 
 fn failed_external_script_source_load_outcome(message: String) -> PreparedScriptSourceLoadOutcome {
     PreparedScriptSourceLoadOutcome {
+        fetch_timing: None,
         source_result: Err(message.clone()),
         source_bytes: None,
         network_result: Some(Arc::new(Err(message))),
@@ -721,13 +757,9 @@ fn classic_script_errors_are_muted(
         ClassicScriptResponseProvenance::Network => {
             !classic_script_response_url_chain_is_same_origin(script, response)
         }
-        ClassicScriptResponseProvenance::ServiceWorker { filter } => filter.is_some_and(|filter| {
-            matches!(
-                filter.response_type(),
-                moli_fetch_types::FetchResponseType::Opaque
-                    | moli_fetch_types::FetchResponseType::OpaqueRedirect
-            )
-        }),
+        ClassicScriptResponseProvenance::ServiceWorker { filter } => {
+            filter.is_some_and(|filter| !filter.is_readable())
+        }
     }
 }
 
@@ -845,6 +877,7 @@ fn external_script_source_load_outcome_from_response_inner(
     };
     PreparedScriptSourceLoadOutcome {
         source_result,
+        fetch_timing: None,
         source_bytes: Some(response_bytes),
         network_result: Some(Arc::new(Ok(response))),
         muted_errors,
@@ -1003,6 +1036,7 @@ mod tests {
         let load = SharedScriptSourceLoad::spawn_outcome_with_owner_wake(
             async {
                 PreparedScriptSourceLoadOutcome {
+                    fetch_timing: None,
                     source_result: Ok("window.ready = true;".to_owned()),
                     source_bytes: None,
                     network_result: None,
@@ -1056,6 +1090,7 @@ mod tests {
     fn prepared_external_classic_with_mode(mode: ScriptMode) -> PreparedScript {
         let url = url::Url::parse("https://example.test/app.js").unwrap();
         PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: 0,
@@ -1122,6 +1157,7 @@ mod tests {
             cookie_set_reports: Vec::new(),
             from_cache: false,
             negotiated_http_version: None,
+
             dispatched_request: None,
         }
     }
@@ -1137,6 +1173,7 @@ mod tests {
         initiator_url: url::Url,
     ) -> PreparedScript {
         PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: 0,
@@ -1567,6 +1604,7 @@ mod tests {
             "throw new Error('secret')".to_owned(),
             None,
             true,
+            None,
         );
 
         assert!(loaded.fetch_metadata.muted_errors);

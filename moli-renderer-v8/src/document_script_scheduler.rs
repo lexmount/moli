@@ -531,6 +531,7 @@ mod tests {
         source_kind: ScriptSourceKind,
     ) -> PreparedScript {
         PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position,
@@ -579,6 +580,7 @@ mod tests {
 
     fn source_load_outcome_ok(source: impl Into<String>) -> PreparedScriptSourceLoadOutcome {
         PreparedScriptSourceLoadOutcome {
+            fetch_timing: None,
             source_result: Ok(source.into()),
             source_bytes: None,
             network_result: None,
@@ -589,6 +591,7 @@ mod tests {
 
     fn source_load_outcome_err(error: impl Into<String>) -> PreparedScriptSourceLoadOutcome {
         PreparedScriptSourceLoadOutcome {
+            fetch_timing: None,
             source_result: Err(error.into()),
             source_bytes: None,
             network_result: None,
@@ -668,6 +671,7 @@ mod tests {
                             load_delay_binding: None,
                             awaiting_completion: false,
                             source_load: None,
+                            source_network_result: None,
                             load_failure: None,
                         })
                         .collect(),

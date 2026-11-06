@@ -135,11 +135,13 @@ fn post_parse_async_script_task_into_page_owned_work(
     match task {
         PostParseAsyncScriptTask::Ready {
             script,
+            source_network_result,
             load_delay_binding,
         } => PostParsePageOwnedWork::document_script_work(
             PageOwnedDocumentScriptWork::parser_async_script(
                 DocumentScriptExecutionLane::AsyncPhase,
                 script,
+                source_network_result,
                 load_delay_binding,
             ),
         ),
@@ -227,6 +229,7 @@ mod tests {
         assert!(port.send(
             NodeId::new(17),
             PreparedScriptSourceLoadOutcome {
+                fetch_timing: None,
                 source_result: Ok("window.ready = true;".to_owned()),
                 source_bytes: None,
                 network_result: None,

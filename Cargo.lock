@@ -5586,6 +5586,7 @@ dependencies = [
  "html5ever 0.40.1",
  "markup5ever 0.40.0",
  "moli-dom",
+ "moli-fetch",
  "moli-fetch-types",
  "moli-page-types",
  "moli-script",

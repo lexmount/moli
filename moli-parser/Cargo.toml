@@ -14,6 +14,7 @@ test-support = []
 anyhow = "1.0.100"
 html5ever = "0.40"
 moli-dom = { path = "../moli-dom" }
+moli-fetch = { path = "../moli-fetch" }
 moli-fetch-types = { path = "../moli-types/moli-fetch-types" }
 moli-page-types = { path = "../moli-types/moli-page-types" }
 moli-script = { path = "../moli-script" }

@@ -663,9 +663,17 @@ impl ResourceRequestClient {
         ))
     }
 
-    pub(crate) async fn fetch_cacheable_script_text_stream(
+    pub(crate) fn fetch_cacheable_script_text_stream(
+        &self,
+        request: Request,
+    ) -> impl std::future::Future<Output = Result<Response>> + '_ {
+        self.fetch_cacheable_script_text_stream_with_cancel(request, FetchCancelHandle::new())
+    }
+
+    pub(crate) async fn fetch_cacheable_script_text_stream_with_cancel(
         &self,
         mut request: Request,
+        cancel: FetchCancelHandle,
     ) -> Result<Response> {
         request
             .browser_request_metadata
@@ -695,11 +703,7 @@ impl ResourceRequestClient {
                 );
             }
             let result = self
-                .fetch_script_text_stream_with_cancel_after_policy(
-                    request,
-                    FetchCancelHandle::new(),
-                    None,
-                )
+                .fetch_script_text_stream_with_cancel_after_policy(request, cancel, None)
                 .await;
             if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
                 let status = result.as_ref().ok().map(|response| response.status);
@@ -788,7 +792,7 @@ impl ResourceRequestClient {
         let result = self
             .fetch_script_text_stream_with_cancel_after_policy(
                 request,
-                FetchCancelHandle::new(),
+                cancel,
                 Some(Box::new({
                     let load = Arc::clone(&load);
                     move || load.notify_response_started()
@@ -822,11 +826,20 @@ impl ResourceRequestClient {
         &self,
         request: Request,
         resource_load: loads::ResourceLoadLease,
+        cancel: FetchCancelHandle,
     ) -> Result<Response> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.fetch_cacheable_script_text_callback_with_load(request, resource_load, |result| {
-            let _ = tx.send(result);
-        })?;
+        let execution = ScriptTextLoadExecution::Context(resource_load.task_runner());
+        self.fetch_cacheable_script_text_callback_inner(
+            request,
+            resource_load,
+            None,
+            execution,
+            cancel,
+            move |result| {
+                let _ = tx.send(result);
+            },
+        )?;
         rx.await
             .map_err(|_| anyhow!("script load completion channel closed"))?
     }
@@ -841,7 +854,14 @@ impl ResourceRequestClient {
         F: FnOnce(Result<Response>) + Send + 'static,
     {
         let execution = ScriptTextLoadExecution::Context(resource_load.task_runner());
-        self.fetch_cacheable_script_text_callback_inner(request, resource_load, None, execution, callback)
+        self.fetch_cacheable_script_text_callback_inner(
+            request,
+            resource_load,
+            None,
+            execution,
+            FetchCancelHandle::new(),
+            callback,
+        )
     }
 
     fn fetch_cacheable_script_text_callback_inner<F>(
@@ -850,6 +870,7 @@ impl ResourceRequestClient {
         resource_load: loads::ResourceLoadLease,
         response_start: Option<ScriptResponseStartCallback>,
         execution: ScriptTextLoadExecution,
+        cancel: FetchCancelHandle,
         callback: F,
     ) -> Result<()>
     where
@@ -901,12 +922,11 @@ impl ResourceRequestClient {
                     stage = "script_text_request_start",
                 );
             }
-            let cancel_handle = FetchCancelHandle::new();
-            resource_load.attach_cancel_handle(cancel_handle.clone());
+            resource_load.attach_cancel_handle(cancel.clone());
             let callback_resource_load = resource_load.clone();
             let started_fetch = self.fetch_script_text_callback_with_cancel_after_policy(
                 request,
-                cancel_handle,
+                cancel,
                 execution,
                 response_start,
                 move |result| {
@@ -1030,12 +1050,11 @@ impl ResourceRequestClient {
         let cache_request = request.clone();
         let callback_cache_request = cache_request.clone();
         let callback_key = key.clone();
-        let cancel_handle = FetchCancelHandle::new();
-        load.attach_transport_cancel(cancel_handle.clone());
+        load.attach_transport_cancel(cancel.clone());
         let header_load = Arc::clone(&load);
         if let Err(error) = self.fetch_script_text_callback_with_cancel_after_policy(
             request,
-            cancel_handle,
+            cancel,
             execution,
             Some(Box::new(move || header_load.notify_response_started())),
             move |result| {
@@ -1561,6 +1580,7 @@ impl ResourceRequestClient {
             resource_load,
             Some(Box::new(on_response_start)),
             ScriptTextLoadExecution::BlockingWorker,
+            FetchCancelHandle::new(),
             move |result| {
                 let _ = response_tx.send(result);
             },

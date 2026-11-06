@@ -2063,6 +2063,7 @@ impl DynamicScriptOwner {
                     source,
                     outcome.source_bytes,
                     outcome.muted_errors,
+                    outcome.fetch_timing,
                 );
                 DynamicScriptReadyState::Ready {
                     order,
@@ -2070,6 +2071,7 @@ impl DynamicScriptOwner {
                 }
             }
             Err(message) => {
+                entry.script.source_fetch_timing = outcome.fetch_timing;
                 on_load_failure(entry.script.url.as_str(), &message);
                 let failure = DynamicScriptFailure::with_kind(
                     message,
@@ -2234,6 +2236,7 @@ mod tests {
 
     fn prepared_script(position: usize, mode: ScriptMode) -> PreparedScript {
         PreparedScript {
+            source_fetch_timing: None,
             resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position,
@@ -2317,6 +2320,7 @@ mod tests {
         DynamicScriptLoadCompletion {
             id: owner_id(id),
             outcome: PreparedScriptSourceLoadOutcome {
+                fetch_timing: None,
                 source_result: Ok(source.into()),
                 source_bytes: None,
                 network_result: None,
@@ -2330,6 +2334,7 @@ mod tests {
         DynamicScriptLoadCompletion {
             id: owner_id(id),
             outcome: PreparedScriptSourceLoadOutcome {
+                fetch_timing: None,
                 source_result: Err(error.into()),
                 source_bytes: None,
                 network_result: None,
