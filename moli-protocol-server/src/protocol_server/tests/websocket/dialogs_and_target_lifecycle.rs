@@ -1771,9 +1771,11 @@ document.querySelector('main').textContent = globalThis.__realmMarker;
 #[tokio::test]
 async fn websocket_cdp_javascript_dialog_is_reported_to_and_resolvable_by_every_attached_session() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
