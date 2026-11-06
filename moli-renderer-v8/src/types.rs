@@ -167,6 +167,7 @@ pub(super) enum PendingSubresourceContinuation {
 pub(super) struct PendingEventSourceRequest {
     pub(super) event_source: v8::Global<v8::Object>,
     pub(super) csp: crate::network_host::WindowCspRequestContext,
+    pub(super) timing: crate::context_bootstrap::FetchResourceTiming,
 }
 
 /// Fire-and-forget HTTP requests retain native policy, not a script realm.
@@ -386,6 +387,7 @@ impl PendingSubresourceContinuation {
             Self::Fetch(fetch) => Some(&mut fetch.resource_timing),
             Self::InputImage(input) => Some(&mut input.timing),
             Self::Xhr { timing, .. } => timing.as_mut(),
+            Self::EventSource(request) => Some(&mut request.timing),
             _ => None,
         }
     }
