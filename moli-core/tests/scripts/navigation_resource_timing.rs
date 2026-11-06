@@ -55,6 +55,7 @@ addEventListener('activate', event => {
 });
 addEventListener('fetch', event => {
     times.fetchEvent = epoch();
+    if (event.request.url.includes('network-fallback')) return;
     event.respondWith(new Response('<!doctype html><body>controlled<script>globalThis.swTimes=' +
         JSON.stringify(times) + '</script>', {headers:{'Content-Type':'text/html'}}));
 });
@@ -105,6 +106,10 @@ impl NavigationTimingServer {
                         request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     }
                     let (mime, body) = match path {
+                        "/queued-network" => ("text/html", queued_navigation_source(false)),
+                        "/queued-service-worker" => ("text/html", queued_navigation_source(true)),
+                        "/beforeunload" => ("text/html", beforeunload_navigation_source()),
+                        "/with-nested" => ("text/html", "<!doctype html><body><iframe src='/empty'></iframe>".to_owned()),
                         "/prefetch" => ("text/html", format!(r#"<!doctype html><body><script>
                             {STATE_WAITER}
                             (async () => {{
@@ -179,6 +184,225 @@ impl NavigationTimingServer {
             prefetched_requests,
         }
     }
+}
+
+fn queued_navigation_source(service_worker: bool) -> String {
+    format!(
+        r#"<!doctype html><body><script>
+        {STATE_WAITER}
+        (async () => {{
+            if ({service_worker}) {{
+                const registration = await navigator.serviceWorker.register('/sw.js', {{scope:'/controlled/'}});
+                await waitState(registration.installing || registration.waiting || registration.active, 'activated');
+            }}
+            const observations = [];
+            for (const kind of ['location', 'src', 'replacement']) {{
+                for (const fallback of ({service_worker} ? [false, true] : [false])) {{
+                    const frame = document.createElement('iframe');
+                    await new Promise(resolve => {{ frame.onload=resolve;frame.src='/empty';document.body.appendChild(frame); }});
+                    if (kind === 'replacement') {{
+                        frame.contentWindow.location='/slow?discarded';
+                        const discardedEnd=performance.now()+100;
+                        while(performance.now()<discardedEnd) {{}}
+                    }}
+                    const before=performance.timeOrigin+performance.now();
+                    const loaded=new Promise(resolve => frame.addEventListener('load',resolve,{{once:true}}));
+                    const target=({service_worker} ? '/controlled/queued' : '/empty')+'?kind='+kind+(fallback ? '&network-fallback' : '');
+                    if (kind === 'src') frame.src=target;
+                    else frame.contentWindow.location=target;
+                    const afterAssignment=performance.timeOrigin+performance.now();
+                    const busyEnd=performance.now()+150;
+                    while(performance.now()<busyEnd) {{}}
+                    const afterBusy=performance.timeOrigin+performance.now();
+                    await loaded;
+                    observations.push({{kind,fallback,before,afterAssignment,afterBusy,...snapshot(frame.contentWindow)}});
+                    frame.remove();
+                }}
+            }}
+            globalThis.observations=observations;
+        }})().catch(error => globalThis.caseError=String(error));
+        </script>"#,
+    )
+}
+
+async fn check_queued_navigation_clock(service_worker: bool) -> Result<()> {
+    let server = NavigationTimingServer::spawn().await;
+    let browser = Browser::new(AppConfig::default())?;
+    let path = if service_worker {
+        "/queued-service-worker"
+    } else {
+        "/queued-network"
+    };
+    let mut page = browser.fetch(&format!("{}{path}", server.origin)).await?;
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            "Boolean(globalThis.observations || globalThis.caseError)",
+            Duration::from_secs(15),
+        )
+        .await?;
+    let result = read_json(
+        &mut page,
+        "JSON.stringify({observations:globalThis.observations,error:globalThis.caseError})",
+    )
+    .await?;
+    assert!(result.get("error").is_none(), "{result}");
+    let observations = result["observations"].as_array().unwrap();
+    assert_eq!(observations.len(), if service_worker { 6 } else { 3 });
+    for row in observations {
+        let origin = row["timeOrigin"].as_f64().unwrap();
+        let before = row["before"].as_f64().unwrap();
+        let assignment = row["afterAssignment"].as_f64().unwrap();
+        assert!(
+            origin >= before - 1.0,
+            "a replacement must get its own navigation start: {row}"
+        );
+        assert!(
+            origin <= assignment + 20.0,
+            "navigation must include the deferred task's queueing time: {row}"
+        );
+        assert!(
+            row["afterBusy"].as_f64().unwrap() - origin >= 100.0,
+            "{row}"
+        );
+        let nav = &row["nav"];
+        assert!(
+            nav["fetchStart"].as_f64().unwrap() >= 100.0,
+            "fetchStart must reflect actual deferred fetching: {row}"
+        );
+        for [earlier, later] in [
+            ["fetchStart", "requestStart"],
+            ["requestStart", "responseStart"],
+            ["responseStart", "responseEnd"],
+            ["fetchStart", "domainLookupStart"],
+            ["domainLookupStart", "domainLookupEnd"],
+            ["domainLookupEnd", "connectStart"],
+            ["connectStart", "connectEnd"],
+        ] {
+            assert!(
+                nav[earlier].as_f64().unwrap() <= nav[later].as_f64().unwrap(),
+                "{earlier} <= {later}: {row}"
+            );
+        }
+        assert_eq!(
+            nav["secureConnectionStart"], 0,
+            "plain HTTP must not acquire a TLS timestamp: {row}"
+        );
+        if service_worker {
+            assert!(
+                nav["workerStart"].as_f64().unwrap() >= 100.0,
+                "the actual SW dispatch follows the queued parent script: {row}"
+            );
+            assert!(
+                nav["workerStart"].as_f64().unwrap() <= nav["fetchStart"].as_f64().unwrap(),
+                "{row}"
+            );
+        } else {
+            assert_eq!(nav["workerStart"], 0, "{row}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn queued_frame_navigation_keeps_the_accepted_attempt_clock() -> Result<()> {
+    check_queued_navigation_clock(false).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn queued_service_worker_navigation_keeps_the_accepted_attempt_clock() -> Result<()> {
+    check_queued_navigation_clock(true).await
+}
+
+fn beforeunload_navigation_source() -> String {
+    format!(
+        r#"<!doctype html><body><script>
+        {STATE_WAITER}
+        globalThis.runBeforeunloadCases = async () => {{
+            const observations = [];
+            for (const kind of ['listener', 'property', 'attribute', 'descendant']) {{
+                globalThis.beforeunloadStage=kind+':initial-load';
+                const frame = document.createElement('iframe');
+                await new Promise(resolve => {{ frame.onload=resolve;frame.src=kind === 'descendant' ? '/with-nested' : '/empty';document.body.appendChild(frame); }});
+                let unloadStart, unloadEnd, calls=0;
+                const handler = () => {{
+                    calls++;
+                    unloadStart=performance.timeOrigin+performance.now();
+                    const end=performance.now()+150;
+                    while(performance.now()<end) {{}}
+                    unloadEnd=performance.timeOrigin+performance.now();
+                }};
+                if (kind === 'property') frame.contentWindow.onbeforeunload=handler;
+                else if (kind === 'attribute') {{
+                    globalThis.recordBeforeunload=handler;
+                    frame.contentDocument.body.setAttribute('onbeforeunload', 'parent.recordBeforeunload()');
+                }} else if (kind === 'descendant') {{
+                    const nested=frame.contentDocument.querySelector('iframe');
+                    nested.contentWindow.addEventListener('beforeunload',handler);
+                }} else frame.contentWindow.addEventListener('beforeunload',handler);
+                globalThis.beforeunloadStage=kind+':navigate';
+                const loaded=new Promise(resolve => frame.addEventListener('load',resolve,{{once:true}}));
+                if (kind === 'listener') frame.contentWindow.location='/slow';
+                else frame.src='/slow';
+                const busyEnd=performance.now()+150;
+                while(performance.now()<busyEnd) {{}}
+                await loaded;
+                observations.push({{kind,calls,unloadStart,unloadEnd,responseSent:frame.contentWindow.responseSent,...snapshot(frame.contentWindow)}});
+                globalThis.beforeunloadRows=observations;
+                frame.remove();
+            }}
+            globalThis.observations=observations;
+        }};
+        </script>"#,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn frame_navigation_time_origin_follows_beforeunload_handlers() -> Result<()> {
+    let server = NavigationTimingServer::spawn().await;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = tokio::time::timeout(
+        Duration::from_secs(30),
+        browser.fetch(&format!("{}/beforeunload", server.origin)),
+    )
+    .await??;
+    page.evaluate_runtime_expression_by_value_async(
+        "void runBeforeunloadCases().catch(error => globalThis.caseError=String(error))",
+    )
+    .await?;
+    let waited = tokio::time::timeout(
+        Duration::from_secs(20),
+        browser.wait_for_script_truthy(
+            &mut page,
+            "Boolean(globalThis.observations || globalThis.caseError)",
+            Duration::from_secs(15),
+        ),
+    )
+    .await;
+    let result = read_json(
+        &mut page,
+        "JSON.stringify({observations:globalThis.observations,error:globalThis.caseError,stage:globalThis.beforeunloadStage,rows:globalThis.beforeunloadRows})",
+    )
+    .await?;
+    assert!(matches!(waited, Ok(Ok(()))), "{waited:?}: {result}");
+    assert!(result.get("error").is_none(), "{result}");
+    let observations = result["observations"].as_array().unwrap();
+    assert_eq!(observations.len(), 4, "{result}");
+    for row in observations {
+        assert_eq!(row["calls"], 1, "{row}");
+        let end = row["unloadEnd"].as_f64().unwrap();
+        let origin = row["timeOrigin"].as_f64().unwrap();
+        assert!(end - row["unloadStart"].as_f64().unwrap() >= 140.0, "{row}");
+        assert!(
+            origin >= end - 1.0,
+            "navigation time origin must follow beforeunload: {row}"
+        );
+        assert!(
+            origin <= row["responseSent"].as_f64().unwrap() + 1.0,
+            "navigation time origin must precede the response: {row}"
+        );
+    }
+    Ok(())
 }
 
 async fn read_json(
