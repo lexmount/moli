@@ -115,7 +115,10 @@ fn resource_initiator_unknown_registration_does_not_retain_its_creation_context(
             let context = v8::Context::new(scope, Default::default());
             let scope = &mut v8::ContextScope::new(scope, context);
             let captured = crate::resource_initiator::CallbackInitiator::capture(scope);
-            Ok(([captured], v8::Weak::new(scope, context)))
+            let undefined = v8::undefined(scope).into();
+            let missing =
+                crate::resource_initiator::CallbackInitiator::from_value(scope, undefined);
+            Ok(([captured, missing], v8::Weak::new(scope, context)))
         })
         .unwrap();
     for _ in 0..3 {

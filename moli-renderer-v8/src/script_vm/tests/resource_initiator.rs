@@ -382,3 +382,63 @@ async fn event_handler_resource_initiator_updates_on_reassignment_and_keeps_call
     assert_eq!(vm.eval("JSON.stringify(performance.getEntriesByType('resource').map(entry => entry.initiatorUrl).sort())").unwrap(), serde_json::json!(["", caller.as_str(), first.as_str(), second.as_str()]).to_string());
     assert_eq!(server.finish().await.len(), 4);
 }
+
+#[tokio::test]
+async fn webidl_task_resource_initiator_covers_animation_idle_and_observer_delivery() {
+    let server = StaticHttpServer::spawn_with_responder(
+        4,
+        "Content-Type: text/plain\r\nCache-Control: no-store\r\n",
+        |_, _| "ok".to_owned(),
+    )
+    .await;
+    let base = server.base_url();
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(base.as_str(), &loader);
+    execute_with_source(
+        &mut vm,
+        r#"
+      globalThis.request = path => { const x = new XMLHttpRequest(); x.open('GET', path); x.send(); };
+      globalThis.sharedFrame = () => request('frame');
+    "#,
+        &base.join("library.js").unwrap(),
+        &base,
+    );
+    let first = base.join("first.js").unwrap();
+    let second = base.join("second.js").unwrap();
+    execute_with_source(
+        &mut vm,
+        r#"
+      requestAnimationFrame(sharedFrame);
+      requestIdleCallback(() => request('idle'));
+      globalThis.observer = new PerformanceObserver((list, observer) => {
+        observer.disconnect();
+        request('observer');
+      });
+      observer.observe({entryTypes: ['mark']});
+    "#,
+        &first,
+        &base,
+    );
+    execute_with_source(
+        &mut vm,
+        r#"
+      requestAnimationFrame(sharedFrame);
+      performance.mark('delivery-from-another-script');
+    "#,
+        &second,
+        &base,
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(performance.getEntriesByType('resource').length)",
+        "4",
+        "WebIDL callback requests",
+    )
+    .await;
+    assert_eq!(vm.eval("JSON.stringify(performance.getEntriesByType('resource').map(entry => [new URL(entry.name).pathname, entry.initiatorUrl]).sort())").unwrap(), serde_json::json!([
+        ["/frame", first.as_str()], ["/frame", second.as_str()],
+        ["/idle", first.as_str()], ["/observer", first.as_str()]
+    ]).to_string());
+    assert_eq!(server.finish().await.len(), 4);
+}

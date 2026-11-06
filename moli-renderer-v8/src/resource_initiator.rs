@@ -133,6 +133,19 @@ impl CallbackInitiator {
         Self(std::rc::Rc::new(v8::Global::new(scope, anchor)))
     }
 
+    pub(crate) fn value<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Value> {
+        self.local(scope).into()
+    }
+
+    pub(crate) fn from_value<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+    ) -> Self {
+        let anchor =
+            v8::Local::<v8::String>::try_from(value).unwrap_or_else(|_| v8::String::empty(scope));
+        Self(std::rc::Rc::new(v8::Global::new(scope, anchor)))
+    }
+
     fn local<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::String> {
         v8::Local::new(scope, self.0.as_ref())
     }
@@ -144,16 +157,18 @@ pub(crate) fn callback_anchor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     registration: Option<&CallbackInitiator>,
 ) -> Option<v8::Local<'s, v8::String>> {
-    if let Some(anchor) = anchor(scope) {
-        return Some(anchor);
-    }
-    let registration = registration?;
-    if v8::StackTrace::current_stack_trace(scope, 1)
-        .is_none_or(|stack| stack.get_frame_count() != 0)
-    {
+    let Some(registration) = registration else {
+        return anchor(scope);
+    };
+    let Some(stack) = v8::StackTrace::current_stack_trace(scope, 1) else {
         return Some(v8::String::empty(scope));
+    };
+    // A native microtask can inherit its trigger's continuation data. Its
+    // callback uses registration provenance unless author JS is on the stack.
+    if stack.get_frame_count() == 0 {
+        return Some(registration.local(scope));
     }
-    Some(registration.local(scope))
+    Some(anchor(scope).unwrap_or_else(|| v8::String::empty(scope)))
 }
 
 pub(crate) fn with_callback_anchor<'s, R>(
