@@ -736,6 +736,8 @@ pub(crate) enum PendingImageLoadNetworkState {
 pub(crate) enum PendingImageLoadTerminalSource {
     Local,
     Network,
+    /// Decoded pixels accepted by this Document; no new fetch took place.
+    Reused,
 }
 
 impl PendingImageLoadEvent {

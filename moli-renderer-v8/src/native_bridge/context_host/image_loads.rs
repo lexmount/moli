@@ -204,7 +204,7 @@ impl JsContextHost {
             return None;
         }
         pending.network_state =
-            PendingImageLoadNetworkState::Ready(PendingImageLoadTerminalSource::Local);
+            PendingImageLoadNetworkState::Ready(PendingImageLoadTerminalSource::Reused);
         tracing::debug!(
             image = image_handle.index(),
             sequence = id.get(),

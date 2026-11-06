@@ -1473,3 +1473,80 @@ async fn image_decode_cross_realm_loads_settle_in_the_receiver_realm() {
         }
     }
 }
+
+#[tokio::test]
+async fn available_image_reuse_does_not_start_another_fetch_or_timing_entry() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+    ] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://image-reuse-timing.test/page.html",
+            &loader,
+        );
+        vm.set_layout_policy(policy);
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Image),
+        );
+        vm.eval(
+            r#"
+            globalThis.__reuseLoads = [];
+            globalThis.__reuseTimeline = 'pending';
+            (async () => {
+              for (const path of ['/shared.gif', '/shared.gif', '/canary.gif']) {
+                await new Promise(resolve => {
+                  const image = document.createElement('img');
+                  image.onload = () => { __reuseLoads.push(path); resolve(); };
+                  image.onerror = () => { __reuseLoads.push('error'); resolve(); };
+                  image.src = path;
+                  document.body.appendChild(image);
+                });
+              }
+              __reuseTimeline = performance.getEntriesByType('resource')
+                .map(entry => new URL(entry.name).pathname).join('|');
+            })();
+            "#,
+        )
+        .unwrap();
+        let first = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(first.len(), 1, "{policy:?}: initial fetch");
+        vm.fulfill_pending_subresource_fetch(
+            first[0].internal_id,
+            200,
+            vec![("Content-Type".into(), b"image/gif".to_vec())],
+            one_by_one_gif_response_body(),
+        )
+        .unwrap();
+        run_next_image_event_task(&mut vm, &loader, "first shared image load").await;
+        assert_eq!(vm.eval("__reuseLoads.join('|')").unwrap(), "/shared.gif");
+        assert!(
+            vm.take_pending_subresource_fetch_infos().is_empty(),
+            "{policy:?}: an available image must not start another fetch"
+        );
+        run_next_image_event_task(&mut vm, &loader, "reused shared image load").await;
+        let canary = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(canary.len(), 1, "{policy:?}: distinct URL must fetch");
+        assert_eq!(canary[0].url.path(), "/canary.gif");
+        vm.fulfill_pending_subresource_fetch(
+            canary[0].internal_id,
+            200,
+            vec![("Content-Type".into(), b"image/gif".to_vec())],
+            one_by_one_gif_response_body(),
+        )
+        .unwrap();
+        run_next_image_event_task(&mut vm, &loader, "canary image load").await;
+        assert_eq!(
+            vm.eval("__reuseLoads.join('|')").unwrap(),
+            "/shared.gif|/shared.gif|/canary.gif",
+            "{policy:?}"
+        );
+        assert_eq!(
+            vm.eval("__reuseTimeline").unwrap(),
+            "/shared.gif|/canary.gif",
+            "{policy:?}"
+        );
+    }
+}
