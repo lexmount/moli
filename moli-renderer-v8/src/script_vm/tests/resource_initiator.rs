@@ -330,3 +330,54 @@ async fn dom_listener_resource_initiator_preserves_each_registration_and_synchro
     ]).to_string());
     assert_eq!(server.finish().await.len(), 4);
 }
+
+#[tokio::test]
+async fn event_handler_resource_initiator_updates_on_reassignment_and_keeps_caller_precedence() {
+    let server = StaticHttpServer::spawn_with_responder(
+        4,
+        "Content-Type: text/plain\r\nCache-Control: no-store\r\n",
+        |_, _| "ok".to_owned(),
+    )
+    .await;
+    let base = server.base_url();
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(base.as_str(), &loader);
+    execute_with_source(
+        &mut vm,
+        r#"
+      globalThis.sharedHandler = () => { const x = new XMLHttpRequest(); x.open('GET', 'handler'); x.send(); };
+    "#,
+        &base.join("library.js").unwrap(),
+        &base,
+    );
+    let first = base.join("first.js").unwrap();
+    let second = base.join("second.js").unwrap();
+    let caller = base.join("caller.js").unwrap();
+    execute_with_source(&mut vm, "document.onload = sharedHandler;", &first, &base);
+    dispatch_native_document_probe(&mut vm, "load");
+    execute_with_source(&mut vm, "document.onload = sharedHandler;", &second, &base);
+    dispatch_native_document_probe(&mut vm, "load");
+    execute_with_source(
+        &mut vm,
+        "document.dispatchEvent(new Event('load'));",
+        &caller,
+        &base,
+    );
+    execute_with_source(
+        &mut vm,
+        "document.onload = sharedHandler;",
+        &Url::parse("https://other.invalid/setter.js").unwrap(),
+        &base,
+    );
+    dispatch_native_document_probe(&mut vm, "load");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(performance.getEntriesByType('resource').length)",
+        "4",
+        "callback initiator completion",
+    )
+    .await;
+    assert_eq!(vm.eval("JSON.stringify(performance.getEntriesByType('resource').map(entry => entry.initiatorUrl).sort())").unwrap(), serde_json::json!(["", caller.as_str(), first.as_str(), second.as_str()]).to_string());
+    assert_eq!(server.finish().await.len(), 4);
+}
