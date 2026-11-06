@@ -67,6 +67,9 @@ struct PerformanceResourceTimingSlotDeclaration {
     #[webapi(slot = PERFORMANCE_RESOURCE_INITIATOR_TYPE_SLOT)]
     initiator_type: String,
 
+    #[webapi(slot = PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT, constructor_default = "")]
+    initiator_url: &'static str,
+
     #[webapi(slot = PERFORMANCE_RESOURCE_NEXT_HOP_PROTOCOL_SLOT, constructor_default = "")]
     next_hop_protocol: &'static str,
 
@@ -135,6 +138,7 @@ struct PerformanceResourceTimingJsonSnapshotDeclaration {
     duration: f64,
     navigation_id: f64,
     initiator_type: String,
+    initiator_url: String,
     next_hop_protocol: String,
     worker_start: f64,
     redirect_start: f64,
@@ -169,6 +173,7 @@ impl PerformanceResourceTimingJsonSnapshotDeclaration {
             performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_DURATION_SLOT)?,
             performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT)?,
             performance_entry_slot_string(scope, entry, PERFORMANCE_RESOURCE_INITIATOR_TYPE_SLOT)?,
+            performance_entry_slot_string(scope, entry, PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT)?,
             performance_entry_slot_string(
                 scope,
                 entry,
@@ -297,6 +302,14 @@ struct PerformanceEntryDetailPrototypeAccessorsDeclaration {
     receiver
 )]
 struct PerformanceResourceTimingPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = performance_resource_timing_attribute_getter_callback,
+        data = callback_data_index_value(scope, 20),
+        enumerable
+    )]
+    initiator_url: (),
+
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
@@ -698,6 +711,7 @@ const PERFORMANCE_RESOURCE_TIMING_ATTRIBUTE_SLOTS: &[&str] = &[
     PERFORMANCE_RESOURCE_RENDER_BLOCKING_STATUS_SLOT,
     PERFORMANCE_RESOURCE_RESPONSE_STATUS_SLOT,
     PERFORMANCE_RESOURCE_CONTENT_TYPE_SLOT,
+    PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT,
 ];
 
 pub(in crate::context_bootstrap) fn performance_get_entries_callback<'s>(

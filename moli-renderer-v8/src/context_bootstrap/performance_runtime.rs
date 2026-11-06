@@ -39,6 +39,8 @@ pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_DETAIL_SLOT: &str =
     "__moliPerformanceEntryDetail";
 pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_INITIATOR_TYPE_SLOT: &str =
     "__moliPerformanceResourceInitiatorType";
+pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT: &str =
+    "__moliResourceInitiatorUrl";
 pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_NEXT_HOP_PROTOCOL_SLOT: &str =
     "__moliPerformanceResourceNextHopProtocol";
 pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_WORKER_START_SLOT: &str =
@@ -221,6 +223,7 @@ pub(crate) fn current_performance_time_origin(scope: &mut v8::PinScope<'_, '_>) 
 pub(crate) struct ResourcePerformanceEntry {
     name: String,
     initiator_type: String,
+    initiator_url: String,
     start_unix_millis: Option<f64>,
     transfer_size: f64,
     encoded_body_size: f64,
@@ -335,6 +338,7 @@ impl ResourcePerformanceEntry {
         Self {
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
+            initiator_url: String::new(),
             start_unix_millis,
             transfer_size,
             encoded_body_size: body_size,
@@ -380,6 +384,7 @@ impl ResourcePerformanceEntry {
         Self {
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
+            initiator_url: String::new(),
             start_unix_millis,
             transfer_size: 0.0,
             encoded_body_size: 0.0,
@@ -432,6 +437,14 @@ fn append_resource_performance_entry<'s>(
         entry.response_status,
         &entry.content_type,
     );
+    if let Some(value) = v8_string(scope, &entry.initiator_url) {
+        set_private_value(
+            scope,
+            resource,
+            PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT,
+            value.into(),
+        );
+    }
     push_performance_entry(scope, performance, resource);
 }
 
