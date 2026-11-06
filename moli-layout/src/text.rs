@@ -1407,7 +1407,10 @@ impl DocumentLayoutServices {
                 continue;
             }
             let Some(cached) = self.web_fonts.values().find(|font| {
-                font.membership.stylesheet
+                // FontFace.load() may register a CSS-connected face before
+                // its native stylesheet loader registers the same source.
+                (font.membership.stylesheet
+                    || font.membership.font_face_set == Some(FontFaceSetMembership::Connected))
                     && font.source_key.as_deref() == Some(declaration.source_key)
             }) else {
                 continue;
