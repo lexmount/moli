@@ -1779,7 +1779,7 @@ impl ProtocolDeliveryEnvelope {
     }
 
     /// One CDP projection; the producer emits the native dialog fact separately.
-    pub(crate) fn page_javascript_dialog_opening(
+    pub fn page_javascript_dialog_opening(
         session_id: Option<&str>,
         event: PageJavaScriptDialogOpeningEvent,
     ) -> Self {
@@ -2405,6 +2405,15 @@ impl ProtocolDeliveryEnvelope {
                 | BackgroundProtocolEventPayload::PageSameDocumentNavigation(_)
                 | BackgroundProtocolEventPayload::PageFrameAttached(_)
                 | BackgroundProtocolEventPayload::PageFrameDetached(_)
+        )
+    }
+
+    /// A typed CDP opening projects a separately delivered native dialog fact.
+    /// Raw CDP JSON remains eligible for adapters' compatibility bridges.
+    pub fn is_javascript_dialog_opening_projection(&self) -> bool {
+        matches!(
+            &self.payload,
+            BackgroundProtocolEventPayload::PageJavaScriptDialogOpening(_)
         )
     }
 

@@ -1699,7 +1699,8 @@ impl BidiDevToolsEventSources {
     }
 
     fn push_background_event(&mut self, event: BackgroundProtocolEvent) {
-        if event.is_frame_lifecycle_projection() {
+        if event.is_frame_lifecycle_projection() || event.is_javascript_dialog_opening_projection()
+        {
             return;
         }
         let event = match event.into_command_response_payload() {
@@ -3323,10 +3324,94 @@ impl SharedBidiSessionRegistry {
 
 #[cfg(test)]
 mod tests {
-    use moli_protocol::automation::RuntimeConsoleEvent;
+    use moli_protocol::automation::{PageJavaScriptDialogOpeningEvent, RuntimeConsoleEvent};
     use serde_json::json;
 
     use super::*;
+
+    fn bidi_with_prompt_subscription() -> (BidiConnectionState, BidiSessionRegistry) {
+        let mut bidi = BidiConnectionState::new();
+        let mut registry = BidiSessionRegistry::new();
+        for (id, method, params) in [
+            (1, "session.new", json!({})),
+            (
+                2,
+                "session.subscribe",
+                json!({"events": ["browsingContext.userPromptOpened"]}),
+            ),
+        ] {
+            let outcome = bidi.handle_message_with_session_registry(
+                json!({"id": id, "method": method, "params": params}),
+                &mut registry,
+            );
+            assert_eq!(outcome.response["type"], "success", "{method}");
+        }
+        (bidi, registry)
+    }
+
+    #[test]
+    fn protocol_output_hook_delivers_one_native_dialog_opening_with_two_cdp_projections() {
+        let (mut bidi, _registry) = bidi_with_prompt_subscription();
+        let opening = PageJavaScriptDialogOpeningEvent {
+            frame_id: Some("TID-prompt".into()),
+            url: "https://example.test/".to_owned(),
+            message: "one physical prompt".to_owned(),
+            dialog_type: "prompt".to_owned(),
+            has_browser_handler: false,
+            default_prompt: "default prompt".to_owned(),
+        };
+        let mut sources = BidiDevToolsEventSources::default();
+        sources.push_automation_event(AutomationEvent::PageJavaScriptDialogOpening(
+            opening.clone(),
+        ));
+        for session in ["SID-first", "SID-peer"] {
+            sources.push_background_event(BackgroundProtocolEvent::page_javascript_dialog_opening(
+                Some(session),
+                opening.clone(),
+            ));
+        }
+        let events = subscribed_bidi_events_from_devtools_event_sources(
+            None,
+            &mut bidi,
+            &sources.into_sources(),
+            None,
+        );
+        assert_eq!(
+            events,
+            vec![json!({
+                "type": "event",
+                "method": "browsingContext.userPromptOpened",
+                "params": {
+                    "context": "TID-prompt", "type": "prompt", "message": "one physical prompt",
+                    "handler": "dismiss", "defaultValue": "default prompt",
+                }
+            })]
+        );
+    }
+
+    #[test]
+    fn protocol_output_hook_preserves_raw_dialog_opening_bridge() {
+        let (mut bidi, _registry) = bidi_with_prompt_subscription();
+        let output = ProtocolOutputSequence::from_background_event(
+            BackgroundProtocolEvent::immediate(json!({
+                "sessionId": "SID-raw",
+                "method": "Page.javascriptDialogOpening",
+                "params": {
+                    "frameId": "TID-raw", "type": "alert", "message": "raw CDP input",
+                }
+            })),
+        );
+        let mut events = Vec::new();
+        extend_bidi_events_from_protocol_output(None, &mut bidi, &mut events, output, None);
+        assert_eq!(
+            events,
+            vec![json!({
+                "type": "event",
+                "method": "browsingContext.userPromptOpened",
+                "params": {"context": "TID-raw", "type": "alert", "message": "raw CDP input", "handler": "dismiss"}
+            })]
+        );
+    }
 
     #[test]
     fn bidi_dialog_handler_follows_successful_session_creation_and_end() {
