@@ -121,3 +121,54 @@ pub(crate) fn response_url(
         String::new()
     }
 }
+
+/// One registration's immutable attribution, independent of later registrations
+/// of the same callback. The anchor holds no callback or execution authority.
+#[derive(Clone)]
+pub(crate) struct CallbackInitiator(std::rc::Rc<v8::Global<v8::String>>);
+
+impl CallbackInitiator {
+    pub(crate) fn capture(scope: &mut v8::PinScope<'_, '_>) -> Self {
+        let anchor = anchor(scope).unwrap_or_else(|| v8::String::empty(scope));
+        Self(std::rc::Rc::new(v8::Global::new(scope, anchor)))
+    }
+
+    fn local<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::String> {
+        v8::Local::new(scope, self.0.as_ref())
+    }
+}
+
+/// Choose before entering a callback Realm. An active caller, including an
+/// explicit unknown caller, precedes a callback's registration provenance.
+pub(crate) fn callback_anchor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    registration: Option<&CallbackInitiator>,
+) -> Option<v8::Local<'s, v8::String>> {
+    if let Some(anchor) = anchor(scope) {
+        return Some(anchor);
+    }
+    let registration = registration?;
+    if v8::StackTrace::current_stack_trace(scope, 1)
+        .is_none_or(|stack| stack.get_frame_count() != 0)
+    {
+        return Some(v8::String::empty(scope));
+    }
+    Some(registration.local(scope))
+}
+
+pub(crate) fn with_callback_anchor<'s, R>(
+    scope: &mut v8::PinScope<'s, '_>,
+    anchor: Option<v8::Local<'s, v8::String>>,
+    invoke: impl FnOnce(&mut v8::PinScope<'s, '_>) -> R,
+) -> R {
+    let Some(anchor) = anchor else {
+        return invoke(scope);
+    };
+    let previous = scope.get_continuation_preserved_embedder_data();
+    let base = base_url_value(scope);
+    let data = data_with_anchor(scope, base, anchor);
+    scope.set_continuation_preserved_embedder_data(data);
+    let result = invoke(scope);
+    scope.set_continuation_preserved_embedder_data(previous);
+    result
+}

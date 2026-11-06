@@ -107,3 +107,109 @@ async fn classic_xhr_initiator_redacts_cross_origin_and_opaque_script_sources() 
     assert_eq!(vm.eval("JSON.stringify(performance.getEntriesByType('resource').map(entry => entry.initiatorUrl))").unwrap(), r#"["",""]"#);
     assert_eq!(server.finish().await.len(), 2);
 }
+
+#[tokio::test]
+async fn window_timer_resource_initiator_is_per_registration_for_function_string_interval_and_promise()
+ {
+    let server = StaticHttpServer::spawn_with_responder(
+        5,
+        "Content-Type: text/plain\r\nCache-Control: no-store\r\n",
+        |_, _| "ok".to_owned(),
+    )
+    .await;
+    let base = server.base_url();
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(base.as_str(), &loader);
+    execute_with_source(
+        &mut vm,
+        r#"
+      globalThis.request = path => {
+        const xhr = new XMLHttpRequest(); xhr.open('GET', path); xhr.send();
+      };
+      globalThis.sharedTimer = path => request(path);
+    "#,
+        &base.join("library.js").unwrap(),
+        &base,
+    );
+    let first = base.join("first.js").unwrap();
+    let second = base.join("second.js").unwrap();
+    execute_with_source(
+        &mut vm,
+        r#"
+      setTimeout(sharedTimer, 0, 'first');
+      setTimeout("request('string')", 0);
+      const interval = setInterval(() => { clearInterval(interval); request('interval'); }, 0);
+      setTimeout(() => Promise.resolve().then(() => request('promise')), 0);
+    "#,
+        &first,
+        &base,
+    );
+    execute_with_source(
+        &mut vm,
+        "setTimeout(sharedTimer, 0, 'second');",
+        &second,
+        &base,
+    );
+    execute_with_source(
+        &mut vm,
+        "globalThis.unrelated = true;",
+        &base.join("later.js").unwrap(),
+        &base,
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(performance.getEntriesByType('resource').length)",
+        "5",
+        "callback initiator completion",
+    )
+    .await;
+    let actual = vm.eval(r#"JSON.stringify(performance.getEntriesByType('resource').map(entry => [new URL(entry.name).pathname, entry.initiatorUrl]).sort())"#).unwrap();
+    assert_eq!(
+        actual,
+        serde_json::json!([
+            ["/first", first.as_str()],
+            ["/interval", first.as_str()],
+            ["/promise", first.as_str()],
+            ["/second", second.as_str()],
+            ["/string", first.as_str()]
+        ])
+        .to_string()
+    );
+    assert_eq!(server.finish().await.len(), 5);
+}
+
+#[tokio::test]
+async fn window_timer_resource_initiator_keeps_unknown_registration_unknown() {
+    let server = StaticHttpServer::spawn_with_responder(
+        1,
+        "Content-Type: text/plain\r\nCache-Control: no-store\r\n",
+        |_, _| "ok".to_owned(),
+    )
+    .await;
+    let base = server.base_url();
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(base.as_str(), &loader);
+    execute_with_source(
+        &mut vm,
+        "setTimeout(() => { const x = new XMLHttpRequest(); x.open('GET', 'unknown'); x.send(); }, 0);",
+        &Url::parse("https://other.invalid/registration.js").unwrap(),
+        &base,
+    );
+    execute_with_source(
+        &mut vm,
+        "globalThis.unrelated = true;",
+        &base.join("later.js").unwrap(),
+        &base,
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(performance.getEntriesByType('resource').length)",
+        "1",
+        "callback initiator completion",
+    )
+    .await;
+    assert_eq!(vm.eval("JSON.stringify(performance.getEntriesByType('resource').map(entry => entry.initiatorUrl))").unwrap(), r#"[""]"#);
+    assert_eq!(server.finish().await.len(), 1);
+}

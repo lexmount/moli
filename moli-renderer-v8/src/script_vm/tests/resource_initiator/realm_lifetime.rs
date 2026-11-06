@@ -108,6 +108,28 @@ fn resource_initiator_removed_child_without_parent_reaction_is_collectable() {
 }
 
 #[test]
+fn resource_initiator_unknown_registration_does_not_retain_its_creation_context() {
+    let mut vm = new_storage_test_vm("https://initiator-lifetime.test/");
+    let (registrations, context) = vm
+        .with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            let context = v8::Context::new(scope, Default::default());
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let captured = crate::resource_initiator::CallbackInitiator::capture(scope);
+            Ok(([captured], v8::Weak::new(scope, context)))
+        })
+        .unwrap();
+    for _ in 0..3 {
+        vm.renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        context.is_empty(),
+        "an unknown registration retained its creation Realm"
+    );
+    drop(registrations);
+}
+
+#[test]
 fn resource_initiator_continuation_preserves_base_url_and_encoded_control_characters() {
     let mut vm = new_storage_test_vm("https://initiator-lifetime.test/");
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
