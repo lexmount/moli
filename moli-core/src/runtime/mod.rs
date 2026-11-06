@@ -1269,7 +1269,8 @@ impl Browser {
             ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
                 document_fetch_context_seed.browser_resource_runtime(),
                 document_fetch_context_seed.page_network_policy(),
-            );
+            )
+            .with_navigation_timing_seed(&document_fetch_context_seed);
         let response_status = response.status;
         let response_headers = response.headers.clone();
         let redirected = response.redirected;

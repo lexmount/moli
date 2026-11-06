@@ -609,6 +609,7 @@ fn create_navigation_performance_entry<'s>(
     ))
     .initialize(scope, entry)
     .expect("PerformanceNavigationTiming slot declaration should initialize");
+    super::navigation_timing::refresh_navigation_timing(scope, entry);
     entry
 }
 

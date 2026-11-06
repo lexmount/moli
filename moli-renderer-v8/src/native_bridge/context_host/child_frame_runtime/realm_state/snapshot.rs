@@ -28,7 +28,7 @@ pub(super) fn capture_child_window_realm_snapshot(
         window_name: entry.window_name().to_owned(),
         navigation_seed: entry.committed_navigation_entry_seed(),
         navigation_type: entry.performance_navigation_type().to_owned(),
-        performance_time_origin: entry.performance_time_origin_millis(),
+        performance_time_origin: host.child_performance_time_origin(init.handle),
         policy: entry.document_policy_container_snapshot(),
     };
 

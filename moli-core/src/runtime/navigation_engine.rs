@@ -1049,7 +1049,8 @@ impl NavigationEngine {
             ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
                 committed_runtime,
                 seed.page_network_policy(),
-            ),
+            )
+            .with_navigation_timing_seed(&seed),
         )
     }
 

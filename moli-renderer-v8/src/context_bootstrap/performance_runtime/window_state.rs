@@ -87,13 +87,19 @@ fn bind_window_performance_seed_in_current_realm<'s>(
 pub(in crate::context_bootstrap) fn install_default_window_performance_seed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
+    navigation_time_origin: Option<f64>,
 ) -> Result<()> {
     install_performance_observer_runtime_state(
         scope,
         window,
         WINDOW_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES,
     )?;
-    bind_window_performance_seed(scope, window, "navigate", unix_epoch_millis())
+    bind_window_performance_seed(
+        scope,
+        window,
+        "navigate",
+        navigation_time_origin.unwrap_or_else(unix_epoch_millis),
+    )
 }
 
 pub(in crate::context_bootstrap) fn build_window_performance_for_receiver<'s>(

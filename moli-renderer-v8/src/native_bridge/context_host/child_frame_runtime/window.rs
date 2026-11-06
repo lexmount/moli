@@ -1565,6 +1565,14 @@ impl JsContextHost {
     }
 
     pub(crate) fn child_performance_time_origin(&self, handle: DomHandle) -> f64 {
+        if let Some(origin) = self
+            .document_resource_loader_for_dispatch_scope(
+                crate::native_bridge::OwnerDispatchScope::Child(handle),
+            )
+            .and_then(|loader| loader.navigation_time_origin())
+        {
+            return origin;
+        }
         self.child_browsing_contexts
             .get(&handle)
             .map(|entry| entry.performance_time_origin_millis())

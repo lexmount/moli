@@ -6,6 +6,8 @@ mod event_source_resource_timing;
 mod font_loading;
 #[path = "scripts/integrity.rs"]
 mod integrity;
+#[path = "scripts/navigation_resource_timing.rs"]
+mod navigation_resource_timing;
 #[path = "scripts/nested_worker_retirement.rs"]
 mod nested_worker_retirement;
 #[path = "scripts/worker_event_source.rs"]

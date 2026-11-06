@@ -281,8 +281,7 @@ impl JsContextHost {
                         .fetch_service_worker_child_main_resource_for_reserved_client(
                             client_id,
                             &request,
-                            task_resource_loader.request_client(),
-                            task_resource_loader.task_runner(),
+                            &task_resource_loader,
                             completion_tx.clone(),
                         )
                         .await

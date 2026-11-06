@@ -39,6 +39,7 @@ struct NavigationResourceLoaderInner {
     id: u64,
     state: Mutex<NavigationResourceLoaderState>,
     cancel: FetchCancelHandle,
+    timing: super::NavigationTiming,
 }
 
 /// The network authority for exactly one main-resource navigation attempt.
@@ -117,6 +118,7 @@ impl NavigationResourceLoader {
                     .fetch_add(1, Ordering::Relaxed)
                     .saturating_add(1),
                 state: Mutex::new(NavigationResourceLoaderState::Created),
+                timing: super::NavigationTiming::new(cancel.clone()),
                 cancel,
             }),
         }
@@ -124,6 +126,16 @@ impl NavigationResourceLoader {
 
     pub fn loader_id_for_diagnostics(&self) -> u64 {
         self.inner.id
+    }
+
+    pub(crate) fn cancel_handle(&self) -> FetchCancelHandle {
+        self.inner.cancel.clone()
+    }
+
+    /// Records a materialized main-resource response, including SW responses
+    /// whose body does not come from an HTTP transfer.
+    pub fn observe_materialized_response(&self, head: moli_fetch::ResponseHead, body_size: usize) {
+        self.inner.timing.observe_response(head, Some(body_size));
     }
 
     pub fn state(&self) -> NavigationResourceLoaderState {
@@ -180,6 +192,7 @@ impl NavigationResourceLoader {
             .await
         {
             Ok(response) => {
+                self.inner.timing.observe_response(response.head(), None);
                 self.finish_response_ready()?;
                 Ok(response)
             }
@@ -204,6 +217,9 @@ impl NavigationResourceLoader {
             .await
         {
             Ok(response) => {
+                self.inner
+                    .timing
+                    .observe_response(response.response().head(), None);
                 self.finish_response_ready()?;
                 Ok(response)
             }
@@ -234,6 +250,7 @@ impl NavigationResourceLoader {
             .await
         {
             Ok(mut response) => {
+                response.share_response_progress(&self.inner.cancel);
                 let head = response.head();
                 let mut body = Vec::new();
                 while let Some(chunk) = response.next_chunk().await {
@@ -244,6 +261,9 @@ impl NavigationResourceLoader {
                     return Err(error);
                 }
                 self.finish_response_ready()?;
+                self.inner
+                    .timing
+                    .observe_response(head.clone(), Some(body.len()));
                 Ok((
                     RawResponse::from_head_and_body(head, body),
                     response.response_timing(),
@@ -276,6 +296,12 @@ impl NavigationResourceLoader {
             .await
         {
             Ok(response) => {
+                response
+                    .response()
+                    .share_response_progress(&self.inner.cancel);
+                self.inner
+                    .timing
+                    .observe_response(response.response().head(), None);
                 self.finish_response_ready()?;
                 Ok(response)
             }
@@ -310,6 +336,7 @@ impl NavigationResourceLoader {
             self.request_client.page_network_policy(),
             self.committed_document_browser_site_context.clone(),
             self.task_runner.clone(),
+            self.inner.timing.clone(),
         ))
     }
 

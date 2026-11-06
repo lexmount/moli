@@ -102,6 +102,11 @@ impl ScriptTextCacheKey {
 }
 
 impl RawSubresourceCacheKey {
+    pub(in crate::network) fn allows_response_store(&self, request: &Request) -> bool {
+        self.resource_type != "navigation-prefetch"
+            || request.resource_type == RequestResourceType::LinkPrefetch
+    }
+
     pub(in crate::network) fn for_page_cache_partition(mut self, partition_id: u64) -> Self {
         self.page_cache_partition_id = partition_id;
         self
@@ -869,10 +874,13 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
     }
     let mut target_url = request.url.clone();
     target_url.set_fragment(None);
+    let navigation_prefetch = same_origin_navigation_prefetch(request);
     // These policies authorize the same untainted same-origin HTTP hop. Each
     // consumer still checks its redirects and response policy, and Vary still
     // distinguishes their mode-specific wire headers.
-    let request_mode = if request.request_mode == RequestMode::Cors
+    let request_mode = if navigation_prefetch {
+        RequestMode::Navigate
+    } else if request.request_mode == RequestMode::Cors
         && request
             .request_origin()
             .is_some_and(|origin| origin.same_origin_url(&request.url))
@@ -885,18 +893,43 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
     Some(RawSubresourceCacheKey {
         page_cache_partition_id: 0,
         url: target_url.into(),
-        resource_type: raw_subresource_cache_resource_type_key(request.resource_type),
-        follow_redirects: request.transport_follows_redirects(),
-        credentials_mode: request.credentials_mode.as_ref().to_owned(),
+        resource_type: if navigation_prefetch {
+            "navigation-prefetch"
+        } else {
+            raw_subresource_cache_resource_type_key(request.resource_type)
+        },
+        follow_redirects: navigation_prefetch || request.transport_follows_redirects(),
+        credentials_mode: if navigation_prefetch {
+            "include".to_owned()
+        } else {
+            request.credentials_mode.as_ref().to_owned()
+        },
         request_origin: request
             .request_origin()
             .map(|origin| origin.ascii_serialization().to_owned()),
         request_mode: request_mode.as_ref().to_owned(),
         // Policies and explicit Fetch referrers can select different headers
         // without changing the origin or cookie initiator in this cache key.
-        referrer: request.referrer_header_value(&request.url),
+        referrer: if navigation_prefetch {
+            None
+        } else {
+            request.referrer_header_value(&request.url)
+        },
         network_partition_key: request.network_partition_key().map(str::to_owned),
-        cookie_context: format!("{:?}", request.cookie_context),
+        cookie_context: if navigation_prefetch {
+            let context = &request.cookie_context.browser_context;
+            let origin = |url: Option<&Url>| {
+                moli_url::origin_ascii_serialization(url.unwrap_or(&request.url))
+            };
+            format!(
+                "site:{};top:{};storage:{:?}",
+                origin(context.site_for_cookies_url.as_ref()),
+                origin(context.top_frame_origin_url.as_ref()),
+                context.storage_access_status
+            )
+        } else {
+            format!("{:?}", request.cookie_context)
+        },
         serialized_origin: request.serialized_origin(),
         has_cross_origin_url: request.has_cross_origin_url(&request.url),
     })
@@ -916,6 +949,29 @@ fn raw_subresource_cache_resource_type_key(resource_type: RequestResourceType) -
         RequestResourceType::TextTrack => "text-track",
         _ => "other",
     }
+}
+
+/// Same-origin document prefetches and navigations can reuse one HTTP
+/// representation. Keep this namespace separate from script/fetch caches and
+/// from cross-origin or credentialless requests. Vary still matches the actual
+/// wire headers, including Referer, Sec-Fetch-Mode/Dest and Sec-Purpose.
+fn same_origin_navigation_prefetch(request: &Request) -> bool {
+    (request.resource_type == RequestResourceType::LinkPrefetch
+        || (request.request_mode == RequestMode::Navigate
+            && request.browser_request_metadata().is_none()
+            && matches!(
+                request.resource_type,
+                RequestResourceType::Raw | RequestResourceType::Script
+            )))
+        && request
+            .request_origin()
+            .is_some_and(|origin| origin.same_origin_url(&request.url))
+        && !request.has_cross_origin_url(&request.url)
+        && request.redirect_chain().is_empty()
+        && request.credentials_mode != moli_fetch::RequestCredentialsMode::Omit
+        && request
+            .subresource_request_metadata()
+            .is_none_or(|metadata| metadata.integrity.is_none())
 }
 
 fn raw_subresource_request_is_memory_cacheable(
@@ -939,27 +995,29 @@ fn raw_subresource_request_is_memory_cacheable(
 }
 
 fn raw_subresource_memory_cacheable_resource_type(request: &Request) -> bool {
-    matches!(
-        request.resource_type,
-        RequestResourceType::Image
-            | RequestResourceType::Font
-            | RequestResourceType::Media
-            | RequestResourceType::TextTrack
-            | RequestResourceType::CssStyleSheet
-    ) || matches!(
-        (request.resource_type, request.browser_request_metadata()),
-        (
-            RequestResourceType::Raw,
-            Some(
-                BrowserRequestMetadata::Fetch
-                    | BrowserRequestMetadata::JsonModule
-                    | BrowserRequestMetadata::TextModule
-                    | BrowserRequestMetadata::Manifest
-                    | BrowserRequestMetadata::StyleModule
-                    | BrowserRequestMetadata::Xhr
+    same_origin_navigation_prefetch(request)
+        || matches!(
+            request.resource_type,
+            RequestResourceType::Image
+                | RequestResourceType::Font
+                | RequestResourceType::Media
+                | RequestResourceType::TextTrack
+                | RequestResourceType::CssStyleSheet
+        )
+        || matches!(
+            (request.resource_type, request.browser_request_metadata()),
+            (
+                RequestResourceType::Raw,
+                Some(
+                    BrowserRequestMetadata::Fetch
+                        | BrowserRequestMetadata::JsonModule
+                        | BrowserRequestMetadata::TextModule
+                        | BrowserRequestMetadata::Manifest
+                        | BrowserRequestMetadata::StyleModule
+                        | BrowserRequestMetadata::Xhr
+                )
             )
         )
-    )
 }
 
 fn raw_subresource_memory_cacheable_headers(headers: &RequestHeaders) -> bool {
@@ -1001,6 +1059,13 @@ pub(in crate::network) fn raw_subresource_memory_cache_expiry(
     request: &Request,
     response: &RawResponse,
 ) -> Option<u64> {
+    // The shared document-prefetch namespace contains final representations,
+    // never a manual redirect that an automatic navigation might commit.
+    if same_origin_navigation_prefetch(request)
+        && (response.redirected || !(200..300).contains(&response.status))
+    {
+        return None;
+    }
     // This cache retains complete representations, not Content-Range parts.
     if response.status == 206 {
         return None;
@@ -1122,6 +1187,86 @@ mod tests {
     use moli_fetch::{ResponseHead, ScriptFetchRequestMetadata};
 
     use super::*;
+
+    fn document_prefetch_request() -> Request {
+        Request::new_browser(
+            "GET",
+            Url::parse("https://example.test/next").unwrap(),
+            None,
+            Vec::new(),
+            moli_url::WebOrigin::from_ascii_serialization("https://example.test"),
+        )
+        .with_resource_type(RequestResourceType::LinkPrefetch)
+        .with_request_mode(RequestMode::NoCors)
+    }
+
+    #[test]
+    fn document_prefetch_cache_preserves_origin_credentials_and_partitions() {
+        let prefetch = document_prefetch_request();
+        let navigation = prefetch
+            .clone()
+            .with_resource_type(RequestResourceType::Script)
+            .with_top_level_navigation_cookie_context();
+        let key =
+            |request: &Request| raw_subresource_memory_cache_key(request, &request.request_headers);
+        assert_eq!(key(&prefetch), key(&navigation));
+        assert!(key(&prefetch).unwrap().allows_response_store(&prefetch));
+        assert!(!key(&navigation).unwrap().allows_response_store(&navigation));
+        let child = navigation.clone().with_subframe_navigation_cookie_context();
+        assert_eq!(key(&prefetch), key(&child));
+        assert_ne!(
+            key(&prefetch).unwrap().for_page_cache_partition(1),
+            key(&navigation).unwrap().for_page_cache_partition(2)
+        );
+        let credentialless = prefetch
+            .clone()
+            .with_credentials_mode(moli_fetch::RequestCredentialsMode::Omit);
+        assert!(key(&credentialless).is_none());
+        let mut cross_origin = prefetch.clone();
+        cross_origin.url = Url::parse("https://other.test/next").unwrap();
+        assert!(key(&cross_origin).is_none());
+        let mut cookie = prefetch.clone();
+        cookie
+            .request_headers
+            .push(("Cookie".to_owned(), b"session=1".to_vec()));
+        assert!(key(&cookie).is_none());
+        let partitioned = navigation.with_network_partition_key(Some("isolated-frame".to_owned()));
+        assert_ne!(key(&prefetch), key(&partitioned));
+    }
+
+    #[test]
+    fn document_prefetch_cache_matches_vary_against_navigation_wire_headers() {
+        let mut prefetch = document_prefetch_request();
+        prefetch
+            .request_headers
+            .push(("Sec-Fetch-Mode".to_owned(), b"no-cors".to_vec()));
+        let mut navigation = prefetch
+            .clone()
+            .with_resource_type(RequestResourceType::Script)
+            .with_top_level_navigation_cookie_context();
+        navigation.request_headers =
+            RequestHeaders::from_bytes(vec![("Sec-Fetch-Mode".to_owned(), b"navigate".to_vec())]);
+        let key = raw_subresource_memory_cache_key(&prefetch, &prefetch.request_headers).unwrap();
+        assert_eq!(
+            Some(key.clone()),
+            raw_subresource_memory_cache_key(&navigation, &navigation.request_headers)
+        );
+        let mut response = raw_response("https://example.test/next", b"prefetched");
+        response
+            .headers
+            .push(("vary".to_owned(), b"Sec-Fetch-Mode".to_vec()));
+        let mut cache = SharedMemoryResourceCache::default();
+        cache.insert_raw_subresource(key.clone(), response, u64::MAX, &prefetch.request_headers);
+        assert!(
+            cache
+                .lookup_raw_subresource(&key, &navigation, &navigation.request_headers)
+                .is_none()
+        );
+        assert!(matches!(
+            cache.lookup_raw_subresource(&key, &prefetch, &prefetch.request_headers),
+            Some(RawSubresourceCacheLookup::Local { .. })
+        ));
+    }
 
     fn script_request(url: &str) -> Request {
         Request::get(url)

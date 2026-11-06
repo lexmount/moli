@@ -144,8 +144,7 @@ impl RendererBrowserContextRuntime {
             .fetch_service_worker_main_resource_for_reserved_client(
                 client_id,
                 request,
-                navigation_loader.request_client(),
-                navigation_loader.task_runner(),
+                navigation_loader,
                 completion_tx,
                 ServiceWorkerRequestDestination::Document,
             )
@@ -160,15 +159,13 @@ impl RendererBrowserContextRuntime {
         &self,
         client_id: ServiceWorkerClientId,
         request: &Request,
-        request_client: &ResourceRequestClient,
-        resource_task_runner: RendererResourceTaskRunner,
+        navigation_loader: &NavigationResourceLoader,
         completion_tx: crate::page_task_queue::RendererResourceCompletionSender,
     ) -> Result<Option<crate::protocol_types::NavigationResponse>> {
         self.fetch_service_worker_main_resource_for_reserved_client(
             client_id,
             request,
-            request_client,
-            resource_task_runner,
+            navigation_loader,
             completion_tx,
             ServiceWorkerRequestDestination::Iframe,
         )
@@ -179,8 +176,7 @@ impl RendererBrowserContextRuntime {
         &self,
         client_id: ServiceWorkerClientId,
         request: &Request,
-        request_client: &ResourceRequestClient,
-        resource_task_runner: RendererResourceTaskRunner,
+        navigation_loader: &NavigationResourceLoader,
         completion_tx: crate::page_task_queue::RendererResourceCompletionSender,
         destination: ServiceWorkerRequestDestination,
     ) -> Result<Option<crate::protocol_types::NavigationResponse>> {
@@ -228,9 +224,9 @@ impl RendererBrowserContextRuntime {
                 policy_context: Default::default(),
             },
             completion_tx,
-            request_client: request_client.clone(),
-            resource_task_runner,
-            cancel_handle: FetchCancelHandle::new(),
+            request_client: navigation_loader.request_client().clone(),
+            resource_task_runner: navigation_loader.task_runner(),
+            cancel_handle: navigation_loader.cancel_handle(),
             direct_completion_tx: Some(direct_completion_tx),
         };
 
@@ -246,7 +242,13 @@ impl RendererBrowserContextRuntime {
                 "navigation requests cannot contain an author stream"
             )),
             Ok(ServiceWorkerDirectFetchResult::Fallback) => Ok(None),
-            Ok(ServiceWorkerDirectFetchResult::Response(response)) => Ok(Some(*response.response)),
+            Ok(ServiceWorkerDirectFetchResult::Response(response)) => {
+                navigation_loader.observe_materialized_response(
+                    response.response.head(),
+                    response.response.body_bytes().len(),
+                );
+                Ok(Some(*response.response))
+            }
             Ok(ServiceWorkerDirectFetchResult::Failure(message)) => Err(anyhow!(message)),
             Err(_) => Err(anyhow!(
                 "service worker main resource fetch completion channel closed"

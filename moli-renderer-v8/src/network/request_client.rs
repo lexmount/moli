@@ -66,6 +66,7 @@ impl ClientSecurityPolicy {
 
 #[derive(Clone, Default)]
 struct DocumentRequestContext {
+    navigation_timing_seed: Option<super::navigation::NavigationTiming>,
     preloads: super::preloads::DocumentPreloads,
     response_links: Option<super::context::DocumentResponseLinkObserver>,
     client_security_policy: ClientSecurityPolicy,
@@ -136,6 +137,24 @@ impl ScriptTextLoadExecution {
 }
 
 impl ResourceRequestClient {
+    /// Transfer a committed navigation's clock through initial page bootstrap.
+    /// The bootstrap consumes this seed before binding the Document client.
+    pub fn with_navigation_timing_seed(
+        mut self,
+        seed: &super::navigation::DocumentFetchContextSeed,
+    ) -> Self {
+        self.document_request_context_mut().navigation_timing_seed = Some(seed.navigation_timing());
+        self
+    }
+
+    pub(crate) fn take_navigation_timing_seed(
+        &mut self,
+    ) -> Option<super::navigation::NavigationTiming> {
+        self.document_requests
+            .as_mut()
+            .and_then(|context| Arc::make_mut(context).navigation_timing_seed.take())
+    }
+
     // Standalone clients must return their thread-affine lifetime owner; the
     // owner dereferences to this request-side handle for existing call sites.
     #[allow(clippy::new_ret_no_self)]
@@ -476,10 +495,21 @@ impl ResourceRequestClient {
 
     /// Creates a Document-owned adapter inside this client's Page target.
     pub(crate) fn fork_with_isolated_document_network_policy(&self) -> Self {
-        Self::from_browser_resource_runtime_with_page_network_policy(
+        let mut client = Self::from_browser_resource_runtime_with_page_network_policy(
             self.resource_runtime.clone(),
             self.page_network_policy.isolated_same_page_copy(),
-        )
+        );
+        // The new Document gets its own policy, while retaining the clock of
+        // the navigation being committed. Committed Document clients have
+        // already consumed this seed and cannot pass it to inherited children.
+        if let Some(timing) = self
+            .document_requests
+            .as_ref()
+            .and_then(|context| context.navigation_timing_seed.clone())
+        {
+            client.document_request_context_mut().navigation_timing_seed = Some(timing);
+        }
+        client
     }
 
     /// Creates a Worker-owned adapter while retaining the creator Document's
@@ -1275,9 +1305,9 @@ impl ResourceRequestClient {
                 if let Some(sizes) = cached.body_sizes() {
                     cancel_handle.set_response_body_sizes(sizes);
                 }
-                return Ok(NetworkFetchResult::without_request_observation(
-                    streaming_raw_response_from_cached_subresource(*cached)?,
-                ));
+                let response = streaming_raw_response_from_cached_subresource(*cached)?;
+                response.share_response_progress(&cancel_handle);
+                return Ok(NetworkFetchResult::without_request_observation(response));
             }
             Some(RawSubresourceCacheLookup::Revalidate(cached)) => {
                 let validators = validation_headers_from_headers(&cached.headers);
@@ -1363,6 +1393,10 @@ impl ResourceRequestClient {
             ));
         }
         let response = self.observe_streaming_response_links(&request, response);
+        // A navigation may consume a completed document prefetch. It does not
+        // produce speculative entries or acquire a cache tee's body task on a
+        // miss. In particular, standalone navigation keeps its streaming owner.
+        let cache_key = cache_key.filter(|key| key.allows_response_store(&request));
         let response = if let Some(cache_key) = cache_key {
             self.tee_raw_subresource_response_for_memory_cache(request, cache_key, response)
         } else {

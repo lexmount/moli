@@ -12,6 +12,7 @@ mod marks_measures;
 mod measurement_interfaces;
 mod memory;
 mod name;
+mod navigation_timing;
 pub(in crate::context_bootstrap) use name::PerformanceEntryName;
 mod resource_buffer;
 mod window_state;

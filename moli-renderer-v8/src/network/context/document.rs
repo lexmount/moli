@@ -171,6 +171,7 @@ pub struct DocumentResourceLoader {
     creation_url: Arc<url::Url>,
     authority: Arc<DocumentResourceLoaderAuthority>,
     csp_reports: Arc<crate::content_security_policy::ContentSecurityPolicyReports>,
+    navigation_timing: Option<crate::network::navigation::NavigationTiming>,
 }
 
 /// Inputs that exist before the initial committed Document owner is known.
@@ -183,21 +184,26 @@ pub struct DocumentResourceLoader {
 pub(crate) struct DocumentResourceLoaderBootstrap {
     request_client: ResourceRequestClient,
     task_runner: RendererResourceTaskRunner,
+    navigation_timing: Option<crate::network::navigation::NavigationTiming>,
 }
 
 impl DocumentResourceLoaderBootstrap {
     pub(crate) fn new(
-        request_client: ResourceRequestClient,
+        mut request_client: ResourceRequestClient,
         task_runner: RendererResourceTaskRunner,
     ) -> Self {
         Self {
+            navigation_timing: request_client.take_navigation_timing_seed(),
             request_client,
             task_runner,
         }
     }
 
     pub(crate) fn commit(self, context: DocumentFetchContext) -> DocumentResourceLoader {
-        DocumentResourceLoader::new(self.request_client, self.task_runner, context)
+        let mut loader =
+            DocumentResourceLoader::new(self.request_client, self.task_runner, context);
+        loader.navigation_timing = self.navigation_timing;
+        loader
     }
 
     pub(crate) fn author_styles_disabled(&self) -> bool {
@@ -273,6 +279,7 @@ impl DocumentResourceLoader {
                 .with_document_client_policy(client_security_policy),
             creation_url,
             csp_reports: Default::default(),
+            navigation_timing: None,
             authority,
         }
     }
@@ -290,12 +297,14 @@ impl DocumentResourceLoader {
         if let Some(browser_site_context) = seed.shared_browser_site_context() {
             request_client = request_client.with_shared_browser_site_context(browser_site_context);
         }
-        Self::new_with_preloads(
+        let mut loader = Self::new_with_preloads(
             request_client,
             seed.resource_task_runner(),
             context,
             preloads,
-        )
+        );
+        loader.navigation_timing = Some(seed.navigation_timing());
+        loader
     }
 
     pub(crate) fn for_committed_document(
@@ -335,6 +344,16 @@ impl DocumentResourceLoader {
         Self::new(self.request_client.clone(), self.task_runner(), context)
     }
 
+    pub(crate) fn navigation_timing(&self) -> Option<crate::network::navigation::NavigationTiming> {
+        self.navigation_timing.clone()
+    }
+
+    pub(crate) fn navigation_time_origin(&self) -> Option<f64> {
+        self.navigation_timing
+            .as_ref()
+            .map(|timing| timing.time_origin())
+    }
+
     pub(crate) fn for_document_open(
         context: DocumentFetchContext,
         source: DocumentResourceAuthoritySource,
@@ -350,6 +369,7 @@ impl DocumentResourceLoader {
         replacement.csp_reports = previous.csp_reports.clone();
         replacement.set_client_security_policy(previous.client_security_policy());
         replacement.creation_url = previous.creation_url.clone();
+        replacement.navigation_timing = previous.navigation_timing.clone();
         // document.open() replaces the load owner, not the Document. Transfer
         // retirement authority along with its one-shot preload map.
         previous
@@ -417,6 +437,7 @@ impl DocumentResourceLoader {
             authority: Arc::clone(&self.authority),
             creation_url: self.creation_url.clone(),
             csp_reports: self.csp_reports.clone(),
+            navigation_timing: self.navigation_timing.clone(),
         }
     }
 

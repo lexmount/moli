@@ -1367,6 +1367,7 @@ mod tests {
         ConnectedLoadParameters::PreloadLikeLink {
             url,
             options: Arc::new(ConnectedLinkReadinessFetchOptions {
+                network_partition_key: None,
                 document_referrer_policy: None,
                 resource_type: SubresourceResourceType::Stylesheet,
                 request_resource_type: Some(moli_fetch::RequestResourceType::CssStyleSheet),

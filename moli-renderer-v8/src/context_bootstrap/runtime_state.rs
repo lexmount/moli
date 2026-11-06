@@ -1961,7 +1961,11 @@ fn install_window_runtime_state<'s>(
     install_trusted_types_runtime_state(scope, global)?;
     install_window_crypto_runtime_state(scope, global, secure_context_available)?;
     install_css_runtime_state(scope, global)?;
-    install_default_window_performance_seed(scope, global)?;
+    install_default_window_performance_seed(
+        scope,
+        global,
+        document_loader.navigation_time_origin(),
+    )?;
     install_chrome_runtime_state(scope, global)?;
     install_storage_runtime_state(scope, global)?;
     install_public_window_surface_accessors(scope, global)?;

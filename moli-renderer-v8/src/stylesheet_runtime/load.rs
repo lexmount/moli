@@ -376,6 +376,7 @@ impl Eq for InlineStyleImportSource {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::document_runtime) struct ConnectedLinkReadinessFetchOptions {
+    pub(in crate::document_runtime) network_partition_key: Option<String>,
     pub(in crate::document_runtime) resource_type: SubresourceResourceType,
     pub(in crate::document_runtime) request_resource_type: Option<moli_fetch::RequestResourceType>,
     pub(in crate::document_runtime) script_fetch_metadata:
