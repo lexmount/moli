@@ -54,6 +54,9 @@ non-yielding WebDriver timeout behavior.
   switching, shadow roots, page-side SharedWorker probe without polluting window
   handles, `document.open()` replacement stale-element behavior, and headless window state surface.
 - WebDriver BiDi `session.status`, `session.new`, `browsingContext.create`,
+  exactly one `browsingContext.userPromptOpened`/`userPromptClosed` notification
+  per alert/confirm/prompt, prompt text and one-shot handling followed by live
+  commands in the same session,
   `session.subscribe`, `browsingContext.navigate`, DOMContentLoaded lifecycle
   events, `input.performActions`, `input.releaseActions`, key actions that trigger a top-level Page
   replacement and remain successful through the replacement lifecycle, element-origin input
