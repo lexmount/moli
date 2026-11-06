@@ -1811,6 +1811,7 @@ pub(super) struct ChildParserModuleRootFetchCompletion {
     network_result: Option<SharedNavigationResponseResult>,
     network_attribution: ChildModuleFetchNetworkAttribution,
     csp_context: Option<crate::content_security_policy::ModuleFetchCspContext>,
+    performance_entry: Option<crate::context_bootstrap::ResourcePerformanceEntry>,
 }
 
 impl ChildParserModuleRootFetchCompletion {
@@ -1830,6 +1831,7 @@ impl ChildParserModuleRootFetchCompletion {
             network_result,
             network_attribution,
             csp_context: None,
+            performance_entry: None,
         }
     }
 
@@ -1845,6 +1847,20 @@ impl ChildParserModuleRootFetchCompletion {
         &self,
     ) -> Option<&crate::content_security_policy::ModuleFetchCspContext> {
         self.csp_context.as_ref()
+    }
+
+    pub(super) fn with_performance_entry(
+        mut self,
+        entry: Option<crate::context_bootstrap::ResourcePerformanceEntry>,
+    ) -> Self {
+        self.performance_entry = entry;
+        self
+    }
+
+    pub(super) fn take_performance_entry(
+        &mut self,
+    ) -> Option<crate::context_bootstrap::ResourcePerformanceEntry> {
+        self.performance_entry.take()
     }
 
     pub(super) fn target(&self) -> crate::frame_owner_model::ChildDocumentModuleFetchTarget {
@@ -1882,6 +1898,7 @@ pub(super) struct ChildModuleDependencyFetchCompletion {
     result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
     network_result: Option<SharedNavigationResponseResult>,
     network_attribution: ChildModuleFetchNetworkAttribution,
+    performance_entry: Option<crate::context_bootstrap::ResourcePerformanceEntry>,
 }
 
 impl ChildModuleDependencyFetchCompletion {
@@ -1905,7 +1922,22 @@ impl ChildModuleDependencyFetchCompletion {
             result,
             network_result,
             network_attribution,
+            performance_entry: None,
         }
+    }
+
+    pub(super) fn with_performance_entry(
+        mut self,
+        entry: Option<crate::context_bootstrap::ResourcePerformanceEntry>,
+    ) -> Self {
+        self.performance_entry = entry;
+        self
+    }
+
+    pub(super) fn take_performance_entry(
+        &mut self,
+    ) -> Option<crate::context_bootstrap::ResourcePerformanceEntry> {
+        self.performance_entry.take()
     }
 
     pub(super) fn target(&self) -> crate::frame_owner_model::ChildDocumentModuleFetchTarget {

@@ -229,6 +229,7 @@ mod tests {
         assert!(port.send(
             NodeId::new(17),
             PreparedScriptSourceLoadOutcome {
+                response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                 fetch_timing: None,
                 source_result: Ok("window.ready = true;".to_owned()),
                 source_bytes: None,

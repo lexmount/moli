@@ -503,6 +503,7 @@ impl ScriptVm {
             &script.initiator_url,
             &script.fetch_metadata,
             completion_owner,
+            script.resource_timing_initiator_url.clone(),
         )
         .await
         .map_err(|error| {

@@ -356,6 +356,7 @@ impl AsyncFallbackQueue {
             source_load: None,
             source_network_result: None,
             load_failure: Some(PreparedScriptSourceLoadOutcome {
+                response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                 fetch_timing: None,
                 source_result: Err(error),
                 source_bytes: None,
@@ -412,6 +413,8 @@ impl AsyncFallbackQueue {
                 }
                 Err(error) => {
                     entry.load_failure = Some(PreparedScriptSourceLoadOutcome {
+                        response_provenance:
+                            crate::planning::ClassicScriptResponseProvenance::Network,
                         fetch_timing: None,
                         source_result: Err(error),
                         source_bytes: completion.outcome.source_bytes,
@@ -510,6 +513,7 @@ fn parse_time_task_from_load_outcome(
     load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
 ) -> ParseTimeDocumentScriptTask {
     let PreparedScriptSourceLoadOutcome {
+        response_provenance: _,
         source_result,
         source_bytes,
         network_result,
@@ -546,6 +550,7 @@ fn async_phase_page_task_from_load_outcome(
     load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
 ) -> PostParseDocumentScriptTask {
     let PreparedScriptSourceLoadOutcome {
+        response_provenance: _,
         source_result,
         source_bytes,
         network_result,
@@ -582,6 +587,7 @@ fn fallback_entry_from_parse_time_entry(mut entry: ParseTimeAsyncEntry) -> Async
     }
     match entry.completion {
         Some(PreparedScriptSourceLoadOutcome {
+            response_provenance: _,
             source_result: Ok(source),
             source_bytes,
             network_result,

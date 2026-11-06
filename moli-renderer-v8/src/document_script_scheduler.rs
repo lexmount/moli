@@ -580,6 +580,7 @@ mod tests {
 
     fn source_load_outcome_ok(source: impl Into<String>) -> PreparedScriptSourceLoadOutcome {
         PreparedScriptSourceLoadOutcome {
+            response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
             fetch_timing: None,
             source_result: Ok(source.into()),
             source_bytes: None,
@@ -591,6 +592,7 @@ mod tests {
 
     fn source_load_outcome_err(error: impl Into<String>) -> PreparedScriptSourceLoadOutcome {
         PreparedScriptSourceLoadOutcome {
+            response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
             fetch_timing: None,
             source_result: Err(error.into()),
             source_bytes: None,

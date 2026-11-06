@@ -64,6 +64,7 @@ pub(crate) struct NativeModuleGraphJob {
     tree_job: Option<NativeModuleTreeJob>,
     kind: NativeModuleGraphJobKind,
     blob_resource: Option<crate::network_host::CapturedBlobResource>,
+    resource_timing_initiator: Option<String>,
 }
 
 enum NativeModuleGraphJobKind {
@@ -92,6 +93,7 @@ pub(crate) enum ModuleScriptGraphAdvance {
 pub(crate) struct NativeModuleGraphFetchRequest {
     source_url: Url,
     initiator_url: Url,
+    resource_timing_initiator: Option<String>,
     referrer: module_tree::ModuleReferrer,
     document_referrer_policy: Option<String>,
     fetch_metadata: ModuleFetchMetadata,
@@ -227,6 +229,7 @@ impl NativeModuleGraphFetchRequest {
         Self {
             source_url,
             initiator_url,
+            resource_timing_initiator: None,
             referrer: module_tree::ModuleReferrer::client(),
             document_referrer_policy: None,
             fetch_metadata,
@@ -245,6 +248,21 @@ impl NativeModuleGraphFetchRequest {
     fn with_referrer(mut self, referrer: module_tree::ModuleReferrer) -> Self {
         self.referrer = referrer;
         self
+    }
+
+    pub(crate) fn with_resource_timing_initiator(mut self, initiator: Option<String>) -> Self {
+        self.resource_timing_initiator = initiator;
+        self
+    }
+
+    pub(crate) fn resource_timing_initiator(
+        &self,
+    ) -> crate::context_bootstrap::ResourceTimingInitiator {
+        crate::context_bootstrap::ResourceTimingInitiator::from_captured_url(
+            self.resource_timing_initiator
+                .clone()
+                .unwrap_or_else(|| self.initiator_url.as_str().to_owned()),
+        )
     }
 
     pub(crate) fn with_document_referrer_policy(mut self, policy: Option<String>) -> Self {
@@ -534,6 +552,7 @@ impl NativeModuleGraphFetchRequest {
         }
         let observed_request = request.clone();
         let response_context = context.clone();
+        let resource_initiator = self.resource_timing_initiator();
         let request_mode = request.request_mode;
         let credentials_mode = request.credentials_mode;
         let csp_context = self.csp_context.clone();
@@ -567,7 +586,7 @@ impl NativeModuleGraphFetchRequest {
                             context.record_failure(&source_url);
                             return Err(error);
                         }
-                        context.record_response(&observed_request, &response, service_worker_filter.as_ref(), native_timing);
+                        context.record_response(&observed_request, &response, service_worker_filter.as_ref(), native_timing, &resource_initiator, from_service_worker);
                     }
                     if !(200..=299).contains(&response.status) {
                         return Err(ModuleLoadError::new(
@@ -701,6 +720,11 @@ impl NativeModuleGraphFetchRequest {
 }
 
 impl NativeModuleGraphJob {
+    pub(crate) fn with_resource_timing_initiator(mut self, initiator: Option<String>) -> Self {
+        self.resource_timing_initiator = initiator;
+        self
+    }
+
     pub(crate) fn with_blob_resource(
         mut self,
         resource: Option<crate::network_host::CapturedBlobResource>,
@@ -733,6 +757,7 @@ impl NativeModuleGraphJob {
             tree_job: Some(NativeModuleTreeJob::new(chromium_tree)),
             kind,
             blob_resource: None,
+            resource_timing_initiator: None,
         }
     }
 
@@ -775,10 +800,12 @@ impl NativeModuleGraphJob {
     }
 
     pub(crate) fn dynamic_import(request: PendingDynamicModuleImport) -> Self {
+        let resource_timing_initiator = request.resource_timing_initiator().cloned();
         Self {
             tree_job: None,
             kind: NativeModuleGraphJobKind::DynamicImport(Box::new(request)),
             blob_resource: None,
+            resource_timing_initiator,
         }
     }
 
@@ -1131,6 +1158,20 @@ impl NativeModuleGraphJob {
                 for fetch in fetches {
                     let key = fetch.key().clone();
                     let request = native_fetch_request_from_tree_fetch(&fetch)?
+                        .with_resource_timing_initiator(
+                            if fetch.graph_level() == module_tree::ModuleGraphLevel::TopLevel {
+                                self.resource_timing_initiator.clone()
+                            } else {
+                                // A static import belongs to the importing module,
+                                // independently of the Document's fetch client.
+                                fetch
+                                    .request()
+                                    .referrer
+                                    .url
+                                    .as_ref()
+                                    .map(|url| url.as_str().to_owned())
+                            },
+                        )
                         .with_document_referrer_policy(document_referrer_policy.clone())
                         .with_tree_fetch(
                             fetch.client(),
@@ -2360,6 +2401,7 @@ pub(crate) async fn execute_external_native_module_script_graph(
     initiator_url: &Url,
     fetch_metadata: &ScriptFetchMetadata,
     completion_owner: ModuleScriptCompletionOwner,
+    resource_timing_initiator: Option<String>,
 ) -> std::result::Result<ModuleScriptExecutionOutcome, ModuleLoadError> {
     let job = external_module_script_graph_job(
         vm,
@@ -2368,7 +2410,10 @@ pub(crate) async fn execute_external_native_module_script_graph(
         fetch_metadata,
         completion_owner,
     );
-    execute_native_module_script_graph_job(vm, job)
+    execute_native_module_script_graph_job(
+        vm,
+        job.with_resource_timing_initiator(resource_timing_initiator),
+    )
 }
 
 fn execute_native_module_script_graph_job(
@@ -2702,6 +2747,7 @@ fn native_module_graph_job_for_inline_entry(
         tree_job: Some(NativeModuleTreeJob::new(chromium_tree)),
         kind,
         blob_resource: None,
+        resource_timing_initiator: None,
     }
 }
 
@@ -3521,6 +3567,7 @@ import "./c.mjs";
     fn module_fetch_metadata_defaults_to_same_origin_credentials() {
         let metadata = ModuleFetchMetadata::default();
         let request = NativeModuleGraphFetchRequest {
+            resource_timing_initiator: None,
             source_url: url("https://cdn.example.test/dep.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
@@ -3601,6 +3648,7 @@ import "./c.mjs";
             Some("use-credentials")
         );
         let request = NativeModuleGraphFetchRequest {
+            resource_timing_initiator: None,
             source_url: url("https://app.example.test/dep.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
@@ -3656,6 +3704,7 @@ import "./c.mjs";
         );
         assert!(metadata.parser_inserted);
         let request = NativeModuleGraphFetchRequest {
+            resource_timing_initiator: None,
             source_url: url("https://app.example.test/entry.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
@@ -3698,6 +3747,7 @@ import "./c.mjs";
             "Chromium ModulePreloadIfNeeded passes FetchPriorityHint::kAuto regardless of the link fetchpriority attribute"
         );
         let request = NativeModuleGraphFetchRequest {
+            resource_timing_initiator: None,
             source_url: url("https://app.example.test/preload.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
@@ -3759,6 +3809,7 @@ import "./c.mjs";
             Some(moli_fetch::FetchPriorityHint::Auto)
         );
         let request = NativeModuleGraphFetchRequest {
+            resource_timing_initiator: None,
             source_url: url("https://app.example.test/dep.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
@@ -3812,6 +3863,7 @@ import "./c.mjs";
             "dynamic import root integrity comes from import maps, not the referrer script element"
         );
         let request = NativeModuleGraphFetchRequest {
+            resource_timing_initiator: None,
             source_url: url("https://app.example.test/dynamic.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
@@ -3854,6 +3906,7 @@ import "./c.mjs";
         assert_eq!(metadata.request_metadata.charset, None);
         assert_eq!(metadata.request_metadata.integrity, None);
         let request = NativeModuleGraphFetchRequest {
+            resource_timing_initiator: None,
             source_url: url("https://app.example.test/inline.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
@@ -3889,6 +3942,7 @@ import "./c.mjs";
         let metadata =
             ModuleFetchMetadata::from_parser_owned_script_fetch_metadata(&script_metadata);
         let request = NativeModuleGraphFetchRequest {
+            resource_timing_initiator: None,
             source_url: url("https://app.example.test/entry.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
@@ -4677,6 +4731,7 @@ import "./c.mjs";
         fetch_metadata: ModuleFetchMetadata,
     ) -> anyhow::Result<crate::protocol_types::NavigationResponse> {
         let request = NativeModuleGraphFetchRequest {
+            resource_timing_initiator: None,
             source_url,
             initiator_url,
             referrer: module_tree::ModuleReferrer::client(),
@@ -4753,6 +4808,7 @@ import "./c.mjs";
         let root_metadata =
             ModuleFetchMetadata::from_parser_owned_script_fetch_metadata(&script_metadata);
         let request = NativeModuleGraphFetchRequest {
+            resource_timing_initiator: None,
             source_url: url("https://cdn.example.test/dep.mjs"),
             initiator_url: url("https://app.example.test/page"),
             referrer: module_tree::ModuleReferrer::client(),
