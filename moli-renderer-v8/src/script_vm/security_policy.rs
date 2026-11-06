@@ -207,6 +207,28 @@ pub(crate) fn string_code_generation_check_callback<'s>(
     source: v8::Local<'s, v8::Value>,
     is_code_like: bool,
 ) -> v8::ModifyCodeGenerationFromStringsResult<'s> {
+    let result = check_string_code_generation(scope, source, is_code_like);
+    if !result.codegen_allowed {
+        return result;
+    }
+    let Some(source) = result
+        .modified_source
+        .or_else(|| v8::Local::<v8::String>::try_from(source).ok())
+    else {
+        return result;
+    };
+    let Some(partition) = crate::util::script_eval_cache_partition(scope) else {
+        return code_generation_result(false, None);
+    };
+    let modified_source = v8::String::concat(scope, source, partition);
+    code_generation_result(modified_source.is_some(), modified_source)
+}
+
+fn check_string_code_generation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Value>,
+    is_code_like: bool,
+) -> v8::ModifyCodeGenerationFromStringsResult<'s> {
     let worker_trusted_types_requirements =
         crate::worker::worker_trusted_types_for_script_requirements(scope);
     let (trusted_types_requirements, allow_trusted_types_eval, host_ptr) =
