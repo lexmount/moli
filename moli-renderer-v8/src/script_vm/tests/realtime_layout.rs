@@ -80,6 +80,42 @@ fn realtime_layout_refresh_does_not_call_page_callbacks() {
 }
 
 #[test]
+fn realtime_rootless_queries_clear_old_geometry_and_rebuild_after_restore() {
+    let mut vm = realtime_vm(
+        "<!doctype html><style>html,body{margin:0}</style><div id=target style='width:100px;height:40px'></div>",
+    );
+    assert_eq!(
+        vm.eval("document.elementFromPoint(10,10)===target")
+            .unwrap(),
+        "true"
+    );
+    let builds = vm.layout_pass_observability_for_test().1;
+    vm.eval("window.root=document.documentElement;root.remove()")
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([document.elementFromPoint(10,10),document.elementsFromPoint(10,10).length])").unwrap(),
+        "[null,0]"
+    );
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    assert_eq!(
+        host.borrow().realtime_layout_working_set_count_for_test(),
+        0
+    );
+    let visual = host.borrow().visual_state_generation();
+    assert_eq!(
+        vm.eval("JSON.stringify([document.elementFromPoint(10,10),document.elementsFromPoint(10,10).length])").unwrap(),
+        "[null,0]"
+    );
+    assert_eq!(host.borrow().visual_state_generation(), visual);
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    assert_eq!(
+        vm.eval("document.append(root);target.style.width='200px';document.elementFromPoint(150,10)===target").unwrap(),
+        "true"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+}
+
+#[test]
 fn realtime_layout_child_reads_refresh_parent_viewport_without_replacing_root() {
     let mut vm = realtime_vm(
         "<!doctype html><iframe id=frame style='width:200px;height:100px;border:0'></iframe>",
