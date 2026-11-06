@@ -76,7 +76,7 @@ pub use stylo_stylesheet::{
     parse_page_margin_rule_view_with_stylo, parse_page_rule_view_with_stylo,
     parse_property_rule_view_with_stylo, parse_stylesheet_rule_snapshot_for_insert_with_stylo,
     parse_stylesheet_rule_snapshots_with_stylo, parse_stylesheet_rule_texts_with_stylo,
-    refresh_native_stylesheet_namespaces_after_cssom_mutation,
+    refresh_native_stylesheet_namespaces_after_cssom_mutation, stylesheet_import_urls_with_stylo,
 };
 pub use transform::{CssTransformFunction, parse_transform_function_list};
 pub use util::{
