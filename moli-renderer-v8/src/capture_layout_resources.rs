@@ -130,17 +130,19 @@ impl CaptureLayoutOverlay {
         self.reused_fonts.insert(identity, available);
     }
 
+    /// Keep loaded source candidates until the pass's declarations have been
+    /// projected. Another media rule can reuse a source under a different slot;
+    /// with_stylesheet_font_declarations then filters the selected view.
     pub(crate) fn font_services_for_document(
         &self,
         identity: CaptureLayoutIdentity,
         live: &DocumentLayoutServices,
-        is_active: impl Fn(&str) -> bool,
     ) -> DocumentLayoutServices {
         if let Some(reused) = self.reused_fonts.get(&identity) {
-            let selected = live.clone_for_temporary_layout(&is_active, Some(&reused.0));
-            selected.clone_for_temporary_layout(is_active, self.fonts.get(&identity))
+            let selected = live.clone_for_temporary_layout(|_| true, Some(&reused.0));
+            selected.clone_for_temporary_layout(|_| true, self.fonts.get(&identity))
         } else {
-            live.clone_for_temporary_layout(is_active, self.fonts.get(&identity))
+            live.clone_for_temporary_layout(|_| true, self.fonts.get(&identity))
         }
     }
 
