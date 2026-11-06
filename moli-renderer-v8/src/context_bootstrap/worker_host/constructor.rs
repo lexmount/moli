@@ -452,6 +452,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 )
             } else {
                 host.start_worker_script_load(
+                    scope,
                     worker_id,
                     resolved_url,
                     base_url,
@@ -516,6 +517,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             return;
         }
         let loaded = match materialize_nested_worker_script_source(
+            scope,
             &resolved_url,
             &nested_context,
             worker_options.worker_type,
@@ -935,6 +937,7 @@ struct LoadedNestedWorkerScript {
 }
 
 fn materialize_nested_worker_script_source(
+    scope: &mut v8::PinScope<'_, '_>,
     script_url: &Url,
     context: &NestedWorkerContext,
     script_kind: WorkerScriptKind,
@@ -966,6 +969,8 @@ fn materialize_nested_worker_script_source(
     }
     let loader = context.loader.clone();
     let resource_url = worker_script_resource_url(script_url);
+    let origin = crate::worker::worker_global_origin(scope)
+        .ok_or_else(|| "Nested Worker creator settings are unavailable".to_owned())?;
     let request = moli_fetch::Request::new("GET", resource_url.as_str(), None, vec![])
         .map_err(|error| error.to_string())?
         .with_request_mode(moli_fetch::RequestMode::SameOrigin)
@@ -977,19 +982,39 @@ fn materialize_nested_worker_script_source(
         .with_page_network_policy()
         .with_network_partition_key(context.network_policy.network_partition_key.clone())
         .with_initiator_url(&context.base_url)
-        .with_request_origin(moli_url::WebOrigin::from_serialized(
-            context
-                .creator_message_security
-                .serialized_origin()
-                .unwrap_or("null"),
-        ))
+        .with_request_origin(origin.clone())
         .with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
             document_referrer_policy: context.referrer_policy.clone(),
             ..Default::default()
         });
+    let timing = crate::context_bootstrap::FetchResourceTiming::capture_for_initiator_type(
+        scope,
+        &origin,
+        match script_kind {
+            WorkerScriptKind::Classic => "other",
+            WorkerScriptKind::Module => "script",
+        },
+    );
+    let cancel = moli_fetch::FetchCancelHandle::new();
     let response = loader
         .request_client()
-        .fetch_text_for_worker_blocking_boundary(request)
+        .fetch_text_for_worker_blocking_boundary_with_cancel(request, cancel.clone());
+    let completed = std::time::Instant::now();
+    let head = response.as_ref().ok().map(|response| response.head());
+    let entry = timing.complete_worker_script_fetch(
+        &resource_url,
+        &origin,
+        head.as_ref().zip(
+            response
+                .as_ref()
+                .ok()
+                .map(|response| response.body_bytes().len()),
+        ),
+        cancel.response_timing(),
+        completed,
+    );
+    crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+    let response = response
         .map_err(|error| format!("Failed to load worker script `{resource_url}`: {error}"))?;
     if !loader.request_client().web_security_disabled() {
         crate::worker::ensure_worker_script_redirect_chain_same_origin(
