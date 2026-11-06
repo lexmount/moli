@@ -908,6 +908,14 @@ impl Element {
         self.control_state().media_paused().unwrap_or(true)
     }
 
+    pub fn media_audio_source_created(&self) -> bool {
+        self.control_state().media_audio_source_created()
+    }
+
+    pub fn mark_media_audio_source_created(&mut self) {
+        self.control_state_mut().mark_media_audio_source_created();
+    }
+
     pub fn set_media_paused(&mut self, paused: bool) -> bool {
         if !self.is_html_media() {
             return false;

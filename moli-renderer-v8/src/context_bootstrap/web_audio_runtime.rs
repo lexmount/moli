@@ -16,6 +16,9 @@ mod listener;
 mod media_element_source;
 mod node;
 
+pub(in crate::context_bootstrap) use gain::constructor as gain_node_constructor_callback;
+pub(in crate::context_bootstrap) use media_element_source::constructor as media_element_source_constructor_callback;
+
 use audio_param::{audio_param, detune_param};
 
 const AUDIO_CONTEXT_MODULES_SLOT: &str = "__moliAudioContextModules";

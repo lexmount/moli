@@ -157,6 +157,7 @@ pub struct ElementControlState {
     selection_end: Option<u32>,
     selection_direction: Option<SelectionDirection>,
     media_paused: Option<bool>,
+    media_audio_source_created: bool,
     media_volume: Option<f64>,
     media_muted: Option<bool>,
     media_seeking: Option<bool>,
@@ -408,6 +409,14 @@ impl ElementControlState {
 
     pub fn media_paused(&self) -> Option<bool> {
         self.media_paused
+    }
+
+    pub fn media_audio_source_created(&self) -> bool {
+        self.media_audio_source_created
+    }
+
+    pub fn mark_media_audio_source_created(&mut self) {
+        self.media_audio_source_created = true;
     }
 
     pub fn media_volume(&self) -> Option<f64> {

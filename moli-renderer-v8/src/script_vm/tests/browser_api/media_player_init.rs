@@ -160,3 +160,250 @@ fn media_element_audio_source_validates_ownership_receivers_and_ports() {
 })()
 "#).expect("MediaElementAudioSourceNode contracts should evaluate"), "ok");
 }
+
+#[test]
+fn media_session_accepts_screen_share_and_voice_activity_actions() {
+    let mut vm = new_storage_html_test_vm("https://media-session-actions.test/");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+      for (const action of ['togglescreenshare', 'voiceactivity']) {
+        navigator.mediaSession.setActionHandler(action, () => {});
+        navigator.mediaSession.setActionHandler(action, null);
+      }
+      return 'ok';
+    })()"#
+        )
+        .unwrap(),
+        "ok"
+    );
+}
+
+#[test]
+fn gain_constructor_converts_options_and_preserves_native_defaults() {
+    let mut vm = new_storage_html_test_vm("https://gain-constructor.test/");
+    assert_eq!(vm.eval(r#"(() => {
+      const check = (ok, message) => { if (!ok) throw Error(message); };
+      const throws = (name, fn) => {
+        try { fn(); } catch (e) { check(e.name === name, e.name); return; }
+        throw Error('expected '+name);
+      };
+      check(GainNode.length === 1, 'arity');
+      for (const context of [new AudioContext(), new OfflineAudioContext(1,64,44100)]) {
+        const node = new GainNode(context, {gain:0.1,channelCount:1,
+          channelCountMode:'explicit',channelInterpretation:'discrete'});
+        check(node instanceof GainNode && node instanceof AudioNode, 'inheritance');
+        check(node.context === context && node.gain.value === Math.fround(0.1), 'context and gain');
+        check(node.gain.defaultValue === 1 && new GainNode(context).gain.value === 1, 'native defaults');
+        check(node.channelCount === 1 && node.channelCountMode === 'explicit' && node.channelInterpretation === 'discrete', 'channel options');
+        check(node.connect(context.destination) === context.destination, 'graph');
+        class CustomGain extends GainNode {}
+        const custom = new CustomGain(context, {gain:0.25});
+        check(custom instanceof CustomGain && custom.gain.value === 0.25, 'subclass');
+        for (const gain of [NaN, Infinity, -Infinity]) throws('TypeError', () => new GainNode(context, {gain}));
+        throws('NotSupportedError', () => new GainNode(context, {channelCount:0}));
+        throws('TypeError', () => new GainNode(context, {channelCountMode:'invalid'}));
+        throws('TypeError', () => new GainNode(context, {channelInterpretation:'invalid'}));
+        const order = [];
+        new GainNode(context, {
+          get channelCount(){order.push('count');return 2},
+          get channelCountMode(){order.push('mode');return 'max'},
+          get channelInterpretation(){order.push('interpretation');return 'speakers'},
+          get gain(){order.push('gain');return 0.5}
+        });
+        check(order.join() === 'count,mode,interpretation,gain', 'dictionary order');
+      }
+      throws('TypeError', () => GainNode(new AudioContext()));
+      for (const context of [undefined,null,{},Object.create(new AudioContext())]) throws('TypeError', () => new GainNode(context));
+      return 'ok';
+    })()"#).unwrap(), "ok");
+}
+
+#[test]
+fn media_element_source_constructor_and_factory_share_ownership() {
+    let mut vm = new_storage_html_test_vm("https://source-constructor.test/");
+    assert_eq!(vm.eval(r#"(() => {
+      const check = (ok, message) => { if (!ok) throw Error(message); };
+      const throws = (name, fn) => {
+        try { fn(); } catch (e) { check(e.name === name, e.name); return; }
+        throw Error('expected '+name);
+      };
+      const context = new AudioContext();
+      check(MediaElementAudioSourceNode.length === 2, 'arity');
+      for (const tag of ['audio', 'video']) {
+        const mediaElement = document.createElement(tag);
+        class Source extends MediaElementAudioSourceNode {}
+        const node = new Source(context, {mediaElement,
+          get channelCount(){throw Error('unknown member must not be read')},
+          get channelCountMode(){throw Error('unknown member must not be read')}});
+        check(node instanceof Source && node instanceof AudioNode, 'inheritance');
+        check(node.context === context && node.mediaElement === mediaElement, 'ownership');
+        check(node.numberOfInputs === 0 && node.numberOfOutputs === 1 && node.channelCount === 2, 'ports');
+        throws('InvalidStateError', () => context.createMediaElementSource(mediaElement));
+        throws('InvalidStateError', () => new MediaElementAudioSourceNode(new AudioContext(), {mediaElement}));
+        const clone = mediaElement.cloneNode();
+        const factory = context.createMediaElementSource(clone);
+        throws('InvalidStateError', () => new MediaElementAudioSourceNode(context, {mediaElement:clone}));
+        check(factory.connect(context.createGain()) instanceof GainNode, 'factory graph');
+      }
+      const mediaElement = new Audio();
+      const marker = Error('dictionary getter');
+      try { new MediaElementAudioSourceNode(context, {get mediaElement(){throw marker}}); }
+      catch(e) { check(e === marker, 'conversion exception'); }
+      check(context.createMediaElementSource(mediaElement).mediaElement === mediaElement, 'failed constructor must not bind');
+      throws('TypeError', () => MediaElementAudioSourceNode(context, {mediaElement:new Audio()}));
+      throws('TypeError', () => new MediaElementAudioSourceNode(new OfflineAudioContext(1,64,44100), {mediaElement:new Audio()}));
+      for (const options of [undefined,null,{}, {mediaElement:{}}, {mediaElement:document.createElement('div')}]) {
+        throws('TypeError', () => new MediaElementAudioSourceNode(context, options));
+      }
+      return 'ok';
+    })()"#).unwrap(), "ok");
+}
+
+#[test]
+fn media_element_source_ownership_is_shared_between_wrapper_worlds() {
+    let mut vm = new_storage_html_test_vm("https://source-worlds.test/");
+    vm.eval(r#"
+      const audio = document.createElement('audio'); audio.id = 'main-source'; audio.mainOnly = true;
+      document.body.append(audio); globalThis.mainSource = new AudioContext().createMediaElementSource(audio);
+    "#).unwrap();
+    let isolated = vm
+        .create_isolated_world("media-source-owner", false)
+        .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"(() => {
+      const audio = document.querySelector('#main-source');
+      if (audio.mainOnly !== undefined) throw Error('wrappers must be isolated');
+      try { new AudioContext().createMediaElementSource(audio); } catch(e) { return e.name; }
+      return 'allowed';
+    })()"#
+        )
+        .unwrap(),
+        "InvalidStateError"
+    );
+    vm.eval_in_isolated_context(isolated, r#"
+      const video = document.createElement('video'); video.id = 'isolated-source';
+      document.body.append(video); globalThis.isolatedSource = new AudioContext().createMediaElementSource(video);
+    "#).unwrap();
+    assert_eq!(vm.eval(r#"(() => {
+      try { new AudioContext().createMediaElementSource(document.querySelector('#isolated-source')); }
+      catch(e) { return e.name; }
+      return 'allowed';
+    })()"#).unwrap(), "InvalidStateError");
+    vm.destroy_isolated_world_context(isolated);
+}
+
+#[test]
+fn media_session_playback_state_is_shared_between_wrapper_worlds() {
+    let mut vm = new_storage_html_test_vm("https://media-session-worlds.test/");
+    vm.eval(
+        "navigator.mediaSession.marker = 'main'; navigator.mediaSession.playbackState = 'playing'",
+    )
+    .unwrap();
+    let isolated = vm
+        .create_isolated_world("media-session-state", false)
+        .unwrap();
+    assert_eq!(vm.eval_in_isolated_context(isolated,
+      "JSON.stringify([navigator.mediaSession.playbackState,navigator.mediaSession.marker===undefined,navigator.mediaSession instanceof MediaSession])").unwrap(),
+      "[\"playing\",true,true]");
+    vm.eval_in_isolated_context(isolated, "navigator.mediaSession.playbackState = 'paused'")
+        .unwrap();
+    assert_eq!(
+        vm.eval("navigator.mediaSession.playbackState").unwrap(),
+        "paused"
+    );
+    vm.destroy_isolated_world_context(isolated);
+    assert_eq!(
+        vm.eval("navigator.mediaSession.playbackState").unwrap(),
+        "paused"
+    );
+}
+
+#[test]
+fn media_session_releases_isolated_worlds_and_unregistered_handlers() {
+    for register_handler in [false, true] {
+        let mut vm = new_storage_html_test_vm("https://media-session-gc.test/");
+        let isolated = vm.create_isolated_world("media-session-gc", false).unwrap();
+        vm.eval_in_isolated_context(
+            isolated,
+            if register_handler {
+                "navigator.mediaSession.setActionHandler('play', () => {}); 'registered'"
+            } else {
+                "navigator.mediaSession.playbackState"
+            },
+        )
+        .unwrap();
+        let context = vm
+            .renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| {
+                let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let context = v8::Local::new(
+                    scope,
+                    &vm.page_isolated_world_contexts
+                        .context(isolated)
+                        .unwrap()
+                        .context,
+                );
+                v8::Weak::new(scope, context)
+            });
+        vm.destroy_isolated_world_context(isolated);
+        for _ in 0..2 {
+            vm.renderer_document_isolate
+                .with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+        }
+        assert_eq!(
+            !context.is_empty(),
+            register_handler,
+            "only an explicitly registered callback should retain its realm"
+        );
+        if register_handler {
+            vm.eval("navigator.mediaSession.setActionHandler('play', null)")
+                .unwrap();
+            for _ in 0..2 {
+                vm.renderer_document_isolate
+                    .with_renderer_document_isolate_mut(|isolate| {
+                        isolate.low_memory_notification()
+                    });
+            }
+            assert!(
+                context.is_empty(),
+                "unregistering from another world must release the callback's realm"
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn media_session_state_belongs_to_each_window_and_resets_on_navigation() {
+    let mut vm = new_storage_html_test_vm("https://media-session-navigation.test/");
+    vm.eval("navigator.mediaSession.playbackState = 'playing'")
+        .unwrap();
+    let isolated = crate::script_vm::tests::window_node_worlds::child_node_world(
+        &mut vm,
+        "media-session-child",
+    )
+    .await;
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "navigator.mediaSession.playbackState")
+            .unwrap(),
+        "none"
+    );
+    vm.eval_in_isolated_context(isolated, "navigator.mediaSession.playbackState = 'paused'")
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([navigator.mediaSession.playbackState,frame.contentWindow.navigator.mediaSession.playbackState])")
+            .unwrap(),
+        "[\"playing\",\"paused\"]"
+    );
+    vm.eval("globalThis.oldSession=frame.contentWindow.navigator.mediaSession; frame.srcdoc='<!doctype html><body>next</body>'")
+        .unwrap();
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "MediaSession navigation").await;
+    assert_eq!(
+        vm.eval("JSON.stringify([navigator.mediaSession.playbackState,frame.contentWindow.navigator.mediaSession.playbackState,oldSession.playbackState,oldSession===frame.contentWindow.navigator.mediaSession])")
+            .unwrap(),
+        "[\"playing\",\"none\",\"paused\",false]"
+    );
+}

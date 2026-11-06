@@ -64,6 +64,7 @@ use super::super::{
     url_search_params_runtime::build_url_search_params_constructor_template,
     web_audio_runtime::{
         build_audio_context_constructor_template, build_audio_worklet_node_constructor_template,
+        gain_node_constructor_callback, media_element_source_constructor_callback,
         offline_audio_context_constructor_callback,
     },
     webrtc::{
@@ -1005,6 +1006,22 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         }
         ConstructorKind::AudioContext => build_audio_context_constructor_template(scope),
         ConstructorKind::AudioWorkletNode => build_audio_worklet_node_constructor_template(scope),
+        ConstructorKind::GainNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::GainNode,
+                gain_node_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::MediaElementAudioSourceNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::MediaElementAudioSourceNode,
+                media_element_source_constructor_callback
+            ))
+            .length(2)
+            .build(scope)
+        }
         ConstructorKind::OfflineAudioContext => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::OfflineAudioContext,
