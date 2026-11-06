@@ -1,26 +1,31 @@
 //! Immutable resource attribution carried with classic-script continuations.
-//! These private values contain strings, never callback or Window authority.
-use crate::util::{get_private_value, set_private_value, v8_string};
+//! Only primitive strings may survive with a reaction or registration: even a
+//! prototype-free JS object can retain its creating Realm through its V8 map.
+use crate::util::{v8_string, v8str};
 use moli_url::WebOrigin;
 use url::Url;
 
-const BASE: &str = "moli.resourceInitiatorBaseURL";
-const ANCHOR: &str = "moli.resourceInitiator";
-const SOURCE: &str = "moli.resourceInitiatorSource";
-const ORIGIN: &str = "moli.resourceInitiatorOrigin";
+// Serialized URLs and origins cannot contain a literal NUL. The continuation
+// is base\0source\0origin; a registration keeps only source\0origin. A legacy
+// base-only continuation has no separator, while an empty anchor is unknown.
+const SEPARATOR: char = '\0';
 
-pub(crate) fn anchor<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Object>> {
+pub(crate) fn anchor<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::String>> {
     let data =
-        v8::Local::<v8::Object>::try_from(scope.get_continuation_preserved_embedder_data()).ok()?;
-    v8::Local::<v8::Object>::try_from(get_private_value(scope, data, ANCHOR)?).ok()
+        v8::Local::<v8::String>::try_from(scope.get_continuation_preserved_embedder_data()).ok()?;
+    let data = data.to_rust_string_lossy(scope);
+    let (_, anchor) = data.split_once(SEPARATOR)?;
+    v8_string(scope, anchor)
 }
 
 pub(crate) fn base_url_value<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Value> {
     let data = scope.get_continuation_preserved_embedder_data();
-    if anchor(scope).is_some()
-        && let Ok(data) = v8::Local::<v8::Object>::try_from(data)
+    if let Ok(value) = v8::Local::<v8::String>::try_from(data)
+        && let Some((base, _)) = value.to_rust_string_lossy(scope).split_once(SEPARATOR)
     {
-        return get_private_value(scope, data, BASE).unwrap_or_else(|| v8::undefined(scope).into());
+        return v8_string(scope, base)
+            .filter(|_| !base.is_empty())
+            .map_or_else(|| v8::undefined(scope).into(), Into::into);
     }
     data
 }
@@ -28,12 +33,14 @@ pub(crate) fn base_url_value<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<
 fn data_with_anchor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     base: v8::Local<'s, v8::Value>,
-    anchor: v8::Local<'s, v8::Object>,
+    anchor: v8::Local<'s, v8::String>,
 ) -> v8::Local<'s, v8::Value> {
-    let data = v8::Object::new(scope);
-    set_private_value(scope, data, BASE, base);
-    set_private_value(scope, data, ANCHOR, anchor.into());
-    data.into()
+    let base = v8::Local::<v8::String>::try_from(base).unwrap_or_else(|_| v8::String::empty(scope));
+    let base = v8::String::concat(scope, base, v8str(scope, "\0"))
+        .expect("continuation base URL must fit in a V8 string");
+    v8::String::concat(scope, base, anchor)
+        .expect("continuation URLs must fit in a V8 string")
+        .into()
 }
 
 pub(crate) fn with_base_url<'s>(
@@ -69,19 +76,18 @@ pub(crate) fn classic_data<'s>(
             .is_some_and(|origin| origin.same_origin_url(source))
     });
     let base = base_url_value(scope);
-    let anchor = v8::Object::new(scope);
-    if let Some(value) = v8_string(scope, source.map(Url::as_str).unwrap_or("")) {
-        set_private_value(scope, anchor, SOURCE, value.into());
-    }
-    if let Some(value) = v8_string(
+    let anchor = v8_string(
         scope,
-        origin
-            .as_ref()
-            .map(WebOrigin::ascii_serialization)
-            .unwrap_or(""),
-    ) {
-        set_private_value(scope, anchor, ORIGIN, value.into());
-    }
+        &format!(
+            "{}\0{}",
+            source.map(Url::as_str).unwrap_or(""),
+            origin
+                .as_ref()
+                .map(WebOrigin::ascii_serialization)
+                .unwrap_or(""),
+        ),
+    )
+    .expect("resource initiator URLs must fit in a V8 string");
     data_with_anchor(scope, base, anchor)
 }
 
@@ -92,16 +98,15 @@ pub(crate) fn current_url(scope: &mut v8::PinScope<'_, '_>, origin: &WebOrigin) 
     let Some(anchor) = anchor(scope) else {
         return String::new();
     };
-    let captured_origin = get_private_value(scope, anchor, ORIGIN)
-        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-        .map(|value| value.to_rust_string_lossy(scope));
-    if captured_origin.as_deref() != Some(origin.ascii_serialization()) {
+    let anchor = anchor.to_rust_string_lossy(scope);
+    let Some((source, captured_origin)) = anchor.split_once(SEPARATOR) else {
         return String::new();
+    };
+    if captured_origin == origin.ascii_serialization() {
+        source.to_owned()
+    } else {
+        String::new()
     }
-    get_private_value(scope, anchor, SOURCE)
-        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default()
 }
 
 pub(crate) fn response_url(
