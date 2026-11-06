@@ -290,6 +290,149 @@ async fn available_image_installs_metadata_synchronously_and_dispatches_load_as_
 }
 
 #[tokio::test]
+async fn available_image_reuse_does_not_start_another_fetch_or_timing_entry() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+    ] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://image-reuse-timing.test/page.html",
+            &loader,
+        );
+        vm.set_layout_policy(policy);
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Image),
+        );
+        vm.eval(
+            r#"
+            globalThis.__reuseLoads = [];
+            globalThis.__reuseTimeline = 'pending';
+            (async () => {
+              for (const path of ['/shared.gif', '/shared.gif', '/canary.gif']) {
+                await new Promise(resolve => {
+                  const image = document.createElement('img');
+                  image.onload = () => { __reuseLoads.push(path); resolve(); };
+                  image.onerror = () => { __reuseLoads.push('error'); resolve(); };
+                  image.src = path;
+                  document.body.appendChild(image);
+                });
+              }
+              __reuseTimeline = performance.getEntriesByType('resource')
+                .map(entry => new URL(entry.name).pathname).join('|');
+            })();
+            "#,
+        )
+        .unwrap();
+        let first = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(first.len(), 1, "{policy:?}: initial fetch");
+        vm.fulfill_pending_subresource_fetch(
+            first[0].internal_id,
+            200,
+            vec![("Content-Type".into(), b"image/gif".to_vec())],
+            one_by_one_gif_response_body(),
+        )
+        .unwrap();
+        run_next_image_event_task(&mut vm, &loader, "first shared image load").await;
+        assert_eq!(vm.eval("__reuseLoads.join('|')").unwrap(), "/shared.gif");
+        assert!(
+            vm.take_pending_subresource_fetch_infos().is_empty(),
+            "{policy:?}: an available image must not start another fetch"
+        );
+        run_next_image_event_task(&mut vm, &loader, "reused shared image load").await;
+        let canary = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(canary.len(), 1, "{policy:?}: distinct URL must fetch");
+        assert_eq!(canary[0].url.path(), "/canary.gif");
+        vm.fulfill_pending_subresource_fetch(
+            canary[0].internal_id,
+            200,
+            vec![("Content-Type".into(), b"image/gif".to_vec())],
+            one_by_one_gif_response_body(),
+        )
+        .unwrap();
+        run_next_image_event_task(&mut vm, &loader, "canary image load").await;
+        assert_eq!(
+            vm.eval("__reuseLoads.join('|')").unwrap(),
+            "/shared.gif|/shared.gif|/canary.gif",
+            "{policy:?}"
+        );
+        assert_eq!(
+            vm.eval("__reuseTimeline").unwrap(),
+            "/shared.gif|/canary.gif",
+            "{policy:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn decoded_scanned_image_publishes_its_original_resource_timing_before_load() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://scanned-image-timing.test/page.html",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    let image_url = Url::parse("https://scanned-image-timing.test/preloaded.gif").unwrap();
+    let request = crate::types::ImageRequestKey::with_density(
+        image_url.as_str().to_owned(),
+        crate::types::ImageRequestCorsMode::NoCors,
+        1.0,
+    );
+    let crate::native_bridge::ScannedImagePreloadAdmission::Fetch(load) = vm
+        ._context_host
+        .borrow_mut()
+        .admit_scanned_image_preload(request)
+    else {
+        panic!("a scanner preload must be admitted for the current Document");
+    };
+    let response = crate::protocol_types::NavigationResponse::from_text_body(
+        image_url,
+        200,
+        vec![("Content-Type".into(), b"image/gif".to_vec())],
+        String::new(),
+    );
+    let encoded = moli_parkable_image::ParkableImageManager::default()
+        .from_frozen_bytes(ONE_BY_ONE_GIF.to_vec());
+    load.finish_network_result(
+        crate::network::RendererResourceTaskRunner::for_test(),
+        std::sync::Arc::new(Ok(response)),
+        Some(encoded),
+        true,
+        true,
+    );
+    let _outcome = tokio::time::timeout(std::time::Duration::from_secs(2), load.wait_outcome())
+        .await
+        .expect("the scanner must finish decoding before the element is created");
+    vm.eval(
+        r#"
+        globalThis.__scannedTimingAtLoad = 'pending';
+        const image = document.createElement('img');
+        image.onload = () => {
+          __scannedTimingAtLoad = performance.getEntriesByType('resource')
+            .filter(entry => entry.name.endsWith('/preloaded.gif'))
+            .map(entry => [entry.initiatorType, entry.responseStatus].join(':')).join('|');
+        };
+        image.onerror = () => __scannedTimingAtLoad = 'error';
+        image.src = '/preloaded.gif';
+        document.body.appendChild(image);
+        "#,
+    )
+    .unwrap();
+    if vm
+        ._context_host
+        .borrow()
+        .has_pending_image_network_requests()
+    {
+        wait_for_and_apply_image_completions(&mut vm).await;
+    }
+    run_next_image_event_task(&mut vm, &loader, "decoded scanner image load").await;
+    assert_eq!(vm.eval("__scannedTimingAtLoad").unwrap(), "img:200");
+}
+
+#[tokio::test]
 async fn image_decode_keeps_the_loaded_resource_after_the_document_base_url_changes() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     loader.set_image_fetch_enabled(true);

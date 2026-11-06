@@ -168,7 +168,7 @@ fn queue_image_load_event(
         let _ = runtime.process_image_decode_requests_for_element(scope, handle);
         return;
     };
-    if let Some(request_key) = synchronous_available_image_request(runtime, handle) {
+    if let Some(request_key) = synchronous_available_image_request(runtime, handle, &pending) {
         let request_allowed = url::Url::parse(request_key.url())
             .is_ok_and(|url| image_request_is_allowed(scope, runtime, handle, &url));
         if runtime.prepare_pending_image_load_request_if_matches(
@@ -202,6 +202,7 @@ fn queue_image_load_event(
 fn synchronous_available_image_request(
     runtime: &JsContextHost,
     handle: DomHandle,
+    pending: &crate::native_bridge::PendingImageLoadEvent,
 ) -> Option<ImageRequestKey> {
     let element = runtime.dom_host().node(handle)?.as_element()?;
     // The synchronous available-image path precedes responsive source selection.
@@ -215,9 +216,14 @@ fn synchronous_available_image_request(
         return None;
     }
     let request = image_selected_request_key(runtime, handle)?;
-    runtime
-        .has_ready_image_request(handle, &request)
-        .then_some(request)
+    // A decoded scanner preload still needs its original response and timing
+    // consumed. Let the update microtask claim it before later elements reuse it.
+    if !runtime.has_ready_image_request(handle, &request)
+        || runtime.pending_image_load_has_scanned_preload(handle, pending, &request)
+    {
+        return None;
+    }
+    Some(request)
 }
 
 fn image_request_is_allowed(

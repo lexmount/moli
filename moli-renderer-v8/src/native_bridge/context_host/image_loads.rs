@@ -244,7 +244,7 @@ impl JsContextHost {
                 return None;
             }
             pending.network_state =
-                PendingImageLoadNetworkState::Ready(PendingImageLoadTerminalSource::Local);
+                PendingImageLoadNetworkState::Ready(PendingImageLoadTerminalSource::Reused);
             (
                 pending_image_load_terminal_followup(pending),
                 pending.request_key.clone(),

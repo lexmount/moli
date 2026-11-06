@@ -671,6 +671,48 @@ fn resource_timing_initiator_survives_promises_and_keeps_its_source_url() {
 }
 
 #[test]
+fn http_cached_fetches_with_same_url_keep_separate_resource_timing_entries() {
+    let mut vm = new_storage_test_vm("https://resource-cache.test/page.html");
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
+    for _ in 0..2 {
+        vm.eval("fetch('/cached.txt').then(response => response.text());")
+            .unwrap();
+        let requests = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        let mut response = crate::types::NavigationResponse::from_text_body(
+            request.url.clone(),
+            200,
+            vec![("content-type".into(), b"text/plain".to_vec())],
+            "cached".into(),
+        );
+        response.from_cache = true;
+        response.cache_state = moli_fetch::ResponseCacheState::Local;
+        vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+            internal_id: request.internal_id,
+            request_url: request.url.clone(),
+            request_method: "GET".into(),
+            request_headers: Default::default(),
+            request_body: None,
+            response_status_text: None,
+            skip_fetch_security_validation: false,
+            response_filter: None,
+            network_error_text: None,
+            result: Ok(response).into(),
+        })
+        .unwrap();
+    }
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify(performance.getEntriesByType('resource').map(entry =>
+                [entry.name, entry.initiatorType, entry.deliveryType, entry.transferSize]))"#,
+        )
+        .unwrap(),
+        r#"[["https://resource-cache.test/cached.txt","fetch","cache",0],["https://resource-cache.test/cached.txt","fetch","cache",0]]"#
+    );
+}
+
+#[test]
 fn resource_timing_initiator_requires_a_known_source_and_readable_network_response() {
     for streaming in [false, true] {
         for scenario in [

@@ -166,6 +166,23 @@ impl super::JsContextHost {
             .is_some_and(|identity| self.image_resources.scanned.contains(identity))
     }
 
+    pub(crate) fn pending_image_load_has_scanned_preload(
+        &self,
+        element: DomHandle,
+        pending: &super::PendingImageLoadEvent,
+        request_key: &ImageRequestKey,
+    ) -> bool {
+        self.image_resources
+            .scanned
+            .contains(&ImageResourceRequestIdentity {
+                element,
+                sequence: pending.id(),
+                document_handle: pending.owner_document_handle(),
+                document_owner: pending.document_task_owner(),
+                request_key: request_key.clone(),
+            })
+    }
+
     pub(crate) fn claim_scanned_image_preload_for_element(
         &mut self,
         element: DomHandle,
