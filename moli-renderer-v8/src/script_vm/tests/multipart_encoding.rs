@@ -44,8 +44,9 @@ async fn multipart_encoding_normalizes_wire_values_and_preserves_source_form_dat
     );
 }
 
-#[test]
-fn multipart_form_submission_uses_accept_charset_on_the_native_navigation_request() {
+#[tokio::test(flavor = "current_thread")]
+async fn multipart_form_submission_uses_accept_charset_on_the_native_navigation_request() {
+    let loader = static_http_loader([]);
     for (label, value, expected, canonical) in [
         (
             "windows-1252",
@@ -55,9 +56,10 @@ fn multipart_form_submission_uses_accept_charset_on_the_native_navigation_reques
         ),
         ("gbk", "家居", &b"\xbc\xd2\xbe\xd3"[..], "GBK"),
     ] {
-        let mut vm = new_parsed_test_vm(
+        let mut vm = new_parsed_page_task_executor_test_vm(
             "https://multipart-charset.test/page",
             "<!doctype html><body></body>",
+            &loader,
         );
         vm.eval(&format!(
             r#"(() => {{
