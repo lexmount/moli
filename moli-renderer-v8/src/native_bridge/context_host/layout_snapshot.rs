@@ -4,6 +4,7 @@ use crate::document_runtime::DomHandle;
 
 struct LatestFrozenLayout {
     document: DomHandle,
+    dom_version: u64,
     tree: Box<FrozenLayoutTree<DomHandle>>,
 }
 
@@ -32,11 +33,26 @@ impl LatestLayoutTreeCache {
         self.latest.as_ref()?.tree.tree_for_root(root)
     }
 
-    pub(super) fn publish(&mut self, document: DomHandle, tree: FrozenLayoutTree<DomHandle>) {
+    pub(super) fn publish(
+        &mut self,
+        document: DomHandle,
+        dom_version: u64,
+        tree: FrozenLayoutTree<DomHandle>,
+    ) {
         self.latest = Some(LatestFrozenLayout {
             document,
+            dom_version,
             tree: Box::new(tree),
         });
+    }
+
+    /// The first geometry demand may run while the document is still parsing;
+    /// without a version check that early tree would serve stale or empty
+    /// geometry to every later observable query.
+    pub(super) fn is_current(&self, document: DomHandle, dom_version: u64) -> bool {
+        self.latest.as_ref().is_some_and(|snapshot| {
+            snapshot.document == document && snapshot.dom_version == dom_version
+        })
     }
 
     pub(super) fn clear(&mut self) {
