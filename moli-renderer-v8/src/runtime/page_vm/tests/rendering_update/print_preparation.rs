@@ -186,3 +186,123 @@ fn print_depth_limit_truncates_output_without_weakening_realtime_screen_coverage
         }
     });
 }
+
+fn install_many_capture_fonts(page: &mut PageVm, print_only: bool) -> anyhow::Result<String> {
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+    )));
+    page.vm_mut().eval(&format!(r#"(() => {{
+        const rules=Array.from({{length:65}},(_,i)=>
+            `@font-face{{font-family:Cached${{i}};src:url(data:font/woff2;base64,{data})}}`).join('');
+        document.head.innerHTML='<style>'+({print_only}?'@media print{{'+rules+'}}':rules)+'</style>';
+        document.body.innerHTML='<p style="font:16px Cached0">Cached text</p>';
+        const fonts=[...document.fonts];
+        if(!{print_only})for(const face of fonts)face.load();
+        return JSON.stringify([fonts.length,fonts.every(face=>face.status==='loaded')]);
+    }})()"#))
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn print_cached_fonts_do_not_consume_resource_admission() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+            let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://cached-print-fonts.test/")?,
+            );
+            page.layout_configuration.policy = policy;
+            page.vm_mut().set_layout_policy(policy);
+            assert_eq!(install_many_capture_fonts(&mut page, false)?, "[65,true]");
+            for raster in [false, true] {
+                let mut job = if raster {
+                    PrintCaptureJob::new(RendererCaptureScreenshotRequest {
+                        purpose: RendererScreenshotPurpose::Print {
+                            print_background: true,
+                        },
+                        ..RendererCaptureScreenshotRequest::viewport_png()
+                    })?
+                } else {
+                    PrintCaptureJob::new(RendererPrintToPdfRequest::default())?
+                };
+                let before = page.vm().layout_pass_observability_for_test().1;
+                let publishes = page.vm().layout_snapshot_cache_observability_for_test().2;
+                match page.advance_print_capture(&mut job)? {
+                    PrintCaptureAdvance::Complete(PrintCaptureReply::Pdf(
+                        RendererPrintToPdfReply::Printed(bytes),
+                    )) => assert!(bytes.starts_with(b"%PDF-")),
+                    PrintCaptureAdvance::Complete(PrintCaptureReply::Raster(
+                        RendererCaptureScreenshotReply::Captured(image),
+                    )) => assert!(!image.bytes.is_empty()),
+                    _ => anyhow::bail!("cached fonts must not require another resource wave"),
+                }
+                assert_eq!(page.vm().layout_pass_observability_for_test().1 - before, 1);
+                assert_eq!(
+                    page.vm().layout_snapshot_cache_observability_for_test().2,
+                    publishes
+                );
+                assert!(
+                    job.entries.is_empty(),
+                    "ready fonts cannot consume preparation entries"
+                );
+                assert!(job.fetches.is_empty());
+                assert_eq!(page.vm_mut().eval("document.fonts.size")?, "65");
+                page.cancel_print_capture(&mut job);
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("ready print fonts are not new preparation work");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn print_new_fonts_still_respect_preparation_entry_limit() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+            let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://new-print-fonts.test/")?,
+            );
+            page.layout_configuration.policy = policy;
+            page.vm_mut().set_layout_policy(policy);
+            assert_eq!(install_many_capture_fonts(&mut page, true)?, "[0,true]");
+            for raster in [false, true] {
+                let mut job = if raster {
+                    PrintCaptureJob::new(RendererCaptureScreenshotRequest {
+                        purpose: RendererScreenshotPurpose::Print {
+                            print_background: true,
+                        },
+                        ..RendererCaptureScreenshotRequest::viewport_png()
+                    })?
+                } else {
+                    PrintCaptureJob::new(RendererPrintToPdfRequest::default())?
+                };
+                let error = page
+                    .advance_print_capture(&mut job)
+                    .err()
+                    .expect("65 new fonts must retain the capture preparation limit");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("print resource manifest entry limit exceeded")
+                );
+                assert_eq!(
+                    job.entries.len(),
+                    crate::capture_resources::MAX_CAPTURE_RESOURCE_ENTRIES
+                );
+                assert!(
+                    job.fetches.is_empty(),
+                    "failed admission must not start partial downloads"
+                );
+                page.cancel_print_capture(&mut job);
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("new print resource work remains bounded");
+}
