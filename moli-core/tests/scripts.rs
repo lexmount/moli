@@ -1,5 +1,7 @@
 #[path = "scripts/child_script_text.rs"]
 mod child_script_text;
+#[path = "scripts/connection_resource_timing.rs"]
+mod connection_resource_timing;
 #[path = "scripts/event_source_resource_timing.rs"]
 mod event_source_resource_timing;
 #[path = "scripts/font_loading.rs"]
