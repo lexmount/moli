@@ -334,6 +334,12 @@ impl NativeBridgeTemplates {
         web_api_interfaces::initialize(scope, wrapper, prototype_name)
             .expect("native wrapper identity should initialize");
         set_named_constructor_prototype(scope, wrapper, prototype_name);
+        if matches!(prototype_name, "Document" | "HTMLDocument" | "XMLDocument") {
+            crate::context_bootstrap::install_constructed_document_location_runtime_state(
+                scope, wrapper,
+            )
+            .expect("Document.location should initialize on its native wrapper");
+        }
         if matches!(wrapper_kind, WrapperKind::Window) {
             window::sync_window_wrapper_function_identity(scope, wrapper);
         }

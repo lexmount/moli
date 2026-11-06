@@ -2198,6 +2198,7 @@ mod audio_param_native_receivers;
 mod css_keyframes_mutations;
 mod css_keyframes_receivers;
 mod device_events;
+mod document_location_materialization;
 mod document_svg_root;
 
 mod svg_length_native_receivers;

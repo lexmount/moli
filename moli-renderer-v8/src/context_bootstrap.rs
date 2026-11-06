@@ -75,6 +75,7 @@ pub(crate) use indexed_db::{
 mod location_history_storage;
 mod location_navigation;
 mod location_runtime;
+pub(crate) use location_runtime::install_constructed_document_location_runtime_state;
 mod media_cues;
 pub(crate) use media_cues::new_media_error_value;
 mod media_file_template;
