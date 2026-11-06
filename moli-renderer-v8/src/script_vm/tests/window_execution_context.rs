@@ -576,10 +576,11 @@ fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn window_event_callbacks_project_same_window_realms_in_both_layout_modes() {
+async fn window_event_callbacks_project_same_window_realms_in_all_layout_modes() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://window-event-realms.test/");
         vm.set_layout_policy(policy);
@@ -683,6 +684,7 @@ async fn borrowed_default_world_window_callback_keeps_target_window_and_event_id
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://borrowed-window-event.test/");
         vm.set_layout_policy(policy);
@@ -880,6 +882,7 @@ async fn isolated_window_world_ids_reuse_names_across_frames_but_separate_isolat
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://window-world-identity.test/");
         vm.set_layout_policy(policy);
@@ -957,6 +960,7 @@ async fn isolated_window_world_reuse_does_not_revive_retired_realm_authority() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://window-world-rewrite.test/");
         vm.set_layout_policy(policy);
@@ -1046,6 +1050,7 @@ async fn foreign_window_callbacks_use_the_target_context_in_the_listener_world()
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://foreign-window-world.test/");
         vm.set_layout_policy(policy);
@@ -1155,6 +1160,7 @@ async fn implicit_window_world_members_retire_independently_and_release_the_host
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://window-world-members.test/");
         vm.set_layout_policy(policy);
@@ -1295,6 +1301,7 @@ async fn isolated_window_proxies_follow_child_navigation_in_surviving_worlds() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://isolated-proxy-navigation.test/");
         vm.set_layout_policy(policy);
@@ -1435,6 +1442,7 @@ async fn isolated_proxy_navigation_rechecks_origin_and_universal_access() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://isolated-proxy-origin.test/");
         vm.set_layout_policy(policy);

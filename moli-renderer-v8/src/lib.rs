@@ -31,6 +31,8 @@ mod app_manifest;
 mod blob;
 mod broadcast_channel_runtime;
 mod callback_invocation;
+mod capture_layout_resources;
+mod capture_resources;
 #[cfg(test)]
 mod chromium_property_surface;
 mod common_runtime;
@@ -324,7 +326,7 @@ pub use runtime::{
     RendererRuntimeInspectorResponseSender, RendererRuntimeObservableSourceItem,
     RendererRuntimeObservableSourceSummary, RendererRuntimeRealmInfo, RendererRuntimeRemoteObject,
     RendererRuntimeRemoteObjectResolution, RendererScreenshotClip, RendererScreenshotFormat,
-    RendererScreenshotRegion, RendererScriptExecutionMemoryDiagnostics,
+    RendererScreenshotPurpose, RendererScreenshotRegion, RendererScriptExecutionMemoryDiagnostics,
     RendererScriptSourceMemoryDiagnostics, RendererScrollIntoViewResult,
     RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
     RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,

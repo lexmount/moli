@@ -295,9 +295,8 @@ impl Browser {
             .context("browser context resource owner unavailable")?;
         let js_runtime =
             JsRuntime::initialize_with_browser_context_owner_access(&browser_context_access)?;
-        js_runtime
-            .renderer_owner_handle()
-            .configure_layout_configuration(config.layout_configuration())?;
+        let renderer_owner = js_runtime.renderer_owner_handle();
+        renderer_owner.configure_layout_configuration(config.layout_configuration())?;
         let lifetime_owner = Rc::new(BrowserLifetimeOwner {
             js_runtime: Some(js_runtime.clone()),
             browser_context_owner,

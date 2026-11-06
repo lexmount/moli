@@ -9,6 +9,7 @@ const GRID: &str = r#"<div id=target class=sized style="display:grid;grid-templa
 fn inspector_properties(host: &JsContextHost, target: DomHandle) -> BTreeMap<String, String> {
     crate::native_bridge::element::computed_style_properties_for_inspector_handle(host, target)
         .unwrap()
+        .unwrap()
         .into_iter()
         .collect()
 }
@@ -151,8 +152,9 @@ fn computed_size_document_batch_never_publishes_layout_regardless_of_grid_order(
                 vm.publish_layout_for_test().unwrap();
             }
             take_query_counts();
-            let rows =
-                vm.computed_style_property_values_for_document_snapshot(handles, &properties);
+            let rows = vm
+                .computed_style_property_values_for_document_snapshot(handles, &properties)
+                .unwrap();
             assert_eq!(rows.len(), 2);
             let tracks = if published { "30px 90px" } else { "30px 1fr" };
             for (row, tracks) in rows.iter().zip([tracks, "none"]) {

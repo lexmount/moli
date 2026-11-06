@@ -279,23 +279,31 @@ async fn navigator_service_worker_register_changed_main_script_fires_updatefound
                 const registration = await sw.register("worker.js", { scope: "./" });
                 await sw.ready;
                 const events = [];
-                registration.addEventListener("updatefound", () => {
-                  const installing = registration.installing;
-                  events.push([
-                    "updatefound",
-                    installing && installing.scriptURL,
-                    installing && installing.state
-                  ].join(":"));
-                  installing.addEventListener("statechange", () => {
-                    events.push("statechange:" + installing.state);
-                  });
+                const installed = new Promise((resolve, reject) => {
+                  registration.addEventListener("updatefound", () => {
+                    const installing = registration.installing;
+                    events.push([
+                      "updatefound",
+                      installing && installing.scriptURL,
+                      installing && installing.state
+                    ].join(":"));
+                    if (!installing) {
+                      reject(new Error("updatefound had no installing worker"));
+                      return;
+                    }
+                    installing.addEventListener("statechange", () => {
+                      events.push("statechange:" + installing.state);
+                      if (installing.state === "installed") {
+                        resolve();
+                      } else if (installing.state === "redundant") {
+                        reject(new Error("replacement worker became redundant"));
+                      }
+                    });
+                  }, { once: true });
                 });
                 const second = await sw.register("worker.js", { scope: "./" });
-                let lookup = await sw.getRegistration();
-                for (let i = 0; i < 20 && !events.includes("statechange:installed"); i++) {
-                  await new Promise(resolve => setTimeout(resolve, 0));
-                  lookup = await sw.getRegistration();
-                }
+                await installed;
+                const lookup = await sw.getRegistration();
                 globalThis.__serviceWorkerChangedUpdateProbe = [
                   events.join(","),
                   second.installing === null,
@@ -616,23 +624,31 @@ async fn navigator_service_worker_default_update_via_cache_revalidates_fresh_mai
                 const registration = await sw.register("worker.js", { scope: "./" });
                 await sw.ready;
                 const events = [];
-                registration.addEventListener("updatefound", () => {
-                  const installing = registration.installing;
-                  events.push([
-                    "updatefound",
-                    installing && installing.scriptURL,
-                    installing && installing.state
-                  ].join(":"));
-                  installing.addEventListener("statechange", () => {
-                    events.push("statechange:" + installing.state);
-                  });
+                const installed = new Promise((resolve, reject) => {
+                  registration.addEventListener("updatefound", () => {
+                    const installing = registration.installing;
+                    events.push([
+                      "updatefound",
+                      installing && installing.scriptURL,
+                      installing && installing.state
+                    ].join(":"));
+                    if (!installing) {
+                      reject(new Error("updatefound had no installing worker"));
+                      return;
+                    }
+                    installing.addEventListener("statechange", () => {
+                      events.push("statechange:" + installing.state);
+                      if (installing.state === "installed") {
+                        resolve();
+                      } else if (installing.state === "redundant") {
+                        reject(new Error("replacement worker became redundant"));
+                      }
+                    });
+                  }, { once: true });
                 });
                 const second = await sw.register("worker.js", { scope: "./" });
-                let lookup = await sw.getRegistration();
-                for (let i = 0; i < 20 && !events.includes("statechange:installed"); i++) {
-                  await new Promise(resolve => setTimeout(resolve, 0));
-                  lookup = await sw.getRegistration();
-                }
+                await installed;
+                const lookup = await sw.getRegistration();
                 globalThis.__serviceWorkerUpdateViaCacheImportsProbe = [
                   events.join(","),
                   second.installing === null,

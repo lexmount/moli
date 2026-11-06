@@ -69,8 +69,9 @@ pub(crate) use indexed_db::{
     create_sql_upgrade_for_test, deserialize_indexed_db_value_for_test,
     indexed_db_has_in_flight_sql_tasks_for_test, indexed_db_has_queued_task_kind_for_test,
     indexed_db_metadata_sharing_probe_for_test, indexed_db_native_cursor_count_for_test,
-    indexed_db_transaction_resources_for_test, serialize_indexed_db_value_for_test,
-    sql_transaction_handle_for_test, sql_transaction_started_for_test,
+    indexed_db_transaction_commit_submitted_for_test, indexed_db_transaction_resources_for_test,
+    serialize_indexed_db_value_for_test, sql_transaction_handle_for_test,
+    sql_transaction_started_for_test,
 };
 mod location_history_storage;
 mod location_navigation;
@@ -150,6 +151,11 @@ mod range_live;
 mod range_surface;
 mod resize_observer_runtime;
 pub(crate) use resize_observer_runtime::queue_resize_observer_checks;
+#[cfg(test)]
+pub(crate) use resize_observer_runtime::resize_observer_measurements_for_test;
+pub(crate) use resize_observer_runtime::{
+    broadcast_realtime_resize_observer, gather_realtime_resize_observers,
+};
 mod runtime_state;
 mod selection;
 mod selection_callbacks;
@@ -184,7 +190,8 @@ pub(crate) use crypto::{
     crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
 };
 pub(crate) use css_fontface_runtime::{
-    new_font_face_set, rebuild_font_face_set_faces, settle_document_font_face_set_ready,
+    check_realtime_document_font_readiness, new_font_face_set, rebuild_font_face_set_faces,
+    settle_document_font_face_set_ready, sync_realtime_document_font_face_set,
 };
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
@@ -399,14 +406,14 @@ pub(crate) use self::media_cues::{
 };
 pub(crate) use self::media_queries::{
     ResolvedSimpleEventTarget, SimpleObjectEventListenerInspectorSnapshot,
-    dispatch_media_query_list_change_events, dispatch_simple_event_target_event,
-    dispatch_simple_event_target_event_collecting_errors,
+    dispatch_media_query_list_change_events, dispatch_realtime_media_query_event,
+    dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
     dispatch_simple_event_target_event_with_ancestors,
     dispatch_simple_event_target_event_with_checkpoint, initialize_simple_event_target,
     install_simple_event_target_handlers, simple_event_target_handler_getter_callback,
     simple_event_target_handler_setter_callback, simple_event_target_inspector_listener_snapshots,
     simple_object_event_listeners_snapshot, simple_object_event_set_handler,
-    simple_object_has_event_listeners,
+    simple_object_has_event_listeners, take_realtime_media_query_events,
 };
 use self::message_ports::schedule_scope_callback;
 pub(crate) use self::message_ports::{
@@ -447,9 +454,9 @@ pub(crate) use self::notification_runtime::{
 };
 pub(crate) use self::performance_runtime::{
     ResourcePerformanceEntry, bind_document_performance, bind_window_performance_seed,
-    current_performance_time_origin, increment_performance_event_count,
-    project_document_lifecycle_timing, record_resource_performance_entry,
-    run_resource_timing_buffer_full_task,
+    current_performance_time_origin, current_window_performance_time_origin_seed,
+    increment_performance_event_count, project_document_lifecycle_timing,
+    record_resource_performance_entry, run_resource_timing_buffer_full_task,
 };
 use self::range_live::{
     update_live_ranges_for_character_data_edit, update_live_ranges_for_character_data_reset,

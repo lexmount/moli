@@ -114,10 +114,6 @@ impl<I: Copy, K: Copy, T: Copy> RendererPageWindowDocumentTaskSource<I, K, T> {
         self.source.front().map(ReadyPageTask::metadata)
     }
 
-    pub(crate) fn next_ready_head(&mut self) -> Option<RendererPageWindowDocumentTask<I, K, T>> {
-        self.source.front().map(|ready| *ready.value())
-    }
-
     pub(crate) fn next_ready_owner(&mut self) -> Option<RendererPageWindowDocumentTaskOwner<T>> {
         self.source.front().map(|ready| ready.value().owner())
     }

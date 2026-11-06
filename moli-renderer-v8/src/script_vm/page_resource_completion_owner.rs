@@ -64,6 +64,16 @@ impl ScriptVm {
                 .then(|| {
                     RendererPageResourceCompletionOwner::async_subresource(root_document, target)
                 }),
+            RendererPageResourceCompletionLocalOwner::CaptureResource(target) => self
+                ._context_host
+                .borrow()
+                .current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
+                .map(|current_target| {
+                    RendererPageResourceCompletionOwner::capture_resource(
+                        root_document,
+                        current_target,
+                    )
+                }),
             RendererPageResourceCompletionLocalOwner::DocumentWriteExternalScript(target) => self
                 .document_write_external_script_fetch_target_is_current(target)
                 .then(|| {

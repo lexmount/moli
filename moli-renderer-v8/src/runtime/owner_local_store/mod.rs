@@ -516,8 +516,12 @@ impl RendererPageToken {
 #[cfg(test)]
 impl RendererPageToken {
     pub(crate) fn new_for_testing(page_id: PageId) -> Self {
+        Self::new_for_testing_with_host(0, page_id)
+    }
+
+    pub(crate) fn new_for_testing_with_host(local_host_id: u64, page_id: PageId) -> Self {
         Self {
-            local_host_id: RendererOwnerLocalHostId::new_for_testing(0),
+            local_host_id: RendererOwnerLocalHostId::new_for_testing(local_host_id),
             #[cfg(debug_assertions)]
             local_thread_id: std::thread::current().id(),
             page_id,
@@ -606,9 +610,12 @@ impl RendererOwnerLocalPageSlot {
         let action_window_deadline = entry.page_vm().next_action_window_deadline();
         let internal_loading_deadline = task_sources
             .next_internal_loading_deadline(entry.page_vm().current_page_internal_loading_owner());
+        let rendering_deadline = task_sources.next_rendering_opportunity_deadline(
+            entry.page_vm().current_realtime_rendering_opportunity(),
+        );
         earliest_deadline(
             earliest_deadline(timer_deadline, action_window_deadline),
-            internal_loading_deadline,
+            earliest_deadline(internal_loading_deadline, rendering_deadline),
         )
     }
 
@@ -620,9 +627,12 @@ impl RendererOwnerLocalPageSlot {
         let internal_loading_deadline = self
             .task_sources
             .local_internal_loading_deadline(entry.page_vm().current_page_internal_loading_owner());
+        let rendering_deadline = self.task_sources.local_rendering_opportunity_deadline(
+            entry.page_vm().current_realtime_rendering_opportunity(),
+        );
         earliest_deadline(
             earliest_deadline(timer_deadline, action_window_deadline),
-            internal_loading_deadline,
+            earliest_deadline(internal_loading_deadline, rendering_deadline),
         )
     }
 }
@@ -889,6 +899,60 @@ impl RendererOwnerLocalStoreSession<'_> {
     ) -> Result<usize> {
         self.store
             .host_unique_document_isolate_count_for_testing(token)
+    }
+
+    #[cfg(test)]
+    pub(super) fn layout_working_set_observation_for_testing(
+        &mut self,
+        token: RendererPageToken,
+    ) -> Result<super::owner_local::RendererLayoutWorkingSetObservation> {
+        #[cfg(debug_assertions)]
+        RendererOwnerLocalStore::ensure_token_thread(&token)?;
+        let slot = self
+            .store
+            .page_hosts
+            .get(&token.local_host_id)
+            .and_then(|host| host.pages.get(&token.page_id))
+            .ok_or_else(|| anyhow!("layout working-set observation Page has retired"))?;
+        // Commands can overtake an admitted maintenance turn once. Observe
+        // that turn's scheduled_for instead of treating its unindexed state
+        // as a missing maintenance residence.
+        let maintenance_deadline = slot.owner_maintenance.observation_deadline_for_test();
+        let entry = slot
+            .resident_entry()
+            .ok_or_else(|| anyhow!("layout working-set observation Page is not resident"))?;
+        let page_vm = entry.page_vm();
+        let host = page_vm
+            .vm()
+            .context_host_weak_for_test()
+            .upgrade()
+            .ok_or_else(|| anyhow!("layout working-set observation Host has retired"))?;
+        let host = host.borrow();
+        let screen = host.layout_snapshot_cache_observability_for_test();
+        Ok(super::owner_local::RendererLayoutWorkingSetObservation {
+            vm_creation_id: page_vm.creation_id,
+            document: host.document_handle(),
+            working_sets: host.realtime_layout_working_set_count_for_test(),
+            builds: host.layout_pass_observability_for_test().1,
+            last_pass_paint_operations: host
+                .layout_pass_observability_for_test()
+                .3
+                .map(|metrics| metrics.paint_operation_count),
+            screen: (screen.hits, screen.misses, screen.publishes, screen.cached),
+            inputs: host.realtime_layout_input_snapshot_for_test(),
+            frame: host.realtime_frame_snapshot_for_test(),
+            frame_idle: host.realtime_frame_is_idle_for_test(),
+            main_parser_source_waiting: entry.pending_phase_one_navigation.as_ref().is_some_and(
+                |pending| {
+                    matches!(
+                        &pending.residence,
+                        super::phase_one::PendingPhaseOneResidence::OpenStreaming(continuation)
+                            if continuation.main_parser_source_waiting_for_test()
+                    )
+                },
+            ),
+            maintenance_deadline,
+        })
     }
 }
 
@@ -1246,6 +1310,7 @@ impl RendererOwnerLocalStore {
                     output_journal: environment.output_journal(),
                     retire_output_journal_on_drop: false,
                     initial_task_sources: None,
+
                     _accounting: RendererDocumentIsolateReservationAccounting::new(),
                 });
             return Ok((
@@ -1259,6 +1324,7 @@ impl RendererOwnerLocalStore {
                 },
             ));
         }
+
         let existing_page_routes = self
             .page_hosts
             .get(&owner.local_host_id)
@@ -1326,6 +1392,7 @@ impl RendererOwnerLocalStore {
                 output_journal,
                 retire_output_journal_on_drop: true,
                 initial_task_sources,
+
                 _accounting: RendererDocumentIsolateReservationAccounting::new(),
             });
         Ok((
@@ -2056,6 +2123,8 @@ impl RendererOwnerLocalStore {
                 return;
             }
         }
+        // Revoke before canceling replacement preparation or dropping a Host.
+        // A checked-out entry can keep payloads alive, but cannot retain again.
         if let Some(reservation) = self.page_replacement_reservations.remove(&token) {
             self.cancel_prepared_document(reservation);
         }
@@ -2427,6 +2496,7 @@ impl RendererOwnerLocalStore {
         );
         let RendererDocumentIsolateReservationEntry {
             initial_task_sources,
+
             handle: _,
             output_journal: _,
             retire_output_journal_on_drop: _,
@@ -2575,11 +2645,11 @@ impl RendererOwnerLocalStore {
             reserved_isolate.initial_task_sources.is_none(),
             "replacement renderer isolate reservation unexpectedly owns a second Page consumer set"
         );
-        let page_task_sources = &host
+        let page_slot = host
             .pages
             .get(&token.page_id)
-            .ok_or_else(|| anyhow!("restored page is missing its stable Page slot"))?
-            .task_sources;
+            .ok_or_else(|| anyhow!("restored page is missing its stable Page slot"))?;
+        let page_task_sources = &page_slot.task_sources;
         ensure!(
             page_script_environment
                 .page_runtime_task_source()
@@ -2594,6 +2664,7 @@ impl RendererOwnerLocalStore {
         .expect("restored page preflight must retain its isolate reservation");
         let RendererDocumentIsolateReservationEntry {
             initial_task_sources,
+
             handle: _,
             output_journal: _,
             retire_output_journal_on_drop: _,

@@ -34,18 +34,23 @@ impl RendererOwnerLocalStore {
         let RendererRelatedInitialEmptyPageInit {
             dom_host,
             loader,
-            env,
+            mut env,
             inherited_origin,
             inherited_security_token,
             opener,
             window,
             name,
         } = init;
+        // The creator supplies document policy and resource inputs, while the
+        // stable owner supplies immutable renderer configuration. Install it
+        // before exposing the initial Window, not only at protocol adoption.
+        env.layout_configuration = owner.layout_configuration();
         ensure!(
             pending.popup_id() == window.id(),
             "auxiliary identity changed before staging"
         );
         let token = renderer_page_token_for_owner_context(owner, page_id);
+
         let owner_wake = crate::page_task_queue::RendererOwnerWakeSender::new(
             owner.owner_state.page_wake_tx.clone(),
             token,
@@ -106,6 +111,7 @@ impl RendererOwnerLocalStore {
                 output_journal: journal,
                 retire_output_journal_on_drop: true,
                 initial_task_sources: Some(task_sources),
+
                 _accounting: RendererDocumentIsolateReservationAccounting::new(),
             });
         let isolate_reservation = RendererDocumentIsolateReservation {

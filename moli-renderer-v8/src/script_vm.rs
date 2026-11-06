@@ -697,6 +697,7 @@ mod app_manifest;
 mod autofill;
 mod blob_inspector;
 mod broadcast_channel_delivery;
+mod capture_resource_loading;
 mod child_classic_document_script;
 mod child_classic_source_load;
 mod child_document_event;
@@ -755,7 +756,9 @@ use main_world::MainWorld;
 mod native_drag_data;
 pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
 mod document_context_transition;
+mod font_loading;
 mod initial_window_document;
+mod intersection_observer;
 mod isolated_worlds;
 mod main_document_lifecycle;
 mod main_document_lifecycle_body;
@@ -796,6 +799,7 @@ mod document_settings;
 pub(crate) use document_settings::{
     DocumentSetting, DocumentSettingEffect, DocumentSettingsApplication,
 };
+mod capture_layout;
 mod execution_contexts;
 mod font_resources;
 mod layout;
@@ -2436,6 +2440,7 @@ impl ScriptVmDefaultWorldBootstrap {
         let default_context = v8::Global::new(scope.as_ref(), local_context);
         let registered_context = v8::Global::new(scope.as_ref(), local_context);
         let scope = &mut v8::ContextScope::new(scope, local_context);
+        let baseline = Self::capture_baseline_globals_in_scope(scope)?;
         page_inspector.attach_context(
             renderer_document_isolate,
             inspector,
@@ -2446,7 +2451,7 @@ impl ScriptVmDefaultWorldBootstrap {
             root_frame_id,
         );
 
-        Self::capture_baseline_globals_in_scope(scope)
+        Ok(baseline)
     }
 
     fn capture_baseline_globals_in_scope(
@@ -2460,6 +2465,12 @@ impl ScriptVmDefaultWorldBootstrap {
 
         #[cfg(any(test, feature = "test-support"))]
         {
+            #[cfg(test)]
+            if scope.remove_slot::<main_world::MainWorldBootstrapFailureForTest>()
+                == Some(main_world::MainWorldBootstrapFailureForTest::Baseline)
+            {
+                anyhow::bail!("forced main-world bootstrap failure during baseline");
+            }
             let baseline_source = v8_string(
                 scope,
                 "JSON.stringify(Object.getOwnPropertyNames(globalThis))",

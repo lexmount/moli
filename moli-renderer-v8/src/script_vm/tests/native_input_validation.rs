@@ -4,6 +4,7 @@ async fn beforeinput_target_change(mutation: &str, should_edit: bool) {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = native_outcome_vm(policy).await;
         let script=r#"
@@ -73,6 +74,7 @@ async fn native_click_revalidates_the_target_after_focus_before_preactivation() 
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = native_outcome_vm(policy).await;
         vm.eval(

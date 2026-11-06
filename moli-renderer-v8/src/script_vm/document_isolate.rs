@@ -352,6 +352,7 @@ impl RendererPageScriptEnvironment {
                 inspector_isolate_backend,
                 page_runtime_task_source,
                 output_journal,
+
                 global_proxy: OnceCell::new(),
                 auxiliary_allocator: OnceCell::new(),
                 browsing_context_name: OnceCell::new(),

@@ -44,6 +44,7 @@ pub(super) enum TextClipMaskScope {
 /// resulting rectangles cross the owned snapshot boundary.
 pub(super) fn project_text<N>(
     layout_box: &LayoutBox<N>,
+    context: Option<&InlineFormattingContext>,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     metrics: &mut PaintProjectionMetrics,
@@ -51,6 +52,7 @@ pub(super) fn project_text<N>(
 ) {
     project_text_phase(
         layout_box,
+        context,
         transform,
         local_cull,
         metrics,
@@ -68,6 +70,7 @@ pub(super) fn project_text<N>(
 /// is consumed by a `DestIn` layer, so only alpha is observable.
 pub(super) fn project_text_clip_mask<N>(
     layout_box: &LayoutBox<N>,
+    context: Option<&InlineFormattingContext>,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     metrics: &mut PaintProjectionMetrics,
@@ -76,6 +79,7 @@ pub(super) fn project_text_clip_mask<N>(
 ) {
     project_text_phase(
         layout_box,
+        context,
         transform,
         local_cull,
         metrics,
@@ -87,6 +91,7 @@ pub(super) fn project_text_clip_mask<N>(
 
 fn project_text_phase<N>(
     layout_box: &LayoutBox<N>,
+    context: Option<&InlineFormattingContext>,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     metrics: &mut PaintProjectionMetrics,
@@ -94,7 +99,7 @@ fn project_text_phase<N>(
     phase: TextPaintPhase,
     mask_scope: Option<TextClipMaskScope>,
 ) {
-    let Some(context) = layout_box.inline_layout.as_ref() else {
+    let Some(context) = context else {
         return;
     };
     let Some(text_layout) = context.laid_out.as_ref() else {

@@ -137,10 +137,20 @@ impl PreparedSubresourceFetch {
         internal_id: u64,
         service_worker_failure: &str,
     ) {
+        let client_id = host.service_worker_client_id_for_subresource_owner(self.owner);
+        self.dispatch_for_client(host, internal_id, client_id, service_worker_failure);
+    }
+
+    pub(super) fn dispatch_for_client(
+        self,
+        host: &mut JsContextHost,
+        internal_id: u64,
+        client_id: crate::service_worker_runtime::ServiceWorkerClientId,
+        service_worker_failure: &str,
+    ) {
         let loader = self.resource_loader.request_client().clone();
         let task_runner = self.resource_loader.task_runner();
         let info = self.pending_info;
-        let client_id = host.service_worker_client_id_for_subresource_owner(self.owner);
         if matches!(info.url.scheme(), "http" | "https")
             && host
                 .service_worker_controller_for_fetch(client_id, &info.document_url, &info.url)
