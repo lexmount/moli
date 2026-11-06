@@ -22,6 +22,7 @@ pub(crate) enum WindowWebIdlCallbackFunction {
     Live {
         callback: WebIdlCallbackFunction,
         relevant_identity: WindowExecutionContextIdentity,
+        resource_initiator: crate::resource_initiator::CallbackInitiator,
     },
     Retired,
 }
@@ -39,6 +40,7 @@ impl WindowWebIdlCallbackFunction {
             Some(relevant_identity) => Self::Live {
                 callback,
                 relevant_identity,
+                resource_initiator: crate::resource_initiator::CallbackInitiator::capture(scope),
             },
             None => Self::Retired,
         }
@@ -55,6 +57,7 @@ impl WindowWebIdlCallbackFunction {
         let Self::Live {
             callback,
             relevant_identity,
+            resource_initiator,
         } = self
         else {
             return None;
@@ -67,6 +70,7 @@ impl WindowWebIdlCallbackFunction {
             owner_identity,
             *relevant_identity,
         )
+        .map(|execution| execution.with_resource_initiator(resource_initiator.clone()))
     }
 
     pub(crate) const fn relevant_identity(&self) -> Option<WindowExecutionContextIdentity> {
