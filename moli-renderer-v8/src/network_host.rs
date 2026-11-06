@@ -19,6 +19,8 @@ mod fetch_surface;
 mod font_face;
 use moli_webapi::headers;
 mod image;
+mod input_image;
+pub(crate) use input_image::update_input_image;
 mod js_values;
 mod loaded_response;
 mod media;

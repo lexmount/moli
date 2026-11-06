@@ -91,8 +91,21 @@ impl DocumentRuntime {
                 .dom_host
                 .node(*root)
                 .and_then(Node::as_element)
-                .is_some_and(|element| element.is_image_resource_element())
+                .is_some_and(|element| {
+                    element.is_image_resource_element()
+                        || (element.is_html_input() && element.input_type().as_ref() == "image")
+                })
             {
+                if self.dom_host.is_html_element_named(*root, "input") {
+                    crate::network_host::update_input_image(
+                        scope,
+                        host_ptr,
+                        *root,
+                        false,
+                        request_initiator_type,
+                    );
+                    return;
+                }
                 crate::native_bridge::element::queue_image_load_event_if_needed_with_initiator(
                     scope,
                     host_ptr,
@@ -109,13 +122,26 @@ impl DocumentRuntime {
                 .dom_host
                 .node(handle)
                 .and_then(Node::as_element)
-                .is_some_and(|element| element.is_image_resource_element())
+                .is_some_and(|element| {
+                    element.is_image_resource_element()
+                        || (element.is_html_input() && element.input_type().as_ref() == "image")
+                })
             {
                 images.push(handle);
             }
             self.push_child_handles(&mut stack, handle);
         }
         for image in images {
+            if self.dom_host.is_html_element_named(image, "input") {
+                crate::network_host::update_input_image(
+                    scope,
+                    host_ptr,
+                    image,
+                    false,
+                    request_initiator_type,
+                );
+                continue;
+            }
             crate::native_bridge::element::queue_image_load_event_if_needed_with_initiator(
                 scope,
                 host_ptr,
@@ -132,7 +158,9 @@ impl DocumentRuntime {
             plan.node_count += 1;
             if let Some(element) = self.dom_host.node(handle).and_then(Node::as_element) {
                 plan.details.observe_element(handle, element);
-                if element.is_image_resource_element() {
+                if element.is_image_resource_element()
+                    || (element.is_html_input() && element.input_type().as_ref() == "image")
+                {
                     plan.may_have_images = true;
                 }
                 match element.local_name() {

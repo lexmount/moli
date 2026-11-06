@@ -545,6 +545,7 @@ impl PageScriptHost {
                 visual_resource_generation,
             ),
             next_image_decode_id: 1,
+            input_images: Default::default(),
             pending_image_decode_requests: HashMap::new(),
             resource_timing_buffers: SharedResourceTimingBufferRegistry::new(),
             pending_font_face_loads: HashMap::new(),
