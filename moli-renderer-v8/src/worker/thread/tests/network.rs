@@ -1,3 +1,5 @@
+mod csp_tasks;
+
 use super::*;
 
 fn assert_initial_worker_auth_network_headers(headers: Option<&[(String, String)]>) {

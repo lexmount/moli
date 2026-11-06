@@ -140,9 +140,10 @@ pub(crate) enum WorkerMessage {
     /// Resolve a Service Worker `ServiceWorkerRegistration.getNotifications()` request in the worker.
     ServiceWorkerGetNotificationsResult(ServiceWorkerGetNotificationsResult),
     /// Dispatch a CSP violation after the current worker script turn.
-    DispatchContentSecurityPolicyViolation(
-        Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
-    ),
+    DispatchContentSecurityPolicyViolation {
+        violation: Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
+        reports_admitted: bool,
+    },
     /// Run the worker's queued unhandled promise rejection notification task.
     DispatchPendingPromiseRejections,
     /// Run one task from the worker's networking task source.
