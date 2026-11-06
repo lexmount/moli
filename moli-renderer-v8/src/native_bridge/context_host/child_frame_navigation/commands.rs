@@ -148,23 +148,35 @@ impl PageScriptHost {
             replace_current,
             initiator,
             ChildDocumentNavigationInitiator::BrowsingContext(None),
+            Default::default(),
         );
         self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
     pub(crate) fn queue_child_browsing_context_attribute_navigation_from_existing_seed(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
         resolved_url: &str,
         replace_current: bool,
         initiator: Option<super::super::OwnerDispatchScope>,
     ) -> bool {
+        let document_url = self
+            .dom_host()
+            .owner_document_handle(handle)
+            .map(|document| self.document_url_for_handle(document));
+        let resource_initiator = crate::context_bootstrap::ResourceTimingInitiator::capture_window(
+            scope,
+            self,
+            document_url.as_ref(),
+        );
         self.queue_child_browsing_context_navigation_from_existing_seed_with_initiator(
             handle,
             resolved_url,
             replace_current,
             initiator,
             ChildDocumentNavigationInitiator::FrameOwnerElement,
+            resource_initiator,
         )
     }
 
@@ -175,6 +187,7 @@ impl PageScriptHost {
         replace_current: bool,
         initiator: Option<super::super::OwnerDispatchScope>,
         navigation_initiator: ChildDocumentNavigationInitiator,
+        resource_initiator: crate::context_bootstrap::ResourceTimingInitiator,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -198,6 +211,7 @@ impl PageScriptHost {
             None,
             initiator,
             navigation_initiator,
+            resource_initiator,
         )
     }
 

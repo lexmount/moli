@@ -36,6 +36,11 @@ pub(crate) struct RuntimeScriptStartPlan {
 }
 
 impl RuntimeScriptStartPlan {
+    pub(crate) fn with_resource_timing_initiator(mut self, url: String) -> Self {
+        self.prepared.preparation.resource_timing_initiator_url = Some(url);
+        self
+    }
+
     pub(crate) fn with_document_referrer_policy(mut self, policy: Option<String>) -> Self {
         self.prepared.preparation.document_referrer_policy = policy;
         self

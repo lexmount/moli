@@ -5,6 +5,8 @@ pub(in crate::context_bootstrap) use moli_webapi::performance::slots::*;
 mod entries;
 mod fetch_timing;
 pub(crate) use fetch_timing::FetchResourceTiming;
+mod resource_initiator;
+pub(crate) use resource_initiator::ResourceTimingInitiator;
 mod install;
 mod lazy_subobjects;
 mod marks_measures;

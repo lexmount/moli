@@ -1082,6 +1082,7 @@ mod tests {
 
     fn prepared_module_script(node: u32) -> PreparedScript {
         PreparedScript {
+            resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: node as usize,
             node_id: NodeId::new(node as usize),

@@ -14,9 +14,24 @@ pub(in crate::native_bridge::context_host) struct ChildNavigationTargetSnapshot 
     embedding_origin: Option<String>,
     owner_referrer_policy: Option<String>,
     creator_referrer_policy: Option<String>,
+    resource_timing_initiator: crate::context_bootstrap::ResourceTimingInitiator,
 }
 
 impl ChildNavigationTargetSnapshot {
+    pub(in crate::native_bridge::context_host) fn with_resource_timing_initiator(
+        mut self,
+        initiator: crate::context_bootstrap::ResourceTimingInitiator,
+    ) -> Self {
+        self.resource_timing_initiator = initiator;
+        self
+    }
+
+    pub(in crate::native_bridge::context_host) fn resource_timing_initiator(
+        &self,
+    ) -> &crate::context_bootstrap::ResourceTimingInitiator {
+        &self.resource_timing_initiator
+    }
+
     pub(in crate::native_bridge::context_host) fn referrer_policy<'a>(
         &'a self,
         initiator: ChildDocumentNavigationInitiator,

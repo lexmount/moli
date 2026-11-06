@@ -74,6 +74,7 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation_utf16(
             runtime.child_frame_attribute_navigation_replaces_current_entry(handle, &url)
         });
         if runtime.queue_child_browsing_context_attribute_navigation_from_existing_seed(
+            scope,
             handle,
             &navigation_target,
             replace_current,
@@ -84,6 +85,7 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation_utf16(
     }
 
     if runtime.queue_child_browsing_context_attribute_navigation_from_existing_seed(
+        scope,
         handle,
         &navigation_target,
         true,

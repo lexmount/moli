@@ -559,8 +559,8 @@ pub(crate) use self::notification_runtime::{
 #[cfg(test)]
 pub(crate) use self::performance_runtime::bind_window_performance_seed;
 pub(crate) use self::performance_runtime::{
-    FetchResourceTiming, ResourcePerformanceEntry, bind_document_performance,
-    bind_window_document_performance, current_performance_time_origin,
+    FetchResourceTiming, ResourcePerformanceEntry, ResourceTimingInitiator,
+    bind_document_performance, bind_window_document_performance, current_performance_time_origin,
     current_window_performance_time_origin_seed, increment_performance_event_count,
     project_document_lifecycle_timing, project_window_document_lifecycle_timing,
     record_resource_performance_entry, run_resource_timing_buffer_full_task,
@@ -685,8 +685,7 @@ use self::window_runtime::global_caches_getter_callback;
 pub(crate) use self::window_template::install_window_own_template_bindings;
 pub(crate) use self::worker_host::{
     dispatch_worker_error_event_with_kind, dispatch_worker_event,
-    flush_pending_worker_messages_for_listener,
-    worker_has_message_delivery_listener,
+    flush_pending_worker_messages_for_listener, worker_has_message_delivery_listener,
 };
 pub(crate) use self::worker_location_runtime::install_worker_location_runtime_state;
 pub(super) use super::{

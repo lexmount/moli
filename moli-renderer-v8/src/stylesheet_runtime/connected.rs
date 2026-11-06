@@ -138,6 +138,12 @@ pub(crate) struct ConnectedStyleLoadPrimeResult {
 /// The plan contains no `ContextHost` state and owns no load-delay token. Its
 /// caller must commit `event_plan` and apply the result synchronously, before
 /// running script or another DOM mutation.
+#[derive(Clone, Debug, Default)]
+pub(in crate::document_runtime) struct ConnectedStyleRequestSource {
+    pub(super) csp_source_location: Option<ContentSecurityPolicySourceLocation>,
+    pub(super) resource_timing_initiator: Option<crate::context_bootstrap::ResourceTimingInitiator>,
+}
+
 #[derive(Debug)]
 pub(crate) struct PreparedConnectedStyleLoad {
     owner: DomHandle,
@@ -146,6 +152,7 @@ pub(crate) struct PreparedConnectedStyleLoad {
     event_plan: ConnectedStyleLoadEventPlan,
     document_referrer_policy: Option<String>,
     csp_source_location: Option<ContentSecurityPolicySourceLocation>,
+    resource_timing_initiator: Option<crate::context_bootstrap::ResourceTimingInitiator>,
 }
 
 #[derive(Debug)]
@@ -199,6 +206,14 @@ impl PreparedStylesheetOwnerRuntimeChange {
 }
 
 impl PreparedConnectedStyleLoad {
+    pub(in crate::document_runtime) fn set_request_source(
+        &mut self,
+        source: ConnectedStyleRequestSource,
+    ) {
+        self.csp_source_location = source.csp_source_location;
+        self.resource_timing_initiator = source.resource_timing_initiator;
+    }
+
     fn new(
         owner: DomHandle,
         csp_blocked: bool,
@@ -212,6 +227,7 @@ impl PreparedConnectedStyleLoad {
             event_plan,
             document_referrer_policy: None,
             csp_source_location: None,
+            resource_timing_initiator: None,
         }
     }
 
@@ -311,27 +327,40 @@ impl DocumentRuntime {
         prepared
     }
 
-    pub(in crate::document_runtime) fn capture_modulepreload_csp_source_location(
+    pub(in crate::document_runtime) fn capture_connected_style_request_source(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host: &PageScriptHost,
-        prepared: &mut PreparedConnectedStyleLoad,
-    ) {
+        host: &mut PageScriptHost,
+        owner: DomHandle,
+    ) -> ConnectedStyleRequestSource {
+        let document_url = self
+            .dom_host
+            .owner_document_handle(owner)
+            .and_then(|document| self.dom_host.document_url_for_handle(document))
+            .cloned();
+        let resource_timing_initiator = Some(
+            crate::context_bootstrap::ResourceTimingInitiator::capture_window(
+                scope,
+                host,
+                document_url.as_ref(),
+            ),
+        );
         let modulepreload = self
             .dom_host
-            .node(prepared.owner)
+            .node(owner)
             .and_then(Node::as_element)
             .filter(|element| element.is_html_element("link"))
             .and_then(|element| element.attribute("rel"))
             .is_some_and(|rel| link_rel_includes_token(rel, "modulepreload"));
-        if modulepreload
+        let csp_source_location = (modulepreload
             && host
-                .owner_dispatch_scope_for_node(prepared.owner)
+                .owner_dispatch_scope_for_node(owner)
                 .and_then(|owner| host.document_connect_policy_snapshot_for_owner(owner))
-                .is_some_and(|policy| policy.has_policies())
-        {
-            prepared.csp_source_location =
-                Some(ContentSecurityPolicySourceLocation::capture(scope));
+                .is_some_and(|policy| policy.has_policies()))
+        .then(|| ContentSecurityPolicySourceLocation::capture(scope));
+        ConnectedStyleRequestSource {
+            csp_source_location,
+            resource_timing_initiator,
         }
     }
 
@@ -638,7 +667,10 @@ impl DocumentRuntime {
             host_ptr,
             Some(event_admission),
             prepared.document_referrer_policy,
-            prepared.csp_source_location,
+            Some(ConnectedStyleRequestSource {
+                csp_source_location: prepared.csp_source_location,
+                resource_timing_initiator: prepared.resource_timing_initiator,
+            }),
         )
     }
 
@@ -874,7 +906,7 @@ impl DocumentRuntime {
         host_ptr: *mut PageScriptHost,
         event_admission: Option<ConnectedStyleLoadEventAdmission>,
         document_referrer_policy: Option<String>,
-        csp_source_location: Option<ContentSecurityPolicySourceLocation>,
+        source: Option<ConnectedStyleRequestSource>,
     ) -> ConnectedStyleLoadPrimeResult {
         if self.current_document_resource_loader().is_some()
             && !self.parser_created_style_import_waits_for_blocking_discovery(handle)
@@ -885,7 +917,7 @@ impl DocumentRuntime {
                 host_ptr,
                 event_admission,
                 document_referrer_policy,
-                csp_source_location,
+                source,
             )
         } else {
             self.stylesheet_lifecycle.pending_connected_loads.push_back(
@@ -894,7 +926,7 @@ impl DocumentRuntime {
                     inline_source,
                     event_admission,
                     document_referrer_policy,
-                    csp_source_location,
+                    source,
                 ),
             );
             ConnectedStyleLoadPrimeResult::default()
@@ -954,7 +986,7 @@ impl DocumentRuntime {
                 host_ptr,
                 queued.event_admission(),
                 queued.document_referrer_policy().map(str::to_owned),
-                queued.csp_source_location().cloned(),
+                queued.request_source().cloned(),
             ));
         }
         result
@@ -991,8 +1023,12 @@ impl DocumentRuntime {
         host_ptr: *mut PageScriptHost,
         event_admission: Option<ConnectedStyleLoadEventAdmission>,
         document_referrer_policy: Option<String>,
-        csp_source_location: Option<ContentSecurityPolicySourceLocation>,
+        source: Option<ConnectedStyleRequestSource>,
     ) -> ConnectedStyleLoadPrimeResult {
+        let ConnectedStyleRequestSource {
+            csp_source_location,
+            resource_timing_initiator,
+        } = source.unwrap_or_default();
         let mut result = ConnectedStyleLoadPrimeResult::default();
         if !self.dom_host.is_connected(handle) {
             self.settle_connected_style_load_admission(
@@ -1059,6 +1095,13 @@ impl DocumentRuntime {
                 document_url.clone(),
                 disposition.url().clone(),
                 disposition.options().clone(),
+            );
+            fetch.set_resource_timing_initiator_url(
+                resource_timing_initiator
+                    .as_ref()
+                    .map(|initiator| initiator.as_str())
+                    .unwrap_or(document_url.as_str())
+                    .to_owned(),
             );
             let import_completion =
                 self.initial_stylesheet_import_completion(disposition.url(), &fetch);

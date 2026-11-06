@@ -1099,6 +1099,7 @@ impl BufferedScriptPreloadRequest {
 
     pub(crate) fn to_preload_script(&self) -> PreparedScript {
         PreparedScript {
+            resource_timing_initiator_url: None,
             position: 0,
             node_id: crate::dom::NodeId::new(0),
             kind: self.kind_hint,

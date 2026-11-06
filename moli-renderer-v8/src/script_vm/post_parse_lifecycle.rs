@@ -2180,6 +2180,7 @@ impl ScriptVm {
     #[cfg(test)]
     pub(super) fn test_pending_runtime_source_load_script(&self) -> PreparedScript {
         PreparedScript {
+            resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: 0,
             node_id: NodeId::new(1),
@@ -2231,6 +2232,7 @@ impl ScriptVm {
         self.document_runtime
             .bind_runtime_owned_script_handle_for_node(node_id, &host_script_handle);
         let script = PreparedScript {
+            resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: node_id.index(),
             node_id,
@@ -2577,15 +2579,23 @@ impl ScriptVm {
                 !source_owners.is_empty()
             };
             if !consumed_preload_error {
-                performance_entries.push((
-                    document_owner,
+                let mut entry =
                     crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
                         request_url.as_str(),
                         resource_timing_initiator_type,
                         start_unix_millis,
                         &result,
-                    ),
-                ));
+                    );
+                if let (Some(fetch), Ok(response)) = (stylesheet_fetch.as_ref(), &result) {
+                    let source = fetch
+                        .resource_timing_initiator_url()
+                        .unwrap_or(document_url.as_str());
+                    crate::context_bootstrap::ResourceTimingInitiator::from_captured_url(
+                        source.to_owned(),
+                    )
+                    .apply(&mut entry, &response.head(), origin_clean);
+                }
+                performance_entries.push((document_owner, entry));
             }
             if resource_type == SubresourceResourceType::Stylesheet && stylesheet_fetch.is_none() {
                 let validated_response = result
@@ -2875,10 +2885,12 @@ impl ScriptVm {
         request_initiator_type: SubresourceRequestInitiatorType,
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) {
-        self.record_script_subresource_network_result_with_handle(
+        self.record_script_subresource_result(
             document_url,
             request_url,
             request_initiator_type,
+            None,
+            None,
             result,
             None,
         );
@@ -2891,20 +2903,44 @@ impl ScriptVm {
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
         request_handle: Option<SubresourceNetworkRequestHandle>,
     ) {
-        self.record_script_subresource_network_result_with_handle(
+        self.record_script_subresource_result(
             document_url,
             request_url,
             SubresourceRequestInitiatorType::Parser,
+            None,
+            None,
             result,
             request_handle,
         );
     }
 
-    fn record_script_subresource_network_result_with_handle(
+    pub(crate) fn record_script_subresource_network_result_with_attribution(
         &mut self,
         document_url: Url,
         request_url: Url,
         request_initiator_type: SubresourceRequestInitiatorType,
+        fetch_metadata: Option<&crate::planning::ScriptFetchMetadata>,
+        resource_timing_initiator_url: Option<&str>,
+        result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
+    ) {
+        self.record_script_subresource_result(
+            document_url,
+            request_url,
+            request_initiator_type,
+            fetch_metadata,
+            resource_timing_initiator_url,
+            result,
+            None,
+        );
+    }
+
+    fn record_script_subresource_result(
+        &mut self,
+        document_url: Url,
+        request_url: Url,
+        request_initiator_type: SubresourceRequestInitiatorType,
+        fetch_metadata: Option<&crate::planning::ScriptFetchMetadata>,
+        resource_timing_initiator_url: Option<&str>,
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
         request_handle: Option<SubresourceNetworkRequestHandle>,
     ) {
@@ -2915,19 +2951,36 @@ impl ScriptVm {
                 None,
                 result,
             );
-        if request_initiator_type == SubresourceRequestInitiatorType::Parser
-            && let Ok(response) = result
-            && let Some(loader) = self.current_main_document_resource_loader()
-        {
-            let origin = loader.fetch_context().request_origin();
-            if origin.same_origin_url(&document_url) {
-                performance_entry =
-                    performance_entry.with_initiator_url(crate::resource_initiator::response_url(
-                        document_url.as_str().to_owned(),
+        if let Ok(response) = result {
+            let origin = self
+                ._context_host
+                .borrow()
+                .document_resource_loader_for_dispatch_scope(
+                    crate::native_bridge::OwnerDispatchScope::Top,
+                )
+                .map(|loader| loader.fetch_context().request_origin());
+            if let Some(origin) = origin {
+                let head = response.head();
+                let readable = if let Some(metadata) =
+                    fetch_metadata.filter(|metadata| metadata.cross_origin.is_some())
+                {
+                    crate::network_host::validate_cors_response_chain(
                         &origin,
-                        &response.final_url,
-                        response.cache_state,
-                    ));
+                        &head,
+                        crate::planning::external_script_credentials_mode(
+                            crate::types::ScriptKind::Classic,
+                            metadata,
+                        ),
+                    )
+                    .is_ok()
+                } else {
+                    !head.url_list().has_cross_origin_url(&origin)
+                };
+                let source = resource_timing_initiator_url.unwrap_or(document_url.as_str());
+                crate::context_bootstrap::ResourceTimingInitiator::from_captured_url(
+                    source.to_owned(),
+                )
+                .apply(&mut performance_entry, &head, readable);
             }
         }
         self._context_host

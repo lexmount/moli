@@ -1,4 +1,5 @@
 use super::*;
+mod dom_requests;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
