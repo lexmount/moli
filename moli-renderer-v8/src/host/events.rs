@@ -254,6 +254,11 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
         current_event,
     )
     .with_execution_context_currentness(host_ptr, relevant_identity);
+    let invocation = if let Some(initiator) = callback.resource_initiator() {
+        invocation.with_resource_initiator(initiator.clone())
+    } else {
+        invocation
+    };
     match CallbackInvoker::invoke(
         scope,
         "event listener",

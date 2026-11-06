@@ -213,3 +213,120 @@ async fn window_timer_resource_initiator_keeps_unknown_registration_unknown() {
     assert_eq!(vm.eval("JSON.stringify(performance.getEntriesByType('resource').map(entry => entry.initiatorUrl))").unwrap(), r#"[""]"#);
     assert_eq!(server.finish().await.len(), 1);
 }
+
+fn dispatch_native_document_probe(vm: &mut ScriptVm, event_type: &str) {
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, host| {
+        unsafe { &mut *host }
+            .dispatch_document_event(scope, host, event_type)
+            .map_err(anyhow::Error::msg)
+    })
+    .unwrap();
+}
+
+#[tokio::test]
+async fn dom_listener_resource_initiator_covers_handle_event_lookup_and_duplicate_registration() {
+    let server = StaticHttpServer::spawn_with_responder(
+        2,
+        "Content-Type: text/plain\r\nCache-Control: no-store\r\n",
+        |_, _| "ok".to_owned(),
+    )
+    .await;
+    let base = server.base_url();
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(base.as_str(), &loader);
+    execute_with_source(
+        &mut vm,
+        r#"
+      globalThis.request = path => { const x = new XMLHttpRequest(); x.open('GET', path); x.send(); };
+      globalThis.listener = { get handleEvent() { request('lookup'); return () => request('body'); } };
+    "#,
+        &base.join("library.js").unwrap(),
+        &base,
+    );
+    let first = base.join("first.js").unwrap();
+    execute_with_source(
+        &mut vm,
+        "document.addEventListener('probe', listener);",
+        &first,
+        &base,
+    );
+    execute_with_source(
+        &mut vm,
+        "document.addEventListener('probe', listener);",
+        &base.join("duplicate.js").unwrap(),
+        &base,
+    );
+    dispatch_native_document_probe(&mut vm, "probe");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(performance.getEntriesByType('resource').length)",
+        "2",
+        "callback initiator completion",
+    )
+    .await;
+    assert_eq!(vm.eval("JSON.stringify(performance.getEntriesByType('resource').map(entry => entry.initiatorUrl))").unwrap(), serde_json::json!([first.as_str(), first.as_str()]).to_string());
+    assert_eq!(server.finish().await.len(), 2);
+}
+
+#[tokio::test]
+async fn dom_listener_resource_initiator_preserves_each_registration_and_synchronous_caller() {
+    let server = StaticHttpServer::spawn_with_responder(
+        4,
+        "Content-Type: text/plain\r\nCache-Control: no-store\r\n",
+        |_, _| "ok".to_owned(),
+    )
+    .await;
+    let base = server.base_url();
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(base.as_str(), &loader);
+    execute_with_source(
+        &mut vm,
+        r#"
+      globalThis.listener = event => { const x = new XMLHttpRequest(); x.open('GET', event.type); x.send(); };
+    "#,
+        &base.join("library.js").unwrap(),
+        &base,
+    );
+    let first = base.join("first.js").unwrap();
+    let second = base.join("second.js").unwrap();
+    let caller = base.join("caller.js").unwrap();
+    execute_with_source(
+        &mut vm,
+        "document.addEventListener('first', listener);",
+        &first,
+        &base,
+    );
+    execute_with_source(
+        &mut vm,
+        "document.addEventListener('second', listener);",
+        &second,
+        &base,
+    );
+    dispatch_native_document_probe(&mut vm, "first");
+    dispatch_native_document_probe(&mut vm, "second");
+    execute_with_source(
+        &mut vm,
+        "document.dispatchEvent(new Event('first'));",
+        &caller,
+        &base,
+    );
+    execute_with_source(
+        &mut vm,
+        "document.dispatchEvent(new Event('first'));",
+        &Url::parse("https://other.invalid/caller.js").unwrap(),
+        &base,
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(performance.getEntriesByType('resource').length)",
+        "4",
+        "callback initiator completion",
+    )
+    .await;
+    assert_eq!(vm.eval("JSON.stringify(performance.getEntriesByType('resource').map(entry => [new URL(entry.name).pathname, entry.initiatorUrl]).sort())").unwrap(), serde_json::json!([
+        ["/first", ""], ["/first", caller.as_str()], ["/first", first.as_str()], ["/second", second.as_str()]
+    ]).to_string());
+    assert_eq!(server.finish().await.len(), 4);
+}

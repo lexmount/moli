@@ -137,6 +137,7 @@ pub(crate) struct CallbackInvocation<'s, 'a> {
     operation_name: &'a str,
     arguments: &'a [v8::Local<'s, v8::Value>],
     current_event: Option<v8::Local<'s, v8::Object>>,
+    resource_initiator: Option<crate::resource_initiator::CallbackInitiator>,
 }
 
 impl<'s, 'a> CallbackInvocation<'s, 'a> {
@@ -163,6 +164,7 @@ impl<'s, 'a> CallbackInvocation<'s, 'a> {
             operation_name,
             arguments,
             current_event,
+            resource_initiator: None,
         }
     }
 
@@ -170,6 +172,14 @@ impl<'s, 'a> CallbackInvocation<'s, 'a> {
     /// callback-interface operations or enter their realm when invoked.
     pub(crate) fn with_legacy_event_handler(mut self) -> Self {
         self.legacy_event_handler = true;
+        self
+    }
+
+    pub(crate) fn with_resource_initiator(
+        mut self,
+        initiator: crate::resource_initiator::CallbackInitiator,
+    ) -> Self {
+        self.resource_initiator = Some(initiator);
         self
     }
 
@@ -232,6 +242,10 @@ impl CallbackInvoker {
             }
         }
 
+        let resource_initiator = crate::resource_initiator::callback_anchor(
+            scope,
+            invocation.resource_initiator.as_ref(),
+        );
         let result = with_webidl_callback_contexts(
             scope,
             invocation.relevant_context,
@@ -257,28 +271,34 @@ impl CallbackInvoker {
                     invocation.operation_name,
                     invocation.arguments,
                 );
-                let result = invoke_webidl_callback(
+                let result = crate::resource_initiator::with_callback_anchor(
                     scope,
-                    webidl_invocation,
-                    |scope, callback, receiver, arguments| {
-                        invoke_callback_with_report(
+                    resource_initiator,
+                    |scope| {
+                        invoke_webidl_callback(
                             scope,
-                            callback_kind,
-                            log_label,
-                            log_level,
-                            callback_name,
-                            callback,
-                            receiver,
-                            arguments,
-                        )
-                    },
-                    |scope, failure| {
-                        capture_callback_resolution_failure(
-                            scope,
-                            log_label,
-                            log_level,
-                            callback_name,
-                            failure,
+                            webidl_invocation,
+                            |scope, callback, receiver, arguments| {
+                                invoke_callback_with_report(
+                                    scope,
+                                    callback_kind,
+                                    log_label,
+                                    log_level,
+                                    callback_name,
+                                    callback,
+                                    receiver,
+                                    arguments,
+                                )
+                            },
+                            |scope, failure| {
+                                capture_callback_resolution_failure(
+                                    scope,
+                                    log_label,
+                                    log_level,
+                                    callback_name,
+                                    failure,
+                                )
+                            },
                         )
                     },
                 );
