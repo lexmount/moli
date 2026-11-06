@@ -399,3 +399,29 @@ fn resource_timing_dropped_count_survives_recovery_resize_and_clear() {
         r#"[1,"absent",1,1,2,0]"#
     );
 }
+
+#[test]
+fn resource_timing_initiator_url_is_a_native_readonly_attribute_and_json_snapshot() {
+    let mut vm = new_storage_test_vm("https://resource-initiator-surface.test/");
+    install_test_resource_recorder(&mut vm);
+    assert_eq!(vm.eval(r#"
+(() => {
+  __recordResourceTiming('https://resource-initiator-surface.test/unknown');
+  const entry = performance.getEntriesByType('resource')[0];
+  const descriptor = Object.getOwnPropertyDescriptor(PerformanceResourceTiming.prototype, 'initiatorUrl');
+  const snapshot = entry.toJSON();
+  let rejects = 0;
+  for (const receiver of [{}, PerformanceResourceTiming.prototype, new Proxy(entry, {})]) {
+    try { descriptor.get.call(receiver); } catch (error) { if (error instanceof TypeError) rejects++; }
+  }
+  entry.initiatorUrl = 'forged';
+  return JSON.stringify([
+    descriptor.get.name, descriptor.get.length, descriptor.set === undefined,
+    descriptor.enumerable, descriptor.configurable,
+    Object.hasOwn(entry, 'initiatorUrl'), entry.initiatorUrl, snapshot.initiatorUrl,
+    Object.hasOwn(snapshot, 'initiatorUrl'), rejects,
+    Object.getOwnPropertyDescriptor(snapshot, 'initiatorUrl').writable
+  ]);
+})()
+"#).unwrap(), r#"["get initiatorUrl",0,true,true,true,false,"","",true,3,true]"#);
+}

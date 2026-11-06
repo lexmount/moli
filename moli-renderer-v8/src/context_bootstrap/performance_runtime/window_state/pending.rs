@@ -61,7 +61,7 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
 ) {
     let global = scope.get_current_context().global(scope);
     let entries = ensure_private_array(scope, global, WINDOW_PERFORMANCE_PENDING_RESOURCES_SLOT, 0);
-    let record = v8::Array::new(scope, 9);
+    let record = v8::Array::new(scope, 10);
     let Some(name) = v8_string(scope, &entry.name) else {
         return;
     };
@@ -72,6 +72,9 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
         return;
     };
     let Some(content_type) = v8_string(scope, &entry.content_type) else {
+        return;
+    };
+    let Some(initiator_url) = v8_string(scope, &entry.initiator_url) else {
         return;
     };
     let start_time: v8::Local<'_, v8::Value> = entry
@@ -88,6 +91,7 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
         render_blocking_status.into(),
         v8::Number::new(scope, entry.response_status).into(),
         content_type.into(),
+        initiator_url.into(),
     ];
     for (index, value) in fields.into_iter().enumerate() {
         let _ = record.set_index(scope, index as u32, value);
@@ -122,6 +126,7 @@ pub(in crate::context_bootstrap::performance_runtime) fn take_pending_resource_e
                 render_blocking_status: array_string(scope, record, 6)?,
                 response_status: array_number(scope, record, 7)?,
                 content_type: array_string(scope, record, 8)?,
+                initiator_url: array_string(scope, record, 9)?,
             })
         })
         .collect()
