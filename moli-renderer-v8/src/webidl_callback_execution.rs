@@ -93,7 +93,9 @@ impl PreparedWebIdlCallbackExecution {
         carrier: v8::Local<'s, v8::Object>,
     ) -> Option<Self> {
         let (binding, owner) = CommonRuntimeBinding::from_scope(scope)?;
-        let callback = V8TracedWebIdlCallbackFunction::from_object(carrier).prepare(scope);
+        let traced = V8TracedWebIdlCallbackFunction::from_object(carrier);
+        let resource_initiator = traced.resource_initiator(scope);
+        let callback = traced.prepare(scope);
         let environment = match owner {
             RuntimeExecutionContext::Window(host_ptr) => {
                 let host = unsafe { &*host_ptr };
@@ -113,7 +115,7 @@ impl PreparedWebIdlCallbackExecution {
             callback,
             environment,
             binding,
-            resource_initiator: None,
+            resource_initiator: Some(resource_initiator),
         })
     }
 

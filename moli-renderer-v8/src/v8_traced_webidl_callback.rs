@@ -18,6 +18,7 @@ use moli_webidl_callback::{
 
 use crate::util::{get_private_value, set_private_value};
 
+const CALLBACK_RESOURCE_INITIATOR_SLOT: &str = "__lmV8TracedCallbackResourceInitiator";
 const CALLBACK_VALUE_SLOT: &str = "__lmV8TracedWebIdlCallbackValue";
 const CALLBACK_RELEVANT_GLOBAL_SLOT: &str = "__lmV8TracedWebIdlCallbackRelevantGlobal";
 const CALLBACK_INCUMBENT_GLOBAL_SLOT: &str = "__lmV8TracedWebIdlCallbackIncumbentGlobal";
@@ -112,6 +113,14 @@ impl<'s> V8TracedWebIdlCallbackFunction<'s> {
             .expect("a Web IDL callback function must be a callable object");
         let relevant_global = callback.relevant_context(scope).global(scope);
         let incumbent_global = callback.incumbent_context(scope).global(scope);
+        let resource_initiator =
+            crate::resource_initiator::CallbackInitiator::capture(scope).value(scope);
+        set_private_value(
+            scope,
+            carrier,
+            CALLBACK_RESOURCE_INITIATOR_SLOT,
+            resource_initiator,
+        );
         set_private_value(scope, carrier, CALLBACK_VALUE_SLOT, callback_value.into());
         set_private_value(
             scope,
@@ -163,5 +172,13 @@ impl<'s> V8TracedWebIdlCallbackFunction<'s> {
             incumbent_context,
         )
         .expect("a traced Web IDL callback function must remain callable")
+    }
+    pub(crate) fn resource_initiator(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> crate::resource_initiator::CallbackInitiator {
+        let value = get_private_value(scope, self.carrier, CALLBACK_RESOURCE_INITIATOR_SLOT)
+            .unwrap_or_else(|| v8::undefined(scope).into());
+        crate::resource_initiator::CallbackInitiator::from_value(scope, value)
     }
 }
