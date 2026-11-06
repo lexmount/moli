@@ -87,7 +87,7 @@ impl DocumentRuntime {
                     .as_document()?
                     .body_or_frameset_handle(self.dom_host.dom(), self.document_handle())?
             }
-            EventTargetHandle::ChildWindow(_) => return None,
+            EventTargetHandle::ChildWindow(_) | EventTargetHandle::PopupWindow(_) => return None,
         };
         if self.event_handler_attribute_target(handle, &attribute) != target {
             return None;

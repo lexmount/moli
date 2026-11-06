@@ -95,6 +95,7 @@ pub(crate) use security_policy::{
     DocumentConnectPolicySnapshot, DocumentContentSecurityPolicyCheck,
     DocumentContentSecurityPolicyViolation, DocumentNavigationEmbeddingContext,
     DocumentSubresourceCspKind, create_content_security_policy_violation_event,
+    create_content_security_policy_violation_event_with_fields,
     document_content_security_policy_error_message,
 };
 pub(crate) use stylesheet_runtime::attribute_reprocesses_connected_stylesheet;
