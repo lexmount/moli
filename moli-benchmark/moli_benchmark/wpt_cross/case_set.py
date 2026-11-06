@@ -1021,6 +1021,7 @@ def _supported_wptserve_handler_references(
         supported += SUPPORTED_WASM_WEBAPI_WPTSERVE_HANDLER_PATTERNS
     if rel is not None:
         supported += _script_load_error_handler_reference_patterns(posixpath.dirname(rel) or ".")
+        supported += _eventsource_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None and rel.startswith("xhr/"):
         supported += SUPPORTED_XHR_DELAY_WPTSERVE_HANDLER_PATTERNS
         supported += _xhr_handler_reference_patterns(rel.rsplit("/", 1)[0])
@@ -1067,6 +1068,18 @@ def _has_unsupported_server_feature(
 
 
 @lru_cache(maxsize=None)
+def _eventsource_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    resource = "eventsource/resources/message.py"
+    relative = posixpath.relpath(resource, directory)
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in ("/" + resource, relative, "./" + relative)
+    )
+
+
 def _script_load_error_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
     resource = "html/semantics/scripting-1/the-script-element/resources/load-error-events.py"
     relative = posixpath.relpath(resource, directory)
