@@ -113,11 +113,11 @@ pub(crate) fn start_font_face_fetch(
         request_url,
         SubresourceFetchOptions::FONT,
     )?;
-    let internal_id = host.record_async_font_face_fetch(
+    let internal_id = host.record_font_face_fetch(
         v8::Global::new(scope, scope.get_current_context()),
         v8::Global::new(scope, face),
         owner,
-        prepared.cancel_handle.clone(),
+        prepared.registration.clone(),
         prepared.network_partition_key.clone(),
         prepared.network_context.policy_context,
         prepared.pending_info.clone(),

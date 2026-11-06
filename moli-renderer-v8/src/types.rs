@@ -10,6 +10,21 @@ pub(crate) type NetworkBodySourceId = u64;
 pub(crate) type SharedNavigationResponseResult =
     std::sync::Arc<std::result::Result<NavigationResponse, String>>;
 
+#[derive(Clone)]
+pub(crate) enum SubresourceFetchRegistration {
+    Intercepted,
+    Dispatched(moli_fetch::FetchCancelHandle),
+}
+
+impl SubresourceFetchRegistration {
+    pub(crate) fn cancel_handle(&self) -> Option<moli_fetch::FetchCancelHandle> {
+        match self {
+            Self::Intercepted => None,
+            Self::Dispatched(cancel_handle) => Some(cancel_handle.clone()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct DedicatedWorkerId(u64);
 
