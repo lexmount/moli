@@ -39,7 +39,10 @@ struct MicrotaskCheckpointState(Rc<Cell<bool>>);
 
 /// HTML's performing-a-microtask-checkpoint flag also covers rejection
 /// notification and checkpoint-end cleanup after V8 finishes draining jobs.
-pub(crate) struct MicrotaskCheckpointScope(Rc<Cell<bool>>);
+pub(crate) struct MicrotaskCheckpointScope {
+    active: Rc<Cell<bool>>,
+    _timer_nesting: Option<crate::timer_nesting::TimerNestingScope>,
+}
 
 impl MicrotaskCheckpointScope {
     pub(crate) fn enter(scope: &mut v8::PinScope<'_, '_>) -> Option<Self> {
@@ -61,13 +64,17 @@ impl MicrotaskCheckpointScope {
         if active.replace(true) {
             return None;
         }
-        Some(Self(active))
+        Some(Self {
+            active,
+            _timer_nesting:
+                crate::timer_nesting::TimerNestingScope::suspend_for_microtask_checkpoint(scope),
+        })
     }
 }
 
 impl Drop for MicrotaskCheckpointScope {
     fn drop(&mut self) {
-        self.0.set(false);
+        self.active.set(false);
     }
 }
 

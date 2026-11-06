@@ -645,8 +645,11 @@ fn finish_worker_module_bootstrap(
         // The host reports evaluation failures as errors, not unhandled rejections.
         promise.mark_as_handled();
     }
-    scope.perform_microtask_checkpoint();
-    crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+    {
+        let _checkpoint_scope = crate::script_cleanup::MicrotaskCheckpointScope::enter(scope);
+        scope.perform_microtask_checkpoint();
+        crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+    }
     if root_module.get_status() == v8::ModuleStatus::Errored {
         return Err(Box::new(worker_bootstrap_value_error(
             scope,
@@ -1197,8 +1200,11 @@ fn finish_worker_dynamic_module_import_evaluation(
     if let Some(promise) = evaluation_promise {
         promise.mark_as_handled();
     }
-    scope.perform_microtask_checkpoint();
-    crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+    {
+        let _checkpoint_scope = crate::script_cleanup::MicrotaskCheckpointScope::enter(scope);
+        scope.perform_microtask_checkpoint();
+        crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+    }
     if root_module.get_status() == v8::ModuleStatus::Errored {
         return Err(WorkerDynamicModuleImportError::evaluation_rejection_value(
             scope,
@@ -1286,8 +1292,11 @@ fn resolve_worker_dynamic_module_import(
         return;
     };
     let _ = resolver.resolve(scope, resolved_value);
-    scope.perform_microtask_checkpoint();
-    crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+    {
+        let _checkpoint_scope = crate::script_cleanup::MicrotaskCheckpointScope::enter(scope);
+        scope.perform_microtask_checkpoint();
+        crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+    }
 }
 
 fn reject_worker_dynamic_module_import(
@@ -1312,8 +1321,11 @@ fn reject_worker_dynamic_module_import(
             .unwrap_or_else(|| v8::undefined(scope).into()),
     };
     let _ = resolver.reject(scope, rejection);
-    scope.perform_microtask_checkpoint();
-    crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+    {
+        let _checkpoint_scope = crate::script_cleanup::MicrotaskCheckpointScope::enter(scope);
+        scope.perform_microtask_checkpoint();
+        crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+    }
 }
 
 #[derive(Default)]

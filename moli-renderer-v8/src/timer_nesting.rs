@@ -66,9 +66,9 @@ struct TimerNestingState {
     scope_depth: Cell<usize>,
 }
 
-/// Keep an ExecutionContext's timer level through its callback checkpoint.
-/// Consume this guard after the checkpoint, before asynchronous runtime
-/// follow-up. Drop also restores it when a callback or checkpoint fails.
+/// Preserve a timer task's level until its callback turn is finished.
+/// Microtask checkpoints temporarily suspend this state because their jobs
+/// are separate tasks. Drop also restores it on callback or checkpoint failure.
 pub(crate) struct TimerNestingScope {
     state: Rc<TimerNestingState>,
     previous: TimerLevels,
@@ -97,6 +97,24 @@ impl TimerNestingScope {
             previous,
             previous_depth,
         }
+    }
+
+    /// A microtask is the currently running task while its checkpoint drains.
+    /// Preserve the outer task's metadata for reentry and interval bookkeeping,
+    /// without letting newly scheduled timers inherit it from microtasks.
+    pub(crate) fn suspend_for_microtask_checkpoint(isolate: &v8::Isolate) -> Option<Self> {
+        let state = isolate.get_slot::<Rc<TimerNestingState>>()?.clone();
+        if state.levels.borrow().is_empty() {
+            return None;
+        }
+        let previous = std::mem::take(&mut *state.levels.borrow_mut());
+        let previous_depth = state.scope_depth.get();
+        state.scope_depth.set(previous_depth + 1);
+        Some(Self {
+            state,
+            previous,
+            previous_depth,
+        })
     }
 
     /// Body-only execution has no checkpoint. Complete-task entrypoints keep
