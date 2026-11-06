@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn custom_element_reactions_preserve_dom_exceptions_through_nested_callbacks() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://reaction-exception.test/");
+    let source = format!(
+        "(() => {{const checks = {}; return JSON.stringify([checks.length, checks.filter(row => !row.passed)]);}})()",
+        include_str!("reaction_exceptions.js")
+    );
+    assert_eq!(vm.eval(&source).unwrap(), "[296,[]]");
+}
+
+#[test]
+fn inline_script_failures_are_reported_without_escaping_dom_reaction_scopes() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://reaction-script-error.test/");
+    let result = vm.eval(r#"(() => {
+        if (!document.documentElement) document.appendChild(document.createElement('html'));
+        if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+        const errors = [];
+        const script = document.createElement('script');
+        addEventListener('error', event => {
+            errors.push([event.error.message, event.error instanceof Error, document.currentScript === script]);
+            event.preventDefault();
+        });
+        document.body.appendChild(script);
+        let caught;
+        try { script.text = 'throw new Error("inline-script-marker")'; }
+        catch (error) { caught = error; }
+        return JSON.stringify([caught === undefined, errors]);
+    })()"#).unwrap();
+    assert_eq!(result, r#"[true,[["inline-script-marker",true,true]]]"#);
+}
+
+#[test]
 fn template_adoption_reactions_use_each_associated_tree_document() {
     let mut vm = new_parsed_test_vm(
         "https://template-adoption-reactions.test/",
