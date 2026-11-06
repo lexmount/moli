@@ -199,6 +199,9 @@ impl JsContextHost {
             None
         };
 
+        let initiator =
+            crate::context_bootstrap::ResourceTimingInitiator::capture_window(scope, self, None);
+        let plan = plan.with_resource_timing_initiator(initiator.as_str().to_owned());
         let prepared = match runtime.prepare_runtime_script_start_commit(plan) {
             Ok(prepared) => prepared,
             Err(error) => {

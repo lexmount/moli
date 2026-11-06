@@ -1588,6 +1588,7 @@ fn inline_module_graph_roots_use_trusted_types_compliant_source() {
 
     let document_url = vm.document_runtime.document_url().clone();
     let prepared = |node_id, position| PreparedScript {
+        resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position,
         node_id,
@@ -1709,6 +1710,7 @@ async fn inline_module_csp_hashes_use_prepared_source_without_duplicate_url_chec
                     .get_element_by_id("inline-module")
                     .unwrap();
                 let script = PreparedScript {
+                    resource_timing_initiator_url: None,
                     document_referrer_policy: None,
                     position: 1,
                     node_id,

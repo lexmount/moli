@@ -383,6 +383,12 @@ fn apply_image_subresource_terminal(
     request_url: &url::Url,
     terminal: ImageSubresourceTerminal<'_>,
 ) {
+    let initiator = context_host
+        .borrow()
+        .pending_image_load_event(image_handle)
+        .filter(|pending| pending.id() == sequence)
+        .map(|pending| pending.resource_timing_initiator().clone())
+        .unwrap_or_default();
     let (accepted, followup) = match &terminal {
         ImageSubresourceTerminal::Response {
             response,
@@ -418,10 +424,16 @@ fn apply_image_subresource_terminal(
         }
     };
     if accepted && !matches!(terminal, ImageSubresourceTerminal::PreloadFailure) {
-        crate::context_bootstrap::record_resource_performance_entry(
-            scope,
-            terminal.resource_performance_entry(request_url),
-        );
+        let mut entry = terminal.resource_performance_entry(request_url);
+        if let ImageSubresourceTerminal::Response {
+            response,
+            origin_clean,
+            ..
+        } = &terminal
+        {
+            initiator.apply(&mut entry, &response.head(), *origin_clean);
+        }
+        crate::context_bootstrap::record_resource_performance_entry(scope, entry);
     }
     let host_ptr: *mut JsContextHost = context_host.as_ref().as_ptr();
     crate::native_bridge::element::queue_image_load_network_terminal_followup(

@@ -117,6 +117,7 @@ mod tests {
 
     fn prepared_script(position: usize, node_index: usize, mode: ScriptMode) -> PreparedScript {
         PreparedScript {
+            resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position,
             node_id: NodeId::new(node_index),

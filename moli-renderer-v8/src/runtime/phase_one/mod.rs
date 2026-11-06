@@ -513,6 +513,7 @@ mod tests {
     fn prepared_external_classic(url: &str) -> PreparedScript {
         let url = Url::parse(url).expect("test script url");
         PreparedScript {
+            resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: 0,
             node_id: NodeId::new(1),

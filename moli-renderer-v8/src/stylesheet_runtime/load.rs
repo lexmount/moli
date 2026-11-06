@@ -10,6 +10,7 @@ use crate::stylesheet_blocking::{
 };
 use crate::types::SubresourceResourceType;
 
+use super::connected::ConnectedStyleRequestSource;
 use super::{ConnectedStyleImportRoot, DomHandle, Url};
 
 /// Immutable element class captured when a connected stylesheet operation is
@@ -285,8 +286,7 @@ pub(in crate::document_runtime) struct QueuedConnectedStyleLoad {
     inline_source: Option<Arc<OwnerStyleSheetSource>>,
     event_admission: Option<ConnectedStyleLoadEventAdmission>,
     document_referrer_policy: Option<String>,
-    csp_source_location:
-        Option<crate::content_security_policy::ContentSecurityPolicySourceLocation>,
+    request_source: Option<ConnectedStyleRequestSource>,
 }
 
 impl QueuedConnectedStyleLoad {
@@ -295,16 +295,14 @@ impl QueuedConnectedStyleLoad {
         inline_source: Option<Arc<OwnerStyleSheetSource>>,
         event_admission: Option<ConnectedStyleLoadEventAdmission>,
         document_referrer_policy: Option<String>,
-        csp_source_location: Option<
-            crate::content_security_policy::ContentSecurityPolicySourceLocation,
-        >,
+        request_source: Option<ConnectedStyleRequestSource>,
     ) -> Arc<Self> {
         Arc::new(Self {
             owner,
             inline_source,
             event_admission,
             document_referrer_policy,
-            csp_source_location,
+            request_source,
         })
     }
 
@@ -316,10 +314,10 @@ impl QueuedConnectedStyleLoad {
         self.document_referrer_policy.as_deref()
     }
 
-    pub(in crate::document_runtime) fn csp_source_location(
+    pub(in crate::document_runtime) fn request_source(
         &self,
-    ) -> Option<&crate::content_security_policy::ContentSecurityPolicySourceLocation> {
-        self.csp_source_location.as_ref()
+    ) -> Option<&ConnectedStyleRequestSource> {
+        self.request_source.as_ref()
     }
 
     pub(in crate::document_runtime) fn inline_source(&self) -> Option<&Arc<OwnerStyleSheetSource>> {

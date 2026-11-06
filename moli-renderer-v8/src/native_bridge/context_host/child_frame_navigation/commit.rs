@@ -248,6 +248,7 @@ impl JsContextHost {
             initiator_url,
             initiator,
             ChildDocumentNavigationInitiator::BrowsingContext,
+            Default::default(),
         )
     }
 
@@ -258,6 +259,7 @@ impl JsContextHost {
         initiator_url: Option<Url>,
         initiator: Option<super::super::OwnerDispatchScope>,
         navigation_initiator: ChildDocumentNavigationInitiator,
+        resource_initiator: crate::context_bootstrap::ResourceTimingInitiator,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -274,7 +276,8 @@ impl JsContextHost {
                     ChildBrowsingContextBootstrap::Url(url.clone()),
                     initiator_url,
                     navigation_initiator,
-                    self.snapshot_child_navigation_target(handle, url),
+                    self.snapshot_child_navigation_target(handle, url)
+                        .with_resource_timing_initiator(resource_initiator),
                     blob_resource,
                 ),
                 true,

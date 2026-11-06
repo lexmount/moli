@@ -261,6 +261,9 @@ pub struct PreparedScript {
     pub url: Url,
     pub base_url: Url,
     pub initiator_url: Url,
+    /// Request attribution is separate from the fetch option reuse key.
+    /// Some("") preserves an explicitly unknown initiating script.
+    pub resource_timing_initiator_url: Option<String>,
     pub host_script_handle: Option<String>,
 }
 
@@ -520,6 +523,7 @@ pub fn build_prepared_script(
         }
         match document_base_url.join(src) {
             Ok(url) => PrepareScriptOutcome::Prepared(Box::new(PreparedScript {
+                resource_timing_initiator_url: None,
                 position,
                 node_id: NodeId::new(node_id.index()),
                 kind,
@@ -541,6 +545,7 @@ pub fn build_prepared_script(
         match classification.script.script_text.clone() {
             Some(source) if !source.is_empty() => {
                 PrepareScriptOutcome::Prepared(Box::new(PreparedScript {
+                    resource_timing_initiator_url: None,
                     position,
                     node_id: NodeId::new(node_id.index()),
                     kind,

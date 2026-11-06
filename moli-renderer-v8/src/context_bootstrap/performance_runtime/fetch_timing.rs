@@ -59,18 +59,9 @@ impl FetchResourceTiming {
         scope: &mut v8::PinScope<'_, '_>,
         host: &mut crate::native_bridge::JsContextHost,
     ) {
-        let Some(initiator) = crate::script_continuation::resource_initiator(scope) else {
-            return;
-        };
-        if let Some(crate::script_continuation::ResourceInitiatorOrigin::Window(origin)) =
-            initiator.origin
-            && Some(origin) == host.window_origin_key_for_current_realm(scope)
-        {
-            self.initiator_url = initiator
-                .source_url
-                .map(|url| url.into())
-                .unwrap_or_default();
-        }
+        self.initiator_url = super::ResourceTimingInitiator::capture_window(scope, host, None)
+            .as_str()
+            .to_owned();
     }
 
     pub(crate) fn capture_worker_initiator(&mut self, scope: &mut v8::PinScope<'_, '_>) {

@@ -2067,6 +2067,11 @@ pub(super) fn finish_runtime_mutation_effects(
                     continue;
                 };
                 debug_assert_eq!(prepared_load.owner(), owner);
+                runtime.capture_connected_style_resource_initiator(
+                    scope,
+                    unsafe { &mut *host_ptr },
+                    &mut prepared_load,
+                );
                 runtime.capture_modulepreload_csp_source_location(
                     scope,
                     unsafe { &*host_ptr },
@@ -2173,6 +2178,13 @@ fn start_connected_child_document_script(
         ),
     )
     .into_parts();
+    let resource_initiator = crate::context_bootstrap::ResourceTimingInitiator::capture_window(
+        scope,
+        unsafe { &mut *host_ptr },
+        None,
+    );
+    let preparation =
+        preparation.with_resource_timing_initiator(resource_initiator.as_str().to_owned());
     match decision {
         RuntimeScriptStartDecision::Skip { commit_start, .. } => {
             if commit_start {

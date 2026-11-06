@@ -189,8 +189,12 @@ impl JsContextHost {
             .child_browsing_contexts
             .get(&handle)
             .and_then(|entry| entry.pending_service_worker_client_id());
-        let frame_owner_resource_timing =
-            self.pending_frame_owner_resource_timing(handle, &target_url, initiator);
+        let frame_owner_resource_timing = self.pending_frame_owner_resource_timing(
+            handle,
+            &target_url,
+            initiator,
+            target_snapshot.resource_timing_initiator().clone(),
+        );
         let initiator_url =
             initiator_url.unwrap_or_else(|| self.document_url_for_child_context(handle));
         let browser_context = self.host_document().cookie_browser_context();

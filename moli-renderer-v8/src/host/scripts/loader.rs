@@ -19,9 +19,15 @@ pub(crate) struct RuntimeScriptPreparationContext {
     pub(super) base_url: Url,
     pub(super) fetch_metadata: ScriptFetchMetadata,
     pub(super) document_referrer_policy: Option<String>,
+    pub(super) resource_timing_initiator_url: Option<String>,
 }
 
 impl RuntimeScriptPreparationContext {
+    pub(crate) fn with_resource_timing_initiator(mut self, url: String) -> Self {
+        self.resource_timing_initiator_url = Some(url);
+        self
+    }
+
     pub(crate) fn into_fetch_metadata(self) -> ScriptFetchMetadata {
         self.fetch_metadata
     }
@@ -43,6 +49,7 @@ impl RuntimeScriptPreparationContext {
             .and_then(|document| dom_host.document_base_url_for_handle(document))
             .unwrap_or_else(|| document_url.clone());
         RuntimeScriptPreparationContext {
+            resource_timing_initiator_url: None,
             document_url,
             base_url,
             document_referrer_policy: None,
@@ -200,6 +207,7 @@ pub(crate) fn build_runtime_prepared_script(
     };
 
     Ok(PreparedScript {
+        resource_timing_initiator_url: preparation.resource_timing_initiator_url.clone(),
         position,
         node_id: crate::dom::NodeId::new(node.index()),
         kind,

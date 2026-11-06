@@ -751,6 +751,7 @@ pub(crate) struct PendingImageLoadEvent {
     owner: PendingImageLoadEventOwner,
     request_initiator_type: crate::types::SubresourceRequestInitiatorType,
     request_key: Option<ImageRequestKey>,
+    resource_timing_initiator: crate::context_bootstrap::ResourceTimingInitiator,
     network_state: PendingImageLoadNetworkState,
     terminal_followup_queued: bool,
 }
@@ -787,6 +788,7 @@ impl PendingImageLoadEvent {
             owner,
             request_initiator_type,
             request_key: None,
+            resource_timing_initiator: Default::default(),
             network_state: PendingImageLoadNetworkState::Unbound,
             terminal_followup_queued: false,
         }
@@ -794,6 +796,20 @@ impl PendingImageLoadEvent {
 
     pub(crate) fn id(&self) -> ImageLoadEventId {
         self.id
+    }
+
+    pub(crate) fn with_resource_timing_initiator(
+        mut self,
+        initiator: crate::context_bootstrap::ResourceTimingInitiator,
+    ) -> Self {
+        self.resource_timing_initiator = initiator;
+        self
+    }
+
+    pub(crate) fn resource_timing_initiator(
+        &self,
+    ) -> &crate::context_bootstrap::ResourceTimingInitiator {
+        &self.resource_timing_initiator
     }
 
     pub(crate) fn owner_document_handle(&self) -> DomHandle {

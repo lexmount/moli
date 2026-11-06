@@ -31,6 +31,8 @@ pub(crate) trait PageOwnedDocumentScriptHooks {
         initiator_url: Url,
         script_url: Url,
         request_initiator_type: crate::types::SubresourceRequestInitiatorType,
+        fetch_metadata: &crate::planning::ScriptFetchMetadata,
+        resource_timing_initiator_url: Option<&str>,
         network_result: &std::result::Result<NavigationResponse, String>,
     );
 

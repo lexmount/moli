@@ -497,8 +497,20 @@ impl JsContextHost {
                             .unwrap_or_else(|| self.document_url_for_child_context(handle));
                     let initiator = self.owner_dispatch_scope_for_node(handle);
                     let blob_resource = self.capture_child_blob_resource(&target_url, initiator);
+                    let document_url = self
+                        .dom_host()
+                        .owner_document_handle(handle)
+                        .map(|document| self.document_url_for_handle(document));
+                    let timing_initiator =
+                        crate::context_bootstrap::ResourceTimingInitiator::capture_window(
+                            scope,
+                            self,
+                            document_url.as_ref(),
+                        );
                     Some(PendingChildAttributeNavigation {
-                        target_snapshot: self.snapshot_child_navigation_target(handle, &target_url),
+                        target_snapshot: self
+                            .snapshot_child_navigation_target(handle, &target_url)
+                            .with_resource_timing_initiator(timing_initiator),
                         blob_resource,
                     })
                 };

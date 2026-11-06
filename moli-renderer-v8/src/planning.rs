@@ -993,6 +993,7 @@ mod tests {
     fn prepared_external_classic_with_mode(mode: ScriptMode) -> PreparedScript {
         let url = url::Url::parse("https://example.test/app.js").unwrap();
         PreparedScript {
+            resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: 0,
             node_id: crate::dom::NodeId::new(1),
@@ -1072,6 +1073,7 @@ mod tests {
         initiator_url: url::Url,
     ) -> PreparedScript {
         PreparedScript {
+            resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: 0,
             node_id: crate::dom::NodeId::new(1),

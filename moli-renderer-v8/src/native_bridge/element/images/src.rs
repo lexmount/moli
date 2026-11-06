@@ -148,9 +148,27 @@ fn queue_image_load_event(
         return;
     };
     let pending_before_registration = runtime.pending_image_load_event(handle);
-    let Some(pending) =
-        runtime.register_pending_image_load_event(handle, target, request_initiator_type)
-    else {
+    let document_url = runtime
+        .dom_host()
+        .owner_document_handle(handle)
+        .map(|document| runtime.document_url_for_handle(document));
+    let parser_document = matches!(
+        request_initiator_type,
+        SubresourceRequestInitiatorType::Parser
+    )
+    .then_some(document_url.as_ref())
+    .flatten();
+    let initiator = crate::context_bootstrap::ResourceTimingInitiator::capture_window(
+        scope,
+        runtime,
+        parser_document,
+    );
+    let Some(pending) = runtime.register_pending_image_load_event_with_initiator(
+        handle,
+        target,
+        request_initiator_type,
+        initiator,
+    ) else {
         if let Some(pending) = runtime
             .pending_image_load_event(handle)
             .or(pending_before_registration)

@@ -518,6 +518,7 @@ struct StylesheetFetchRequest {
     options: StylesheetFetchOptions,
     start_unix_millis: f64,
     terminal: OnceLock<Arc<StylesheetFetchTerminal>>,
+    resource_timing_initiator_url: OnceLock<String>,
     physical_observation_emitted: AtomicBool,
 }
 
@@ -535,6 +536,7 @@ impl StylesheetFetch {
             options,
             start_unix_millis,
             terminal: OnceLock::new(),
+            resource_timing_initiator_url: OnceLock::new(),
             physical_observation_emitted: AtomicBool::new(false),
         }))
     }
@@ -549,6 +551,19 @@ impl StylesheetFetch {
 
     pub fn document_url(&self) -> &Url {
         &self.0.document_url
+    }
+
+    /// Attribution belongs to the original fetch, independently of its later
+    /// link clients and without changing the resource reuse key.
+    pub fn set_resource_timing_initiator_url(&self, url: String) {
+        let _ = self.0.resource_timing_initiator_url.set(url);
+    }
+
+    pub fn resource_timing_initiator_url(&self) -> Option<&str> {
+        self.0
+            .resource_timing_initiator_url
+            .get()
+            .map(String::as_str)
     }
 
     pub(crate) fn request_url(&self) -> &Url {

@@ -884,6 +884,7 @@ mod tests {
         let script_url =
             Url::parse("https://parser-script-runner.test/ready.js").expect("script url");
         let script = PreparedScript {
+            resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: 0,
             node_id: NodeId::new(script_handle.index()),
