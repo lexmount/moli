@@ -169,45 +169,25 @@ fn build_native_layout_pass_recursive(
         )?;
         // Capture discovery must inspect the active manifest even when no live
         // CSS font has been downloaded. Use this pass's exact child viewport.
-        let mut capture_services = if let (Some(overlay), Some(identity)) =
-            (tree.capture_overlay, capture_identity)
-        {
-            let fonts = resources.take().ok_or_else(|| {
-                moli_layout::LayoutError::source_contract(
-                    "capture fonts",
-                    "missing current stylesheet resource manifest",
-                )
-            })?;
-            let active = fonts
-                .web_fonts()
-                .iter()
-                .filter_map(|resource| resource.web_font().map(|font| font.registration_slot()))
-                .collect::<std::collections::HashSet<_>>();
-            let temporary = overlay
-                .font_services_for_document(identity, services, |slot| active.contains(slot));
-            // Keep selected registrations alive across unrelated resource
-            // awaits; a later live reconciliation may legitimately prune them.
-            let available_fonts =
-                crate::capture_layout_resources::CaptureAvailableFonts::from_selected(&temporary);
-            let available_font_slots = active
-                .into_iter()
-                .filter(|slot| temporary.web_font_decoded_bytes(slot).is_some())
-                .map(str::to_owned)
-                .collect();
-            if let Some(discovery) = tree.capture_discovery.as_deref_mut() {
-                discovery
-                    .members
-                    .push(crate::capture_layout_resources::CaptureLayoutMember {
-                        identity,
-                        fonts,
-                        available_font_slots,
-                        available_fonts,
-                    });
-            }
-            (!services.has_same_font_selection(&temporary)).then_some(temporary)
-        } else {
-            None
-        };
+        let mut capture_services =
+            if let (Some(overlay), Some(identity)) = (tree.capture_overlay, capture_identity) {
+                let fonts = resources.take().ok_or_else(|| {
+                    moli_layout::LayoutError::source_contract(
+                        "capture fonts",
+                        "missing current stylesheet resource manifest",
+                    )
+                })?;
+                let active = fonts
+                    .web_fonts()
+                    .iter()
+                    .filter_map(|resource| resource.web_font().map(|font| font.registration_slot()))
+                    .collect::<std::collections::HashSet<_>>();
+                let temporary = overlay
+                    .font_services_for_document(identity, services, |slot| active.contains(slot));
+                Some((identity, fonts, temporary))
+            } else {
+                None
+            };
         let mut frames = NativeEmbeddedFrameRenderer {
             runtime,
             reason: request.reason,
@@ -218,14 +198,9 @@ fn build_native_layout_pass_recursive(
             tree,
             embedded_document_services,
         };
-        let finish = |services: &mut DocumentLayoutServices| {
-            finish_prepared_layout_pass(prepared, &source, services, &mut frames)
-        };
-        if capture_identity.is_some() {
-            finish(capture_services.as_mut().unwrap_or(services))
-        } else if let Some(resources) = resources {
-            services.with_stylesheet_font_declarations(
-                resources.web_fonts().iter().filter_map(|resource| {
+        if let Some((identity, fonts, temporary)) = capture_services.as_mut() {
+            temporary.with_stylesheet_font_declarations(
+                fonts.web_fonts().iter().filter_map(|resource| {
                     let font = resource.web_font()?;
                     Some(moli_layout::WebFontDeclaration {
                         slot: font.registration_slot(),
@@ -233,10 +208,60 @@ fn build_native_layout_pass_recursive(
                         face: font.face(),
                     })
                 }),
-                finish,
+                |selected| {
+                    // Apply this view's declaration order before comparing
+                    // with screen services or retaining loaded registrations.
+                    let available_font_slots = fonts
+                        .web_fonts()
+                        .iter()
+                        .filter_map(|resource| {
+                            let slot = resource.web_font()?.registration_slot();
+                            selected
+                                .web_font_decoded_bytes(slot)
+                                .map(|_| slot.to_owned())
+                        })
+                        .collect();
+                    let available_fonts =
+                        crate::capture_layout_resources::CaptureAvailableFonts::from_selected(
+                            selected,
+                        );
+                    if let Some(discovery) = frames.tree.capture_discovery.as_deref_mut() {
+                        discovery.members.push(
+                            crate::capture_layout_resources::CaptureLayoutMember {
+                                identity: *identity,
+                                fonts: fonts.clone(),
+                                available_font_slots,
+                                available_fonts,
+                            },
+                        );
+                    }
+                    let selected = if services.has_same_font_selection(selected) {
+                        services
+                    } else {
+                        selected
+                    };
+                    finish_prepared_layout_pass(prepared, &source, selected, &mut frames)
+                },
             )
         } else {
-            finish(services)
+            let finish = |services: &mut DocumentLayoutServices| {
+                finish_prepared_layout_pass(prepared, &source, services, &mut frames)
+            };
+            if let Some(resources) = resources {
+                services.with_stylesheet_font_declarations(
+                    resources.web_fonts().iter().filter_map(|resource| {
+                        let font = resource.web_font()?;
+                        Some(moli_layout::WebFontDeclaration {
+                            slot: font.registration_slot(),
+                            source_key: font.resource_key(),
+                            face: font.face(),
+                        })
+                    }),
+                    finish,
+                )
+            } else {
+                finish(services)
+            }
         }
     })();
     if let (Some(started), Some(source_ready), Some(styles_ready)) =

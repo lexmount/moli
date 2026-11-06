@@ -407,17 +407,18 @@ fn admit_print_resource_entry(
         }
         return Ok(false);
     }
+    // Ready bytes are already retained by the capture overlay. The entry
+    // limit bounds new preparation work, not resources the page has loaded.
+    if available {
+        return Ok(false);
+    }
     ensure!(
         job.entries.len() < MAX_CAPTURE_RESOURCE_ENTRIES,
         "print resource manifest entry limit exceeded"
     );
     job.entries.push(CaptureResourceEntry {
         spec,
-        state: if available {
-            CaptureResourceState::Ready
-        } else {
-            CaptureResourceState::Queued
-        },
+        state: CaptureResourceState::Queued,
     });
-    Ok(!available)
+    Ok(true)
 }
