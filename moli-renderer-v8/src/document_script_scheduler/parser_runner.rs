@@ -124,6 +124,7 @@ impl<Owner: Copy> ParserDeferredClassicSourceLoadRequest<Owner> {
         ParserDeferredClassicSourceLoadCompletion::new(
             self.pending_script_id,
             PreparedScriptSourceLoadOutcome {
+                response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                 fetch_timing: None,
                 source_result: Err(message.into()),
                 source_bytes: None,

@@ -30,6 +30,7 @@ pub(crate) struct PendingDynamicModuleImport {
     specifier: String,
     base_url: Url,
     referrer_url: Option<Url>,
+    resource_timing_initiator: Option<String>,
     resolved_url: Option<Url>,
     attributes: ModuleAttributesKey,
     phase: ModuleImportPhase,
@@ -195,6 +196,7 @@ impl PendingDynamicModuleImport {
             specifier: specifier.into(),
             base_url,
             referrer_url: None,
+            resource_timing_initiator: None,
             resolved_url: None,
             attributes,
             phase,
@@ -209,6 +211,15 @@ impl PendingDynamicModuleImport {
     ) -> Self {
         self.csp_source_location = Some(location);
         self
+    }
+
+    pub(crate) fn with_resource_timing_initiator(mut self, initiator: String) -> Self {
+        self.resource_timing_initiator = Some(initiator);
+        self
+    }
+
+    pub(crate) fn resource_timing_initiator(&self) -> Option<&String> {
+        self.resource_timing_initiator.as_ref()
     }
 
     pub(crate) fn csp_source_location(

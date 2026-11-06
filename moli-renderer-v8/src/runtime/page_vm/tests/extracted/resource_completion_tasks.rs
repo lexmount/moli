@@ -41,6 +41,7 @@ async fn page_resource_completion_rejects_stale_document_before_application() {
                     ),
                 ),
                 PreparedScriptSourceLoadOutcome {
+                    response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
                     fetch_timing: None,
                     source_result: Ok("globalThis.__staleDeferRan = true".to_owned()),
                     source_bytes: None,

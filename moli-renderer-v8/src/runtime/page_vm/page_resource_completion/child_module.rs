@@ -33,7 +33,7 @@ impl PageVm {
         &mut self,
         source: RendererOwnerResourceActivitySource,
         owner: RendererPageResourceCompletionOwner,
-        completion: ChildParserModuleRootFetchCompletion,
+        mut completion: ChildParserModuleRootFetchCompletion,
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
         if current_owner != Some(owner) {
@@ -46,12 +46,13 @@ impl PageVm {
             ));
         }
 
+        let entry = completion.take_performance_entry();
         self.vm_mut()
             .record_current_child_module_fetch_network_result(
                 completion.target(),
                 completion.network_attribution(),
                 completion.network_result(),
-                None,
+                entry,
             );
         let _followup = self
             .vm_mut()
@@ -69,7 +70,7 @@ impl PageVm {
         &mut self,
         source: RendererOwnerResourceActivitySource,
         owner: RendererPageResourceCompletionOwner,
-        completion: ChildModuleDependencyFetchCompletion,
+        mut completion: ChildModuleDependencyFetchCompletion,
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
         if current_owner != Some(owner) {
@@ -82,12 +83,13 @@ impl PageVm {
             ));
         }
 
+        let entry = completion.take_performance_entry();
         self.vm_mut()
             .record_current_child_module_fetch_network_result(
                 completion.target(),
                 completion.network_attribution(),
                 completion.network_result(),
-                None,
+                entry,
             );
         let _followup = self
             .vm_mut()

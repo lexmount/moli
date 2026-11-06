@@ -351,6 +351,7 @@ fn page_owned_document_script_work_from_source_load_outcome(
     load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
 ) -> PageOwnedDocumentScriptWork {
     let PreparedScriptSourceLoadOutcome {
+        response_provenance: _,
         source_result,
         source_bytes,
         network_result,
