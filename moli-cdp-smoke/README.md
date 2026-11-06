@@ -11,8 +11,8 @@ handle the prompt and resume the original evaluation with its supplied text.
 The default `fetch-font` group enables mixed Font/Image patterns before
 navigation and loads the fixture's valid WOFF2 through CSS `@font-face` and
 `FontFace.load()`. Six font scenarios cover request-stage continue, fulfill,
-fail and disable, plus response-stage body reading and continuation. Two CSS
-image controls drive `Page.captureScreenshot` to demand real paint resources,
+fail and disable, plus response-stage body reading and continuation. Four CSS
+image/font controls drive `Page.captureScreenshot` to demand real paint resources,
 then verify the shared admission path with continue and fail. A nonmatching
 `fetch()` uses the same URL pattern; font status, fixture request counts and a
 correlated Network terminal verify the actual outcome. Calibration against the
@@ -20,6 +20,21 @@ pinned Chromium 145.0.7632.6 on 2026-11-07 also observed a failed initial font
 attempt followed by a new interception ID with the same Network ID. The group
 settles each interception and still requires exactly one successful response
 body at response stage and one Network terminal per request.
+
+The default `fetch-media` group drives real audio, video and text-track element
+loads. Eleven scenarios cover single Media filters, mixed Image/Media/Font
+patterns, continue/fulfill/fail/disable and response-stage body reading. Valid
+PCM WAV and WebVTT fixtures verify media metadata or parsed cues, server request
+counts and Fetch/Network correlation. Chromium 145 rejects the explicit
+`TextTrack` Fetch filter: text-track pauses use `Media` while Network events
+retain `TextTrack`. Moli follows that classification. As with Image/Font,
+Fetch.disable terminates Moli's paused loads and resumes Chromium's loads.
+
+This shared registration currently covers element images, CSS images and fonts,
+FontFace loads, audio/video elements and text tracks. It does not unify every
+resource loader. Explicit Stylesheet filters and Manifest filters remain
+unsupported; parser-blocking stylesheets and the separate connected-link
+preload/compression-dictionary path require their own interception integration.
 
 ## Chromium Behavior Evidence
 

@@ -210,6 +210,12 @@ async def run_fetch_font_group(
                 )
                 assert_equal(counts["requests"], 0 if failed or action == "fulfill" else 1,
                              f"{case} only continued Font reaches the server")
+                if counts["requests"]:
+                    assert_equal(counts["headers"].get("sec-fetch-dest"), "font",
+                                 f"{case} continuation preserves the font request destination")
+                if not disabled_failure:
+                    assert_equal(counts["imageHeaders"].get("sec-fetch-dest"), "image",
+                                 f"{case} continuation preserves the image request destination")
                 assert_equal(len({pause["requestId"] for pause in pauses()}), len(pauses()),
                              f"{case} unique interception IDs")
                 assert_equal({pause["requestId"] for pause in pauses()}, handled,
@@ -227,12 +233,13 @@ async def run_fetch_font_group(
         finally:
             await context.close()
 
-    for action in ("continue", "fail"):
-        await _verify_css_image_interception(browser, fixture, results, action)
+    for resource_type in ("Image", "Font"):
+        for action in ("continue", "fail"):
+            await _verify_css_resource_interception(browser, fixture, results, action, resource_type)
 
 
-async def _verify_css_image_interception(
-    browser: Any, fixture: str, results: list[dict[str, Any]], action: str,
+async def _verify_css_resource_interception(
+    browser: Any, fixture: str, results: list[dict[str, Any]], action: str, resource_type: str,
 ) -> None:
     context = await browser.new_context()
     screenshot = None
@@ -242,10 +249,13 @@ async def _verify_css_image_interception(
         with attach_cdp_event_collector(cdp, [
             "Fetch.requestPaused", "Network.loadingFinished", "Network.loadingFailed",
         ]) as events:
-            url = f"{fixture}/chromium-resource-image.png?case=css-{action}"
+            label = f"CSS {resource_type.lower()} {action}"
+            case = f"css-{action}" if resource_type == "Image" else f"css-font-{action}"
+            asset = "chromium-resource-image.png" if resource_type == "Image" else "fetch-font.woff2"
+            url = f"{fixture}/{asset}?case={case}"
             await cdp.send("Network.enable")
             await cdp.send("Fetch.enable", {"patterns": [
-                {"urlPattern": url, "resourceType": "Image", "requestStage": "Request"},
+                {"urlPattern": url, "resourceType": resource_type, "requestStage": "Request"},
             ]})
             await page.goto(f"{fixture}/plain", wait_until="load", timeout=10_000)
             await page.evaluate("""url => {
@@ -256,50 +266,80 @@ async def _verify_css_image_interception(
               stylesheet.rel = 'stylesheet';
               stylesheet.href = url;
               document.head.append(stylesheet);
-            }""", f"{fixture}/fetch-font/style.css?case=css-{action}")
+            }""", f"{fixture}/fetch-font/style.css?case={case}&resource={resource_type.lower()}")
             await wait_until(lambda: page.evaluate("__cssImageStylesheet !== 'pending'"),
-                             f"CSS image {action} stylesheet loaded")
+                             f"{label} stylesheet loaded")
             assert_equal(await page.evaluate("__cssImageStylesheet"), "loaded",
-                         f"CSS image {action} stylesheet result")
-            # Moli starts computed CSS image requests when a paint snapshot
-            # actually uses them. Drive that boundary without awaiting a paint
-            # that may itself be waiting for the intercepted image.
+                         f"{label} stylesheet result")
+            # Demand real paint resources. Merely defining @font-face does not
+            # exercise the stylesheet font loader, and the snapshot may itself
+            # be waiting for the intercepted image or font.
             screenshot = asyncio.create_task(cdp.send("Page.captureScreenshot", {"format": "png"}))
             await wait_until(
                 lambda: any(event["method"] == "Fetch.requestPaused" for event in events),
-                f"CSS image {action} pause",
+                f"{label} pause",
             )
             pauses = [event["params"] for event in events if event["method"] == "Fetch.requestPaused"]
-            assert_equal(len(pauses), 1, f"CSS image {action} pause count")
             pause = pauses[0]
-            assert_equal((pause["resourceType"], pause["request"]["url"]), ("Image", url),
-                         f"CSS image {action} pause identity")
+            assert_equal((pause["resourceType"], pause["request"]["url"]), (resource_type, url),
+                         f"{label} pause identity")
             network_id = pause.get("networkId")
             if not isinstance(network_id, str) or not network_id:
-                raise SmokeError(f"CSS image {action} pause missed networkId: {pause!r}")
+                raise SmokeError(f"{label} pause missed networkId: {pause!r}")
             command = "Fetch.continueRequest" if action == "continue" else "Fetch.failRequest"
-            params = {"requestId": pause["requestId"]}
-            if action == "fail":
-                params["errorReason"] = "BlockedByClient"
-            await cdp.send(command, params)
+            handled: set[str] = set()
 
             def terminals() -> list[str]:
                 return [event["method"] for event in events
                         if event["params"].get("requestId") == network_id
                         and event["method"] in ("Network.loadingFinished", "Network.loadingFailed")]
 
-            await wait_until(lambda: bool(terminals()), f"CSS image {action} Network terminal")
-            assert_equal(terminals(), ["Network.loadingFinished" if action == "continue" else "Network.loadingFailed"],
-                         f"CSS image {action} exactly one Network terminal")
-            capture = await asyncio.wait_for(screenshot, timeout=10)
+            async def settle_and_capture() -> bool:
+                for event in events:
+                    if event["method"] != "Fetch.requestPaused":
+                        continue
+                    pending = event["params"]
+                    if pending["requestId"] in handled:
+                        continue
+                    assert_equal((pending["resourceType"], pending["request"]["url"], pending.get("networkId")),
+                                 (resource_type, url, network_id), f"{label} pause identity")
+                    params = {"requestId": pending["requestId"]}
+                    if action == "fail":
+                        params["errorReason"] = "BlockedByClient"
+                    await cdp.send(command, params)
+                    handled.add(pending["requestId"])
+                if not screenshot.done():
+                    return False
+                screenshot.result()
+                if not terminals():
+                    return False
+                if resource_type == "Font":
+                    return await page.evaluate(
+                        "['loaded', 'error'].includes([...document.fonts].find(face => face.family === 'FetchPaint').status)"
+                    )
+                return True
+
+            await wait_until(settle_and_capture, f"{label} resource actions and paint")
+            capture = await screenshot
             if not capture.get("data"):
-                raise SmokeError(f"CSS image {action} paint returned no image")
+                raise SmokeError(f"{label} paint returned no image")
+
+            assert_equal(terminals(), ["Network.loadingFinished" if action == "continue" else "Network.loadingFailed"],
+                         f"{label} exactly one Network terminal")
+            if resource_type == "Image":
+                assert_equal(len(handled), 1, f"{label} pause count")
+            else:
+                font_status = await page.evaluate(
+                    "[...document.fonts].find(face => face.family === 'FetchPaint').status"
+                )
+                assert_equal(font_status, "loaded" if action == "continue" else "error",
+                             f"{label} real CSS font status")
             record_contract(
-                results, f"fetch_css_image_{action}",
-                contract="CSS images use the same interception admission as font requests and element images.",
+                results, f"fetch_css_{resource_type.lower()}_{action}",
+                contract="Paint-demanded CSS images and fonts use the shared interception admission.",
                 source="Executable Chromium CDP oracle",
                 commands=["Fetch.enable", "Page.captureScreenshot", command],
-                observed={"resourceType": pause["resourceType"], "terminal": terminals()[0]},
+                observed={"resourceType": pause["resourceType"], "terminal": terminals()[0], "pauses": len(handled)},
             )
     finally:
         if screenshot is not None:

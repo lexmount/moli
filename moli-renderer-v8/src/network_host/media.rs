@@ -8,7 +8,7 @@ use crate::service_worker_runtime::{
 };
 use crate::types::{
     AsyncSubresourceFetchCompletion, AsyncSubresourceNetworkContext, PendingSubresourceFetchInfo,
-    SubresourceRequestInitiatorType, SubresourceResourceType,
+    SubresourceFetchRegistration, SubresourceRequestInitiatorType, SubresourceResourceType,
 };
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, RequestCredentialsMode, RequestMode,
@@ -124,13 +124,17 @@ pub(crate) fn start_media_element_resource_fetch(
         .with_redirect_mode(RequestRedirectMode::Follow)
         .with_browser_request_metadata(browser_metadata)
         .with_subframe_context(frame_id.is_some());
-    let cancel_handle = FetchCancelHandle::new();
-    let Some(internal_id) = host.record_async_media_subresource_fetch(
+    let registration = if host.should_intercept_subresource(resource_type) {
+        SubresourceFetchRegistration::Intercepted
+    } else {
+        SubresourceFetchRegistration::Dispatched(FetchCancelHandle::new())
+    };
+    let Some(internal_id) = host.record_media_subresource_fetch(
         v8::Global::new(scope, scope.get_current_context()),
         media_handle,
         sequence,
         owner,
-        cancel_handle.clone(),
+        registration.clone(),
         credentials_mode,
         request_mode,
         network_partition_key,
@@ -151,6 +155,9 @@ pub(crate) fn start_media_element_resource_fetch(
         },
     ) else {
         return Err("media lifecycle sequence changed before request binding".to_owned());
+    };
+    let SubresourceFetchRegistration::Dispatched(cancel_handle) = registration else {
+        return Ok(MediaElementResourceFetchStart::Pending);
     };
 
     let client_id = host.service_worker_client_id_for_subresource_owner(owner);

@@ -7,7 +7,7 @@ use crate::service_worker_runtime::{
 };
 use crate::types::{
     AsyncSubresourceFetchCompletion, AsyncSubresourceNetworkContext, PendingSubresourceFetchInfo,
-    SubresourceRequestInitiatorType, SubresourceResourceType,
+    SubresourceFetchRegistration, SubresourceRequestInitiatorType, SubresourceResourceType,
 };
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, RequestCredentialsMode, RequestMode,
@@ -116,13 +116,17 @@ pub(crate) fn start_text_track_resource_fetch(
         .with_redirect_mode(RequestRedirectMode::Follow)
         .with_browser_request_metadata(BrowserRequestMetadata::TextTrack)
         .with_subframe_context(frame_id.is_some());
-    let cancel_handle = FetchCancelHandle::new();
-    let Some(internal_id) = host.record_async_text_track_subresource_fetch(
+    let registration = if host.should_intercept_subresource(SubresourceResourceType::TextTrack) {
+        SubresourceFetchRegistration::Intercepted
+    } else {
+        SubresourceFetchRegistration::Dispatched(FetchCancelHandle::new())
+    };
+    let Some(internal_id) = host.record_text_track_subresource_fetch(
         v8::Global::new(scope, scope.get_current_context()),
         track_handle,
         sequence,
         owner,
-        cancel_handle.clone(),
+        registration.clone(),
         credentials_mode,
         request_mode,
         network_partition_key,
@@ -143,6 +147,9 @@ pub(crate) fn start_text_track_resource_fetch(
         },
     ) else {
         return Err("text-track sequence changed before request binding".to_owned());
+    };
+    let SubresourceFetchRegistration::Dispatched(cancel_handle) = registration else {
+        return Ok(TextTrackResourceFetchStart::Pending);
     };
 
     let client_id = host.service_worker_client_id_for_subresource_owner(owner);

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
+import io
 import json
 import os
 import socket
@@ -12,6 +13,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import wave
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -166,6 +168,20 @@ TRANSPARENT_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
 )
 RESOURCE_MEDIA_BYTES = b"\x00\xffmoli-media"
+
+
+def _silent_wav() -> bytes:
+    output = io.BytesIO()
+    with wave.open(output, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(8000)
+        audio.writeframes(b"\x00\x00" * 800)
+    return output.getvalue()
+
+
+FETCH_MEDIA_WAV = _silent_wav()
+FETCH_MEDIA_CAPTIONS = b"WEBVTT\n\n00:00.000 --> 00:01.000\nintercepted caption\n"
 RESOURCE_XHR_BYTES = b"\x00\xffmoli-xhr"
 
 LAYOUT_SCREENSHOT_FIXTURE = (
@@ -490,6 +506,7 @@ class FixtureServer:
         self.profile_requests: dict[str, dict[str, Any]] = {}
         self._counter_lock = threading.Lock()
         self._request_counts: dict[str, int] = {}
+        self._resource_request_headers: dict[str, dict[str, str]] = {}
         self.document_content_stylesheet_gate = FixtureResponseGate()
         self.fetch_runtime_teardown_gate = FixtureResponseGate()
         self.navigation_suspension_gate = FixtureResponseGate()
@@ -529,6 +546,17 @@ class FixtureServer:
             count = self._request_counts.get(route, 0) + 1
             self._request_counts[route] = count
             return count
+
+    def _record_resource_request(self, route: str, headers: Any) -> None:
+        with self._counter_lock:
+            self._request_counts[route] = self._request_counts.get(route, 0) + 1
+            self._resource_request_headers[route] = {
+                name.lower(): value for name, value in headers.items()
+            }
+
+    def resource_request_headers(self, route: str) -> dict[str, str]:
+        with self._counter_lock:
+            return dict(self._resource_request_headers.get(route, {}))
 
     def _handler_class(self) -> type[BaseHTTPRequestHandler]:
         outer = self
@@ -661,18 +689,39 @@ class FixtureServer:
                 if route == "/plain":
                     self._send_html("<!doctype html><main>plain ok</main>")
                 elif route == "/fetch-font.woff2":
-                    outer._increment_request_count(self.path)
+                    outer._record_resource_request(self.path, self.headers)
                     self._send_common(
                         HTTPStatus.OK, "font/woff2",
                         (REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes(),
                     )
                 elif route == "/fetch-font/status":
                     case = query.get("case", [""])[0]
-                    self._send_json({"requests": outer.request_count(f"/fetch-font.woff2?case={case}")})
+                    path = f"/fetch-font.woff2?case={case}"
+                    self._send_json({"requests": outer.request_count(path),
+                                     "headers": outer.resource_request_headers(path),
+                                     "imageHeaders": outer.resource_request_headers(
+                                         f"/chromium-resource-image.png?case={case}")})
                 elif route == "/fetch-font/style.css":
                     image_query = urllib.parse.urlencode({"case": query.get("case", [""])[0]})
-                    self._send_css('body{background-image:url("/chromium-resource-image.png?'
-                                   + image_query + '")}')
+                    if query.get("resource", [""])[0] == "font":
+                        self._send_css('@font-face{font-family:FetchPaint;src:url("/fetch-font.woff2?'
+                                       + image_query + '")}body{font-family:FetchPaint}')
+                    else:
+                        self._send_css('body{background-image:url("/chromium-resource-image.png?'
+                                       + image_query + '")}')
+                elif route in ("/fetch-media/tone.wav", "/fetch-media/captions.vtt"):
+                    outer._record_resource_request(self.path, self.headers)
+                    self._send_common(
+                        HTTPStatus.OK,
+                        "audio/wav" if route.endswith(".wav") else "text/vtt; charset=utf-8",
+                        FETCH_MEDIA_WAV if route.endswith(".wav") else FETCH_MEDIA_CAPTIONS,
+                    )
+                elif route == "/fetch-media/status":
+                    name = query.get("name", [""])[0]
+                    case = query.get("case", [""])[0]
+                    path = f"/fetch-media/{name}?case={case}"
+                    self._send_json({"requests": outer.request_count(path),
+                                     "headers": outer.resource_request_headers(path)})
                 elif route == "/retained-window-timing":
                     # Measurement interval before commit, so a reset Document
                     # clock is distinguishable from the retained Window clock.
@@ -1593,6 +1642,7 @@ class FixtureServer:
                 elif route == "/chromium-resource-script.js":
                     self._send_js("globalThis.__smokeChromiumResourceScript = true;")
                 elif route == "/chromium-resource-image.png":
+                    outer._record_resource_request(self.path, self.headers)
                     self._send_png(TRANSPARENT_PNG)
                 elif route == "/chromium-resource-audio.wav":
                     self._send_common(HTTPStatus.OK, "audio/wav", RESOURCE_MEDIA_BYTES)

@@ -2492,6 +2492,7 @@ impl DevToolsNetworkResourceType {
             SubresourceResourceType::Fetch
             | SubresourceResourceType::EventSource
             | SubresourceResourceType::Xhr => Self::Xhr,
+            SubresourceResourceType::TextTrack => Self::Media,
             _ => value.into(),
         }
     }
@@ -2568,6 +2569,16 @@ mod network_resource_type_tests {
 
     #[test]
     fn subresource_resource_types_convert_without_stringly_typed_intermediate_state() {
+        assert_eq!(
+            DevToolsNetworkResourceType::from(SubresourceResourceType::TextTrack),
+            DevToolsNetworkResourceType::TextTrack
+        );
+        assert_eq!(
+            DevToolsNetworkResourceType::from_fetch_interception_type(
+                SubresourceResourceType::TextTrack
+            ),
+            DevToolsNetworkResourceType::Media
+        );
         assert_eq!(
             DevToolsNetworkResourceType::from(SubresourceResourceType::Audio),
             DevToolsNetworkResourceType::Media
