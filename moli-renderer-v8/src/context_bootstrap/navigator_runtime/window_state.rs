@@ -51,6 +51,7 @@ pub(in crate::context_bootstrap) fn install_navigator_runtime_state<'s>(
     global: v8::Local<'s, v8::Object>,
     storage_apis_available: bool,
 ) -> Result<()> {
+    super::user_activation::initialize_window_user_activation(scope, global)?;
     let storage_apis_available_value = v8::Boolean::new(scope, storage_apis_available);
     set_private_value(
         scope,

@@ -86,6 +86,7 @@ mod traversal;
 mod traversal_coordinator;
 mod traversal_receivers;
 mod trusted_types;
+mod user_activation;
 mod value_event_init;
 mod value_events;
 mod view_transition_dictionary;
