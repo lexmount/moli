@@ -127,6 +127,11 @@ pub(crate) fn current_script_violation_location(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<(String, i32, i32)> {
     let stack = v8::StackTrace::current_stack_trace(scope, 1)?;
+    // Host-dispatched events can compile a handler with no JavaScript frame.
+    // V8's GetFrame does not validate the index before returning a handle.
+    if stack.get_frame_count() == 0 {
+        return None;
+    }
     let frame = stack.get_frame(scope, 0)?;
     let source_file = frame
         .get_script_name_or_source_url(scope)

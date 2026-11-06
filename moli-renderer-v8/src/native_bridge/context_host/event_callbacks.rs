@@ -112,6 +112,7 @@ impl JsContextHost {
                 )
             }
             crate::document_runtime::EventTargetHandle::Window
+            | crate::document_runtime::EventTargetHandle::PopupWindow(_)
             | crate::document_runtime::EventTargetHandle::Node(_) => {
                 self.event_listener_callback_ids(target, event_type, capture)
             }
@@ -137,6 +138,7 @@ impl JsContextHost {
                 );
             }
             crate::document_runtime::EventTargetHandle::Window
+            | crate::document_runtime::EventTargetHandle::PopupWindow(_)
             | crate::document_runtime::EventTargetHandle::Node(_) => {
                 let registration = crate::host::EventListenerRegistration::new(
                     scope,
@@ -168,6 +170,7 @@ impl JsContextHost {
                     capture,
                 ),
             crate::document_runtime::EventTargetHandle::Window
+            | crate::document_runtime::EventTargetHandle::PopupWindow(_)
             | crate::document_runtime::EventTargetHandle::Node(_) => {
                 self.event_listener_callback_ids(target, event_type, capture)
             }
@@ -187,6 +190,7 @@ impl JsContextHost {
                     capture,
                 ),
             crate::document_runtime::EventTargetHandle::Window
+            | crate::document_runtime::EventTargetHandle::PopupWindow(_)
             | crate::document_runtime::EventTargetHandle::Node(_) => {
                 self.remove_event_listener_by_id(target, event_type, callback_id, capture)
             }

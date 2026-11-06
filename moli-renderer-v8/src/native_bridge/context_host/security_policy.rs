@@ -6,7 +6,7 @@ use crate::{
         ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
         ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyReportingEndpoints,
         ContentSecurityPolicyScriptElementRequest, ContentSecurityPolicyViolationEventFields,
-        TrustedTypesForScriptRequirements,
+        TrustedTypesForScriptRequirements, current_script_violation_location,
     },
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{
@@ -75,6 +75,23 @@ impl DocumentCspOutcome {
 }
 
 impl JsContextHost {
+    pub(crate) fn content_security_policy_response_status(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<u16> {
+        let document = match owner {
+            OwnerDispatchScope::Top => Some(self.document_handle()),
+            OwnerDispatchScope::Child(handle) => {
+                self.child_browsing_context_document_handle(handle)
+            }
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
+                self.lightweight_popup_document_handle(popup_id)
+            }
+        }?;
+        self.dom_host()
+            .document_source_response_status_for_handle(document)
+    }
+
     fn owner_document_policy_snapshot(
         &self,
         owner: OwnerDispatchScope,
@@ -431,14 +448,37 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         owner: OwnerDispatchScope,
+        element: Option<DomHandle>,
         source: &str,
     ) -> bool {
-        self.allows_inline_source_by_csp(
-            scope,
+        let Some(check) = self.inline_source_csp_check_for_owner(
             owner,
             ContentSecurityPolicyNonUrlKind::DocumentInlineEventHandler,
             source,
-        )
+        ) else {
+            return true;
+        };
+        let (mut report_only_violations, mut enforced_violations) = check.into_violations();
+        if report_only_violations.is_none() && enforced_violations.is_none() {
+            return true;
+        }
+        if !self.active_inspector_dispatch
+            && let Some((source_file, line_number, column_number)) =
+                current_script_violation_location(scope)
+        {
+            for violation in report_only_violations
+                .iter_mut()
+                .chain(&mut enforced_violations)
+            {
+                violation.source_file.clone_from(&source_file);
+                violation.line_number = line_number;
+                violation.column_number = column_number;
+            }
+        }
+        for violation in report_only_violations.iter().chain(&enforced_violations) {
+            self.queue_inline_csp_violation_task(scope, owner, element, violation);
+        }
+        enforced_violations.is_none()
     }
 
     pub(crate) fn allows_inline_script_element_by_csp<'s>(
