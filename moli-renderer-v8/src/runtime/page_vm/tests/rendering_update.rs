@@ -65,6 +65,7 @@ mod realtime_events;
 mod realtime_fonts;
 mod realtime_input;
 mod realtime_intersection_observer;
+mod realtime_missing_layout;
 mod realtime_opportunity;
 mod realtime_print;
 mod realtime_resize_observer;

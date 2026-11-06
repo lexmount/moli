@@ -474,7 +474,11 @@ fn for_each_resize_observation<'s, 'i>(
             &moli_layout::LayoutQueryBatch::new(queries),
         ) {
             Ok(answers) => answers,
-            Err(moli_layout::LayoutError::NoLayoutSnapshot) if !realtime => {
+            // A successful screen publication may omit a hidden frame or an
+            // inert Document. Losing the entire publication is still an error.
+            Err(moli_layout::LayoutError::NoLayoutSnapshot)
+                if !realtime || runtime.has_published_realtime_screen_layout() =>
+            {
                 continue;
             }
             Err(error) => return Err(error),
