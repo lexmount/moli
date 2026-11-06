@@ -508,6 +508,26 @@ pub(crate) fn script_parser_inserted_from_host_defined_options(
     }
 }
 
+pub(crate) fn script_eval_cache_partition<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::String>> {
+    let partition = (|| {
+        let options = scope.get_current_host_defined_options()?;
+        let options = script_host_defined_options_as_fixed_array(options)?;
+        if options.length() < 5 {
+            return None;
+        }
+        let marker = v8::Local::<v8::String>::try_from(options.get(scope, 0)?).ok()?;
+        if marker.to_rust_string_lossy(scope) != SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER {
+            return None;
+        }
+        v8::Local::<v8::String>::try_from(options.get(scope, 4)?).ok()
+    })();
+    // Untracked callers need a distinct suffix too: otherwise author-provided
+    // source could match a tracked caller's already-partitioned cache key.
+    partition.or_else(|| v8_string(scope, "\n// moli-referrer:untracked"))
+}
+
 fn script_host_defined_options_as_fixed_array<'s>(
     host_defined_options: v8::Local<'s, v8::Data>,
 ) -> Option<v8::Local<'s, v8::FixedArray>> {
@@ -549,6 +569,16 @@ pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
     nonce: Option<&str>,
     parser_inserted: bool,
 ) -> Option<v8::Local<'s, v8::Data>> {
+    // V8 15.2 looks up Function/indirect-eval cache entries before resolving
+    // the caller script. Partition caller metadata without disabling caching.
+    // The trailing comment stays outside generated functions' source ranges.
+    let partition = format!(
+        "\n// moli-referrer:{}",
+        moli_crypto::sha256_hex(format!(
+            "{base_url}\0{}\0{parser_inserted}",
+            nonce.unwrap_or_default()
+        ))
+    );
     let marker = v8_string(scope, SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER)?;
     let value = v8_string(scope, base_url.as_str())?;
     let nonce = v8_string(scope, nonce.unwrap_or_default())?;
@@ -560,11 +590,13 @@ pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
             "not-parser-inserted"
         },
     )?;
-    let options = v8::PrimitiveArray::new(scope, 4);
+    let partition = v8_string(scope, &partition)?;
+    let options = v8::PrimitiveArray::new(scope, 5);
     options.set(scope, 0, marker.into());
     options.set(scope, 1, value.into());
     options.set(scope, 2, nonce.into());
     options.set(scope, 3, parser_metadata.into());
+    options.set(scope, 4, partition.into());
     Some(options.into())
 }
 
@@ -1040,6 +1072,10 @@ pub(crate) fn utf16_units_contain_unpaired_surrogate(units: &[u16]) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+#[path = "util_codegen_tests.rs"]
+mod generated_code_tests;
 
 #[cfg(test)]
 mod tests {
