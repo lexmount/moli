@@ -584,8 +584,11 @@ fn evaluate_worker_script(
             });
         return Err(error);
     }
-    scope.perform_microtask_checkpoint();
-    crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(&mut scope);
+    {
+        let _checkpoint_scope = crate::script_cleanup::MicrotaskCheckpointScope::enter(&mut scope);
+        scope.perform_microtask_checkpoint();
+        crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(&mut scope);
+    }
     Ok(())
 }
 
