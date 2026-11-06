@@ -1418,7 +1418,10 @@ fn hold_database(client: &DatabaseClient) -> HeldDatabase {
         .submit(
             move |_| {
                 entered.send(()).unwrap();
-                blocked.recv_timeout(Duration::from_secs(10)).unwrap();
+                // The guard owns this barrier. A watchdog here could release
+                // the owner while a slow test still relies on it being held.
+                // Callers bound their observations and release on unwind.
+                blocked.recv().unwrap();
                 Ok(())
             },
             |_| {},
