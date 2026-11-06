@@ -36,6 +36,31 @@ fn parser_form_owner_attribute_mutations_respect_namespace_and_case() {
 }
 
 #[test]
+fn checked_radios_regroup_after_form_attributes_or_referenced_forms_change() {
+    for mutation in [
+        "setFormAttribute",
+        "setFormAttributeNS",
+        "removeFormAttribute",
+        "removeFormAttributeNS",
+        "removeForm",
+        "removeCarrier",
+        "moveForm",
+        "moveCarrier",
+        "detachForm",
+        "detachCarrier",
+        "sameFormAttribute",
+    ] {
+        let mut vm = new_parsed_test_vm("https://radio-owner-changes.test/", PARSER_FORM_HTML);
+        let script = format!(
+            "({})({})",
+            include_str!("radio_form_owner_changes.js"),
+            serde_json::to_string(mutation).unwrap()
+        );
+        assert_eq!(vm.eval(&script).unwrap(), "true", "{mutation}");
+    }
+}
+
+#[test]
 fn secondary_document_form_collections_and_form_data_follow_owner_changes() {
     let mut vm = new_parsed_test_vm(
         "https://secondary-form-collections.test/",

@@ -50,6 +50,36 @@ impl OwnerLifecycleTraversal {
 }
 
 impl NativeDom {
+    pub(crate) fn can_insert_before(
+        &self,
+        parent: NativeNodeId,
+        child: NativeNodeId,
+        reference_child: Option<NativeNodeId>,
+    ) -> bool {
+        if !self.can_have_children(parent)
+            || self.is_host_including_inclusive_ancestor(child, parent)
+        {
+            return false;
+        }
+        let (Some(parent_node), Some(child_node)) = (self.node(parent), self.node(child)) else {
+            return false;
+        };
+        let parent_type = parent_node.node_type();
+        if !Self::can_insert_child_type(parent_type, child_node.node_type())
+            || reference_child.is_some_and(|reference| self.parent_node(reference) != Some(parent))
+        {
+            return false;
+        }
+        !child_node.is_document_fragment()
+            || self.child_ids(child).all(|fragment_child| {
+                !self.is_host_including_inclusive_ancestor(fragment_child, parent)
+                    && self.node(fragment_child).is_some_and(|node| {
+                        !node.is_document_fragment()
+                            && Self::can_insert_child_type(parent_type, node.node_type())
+                    })
+            })
+    }
+
     pub(crate) fn insert_before_with_stylesheet_candidate_changes(
         &mut self,
         parent: NativeNodeId,
@@ -72,43 +102,18 @@ impl NativeDom {
         mut reference_child: Option<NativeNodeId>,
         commit_candidate_registration: bool,
     ) -> Option<OwnerLifecycleChanges> {
-        if !self.can_have_children(parent)
-            || self.is_host_including_inclusive_ancestor(child, parent)
-        {
+        if !self.can_insert_before(parent, child, reference_child) {
             return None;
         }
-        let parent_type = self.node(parent)?.node_type();
-        let child_type = self.node(child)?.node_type();
-        if !Self::can_insert_child_type(parent_type, child_type) {
-            return None;
-        }
-        if let Some(reference) = reference_child {
-            if self.parent_node(reference) != Some(parent) {
-                return None;
-            }
-            if reference == child {
-                // DOM pre-insert changes a self-reference to the node's next
-                // sibling before adopting (and therefore removing) the node.
-                // This is observable through MutationObserver and DOMDebugger.
-                reference_child = self.next_sibling(child);
-            }
+        if reference_child == Some(child) {
+            // DOM pre-insert adjusts a self-reference before adoption/removal.
+            reference_child = self.next_sibling(child);
         }
         if self
             .node(child)
             .is_some_and(|node| node.data().is_document_fragment())
         {
             let fragment_children = self.child_ids(child).collect::<Vec<_>>();
-            let all_children_are_insertable = fragment_children.iter().all(|fragment_child| {
-                !self.is_host_including_inclusive_ancestor(*fragment_child, parent)
-                    && self.node(*fragment_child).is_some_and(|node| {
-                        !node.data().is_document_fragment()
-                            && Self::can_insert_child_type(parent_type, node.node_type())
-                    })
-            });
-            if !all_children_are_insertable {
-                return None;
-            }
-
             let mut changes = OwnerLifecycleChanges::default();
             for &fragment_child in &fragment_children {
                 changes.merge(self.commit_validated_non_fragment_insertion(

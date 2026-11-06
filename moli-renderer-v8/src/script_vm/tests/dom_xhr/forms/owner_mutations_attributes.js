@@ -1,8 +1,10 @@
 (() => {
     const radio = document.getElementById('radio');
     const form = document.getElementById('owner');
+    const peer = document.getElementById('peer');
     const assertOwner = message => {
         if (radio.form !== form || form.elements[0] !== radio) throw Error(message);
+        if (!radio.checked || !peer.checked) throw Error(message + ': unchanged radio groups');
     };
     assertOwner('initial parser owner');
     for (const namespace of [null, '', 'urn:form-owner-test']) {
@@ -17,7 +19,9 @@
     assertOwner('removing a non-null namespace must preserve parser owner');
     radio.setAttributeNS('', 'form', 'missing');
     if (radio.form !== null || form.elements.length !== 0) throw Error('lowercase form must reset owner');
+    if (!radio.checked || peer.checked) throw Error('lowercase form must normalize checkedness');
     radio.removeAttributeNS('', 'form');
     if (radio.form !== null) throw Error('removing form must not resurrect parser owner');
+    if (!radio.checked || peer.checked) throw Error('removing form must preserve checkedness');
     return true;
 })()

@@ -1644,6 +1644,112 @@ mod tests {
     }
 
     #[test]
+    fn checked_radios_regroup_after_form_attribute_changes() {
+        for mutation in ["set", "set_ns", "remove", "remove_ns"] {
+            let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+            host.reset_html_document_shell();
+            let body = host.document_body_handle().unwrap();
+            let form = host.create_element("form");
+            let radio = host.create_parser_element_without_attributes(
+                "input".to_owned(),
+                "http://www.w3.org/1999/xhtml".to_owned(),
+                None,
+            );
+            let peer = host.create_element("input");
+            assert!(host.set_attribute(form, "id", "owner"));
+            assert!(host.append_child(body, form));
+            assert!(host.associate_parser_form_owner(radio, form));
+            for control in [radio, peer] {
+                assert!(host.set_attribute(control, "type", "radio"));
+                assert!(host.set_attribute(control, "name", "group"));
+                assert!(host.append_child(body, control));
+            }
+            if mutation.starts_with("remove") {
+                assert!(host.set_attribute(radio, "form", "owner"));
+            }
+            assert!(host.set_checked_state(radio, true));
+            assert!(host.set_checked_state(peer, true));
+            assert_eq!(host.form_control_owner(radio), Some(form));
+            match mutation {
+                "set" => assert!(host.set_attribute(radio, "FORM", "missing")),
+                "set_ns" => assert!(host.set_attribute_ns(radio, None, None, "form", "missing")),
+                "remove" => assert!(host.remove_attribute(radio, "FORM")),
+                "remove_ns" => assert!(
+                    host.remove_attribute_ns_effects(radio, Some(""), "form")
+                        .did_change()
+                ),
+                _ => unreachable!(),
+            }
+            assert_eq!(host.form_control_owner(radio), None);
+            assert!(host.node(radio).unwrap().as_element().unwrap().checked());
+            assert!(
+                !host.node(peer).unwrap().as_element().unwrap().checked(),
+                "{mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn checked_radios_regroup_when_their_explicit_form_is_removed() {
+        for wrap_form in [false, true] {
+            for mutation in ["remove", "move", "detach", "invalid", "cycle"] {
+                let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+                host.reset_html_document_shell();
+                let body = host.document_body_handle().unwrap();
+                let carrier = host.create_element("section");
+                let destination = host.create_element("div");
+                let form = host.create_element("form");
+                let style = host.create_element("style");
+                let radio = host.create_element("input");
+                let peer = host.create_element("input");
+                assert!(host.set_attribute(form, "id", "owner"));
+                assert!(host.append_child(body, carrier));
+                assert!(host.append_child(body, destination));
+                assert!(host.append_child(carrier, form));
+                assert!(host.append_child(form, style));
+                assert!(host.set_attribute(radio, "form", "owner"));
+                for control in [radio, peer] {
+                    assert!(host.set_attribute(control, "type", "radio"));
+                    assert!(host.set_attribute(control, "name", "group"));
+                    assert!(host.append_child(body, control));
+                    assert!(host.set_checked_state(control, true));
+                }
+                assert_eq!(host.form_control_owner(radio), Some(form));
+                assert!(
+                    host.stylesheet_candidate_handles_for_tree_scope(host.document_handle())
+                        .contains(&style)
+                );
+                let moved = if wrap_form { carrier } else { form };
+                if mutation == "remove" {
+                    let parent = if wrap_form { body } else { carrier };
+                    assert!(host.remove_child(parent, moved));
+                } else if mutation == "detach" {
+                    let fragment = host.create_document_fragment();
+                    assert!(host.append_child(fragment, moved));
+                } else if mutation == "invalid" {
+                    assert!(!host.insert_before(destination, moved, Some(peer)));
+                } else if mutation == "cycle" {
+                    assert!(!host.append_child(form, moved));
+                } else {
+                    assert!(host.append_child(destination, moved));
+                }
+                let keeps_owner = matches!(mutation, "move" | "invalid" | "cycle");
+                assert_eq!(host.form_control_owner(radio), keeps_owner.then_some(form));
+                assert!(host.node(radio).unwrap().as_element().unwrap().checked());
+                assert_eq!(
+                    host.node(peer).unwrap().as_element().unwrap().checked(),
+                    matches!(mutation, "invalid" | "cycle")
+                );
+                assert_eq!(
+                    host.stylesheet_candidate_handles_for_tree_scope(host.document_handle())
+                        .contains(&style),
+                    keeps_owner
+                );
+            }
+        }
+    }
+
+    #[test]
     fn namespaced_form_attribute_mutations_preserve_case_and_namespace() {
         for namespace in [None, Some(""), Some("urn:form-owner-test")] {
             let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));

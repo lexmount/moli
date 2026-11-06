@@ -2,15 +2,20 @@ use super::*;
 use crate::forms::InputType;
 use crate::native::{CustomElementState, SelectedFile};
 
+pub(super) struct FormOwnerMutationSnapshot {
+    pub(super) parser_owner_resets: Vec<DomHandle>,
+    pub(super) checked_radio_owners: Vec<(DomHandle, Option<DomHandle>)>,
+}
+
 impl DomHost {
     // The HTML parser can associate a control with its form-element pointer
     // even when that form is not an ancestor. That exception survives moves
     // which keep the control and form in one subtree, but the reset-the-form-
     // owner algorithm must discard it as soon as a mutation separates them.
-    pub(super) fn parser_form_owner_resets_for_removed_subtrees(
+    pub(super) fn form_owner_snapshot_for_tree_mutation(
         &self,
         roots: &[DomHandle],
-    ) -> Vec<DomHandle> {
+    ) -> FormOwnerMutationSnapshot {
         let removed_forms = roots
             .iter()
             .flat_map(|root| {
@@ -20,7 +25,11 @@ impl DomHost {
             })
             .collect::<HashSet<_>>();
         if removed_forms.is_empty() {
-            return Vec::new();
+            return FormOwnerMutationSnapshot {
+                parser_owner_resets: Vec::new(),
+                checked_radio_owners: self
+                    .checked_radio_form_owner_snapshots_for_mutation(roots, &[]),
+            };
         }
 
         let mut search_roots = Vec::new();
@@ -29,16 +38,38 @@ impl DomHost {
                 search_roots.push(root);
             }
         }
-        search_roots
+        let mut external_controls = Vec::new();
+        let parser_owner_resets = search_roots
             .into_iter()
             .flat_map(|search_root| {
                 self.collect_matching_elements(search_root, true, |handle| {
-                    self.parser_associated_form_owner(handle)
-                        .is_some_and(|owner| removed_forms.contains(&owner))
-                        && !roots.iter().any(|root| self.contains(*root, handle))
+                    let resets_parser_owner = self
+                        .parser_associated_form_owner(handle)
+                        .is_some_and(|owner| removed_forms.contains(&owner));
+                    let is_checked_radio = self.is_checked_radio(handle);
+                    if (!resets_parser_owner && !is_checked_radio)
+                        || roots.iter().any(|root| self.contains(*root, handle))
+                    {
+                        return false;
+                    }
+                    // Explicit form="id" associations need the same radio
+                    // normalization, but must not clear unrelated parser state.
+                    let checked_radio_loses_owner = is_checked_radio
+                        && self
+                            .form_control_owner(handle)
+                            .is_some_and(|owner| removed_forms.contains(&owner));
+                    if resets_parser_owner || checked_radio_loses_owner {
+                        external_controls.push(handle);
+                    }
+                    resets_parser_owner
                 })
             })
-            .collect()
+            .collect();
+        FormOwnerMutationSnapshot {
+            parser_owner_resets,
+            checked_radio_owners: self
+                .checked_radio_form_owner_snapshots_for_mutation(roots, &external_controls),
+        }
     }
 
     pub(super) fn reset_parser_form_owners_after_subtree_removal(
@@ -91,15 +122,19 @@ impl DomHost {
     pub(super) fn reset_parser_form_owner_for_form_attribute_mutation(
         &mut self,
         handle: DomHandle,
-    ) {
+    ) -> Option<(DomHandle, Option<DomHandle>)> {
         if !self
             .node(handle)
             .and_then(Node::as_element)
             .is_some_and(is_builtin_reassociateable_form_associated_element)
         {
-            return;
+            return None;
         }
+        // The old owner must be captured before discarding the parser pointer;
+        // normalization runs after the attribute itself has changed.
+        let checked_radio_owner = self.checked_radio_form_owner_snapshot(handle);
         self.clear_parser_associated_form_owner(handle);
+        checked_radio_owner
     }
 
     fn parser_associated_form_controls_in_subtrees(&self, roots: &[DomHandle]) -> Vec<DomHandle> {
@@ -789,28 +824,35 @@ impl DomHost {
         roots: &[DomHandle],
         external_controls: &[DomHandle],
     ) -> Vec<(DomHandle, Option<DomHandle>)> {
-        let is_checked_radio = |candidate| {
-            self.node(candidate)
-                .and_then(Node::as_element)
-                .is_some_and(|element| {
-                    element.is_html_input()
-                        && element.input_type() == InputType::Radio
-                        && element.checked()
-                })
-        };
         // Match the reset order: external controls first, then the moved
         // subtrees. Both can lose an owner when a parser-associated form moves.
         external_controls
             .iter()
             .copied()
-            .filter(|&control| is_checked_radio(control))
-            .chain(
-                roots
-                    .iter()
-                    .flat_map(|root| self.collect_matching_elements(*root, true, is_checked_radio)),
-            )
+            .filter(|&control| self.is_checked_radio(control))
+            .chain(roots.iter().flat_map(|root| {
+                self.collect_matching_elements(*root, true, |handle| self.is_checked_radio(handle))
+            }))
             .map(|radio| (radio, self.form_control_owner(radio)))
             .collect()
+    }
+
+    fn is_checked_radio(&self, handle: DomHandle) -> bool {
+        self.node(handle)
+            .and_then(Node::as_element)
+            .is_some_and(|element| {
+                element.is_html_input()
+                    && element.input_type() == InputType::Radio
+                    && element.checked()
+            })
+    }
+
+    fn checked_radio_form_owner_snapshot(
+        &self,
+        handle: DomHandle,
+    ) -> Option<(DomHandle, Option<DomHandle>)> {
+        self.is_checked_radio(handle)
+            .then(|| (handle, self.form_control_owner(handle)))
     }
 
     pub(super) fn normalize_checked_radio_groups_after_form_owner_changes(
@@ -819,15 +861,9 @@ impl DomHost {
     ) {
         let mut changed_handles = Vec::new();
         for &(radio, previous_form_owner) in snapshots.iter().rev() {
-            let is_still_checked_radio =
-                self.node(radio)
-                    .and_then(Node::as_element)
-                    .is_some_and(|element| {
-                        element.is_html_input()
-                            && element.input_type() == InputType::Radio
-                            && element.checked()
-                    });
-            if !is_still_checked_radio || self.form_control_owner(radio) == previous_form_owner {
+            if !self.is_checked_radio(radio)
+                || self.form_control_owner(radio) == previous_form_owner
+            {
                 continue;
             }
             changed_handles.extend(self.uncheck_checked_radio_peers(radio, true, None));
