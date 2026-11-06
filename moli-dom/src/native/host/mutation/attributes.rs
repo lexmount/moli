@@ -275,7 +275,7 @@ impl DomHost {
         value: &str,
     ) -> DomAttributeMutationOutcome {
         let namespace = namespace.filter(|namespace| !namespace.is_empty());
-        if namespace.is_none() && local_name.eq_ignore_ascii_case("form") {
+        if namespace.is_none() && local_name == "form" {
             self.reset_parser_form_owner_for_form_attribute_mutation(handle);
         }
         let records_enabled = self.mutation_records_enabled();
@@ -474,11 +474,12 @@ impl DomHost {
         namespace: Option<&str>,
         local_name: &str,
     ) -> DomAttributeMutationOutcome {
+        let namespace = namespace.filter(|namespace| !namespace.is_empty());
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self
             .get_attribute_ns(handle, namespace, local_name)
             .map(Arc::from);
-        if prior_value.is_some() && namespace.is_none() && local_name.eq_ignore_ascii_case("form") {
+        if prior_value.is_some() && namespace.is_none() && local_name == "form" {
             self.reset_parser_form_owner_for_form_attribute_mutation(handle);
         }
         let removed = self.dom.remove_attribute_ns(handle, namespace, local_name);

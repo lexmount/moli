@@ -18,7 +18,7 @@ impl DomHost {
                     self.is_html_element_named(handle, "form")
                 })
             })
-            .collect::<Vec<_>>();
+            .collect::<HashSet<_>>();
         if removed_forms.is_empty() {
             return Vec::new();
         }
@@ -784,23 +784,31 @@ impl DomHost {
         changed_handles
     }
 
-    pub(super) fn checked_radio_form_owner_snapshots_in_subtrees(
+    pub(super) fn checked_radio_form_owner_snapshots_for_mutation(
         &self,
         roots: &[DomHandle],
+        external_controls: &[DomHandle],
     ) -> Vec<(DomHandle, Option<DomHandle>)> {
-        roots
-            .iter()
-            .flat_map(|root| {
-                self.collect_matching_elements(*root, true, |candidate| {
-                    self.node(candidate)
-                        .and_then(Node::as_element)
-                        .is_some_and(|element| {
-                            element.is_html_input()
-                                && element.input_type() == InputType::Radio
-                                && element.checked()
-                        })
+        let is_checked_radio = |candidate| {
+            self.node(candidate)
+                .and_then(Node::as_element)
+                .is_some_and(|element| {
+                    element.is_html_input()
+                        && element.input_type() == InputType::Radio
+                        && element.checked()
                 })
-            })
+        };
+        // Match the reset order: external controls first, then the moved
+        // subtrees. Both can lose an owner when a parser-associated form moves.
+        external_controls
+            .iter()
+            .copied()
+            .filter(|&control| is_checked_radio(control))
+            .chain(
+                roots
+                    .iter()
+                    .flat_map(|root| self.collect_matching_elements(*root, true, is_checked_radio)),
+            )
             .map(|radio| (radio, self.form_control_owner(radio)))
             .collect()
     }
