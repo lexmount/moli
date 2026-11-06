@@ -8,6 +8,8 @@ use crate::util::{get_private_value, set_private_value, v8_string};
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
+const SIMPLE_EVENT_TARGET_LISTENER_RESOURCE_INITIATOR_SLOT: &str =
+    "__lmSimpleListenerResourceInitiator";
 const SIMPLE_EVENT_TARGET_LISTENER_ORIGINAL_SLOT: &str = "__moliSimpleEventTargetListenerOriginal";
 const SIMPLE_EVENT_TARGET_LISTENER_CALLBACK_SLOT: &str = "__moliSimpleEventTargetListenerCallback";
 const SIMPLE_EVENT_TARGET_LISTENER_RELEVANT_CONTEXT_ANCHOR_SLOT: &str =
@@ -86,6 +88,7 @@ pub(crate) struct SimpleObjectEventListenerSnapshot<'s> {
     callback: v8::Local<'s, v8::Object>,
     relevant_context: v8::Local<'s, v8::Context>,
     incumbent_context: v8::Local<'s, v8::Context>,
+    resource_initiator: crate::resource_initiator::CallbackInitiator,
     is_callable: bool,
     pub(crate) capture: bool,
     pub(crate) once: bool,
@@ -158,7 +161,8 @@ impl<'s> SimpleObjectEventListenerSnapshot<'s> {
             "handleEvent",
             arguments,
             current_event,
-        );
+        )
+        .with_resource_initiator(self.resource_initiator.clone());
         if self.handler_slot.is_some() {
             invocation.with_legacy_event_handler()
         } else {
@@ -625,6 +629,7 @@ pub(super) fn simple_object_event_set_handler_in_registry<'s>(
                         SIMPLE_EVENT_TARGET_LISTENER_INCUMBENT_CONTEXT_ANCHOR_SLOT,
                         incumbent_context_anchor.into(),
                     );
+                    capture_simple_listener_initiator(scope, entry);
                 }
                 ensure_simple_object_event_type_order(scope, registry, event_type);
                 return;
@@ -895,7 +900,7 @@ fn simple_object_event_listener_entry_object<'s>(
     once: bool,
     passive: bool,
 ) -> v8::Local<'s, v8::Object> {
-    SimpleObjectEventListenerEntryDeclaration::new(
+    let entry = SimpleObjectEventListenerEntryDeclaration::new(
         original,
         callback,
         relevant_context_anchor,
@@ -906,7 +911,9 @@ fn simple_object_event_listener_entry_object<'s>(
         passive,
     )
     .bind(scope)
-    .expect("SimpleObject event listener entry declaration should bind")
+    .expect("SimpleObject event listener entry declaration should bind");
+    capture_simple_listener_initiator(scope, entry);
+    entry
 }
 
 fn simple_object_event_handler_entry_object<'s>(
@@ -917,7 +924,7 @@ fn simple_object_event_handler_entry_object<'s>(
     incumbent_context_anchor: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
     let marker = format!("event-handler:{handler_slot_name}");
-    SimpleObjectEventHandlerEntryDeclaration::new(
+    let entry = SimpleObjectEventHandlerEntryDeclaration::new(
         v8_string(scope, &marker),
         v8_string(scope, handler_slot_name).expect("event handler slot"),
         callback,
@@ -926,7 +933,22 @@ fn simple_object_event_handler_entry_object<'s>(
         callback.is_callable(),
     )
     .bind(scope)
-    .expect("SimpleObject event handler entry declaration should bind")
+    .expect("SimpleObject event handler entry declaration should bind");
+    capture_simple_listener_initiator(scope, entry);
+    entry
+}
+
+fn capture_simple_listener_initiator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+) {
+    let initiator = crate::resource_initiator::CallbackInitiator::capture(scope).value(scope);
+    set_private_value(
+        scope,
+        entry,
+        SIMPLE_EVENT_TARGET_LISTENER_RESOURCE_INITIATOR_SLOT,
+        initiator,
+    );
 }
 
 fn simple_object_event_listener_array_contains_original(
@@ -1023,12 +1045,20 @@ fn simple_object_event_listener_snapshot_entry<'s>(
     let passive =
         simple_object_private_bool_slot(scope, entry, SIMPLE_EVENT_TARGET_LISTENER_PASSIVE_SLOT)
             .unwrap_or(false);
+    let value = get_private_value(
+        scope,
+        entry,
+        SIMPLE_EVENT_TARGET_LISTENER_RESOURCE_INITIATOR_SLOT,
+    )
+    .unwrap_or_else(|| v8::undefined(scope).into());
+    let resource_initiator = crate::resource_initiator::CallbackInitiator::from_value(scope, value);
     Some(SimpleObjectEventListenerSnapshot {
         entry,
         original,
         callback,
         relevant_context,
         incumbent_context,
+        resource_initiator,
         is_callable,
         capture,
         once,

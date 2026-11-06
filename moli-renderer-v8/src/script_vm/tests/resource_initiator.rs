@@ -443,3 +443,117 @@ async fn webidl_task_resource_initiator_covers_animation_idle_and_observer_deliv
     ]).to_string());
     assert_eq!(server.finish().await.len(), 4);
 }
+
+fn dispatch_native_simple_probe(vm: &mut ScriptVm, name: &str, event_type: &str) {
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let key = crate::util::v8_string(scope, name).unwrap();
+        let target = global.get(scope, key.into()).unwrap();
+        let target = v8::Local::<v8::Object>::try_from(target).unwrap();
+        let event = crate::context_bootstrap::construct_original_event(scope, event_type).unwrap();
+        assert!(
+            crate::context_bootstrap::dispatch_simple_event_target_event(
+                scope, target, event_type, event
+            )
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[tokio::test]
+async fn simple_target_resource_initiator_covers_legacy_listener_getter_and_duplicate_rules() {
+    let server = StaticHttpServer::spawn_with_responder(
+        4,
+        "Content-Type: text/plain\r\nCache-Control: no-store\r\n",
+        |_, _| "ok".to_owned(),
+    )
+    .await;
+    let base = server.base_url();
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(base.as_str(), &loader);
+    execute_with_source(
+        &mut vm,
+        r#"
+      globalThis.request = path => { const x = new XMLHttpRequest(); x.open('GET', path); x.send(); };
+      globalThis.mql = matchMedia('(min-width: 0px)');
+      globalThis.listener = { get handleEvent() { request('lookup'); return () => request('body'); } };
+    "#,
+        &base.join("library.js").unwrap(),
+        &base,
+    );
+    let first = base.join("first.js").unwrap();
+    let caller = base.join("caller.js").unwrap();
+    execute_with_source(&mut vm, "mql.addListener(listener);", &first, &base);
+    execute_with_source(
+        &mut vm,
+        "mql.addEventListener('change', listener);",
+        &base.join("duplicate.js").unwrap(),
+        &base,
+    );
+    dispatch_native_simple_probe(&mut vm, "mql", "change");
+    execute_with_source(
+        &mut vm,
+        "mql.dispatchEvent(new Event('change'));",
+        &caller,
+        &base,
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(performance.getEntriesByType('resource').length)",
+        "4",
+        "simple listener requests",
+    )
+    .await;
+    assert_eq!(vm.eval("JSON.stringify(performance.getEntriesByType('resource').map(entry => [new URL(entry.name).pathname, entry.initiatorUrl]).sort())").unwrap(), serde_json::json!([
+        ["/body", caller.as_str()], ["/body", first.as_str()],
+        ["/lookup", caller.as_str()], ["/lookup", first.as_str()]
+    ]).to_string());
+    assert_eq!(server.finish().await.len(), 4);
+}
+
+#[tokio::test]
+async fn simple_target_resource_initiator_refreshes_handler_assignment_and_redacts_unknown() {
+    let server = StaticHttpServer::spawn_with_responder(
+        3,
+        "Content-Type: text/plain\r\nCache-Control: no-store\r\n",
+        |_, _| "ok".to_owned(),
+    )
+    .await;
+    let base = server.base_url();
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(base.as_str(), &loader);
+    execute_with_source(
+        &mut vm,
+        r#"
+      globalThis.mql = matchMedia('(min-width: 0px)');
+      globalThis.handler = () => { const x = new XMLHttpRequest(); x.open('GET', 'handler'); x.send(); };
+    "#,
+        &base.join("library.js").unwrap(),
+        &base,
+    );
+    let first = base.join("first.js").unwrap();
+    let second = base.join("second.js").unwrap();
+    execute_with_source(&mut vm, "mql.onchange = handler;", &first, &base);
+    dispatch_native_simple_probe(&mut vm, "mql", "change");
+    execute_with_source(&mut vm, "mql.onchange = handler;", &second, &base);
+    dispatch_native_simple_probe(&mut vm, "mql", "change");
+    execute_with_source(
+        &mut vm,
+        "mql.onchange = handler;",
+        &Url::parse("https://other.invalid/setter.js").unwrap(),
+        &base,
+    );
+    dispatch_native_simple_probe(&mut vm, "mql", "change");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(performance.getEntriesByType('resource').length)",
+        "3",
+        "simple handler requests",
+    )
+    .await;
+    assert_eq!(vm.eval("JSON.stringify(performance.getEntriesByType('resource').map(entry => entry.initiatorUrl).sort())").unwrap(), serde_json::json!(["", first.as_str(), second.as_str()]).to_string());
+    assert_eq!(server.finish().await.len(), 3);
+}
