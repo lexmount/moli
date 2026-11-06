@@ -2278,6 +2278,27 @@ async fn drive_page_work_until_done_with_explicit_producer_admission(
             .vm_mut()
             .eval("String(globalThis.__wsStreamDone ?? null)")
             .unwrap_or_else(|error| format!("<failed to read __wsStreamDone: {error}>"));
+        if context.starts_with("controlled header preload") {
+            // A failed child navigation may still expose only the cross-origin
+            // WindowProxy surface. Preserve that state without losing the
+            // original timeout assertion to a diagnostic access error.
+            let preload_state = page_vm.vm_mut().eval(r#"
+                JSON.stringify({url:location.href,frames:Array.from(document.querySelectorAll('iframe')).map(frame=>{
+                    const row={src:frame.src,outerHTML:frame.outerHTML};
+                    try { row.url=frame.contentWindow.location.href; } catch(error) { row.urlError=String(error); }
+                    try {
+                        const doc=frame.contentDocument;
+                        row.hasDocument=!!doc;row.ready=doc&&doc.readyState;
+                        row.html=doc&&doc.documentElement&&doc.documentElement.outerHTML;
+                    } catch(error) { row.documentError=String(error); }
+                    try {
+                        row.state=frame.contentWindow.eval("JSON.stringify({started:typeof started==='undefined'?null:started,executions:globalThis.controlledPreloadExecutions,controller:!!navigator.serviceWorker.controller,resources:performance.getEntriesByType('resource').map(entry=>({name:entry.name,initiatorType:entry.initiatorType,startTime:entry.startTime,responseEnd:entry.responseEnd}))})");
+                    } catch(error) { row.stateError=String(error); }
+                    return row;
+                })})
+            "#).unwrap_or_else(|error| format!("failed to inspect preload timeout: {error}"));
+            eprintln!("controlled preload timeout state: {preload_state}");
+        }
         panic!(
             "{context}; events={events}; done={done}; stream_events={stream_events}; stream_done={stream_done}"
         );

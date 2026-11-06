@@ -61,6 +61,21 @@ struct ReadyChildWindowEventListenerInvocation {
 }
 
 impl JsContextHost {
+    pub(super) fn child_window_needs_beforeunload_check(&self, handle: DomHandle) -> bool {
+        let Some(target) = self.current_child_window_event_target(handle) else {
+            return false;
+        };
+        self.child_window_event_listeners
+            .get(&handle)
+            .and_then(|listeners| listeners.get("beforeunload"))
+            .is_some_and(|listeners| {
+                listeners.iter().any(|entry| {
+                    entry.local_window_id == Some(target.owner().local_window_id)
+                        && !matches!(entry.callback_state, EventHandlerPropertyState::Null)
+                })
+            })
+    }
+
     pub(super) fn child_window_has_event_listener(
         &self,
         target: ChildWindowEventTarget,

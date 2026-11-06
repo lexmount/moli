@@ -101,6 +101,7 @@ pub(super) struct ChildBrowsingContextEntry {
 pub(super) struct PendingChildAttributeNavigation {
     pub(super) target_snapshot: ChildNavigationTargetSnapshot,
     pub(super) blob_resource: Option<crate::network_host::CapturedBlobResource>,
+    pub(super) navigation_start: (std::time::Instant, std::time::SystemTime),
 }
 
 /// Provenance belongs to the queued navigation, including when an attribute
@@ -108,6 +109,8 @@ pub(super) struct PendingChildAttributeNavigation {
 #[derive(Debug, Clone)]
 pub(super) struct PendingChildFrameNavigation {
     pub(super) bootstrap: ChildBrowsingContextBootstrap,
+    /// Data owned by this attempt, retained when its commit runs later.
+    pub(super) navigation_start: (std::time::Instant, std::time::SystemTime),
     pub(super) browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
     pub(super) blob_resource: Option<crate::network_host::CapturedBlobResource>,
     pub(super) initiator_url: Option<Url>,
@@ -130,6 +133,7 @@ impl PendingChildFrameNavigation {
         Self {
             blob_resource,
             bootstrap,
+            navigation_start: (std::time::Instant::now(), std::time::SystemTime::now()),
             browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind::Navigate,
             initiator_url,
             initiator,
@@ -137,6 +141,14 @@ impl PendingChildFrameNavigation {
             source_policy: None,
             request_initiator: None,
         }
+    }
+
+    pub(super) fn with_navigation_start(
+        mut self,
+        start: (std::time::Instant, std::time::SystemTime),
+    ) -> Self {
+        self.navigation_start = start;
+        self
     }
 
     pub(super) fn with_browser_navigation_kind(
@@ -1172,6 +1184,15 @@ impl ChildBrowsingContextEntry {
 
     pub(super) fn pending_navigation(&self) -> Option<PendingChildFrameNavigation> {
         self.pending_live_navigation.clone()
+    }
+
+    pub(super) fn set_pending_navigation_start(
+        &mut self,
+        start: (std::time::Instant, std::time::SystemTime),
+    ) {
+        if let Some(navigation) = self.pending_live_navigation.as_mut() {
+            navigation.navigation_start = start;
+        }
     }
 
     pub(super) fn pending_live_navigation_for_refresh(

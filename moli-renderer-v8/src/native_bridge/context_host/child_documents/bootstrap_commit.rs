@@ -21,6 +21,7 @@ impl JsContextHost {
     ) -> Option<ChildDocumentCommitResult> {
         let PendingChildFrameNavigation {
             bootstrap,
+            mut navigation_start,
             browser_navigation_kind,
             blob_resource,
             initiator,
@@ -83,7 +84,12 @@ impl JsContextHost {
             return Some(ChildDocumentCommitResult::ready(None));
         }
         if initiator != ChildDocumentNavigationInitiator::HistoryTraversal
-            && !self.check_child_navigation_beforeunload(scope, handle, navigation_load)
+            && !self.check_child_navigation_beforeunload_with_start(
+                scope,
+                handle,
+                navigation_load,
+                Some(&mut navigation_start),
+            )
         {
             return Some(ChildDocumentCommitResult::ready(None));
         }
@@ -194,6 +200,7 @@ impl JsContextHost {
                         target_snapshot,
                         blob_resource,
                     )
+                    .with_navigation_start(navigation_start)
                     .with_browser_navigation_kind(browser_navigation_kind)
                     .with_source_policy(source_policy)
                     .with_request_initiator(request_initiator),

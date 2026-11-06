@@ -894,6 +894,16 @@ impl JsContextHost {
         handle: DomHandle,
         navigation_load: FrameDocumentNavigationLoadBinding,
     ) -> bool {
+        self.check_child_navigation_beforeunload_with_start(scope, handle, navigation_load, None)
+    }
+
+    pub(in crate::native_bridge::context_host) fn check_child_navigation_beforeunload_with_start(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        navigation_load: FrameDocumentNavigationLoadBinding,
+        navigation_start: Option<&mut (std::time::Instant, std::time::SystemTime)>,
+    ) -> bool {
         if !self
             .frame_owner_store
             .claim_current_child_navigation_beforeunload(handle, navigation_load)
@@ -903,7 +913,27 @@ impl JsContextHost {
                     .frame_owner_store
                     .child_document_task_owner_is_current(handle, navigation_load.owner());
         }
-        self.dispatch_child_document_tree_beforeunload(scope, handle, Some(navigation_load))
+        let needs_beforeunload = self
+            .child_document_unload_tree_snapshot(handle)
+            .iter()
+            .any(|(handle, _, _)| self.child_window_needs_beforeunload_check(*handle));
+        let is_current =
+            self.dispatch_child_document_tree_beforeunload(scope, handle, Some(navigation_load));
+        if is_current && needs_beforeunload {
+            // The queued attempt precedes the retiring tree's handlers. Its
+            // new Document's time origin must follow that check. With no
+            // handlers, retain the attempt's original queueing time.
+            let start = (std::time::Instant::now(), std::time::SystemTime::now());
+            if let Some(navigation_start) = navigation_start {
+                *navigation_start = start;
+            }
+            // Location and Navigation API calls can check synchronously,
+            // before the deferred commit takes this request out of the queue.
+            if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
+                entry.set_pending_navigation_start(start);
+            }
+        }
+        is_current
     }
 
     fn dispatch_child_document_tree_beforeunload(

@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 use moli_fetch::{FetchCancelHandle, FetchResponseTiming, ResponseHead};
 use parking_lot::Mutex;
@@ -12,6 +15,7 @@ pub(crate) struct NavigationTiming(Arc<NavigationTimingInner>);
 struct NavigationTimingInner {
     started: Instant,
     time_origin: f64,
+    fetch_started: Instant,
     cancel: FetchCancelHandle,
     response: Mutex<Option<NavigationTimingResponse>>,
 }
@@ -26,6 +30,7 @@ struct NavigationTimingResponse {
 pub(crate) struct NavigationTimingSnapshot {
     pub started: Instant,
     pub time_origin: f64,
+    pub fetch_started: Instant,
     pub native: FetchResponseTiming,
     pub head: ResponseHead,
     pub headers_received: Instant,
@@ -33,10 +38,17 @@ pub(crate) struct NavigationTimingSnapshot {
 }
 
 impl NavigationTiming {
-    pub(super) fn new(cancel: FetchCancelHandle) -> Self {
+    pub(super) fn new(cancel: FetchCancelHandle, start: Option<(Instant, SystemTime)>) -> Self {
+        let fetch_started = Instant::now();
+        let (started, time_origin) = start.unwrap_or_else(|| (fetch_started, SystemTime::now()));
         Self(Arc::new(NavigationTimingInner {
-            started: Instant::now(),
-            time_origin: moli_time::unix_epoch_millis(),
+            started,
+            time_origin: time_origin
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64()
+                * 1000.0,
+            fetch_started,
             cancel,
             response: Mutex::new(None),
         }))
@@ -59,6 +71,7 @@ impl NavigationTiming {
         Some(NavigationTimingSnapshot {
             started: self.0.started,
             time_origin: self.0.time_origin,
+            fetch_started: self.0.fetch_started,
             native: self.0.cancel.response_timing(),
             head: response.head,
             headers_received: response.headers_received,

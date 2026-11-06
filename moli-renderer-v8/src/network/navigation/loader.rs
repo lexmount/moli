@@ -83,6 +83,7 @@ impl NavigationResourceLoader {
             task_runner,
             None,
             cancel,
+            None,
         )
     }
 
@@ -90,6 +91,7 @@ impl NavigationResourceLoader {
         request_client: ResourceRequestClient,
         requested_url: url::Url,
         task_runner: RendererResourceTaskRunner,
+        start: (std::time::Instant, std::time::SystemTime),
     ) -> Self {
         let browser_site_context = request_client.shared_browser_site_context();
         Self::new_with_committed_document_browser_site_context(
@@ -98,6 +100,7 @@ impl NavigationResourceLoader {
             task_runner,
             browser_site_context,
             FetchCancelHandle::new(),
+            Some(start),
         )
     }
 
@@ -107,6 +110,7 @@ impl NavigationResourceLoader {
         task_runner: RendererResourceTaskRunner,
         committed_document_browser_site_context: Option<Arc<BrowserCookieFacadeContext>>,
         cancel: FetchCancelHandle,
+        start: Option<(std::time::Instant, std::time::SystemTime)>,
     ) -> Self {
         Self {
             request_client,
@@ -118,7 +122,7 @@ impl NavigationResourceLoader {
                     .fetch_add(1, Ordering::Relaxed)
                     .saturating_add(1),
                 state: Mutex::new(NavigationResourceLoaderState::Created),
-                timing: super::NavigationTiming::new(cancel.clone()),
+                timing: super::NavigationTiming::new(cancel.clone(), start),
                 cancel,
             }),
         }
@@ -513,6 +517,7 @@ mod tests {
             client,
             Url::parse("https://frame.test/start").unwrap(),
             crate::network::RendererResourceTaskRunner::from_current_tokio().unwrap(),
+            (std::time::Instant::now(), std::time::SystemTime::now()),
         );
 
         navigation

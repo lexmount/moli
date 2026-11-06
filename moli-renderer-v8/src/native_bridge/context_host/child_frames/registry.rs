@@ -508,6 +508,7 @@ impl JsContextHost {
                             document_url.as_ref(),
                         );
                     Some(PendingChildAttributeNavigation {
+                        navigation_start: (std::time::Instant::now(), std::time::SystemTime::now()),
                         target_snapshot: self
                             .snapshot_child_navigation_target(handle, &target_url)
                             .with_resource_timing_initiator(timing_initiator),

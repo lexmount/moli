@@ -381,7 +381,8 @@ impl JsContextHost {
                     ChildDocumentNavigationInitiator::FrameOwnerElement,
                     target_snapshot,
                     None,
-                ),
+                )
+                .with_navigation_start(attribute_navigation.navigation_start),
                 true,
                 entry_snapshot.pending_javascript_initiator_origin(),
             );
@@ -416,6 +417,7 @@ impl JsContextHost {
                 target_snapshot,
                 attribute_navigation.blob_resource,
             )
+            .with_navigation_start(attribute_navigation.navigation_start)
             .with_request_initiator(
                 self.owner_dispatch_scope_for_node(handle)
                     .and_then(|source| self.navigation_initiator_for_owner(source)),

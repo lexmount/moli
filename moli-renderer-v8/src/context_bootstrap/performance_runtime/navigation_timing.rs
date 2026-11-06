@@ -68,22 +68,26 @@ pub(super) fn refresh_navigation_timing<'s>(
             .native
             .fetch_started_at()
             .map(epoch)
-            .unwrap_or(snapshot.time_origin)
+            .unwrap_or_else(|| epoch(snapshot.fetch_started))
     } else {
-        worker_ready.unwrap_or(snapshot.time_origin)
+        worker_ready
+            .or_else(|| snapshot.native.fetch_started_at().map(epoch))
+            .unwrap_or_else(|| epoch(snapshot.fetch_started))
     };
     if expose_redirects && snapshot.head.redirected {
         data.redirect_start_unix_millis = Some(snapshot.time_origin);
         data.redirect_end_unix_millis = Some(fetch_start);
     }
-    if snapshot.head.redirected
-        && let Some(connection) = &mut data.connection_timing
-    {
+    if let Some(connection) = &mut data.connection_timing {
         connection.domain_lookup_start = connection.domain_lookup_start.max(fetch_start);
         connection.domain_lookup_end = connection.domain_lookup_end.max(fetch_start);
         connection.connect_start = connection.connect_start.max(fetch_start);
         connection.connect_end = connection.connect_end.max(fetch_start);
+        connection.secure_connection_start = connection
+            .secure_connection_start
+            .map(|start| start.max(fetch_start));
     }
+    data.request_start_unix_millis = data.request_start_unix_millis.or(Some(fetch_start));
     let response_end = snapshot.native.response_end_at().map(epoch).or_else(|| {
         snapshot
             .materialized_body_size
