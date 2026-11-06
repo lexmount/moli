@@ -32,7 +32,9 @@ impl StreamingDocumentInputSender {
             return false;
         }
         // The payload is resident before the owner is notified. A merged or
-        // delayed wake therefore cannot lose parser input.
+        // delayed wake therefore cannot lose parser input. The owner can also
+        // observe the payload before this producer publishes its task: that
+        // intermediate state must not be treated as a lost continuation.
         self.parser_continuation.request().is_ok()
     }
 }
@@ -85,10 +87,6 @@ impl StreamingDocumentInputSource {
         Self { rx }
     }
 
-    pub(super) fn has_ready_input(&mut self) -> bool {
-        !self.rx.is_empty()
-    }
-
     pub(super) fn try_next(&mut self) -> Result<Option<StreamingDocumentInputEvent>> {
         match self.rx.try_recv() {
             Ok(event) => Ok(Some(event)),
@@ -110,8 +108,8 @@ mod tests {
         },
         page_task_queue::{
             PageRuntimeWakeSignal, RendererOwnerWake, RendererOwnerWakeSender,
-            RendererPageMainParserContinuationSender, RendererPageNetworkingSource,
-            RendererPageNetworkingTask,
+            RendererOwnerWakeSource, RendererPageMainParserContinuationSender,
+            RendererPageNetworkingSource, RendererPageNetworkingTask,
         },
         runtime::{RendererDocumentToken, RendererPageToken},
     };
@@ -171,6 +169,111 @@ mod tests {
                     DocumentId(3),
                 ));
         (networking, continuation, wake_rx)
+    }
+
+    #[test]
+    fn input_publication_can_precede_its_parser_task_without_losing_the_wake() {
+        use super::super::wait::{PhaseOneResidenceAdmission, PhaseOneRestoreRequirement};
+        use parking_lot::Mutex;
+        use std::{
+            sync::{Arc, mpsc as std_mpsc},
+            task::{Context, Wake, Waker},
+        };
+
+        struct PauseAfterPublication {
+            reached: std_mpsc::SyncSender<()>,
+            resume: Mutex<std_mpsc::Receiver<()>>,
+        }
+        impl Wake for PauseAfterPublication {
+            fn wake(self: Arc<Self>) {
+                self.reached.send(()).unwrap();
+                self.resume.lock().recv().unwrap();
+            }
+        }
+        struct ResumeOnDrop(std_mpsc::Sender<()>);
+        impl Drop for ResumeOnDrop {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+
+        let (mut networking, continuation, mut wake_rx) = continuation_fixture(97);
+        let (tx, rx) = mpsc::channel(STREAMING_DOCUMENT_INPUT_BUFFERED_EVENTS);
+        let sender = StreamingDocumentInputSender {
+            tx,
+            parser_continuation: continuation.clone(),
+        };
+        let mut source = StreamingDocumentInputSource { rx };
+        let (reached_tx, reached_rx) = std_mpsc::sync_channel(1);
+        let (resume_tx, resume_rx) = std_mpsc::channel();
+        let waker = Waker::from(Arc::new(PauseAfterPublication {
+            reached: reached_tx,
+            resume: Mutex::new(resume_rx),
+        }));
+        // The receiver wake pauses the real sender after input publication,
+        // before its continuation request, just as thread preemption can.
+        assert!(
+            source
+                .rx
+                .poll_recv(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+
+        std::thread::scope(|threads| {
+            let producer = threads.spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .unwrap()
+                    .block_on(sender.send(StreamingDocumentInputEvent::Chunks(vec![
+                        b"published input".to_vec(),
+                    ])))
+            });
+            // Unblock the real producer even if a regression panics below;
+            // the scoped thread must be joined before its task source drops.
+            let resume = ResumeOnDrop(resume_tx);
+            reached_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("producer must publish its payload before notifying the parser");
+            assert!(!source.rx.is_empty());
+            assert!(!networking.has_ready_task());
+            assert_eq!(
+                PhaseOneResidenceAdmission::after_stable_restore(
+                    PhaseOneRestoreRequirement::Producer,
+                    networking.has_ready_task(),
+                ),
+                PhaseOneResidenceAdmission::WaitingForProducer,
+            );
+
+            drop(resume);
+            assert!(producer.join().expect("input producer must finish"));
+        });
+
+        let wake = wake_rx
+            .try_recv()
+            .expect("publication must notify the owner");
+        assert_eq!(
+            wake.source_for_test(),
+            RendererOwnerWakeSource::NetworkingTask
+        );
+        assert_eq!(
+            PhaseOneResidenceAdmission::after_stable_restore(
+                PhaseOneRestoreRequirement::Producer,
+                networking.has_ready_task(),
+            ),
+            PhaseOneResidenceAdmission::ReadyPageTurn,
+        );
+        let (_, task) = networking
+            .pop_front_task()
+            .expect("parser task must be resident");
+        let RendererPageNetworkingTask::MainParserContinuation(task) = task else {
+            panic!("input must resume through the production parser task");
+        };
+        assert_eq!(task.into_owner(), continuation.owner());
+        assert!(matches!(
+            source.try_next().unwrap(),
+            Some(StreamingDocumentInputEvent::Chunks(chunks))
+                if chunks == [b"published input".to_vec()]
+        ));
     }
 
     #[tokio::test]
@@ -236,7 +339,7 @@ mod tests {
             chunk_wake.source_for_test(),
             crate::page_task_queue::RendererOwnerWakeSource::NetworkingTask
         );
-        assert!(source.has_ready_input());
+        assert!(!source.rx.is_empty());
         let (_, task) = networking
             .pop_front_task()
             .expect("body payload should queue one parser continuation");

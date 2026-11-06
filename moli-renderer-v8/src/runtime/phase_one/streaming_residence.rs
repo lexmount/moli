@@ -70,10 +70,6 @@ impl PendingStreamingPhaseOneContinuation {
         self.runtime.owner_wake_token()
     }
 
-    pub(in crate::runtime) fn has_ready_input(&mut self) -> bool {
-        self.input.has_ready_input()
-    }
-
     pub(super) fn retire_for_committed_navigation(self) -> PageVm {
         let Self { runtime, input, .. } = self;
         // Dropping the input receiver cancels the old body bridge without
