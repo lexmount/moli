@@ -160,6 +160,10 @@ pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
     if event_type != "change" {
         return;
     }
+    let Some(context) = list.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
