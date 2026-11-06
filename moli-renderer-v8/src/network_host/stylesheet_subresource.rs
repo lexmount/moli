@@ -116,11 +116,11 @@ pub(crate) fn start_stylesheet_subresource_fetch(
         options,
     )?;
     let internal_id = host
-        .record_async_stylesheet_subresource_fetch(
+        .record_stylesheet_subresource_fetch(
             v8::Global::new(scope, scope.get_current_context()),
             binding,
             owner,
-            prepared.cancel_handle.clone(),
+            prepared.registration.clone(),
             options.credentials_mode,
             options.request_mode,
             prepared.network_partition_key.clone(),

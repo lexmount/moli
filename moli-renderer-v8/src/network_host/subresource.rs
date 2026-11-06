@@ -8,7 +8,7 @@ use crate::{
     },
     types::{
         AsyncSubresourceFetchCompletion, AsyncSubresourceNetworkContext,
-        PendingSubresourceFetchInfo, SubresourceResourceType,
+        PendingSubresourceFetchInfo, SubresourceFetchRegistration, SubresourceResourceType,
     },
 };
 use anyhow::{Context, Result};
@@ -51,7 +51,7 @@ impl SubresourceFetchOptions {
 /// it through CSP/local-resource policy and binds its own pending continuation,
 /// then dispatches using the assigned request identity.
 pub(super) struct PreparedSubresourceFetch {
-    pub(super) cancel_handle: FetchCancelHandle,
+    pub(super) registration: SubresourceFetchRegistration,
     pub(super) network_partition_key: Option<String>,
     pub(super) network_context: AsyncSubresourceNetworkContext,
     pub(super) pending_info: PendingSubresourceFetchInfo,
@@ -114,7 +114,11 @@ impl PreparedSubresourceFetch {
             request_cookie_report,
         };
         Ok(Self {
-            cancel_handle: FetchCancelHandle::new(),
+            registration: if host.should_intercept_subresource(options.resource_type) {
+                SubresourceFetchRegistration::Intercepted
+            } else {
+                SubresourceFetchRegistration::Dispatched(FetchCancelHandle::new())
+            },
             network_partition_key,
             network_context: AsyncSubresourceNetworkContext {
                 request_origin,
@@ -137,6 +141,9 @@ impl PreparedSubresourceFetch {
         internal_id: u64,
         service_worker_failure: &str,
     ) {
+        let SubresourceFetchRegistration::Dispatched(cancel_handle) = self.registration else {
+            return;
+        };
         let loader = self.resource_loader.request_client().clone();
         let task_runner = self.resource_loader.task_runner();
         let info = self.pending_info;
@@ -167,7 +174,7 @@ impl PreparedSubresourceFetch {
                 completion_tx: host.resource_completion_sender(),
                 request_client: loader,
                 resource_task_runner: task_runner,
-                cancel_handle: self.cancel_handle,
+                cancel_handle,
                 direct_completion_tx: None,
             };
             if !host.dispatch_service_worker_fetch(dispatch) {
@@ -193,7 +200,7 @@ impl PreparedSubresourceFetch {
             host.resource_completion_sender(),
             loader,
             self.request,
-            Some(self.cancel_handle),
+            Some(cancel_handle),
             Vec::new(),
             internal_id,
             self.network_context,
