@@ -6,6 +6,8 @@ mod font_loading;
 mod integrity;
 #[path = "scripts/nested_worker_retirement.rs"]
 mod nested_worker_retirement;
+#[path = "scripts/worker_event_source.rs"]
+mod worker_event_source;
 #[path = "scripts/worker_fetch_metadata.rs"]
 mod worker_fetch_metadata;
 #[path = "scripts/worker_resource_timing.rs"]

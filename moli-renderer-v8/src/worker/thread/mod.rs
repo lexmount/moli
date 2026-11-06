@@ -686,6 +686,7 @@ fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
         || !state.webtransport_tasks.is_empty()
         || !state.canvas_blob_tasks.is_empty()
         || !state.pending_fetches.is_empty()
+        || !state.browser_timeouts.is_empty()
         || !state.pending_xhrs.is_empty()
         || !state.websockets.is_empty()
         || !state.pending_webcrypto.is_empty()
@@ -2006,6 +2007,8 @@ async fn worker_main(
         shared_memory_agent_cluster,
         fetch_completion_tx,
         pending_fetches: std::collections::HashMap::new(),
+        browser_timeouts: std::collections::HashMap::new(),
+        next_browser_timeout_id: 0,
         pending_network_body_sources: std::collections::HashMap::new(),
         pending_network_body_clones: std::collections::HashMap::new(),
         next_fetch_id: 0,

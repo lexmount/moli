@@ -197,13 +197,16 @@ pub(crate) use nested_workers::{
 };
 pub(super) use nested_workers::{dispatch_nested_worker_event, retire_nested_workers};
 pub(super) use network_state::{
-    PendingWorkerFetch, PendingWorkerXhr, WorkerWebSocketState, WorkerXhrCompletion, WorkerXhrEvent,
+    WorkerFetchClient, PendingWorkerFetch, PendingWorkerXhr, WorkerWebSocketState, WorkerXhrCompletion, WorkerXhrEvent,
 };
 pub(crate) use network_state::{
     WorkerFetchCompletion, WorkerFetchEvent, WorkerFetchResponse, WorkerFetchStreamingChunk,
     WorkerFetchStreamingFinished, WorkerFetchStreamingStarted,
+
 };
 use network_state::{merge_worker_request_headers, next_fetch_id, next_xhr_id, worker_url_blocked};
+mod event_source;
+pub(crate) use event_source::{abort_worker_event_source, start_worker_event_source_request};
 pub(crate) use origin::worker_global_origin;
 use origin::{WorkerGlobalOriginDeclaration, WorkerGlobalOriginPrototypeDeclaration};
 use performance::monotonic_unix_epoch_millis;
@@ -240,3 +243,4 @@ pub(crate) use state::{
     worker_termination_requested,
 };
 pub(super) use timers::{TimerInfo, WorkerIsolateTimerQueues, worker_isolate_timer_queues};
+pub(crate) use timers::{cancel_worker_browser_timeout, queue_worker_browser_timeout};

@@ -360,16 +360,22 @@ pub(crate) fn schedule_event_source_connect<'s>(
     else {
         return false;
     };
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return false;
+    let timer_id = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        unsafe { &mut *host_ptr }.queue_timeout(
+            scope,
+            callback,
+            delay_ms.min(u64::from(u32::MAX)),
+            crate::host::HostTimerOwner::Window,
+            Vec::new(),
+        )
+    } else {
+        crate::worker::queue_worker_browser_timeout(
+            scope,
+            callback,
+            delay_ms.min(u64::from(u32::MAX)),
+        )
+        .unwrap_or(0)
     };
-    let timer_id = unsafe { &mut *host_ptr }.queue_timeout(
-        scope,
-        callback,
-        delay_ms.min(u64::from(u32::MAX)),
-        crate::host::HostTimerOwner::Window,
-        Vec::new(),
-    );
     if timer_id == 0 {
         return false;
     }
@@ -415,10 +421,12 @@ fn event_source_close_callback<'s>(
         return;
     }
     clear_event_source_reconnect_timer(scope, event_source);
-    if let Some(internal_id) = event_source_active_request_id(scope, event_source)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        let _ = unsafe { &mut *host_ptr }.abort_event_source_fetch(internal_id);
+    if let Some(internal_id) = event_source_active_request_id(scope, event_source) {
+        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+            let _ = unsafe { &mut *host_ptr }.abort_event_source_fetch(internal_id);
+        } else {
+            crate::worker::abort_worker_event_source(scope, internal_id);
+        }
     }
     set_event_source_active_request_id(scope, event_source, None);
     set_event_source_number_slot(
@@ -442,6 +450,8 @@ fn clear_event_source_reconnect_timer<'s>(
     };
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         unsafe { &mut *host_ptr }.cancel_timer(timer_id);
+    } else {
+        crate::worker::cancel_worker_browser_timeout(scope, timer_id);
     }
     set_private_value(
         scope,

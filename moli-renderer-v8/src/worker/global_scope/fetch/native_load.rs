@@ -1,17 +1,19 @@
 use super::*;
 
-pub(super) struct NativeWorkerFetchRequest<'s> {
-    pub(super) request: Request,
-    pub(super) body_stream: Option<v8::Global<v8::Object>>,
-    pub(super) body_stream_locked: bool,
-    pub(super) signal: Option<v8::Local<'s, v8::Object>>,
-    pub(super) blob_url_entry: Option<CapturedBlobUrl>,
-    pub(super) kind: WorkerFetchKind,
-    pub(super) timing: WorkerResourceTiming,
-    pub(super) font_face: Option<v8::Local<'s, v8::Object>>,
+pub(in crate::worker::global_scope) struct NativeWorkerFetchRequest<'s> {
+    pub(in crate::worker::global_scope) request: Request,
+    pub(in crate::worker::global_scope) event_source: Option<v8::Local<'s, v8::Object>>,
+    pub(in crate::worker::global_scope) admission_error: Option<String>,
+    pub(in crate::worker::global_scope) body_stream: Option<v8::Global<v8::Object>>,
+    pub(in crate::worker::global_scope) body_stream_locked: bool,
+    pub(in crate::worker::global_scope) signal: Option<v8::Local<'s, v8::Object>>,
+    pub(in crate::worker::global_scope) blob_url_entry: Option<CapturedBlobUrl>,
+    pub(in crate::worker::global_scope) kind: WorkerFetchKind,
+    pub(in crate::worker::global_scope) timing: WorkerResourceTiming,
+    pub(in crate::worker::global_scope) font_face: Option<v8::Local<'s, v8::Object>>,
 }
 
-pub(super) fn start<'s>(
+pub(in crate::worker::global_scope) fn start<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
     request: NativeWorkerFetchRequest<'s>,
@@ -20,7 +22,7 @@ pub(super) fn start<'s>(
     metadata: ServiceWorkerFetchRequestMetadata,
     policy_context: SubresourcePolicyContext,
 ) -> Option<v8::Local<'s, v8::Promise>> {
-    let NativeWorkerFetchRequest { mut request, blob_url_entry, kind, font_face, timing, body_stream, body_stream_locked, signal } = request;
+    let NativeWorkerFetchRequest { mut request, blob_url_entry, kind, font_face, timing, body_stream, body_stream_locked, signal, event_source, admission_error } = request;
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
     let cancel = FetchCancelHandle::new();
@@ -71,9 +73,14 @@ pub(super) fn start<'s>(
             PendingWorkerFetch {
                 upload: None,
                 kind,
-                font_face: font_face.map(|face| v8::Global::new(scope, face)),
-                resolver: v8::Global::new(scope, resolver),
+                client: if let Some(source) = event_source { WorkerFetchClient::EventSource(v8::Global::new(scope, source)) } else { WorkerFetchClient::Promise { resolver: v8::Global::new(scope, resolver), font_face: font_face.map(|face| v8::Global::new(scope, face)) } },
+                request_headers: request.request_headers.clone(),
                 resource_timing: resource_timing.clone(),
+                document_url,
+                credentials_mode: policy_context.network_credentials_mode(request.request_mode, request.credentials_mode),
+                request_mode: request.request_mode,
+                redirect_mode: request.redirect_mode(),
+                policy_context,
                 timing: timing.clone(),
                 signal_id,
                 load: load.clone(),
@@ -88,6 +95,14 @@ pub(super) fn start<'s>(
         control.connect_policy = control.connect_policy.for_resource_kind(kind.csp_resource_kind());
         (fetch_id, state.fetch_completion_tx.clone(), control, resource_timing)
     };
+    if let Some(source) = event_source {
+        crate::network_host::set_event_source_active_request_id(scope, source, Some(u64::from(fetch_id)));
+    }
+    if let Some(error) = admission_error {
+        record_worker_subresource_failure_with_handle(&state.borrow(), info.network_request_handle, info.document_url.clone(), info.url.clone(), info.method.clone(), info.request_headers.clone(), info.request_body_bytes.clone(), info.resource_type, error.clone());
+        let _ = completion.send(WorkerFetchEvent::EventSourceFailure { fetch_id, error, mode: crate::network_host::EventSourceTerminalMode::Close });
+        return Some(promise);
+    }
     let service_worker = state.borrow().service_worker_runtime.clone();
     let service_worker_client = state.borrow().service_worker_client_id;
     let controlled = service_worker.as_ref().zip(service_worker_client).is_some_and(|(runtime, client)| {
@@ -132,7 +147,8 @@ pub(super) fn start<'s>(
         }
     }
     let task_runner = load.task_runner();
-    let redirect_owner = (kind == WorkerFetchKind::Fetch).then(|| {
+    let event_source_parser = crate::worker::global_scope::event_source::parser_for_request(kind, &request.request_headers);
+    let redirect_owner = (kind != WorkerFetchKind::Font).then(|| {
         crate::network_host::RedirectOwner::Worker(WorkerRedirectOwner::fetch(completion.clone(), fetch_id, load.clone()))
     });
     task_runner.spawn(async move {
@@ -143,7 +159,7 @@ pub(super) fn start<'s>(
             .with_blob_url_entry(blob_url_entry)
             .with_service_worker(service_worker, service_worker_client, metadata)
             .with_service_worker_request_body(transferred, request_body_owner)
-            .run_fetch(completion, fetch_id, resource_timing, integrity, timing)
+            .run_fetch(completion, fetch_id, resource_timing, integrity, timing, event_source_parser)
             .await;
     });
     Some(promise)
