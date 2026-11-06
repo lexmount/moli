@@ -145,8 +145,15 @@ pub(super) fn compute_intersection_check_batch(
             .collect();
         let queries = moli_layout::LayoutQueryBatch::new(queries);
         let answers: Vec<_> = if runtime.layout_policy().is_realtime() {
-            crate::native_bridge::element::observable_geometry_batch(runtime, document, &queries)?
-                .answers
+            match crate::native_bridge::element::observable_geometry_batch(
+                runtime, document, &queries,
+            ) {
+                Ok(answers) => answers.answers,
+                // Missing frame members and inert Documents have no layout.
+                // Their targets retain None geometry and report nonintersection.
+                Err(moli_layout::LayoutError::NoLayoutSnapshot) => continue,
+                Err(error) => return Err(error),
+            }
         } else {
             runtime
                 .with_latest_layout_tree_for_document(document, |tree| {

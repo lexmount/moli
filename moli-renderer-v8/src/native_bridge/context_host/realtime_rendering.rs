@@ -378,16 +378,8 @@ impl JsContextHost {
             .frame
             .borrow_mut()
             .source_requested = false;
-        // Empty Documents have no layout root. A later parser/DOM commit will
-        // request a new opportunity; do not automatically retry the same input.
-        if self
-            .dom_host()
-            .dom()
-            .document_element_handle_for_document(self.document_handle())
-            .is_none()
-        {
-            return Ok(());
-        }
+        // The shared freshness gate also publishes an empty result when the
+        // root was removed, retiring the previous geometry and computation.
         self.ensure_current_screen_layout(LayoutFlushReason::RenderingOpportunity)?;
         #[cfg(test)]
         if let Some(completed) = self
