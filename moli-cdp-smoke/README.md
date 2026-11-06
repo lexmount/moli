@@ -4,6 +4,10 @@ This is a standalone CDP smoke project for moli. The default suite uses Playwrig
 
 The suite covers real CDP-client workflows: `connect_over_cdp`, concurrent browser and direct-page clients, multiple pages and contexts, navigation, history, `Page.setDocumentContent`, popup target creation, JavaScript dialog events, Network/Fetch routing, workers, WebSocket, file upload, downloads, locator/input flows, DOM/handle flows, Chromium-derived CDP protocol samples, Playwright-upstream-derived route/CDPSession samples, screenshots, `Page.printToPDF`, viewport, and storage/profile behavior. It is not a replacement for unit tests. Its job is to answer whether moli is usable as a Playwright/Puppeteer-style CDP endpoint.
 
+The `protocol` group also opens prompts with two attached Page sessions. Each
+session receives one opening and one closing notification; either session can
+handle the prompt and resume the original evaluation with its supplied text.
+
 ## Chromium Behavior Evidence
 
 CI runs every default group twice per engine: `CDP smoke` uses the HEAD Moli

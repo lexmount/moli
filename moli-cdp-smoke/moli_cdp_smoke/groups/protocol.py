@@ -11,12 +11,14 @@ from ..config import is_moli_browser
 from ..navigation import navigate as navigate_document
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
 from .browser_endpoint import browser_endpoint_discovery
+from .javascript_dialogs import javascript_dialog_subscriptions
 
 
 @dataclass
 class RawPageSession:
     session_id: str
     browser_context_id: str
+    target_id: str
 
 
 async def run_raw_protocol_group(endpoint: str, fixture: str, results: list[dict[str, Any]]) -> None:
@@ -28,6 +30,7 @@ async def run_raw_protocol_group(endpoint: str, fixture: str, results: list[dict
         await _runtime_unique_context_id_roundtrip(client, page_session.session_id, results)
         await _large_runtime_result_roundtrip(client, page_session.session_id, results)
         await _javascript_dialog_protocol_shape(client, page_session.session_id, results)
+        await javascript_dialog_subscriptions(client, page_session.target_id, page_session.session_id, results)
         await _browser_get_version_keeps_session_route(client, page_session.session_id, results)
         await _navigation_suspension_command_routing_matches_chromium(
             client,
@@ -1167,7 +1170,7 @@ async def _create_page_session(client: RawCdpClient, url: str) -> RawPageSession
 
     await navigate_document(client, session_id, {"url": url})
 
-    return RawPageSession(session_id=session_id, browser_context_id=browser_context_id)
+    return RawPageSession(session_id=session_id, browser_context_id=browser_context_id, target_id=target_id)
 
 
 def _profile_function_names(profile: dict[str, Any]) -> set[str]:
