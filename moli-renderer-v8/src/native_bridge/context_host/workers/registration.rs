@@ -243,6 +243,7 @@ impl JsContextHost {
 
     pub(crate) fn start_worker_script_load(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         worker_id: DedicatedWorkerId,
         script_url: Url,
         initiator_url: Url,
@@ -273,6 +274,26 @@ impl JsContextHost {
         let Some(outside_settings_load) = outside_settings_load else {
             return false;
         };
+        let Some(creator) = self
+            .workers
+            .get(&worker_id)
+            .and_then(|state| state.owner.resolve_identity(self))
+        else {
+            return false;
+        };
+        let Some(loader) =
+            self.document_resource_loader_for_dispatch_scope(creator.dispatch_scope())
+        else {
+            return false;
+        };
+        let request_origin = loader.fetch_context().request_origin();
+        let mut timing =
+            crate::context_bootstrap::FetchResourceTiming::for_initiator_type(match script_kind {
+                WorkerScriptKind::Classic => "other",
+                WorkerScriptKind::Module => "script",
+            });
+        timing.capture_window_initiator(scope, self);
+        let timing_sender = self.resource_completion_sender();
         let request_client = outside_settings_load.request_client();
         let cancel_handle = moli_fetch::FetchCancelHandle::new();
         outside_settings_load.attach_cancel_handle(cancel_handle.clone());
@@ -287,7 +308,7 @@ impl JsContextHost {
             let result = fetch_worker_script_source(
                 &request_client,
                 fetch_task_runner,
-                cancel_handle,
+                cancel_handle.clone(),
                 &script_url,
                 &initiator_url,
                 network_partition_key.clone(),
@@ -299,6 +320,30 @@ impl JsContextHost {
                 reserved_service_worker_client_id,
             )
             .await;
+            let completed = std::time::Instant::now();
+            // Report to the captured outside settings before worker startup.
+            // This task does not require the Worker wrapper to remain live.
+            let response = match &result {
+                Ok(loaded) => Some(&loaded.network_response),
+                Err(error) => error.network_response.as_deref(),
+            };
+            let head = response.map(|response| response.head());
+            let mut resource_url = script_url.clone();
+            resource_url.set_fragment(None);
+            let entry = timing.complete_worker_script_fetch(
+                &resource_url,
+                &request_origin,
+                head.as_ref()
+                    .zip(response.map(|response| response.body_bytes().len())),
+                cancel_handle.response_timing(),
+                completed,
+            );
+            let _ = timing_sender.send_async_subresource_event(
+                crate::types::AsyncSubresourceFetchEvent::ResourceTiming {
+                    target: creator,
+                    entry: Box::new(entry),
+                },
+            );
             outside_settings_load.finish();
             match result {
                 Ok(mut loaded) => {

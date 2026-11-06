@@ -172,6 +172,36 @@ impl FetchResourceTiming {
         entry
     }
 
+    /// Worker root fetches belong to the outside settings object, including
+    /// responses rejected by the subsequent HTTP status or MIME checks.
+    pub(crate) fn complete_worker_script_fetch(
+        mut self,
+        name: &Url,
+        origin: &WebOrigin,
+        response: Option<(&ResponseHead, usize)>,
+        native: moli_fetch::FetchResponseTiming,
+        completed: Instant,
+    ) -> ResourcePerformanceEntry {
+        self.observe_native_timing(native);
+        let entry = match response {
+            Some((head, body_size)) => {
+                let filter = crate::network_host::FetchResponseRequest {
+                    method: "GET",
+                    mode: moli_fetch::RequestMode::SameOrigin,
+                    redirect_mode: moli_fetch::RequestRedirectMode::Follow,
+                }
+                .network_response_filter(
+                    origin,
+                    head,
+                    moli_fetch::RequestCredentialsMode::SameOrigin,
+                );
+                self.response(name, origin, head, &filter, body_size)
+            }
+            None => self.failure(name),
+        };
+        self.completed_at(entry, native.response_end_at().unwrap_or(completed))
+    }
+
     pub(crate) fn response(
         &self,
         name: &Url,

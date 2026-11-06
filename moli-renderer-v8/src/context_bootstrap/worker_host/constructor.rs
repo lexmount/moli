@@ -478,6 +478,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 )
             } else {
                 host.start_worker_script_load(
+                    scope,
                     worker_id,
                     resolved_url,
                     base_url,
@@ -541,6 +542,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             return;
         }
         let loaded = match materialize_nested_worker_script_source(
+            scope,
             &resolved_url,
             &nested_context,
             worker_options.worker_type,
@@ -923,6 +925,7 @@ struct LoadedNestedWorkerScript {
 }
 
 fn materialize_nested_worker_script_source(
+    scope: &mut v8::PinScope<'_, '_>,
     script_url: &Url,
     context: &NestedWorkerContext,
     script_kind: WorkerScriptKind,
@@ -970,9 +973,34 @@ fn materialize_nested_worker_script_source(
             document_referrer_policy: context.referrer_policy.clone(),
             ..Default::default()
         });
+    let mut timing =
+        crate::context_bootstrap::FetchResourceTiming::for_initiator_type(match script_kind {
+            WorkerScriptKind::Classic => "other",
+            WorkerScriptKind::Module => "script",
+        });
+    timing.capture_worker_initiator(scope);
+    let origin = crate::worker::worker_global_origin(scope)
+        .unwrap_or_else(|| moli_url::WebOrigin::from_url(&context.base_url));
+    let cancel = moli_fetch::FetchCancelHandle::new();
     let response = loader
         .request_client()
-        .fetch_text_for_worker_blocking_boundary(request)
+        .fetch_text_for_worker_blocking_boundary_with_cancel(request, cancel.clone());
+    let completed = std::time::Instant::now();
+    let head = response.as_ref().ok().map(|response| response.head());
+    let entry = timing.complete_worker_script_fetch(
+        &resource_url,
+        &origin,
+        head.as_ref().zip(
+            response
+                .as_ref()
+                .ok()
+                .map(|response| response.body_bytes().len()),
+        ),
+        cancel.response_timing(),
+        completed,
+    );
+    crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+    let response = response
         .map_err(|error| format!("Failed to load worker script `{resource_url}`: {error}"))?;
     crate::worker::ensure_worker_script_redirect_chain_same_origin(
         &context.base_url,

@@ -477,6 +477,19 @@ impl ScriptVm {
                     .record_subresource_network(*record);
                 Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered)
             }
+            AsyncSubresourceFetchEvent::ResourceTiming { target, entry } => {
+                let entered = self.with_default_context_scope(|scope, host_ptr| {
+                    // The completed fetch has no dependency on a live Worker
+                    // wrapper, but must retain its exact creator Document.
+                    Ok(unsafe { &mut *host_ptr }
+                        .record_window_resource_timing(scope, target, *entry))
+                })?;
+                Ok(if entered {
+                    AsyncSubresourceFetchBodyActivity::WindowRealmEntered
+                } else {
+                    AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered
+                })
+            }
             AsyncSubresourceFetchEvent::StreamingStarted(started) => {
                 self.start_streaming_async_subresource_fetch_body(*started)
             }

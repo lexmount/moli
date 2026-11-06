@@ -8,6 +8,8 @@ mod integrity;
 mod nested_worker_retirement;
 #[path = "scripts/worker_fetch_metadata.rs"]
 mod worker_fetch_metadata;
+#[path = "scripts/worker_resource_timing.rs"]
+mod worker_resource_timing;
 
 use moli_test_support as support;
 

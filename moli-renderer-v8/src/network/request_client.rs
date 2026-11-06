@@ -1526,13 +1526,6 @@ impl ResourceRequestClient {
         result?
     }
 
-    pub(crate) fn fetch_text_for_worker_blocking_boundary(
-        &self,
-        request: Request,
-    ) -> Result<Response> {
-        self.fetch_text_for_worker_blocking_boundary_with_cancel(request, FetchCancelHandle::new())
-    }
-
     pub(crate) fn fetch_text_for_worker_blocking_boundary_with_cancel(
         &self,
         request: Request,
