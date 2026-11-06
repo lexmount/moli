@@ -2,6 +2,7 @@ use super::{
     JsContextHost, OwnerDispatchScope, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES,
 };
 use crate::{
+    context_bootstrap::{error_event_handler_arguments, event_is_error_event},
     document_runtime::DomHandle,
     document_runtime::EventTargetHandle,
     exception_reporting::invoke_event_handler,
@@ -755,40 +756,25 @@ fn child_window_event_callback_arguments<'s>(
 ) -> Vec<v8::Local<'s, v8::Value>> {
     if registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty
         && event_type == "error"
+        && let Some(arguments) = error_event_handler_arguments(scope, event)
     {
-        vec![
-            crate::context_bootstrap::event_backing(scope, event)
-                .get(scope, v8str(scope, "message").into())
-                .unwrap_or_else(|| v8::undefined(scope).into()),
-            crate::context_bootstrap::event_backing(scope, event)
-                .get(scope, v8str(scope, "filename").into())
-                .unwrap_or_else(|| v8::undefined(scope).into()),
-            crate::context_bootstrap::event_backing(scope, event)
-                .get(scope, v8str(scope, "lineno").into())
-                .unwrap_or_else(|| v8::Number::new(scope, 0.0).into()),
-            crate::context_bootstrap::event_backing(scope, event)
-                .get(scope, v8str(scope, "colno").into())
-                .unwrap_or_else(|| v8::Number::new(scope, 0.0).into()),
-            crate::context_bootstrap::event_backing(scope, event)
-                .get(scope, v8str(scope, "error").into())
-                .unwrap_or_else(|| v8::null(scope).into()),
-        ]
+        arguments.to_vec()
     } else {
         vec![event.into()]
     }
 }
 
-fn apply_child_window_event_handler_return(
-    scope: &mut v8::PinScope<'_, '_>,
+fn apply_child_window_event_handler_return<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    event: v8::Local<'_, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
     returned: Option<v8::Global<v8::Value>>,
 ) {
     let Some(returned) = returned else {
         return;
     };
     let returned = v8::Local::new(scope, returned);
-    let should_cancel = if event_type == "error" {
+    let should_cancel = if event_type == "error" && event_is_error_event(scope, event) {
         returned.is_boolean() && returned.boolean_value(scope)
     } else {
         returned.is_boolean() && !returned.boolean_value(scope)

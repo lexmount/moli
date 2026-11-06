@@ -94,6 +94,7 @@ mod web_mcp;
 mod webrtc;
 mod webrtc_events;
 mod window_legacy_objects;
+mod window_onerror;
 mod worker_listener_invocation;
 mod worker_options;
 
