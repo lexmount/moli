@@ -1460,10 +1460,15 @@ impl DocumentRuntime {
         new_value: Option<Arc<DomStringValue>>,
         policy: AttributeChangedReactionPolicy,
     ) {
-        if namespace.is_none() {
-            native_bridge::element::invalidate_event_handler_content_attribute(
-                scope, host_ptr, handle, name,
-            );
+        if let Some(previous) = self.sync_event_handler_content_attribute(
+            scope,
+            host_ptr,
+            handle,
+            name,
+            namespace,
+            new_value.clone(),
+        ) {
+            unsafe { &mut *host_ptr }.release_event_callback(previous);
         }
         match policy {
             AttributeChangedReactionPolicy::DispatchNow => {
@@ -2133,11 +2138,6 @@ impl DocumentRuntime {
                     continue;
                 };
                 debug_assert_eq!(prepared_load.owner(), owner);
-                self.capture_modulepreload_csp_source_location(
-                    scope,
-                    unsafe { &*host_ptr },
-                    &mut prepared_load,
-                );
                 prime_result.extend(self.apply_prepared_connected_style_load(
                     prepared_load,
                     inline_source.clone(),
@@ -2228,6 +2228,13 @@ fn start_connected_child_document_script(
         ),
     )
     .into_parts();
+    let resource_initiator = crate::context_bootstrap::ResourceTimingInitiator::capture_window(
+        scope,
+        unsafe { &mut *host_ptr },
+        None,
+    );
+    let preparation =
+        preparation.with_resource_timing_initiator(resource_initiator.as_str().to_owned());
     match decision {
         RuntimeScriptStartDecision::Skip { commit_start, .. } => {
             if commit_start {

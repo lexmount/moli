@@ -228,6 +228,8 @@ where
                     task_script_initiator_url,
                     task_script_url.clone(),
                     script_request_initiator_type(runtime_script_claim.as_ref()),
+                    &script.fetch_metadata,
+                    script.resource_timing_initiator_url.as_deref(),
                     network_result,
                 );
             }
@@ -422,6 +424,8 @@ where
                 task_script_initiator_url,
                 task_script_url.clone(),
                 script_request_initiator_type(runtime_script_claim.as_ref()),
+                &script.fetch_metadata,
+                script.resource_timing_initiator_url.as_deref(),
                 network_result,
             );
         }
@@ -644,6 +648,8 @@ mod tests {
             _initiator_url: url::Url,
             _script_url: url::Url,
             _request_initiator_type: crate::types::SubresourceRequestInitiatorType,
+            _fetch_metadata: &crate::planning::ScriptFetchMetadata,
+            _resource_timing_initiator_url: Option<&str>,
             _network_result: &std::result::Result<NavigationResponse, String>,
         ) {
             self.recorded_network_results += 1;
@@ -713,6 +719,7 @@ mod tests {
 
     fn prepared_classic_script() -> PreparedScript {
         PreparedScript {
+            resource_timing_initiator_url: None,
             document_referrer_policy: None,
             position: 1,
             node_id: NodeId::new(2),

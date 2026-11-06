@@ -31,6 +31,36 @@ impl PageScriptHost {
         target: WindowDocumentTaskTarget,
         request_initiator_type: crate::types::SubresourceRequestInitiatorType,
     ) -> Option<PendingImageLoadEvent> {
+        let initiator = self
+            .dom_host()
+            .owner_document_handle(image_handle)
+            .filter(|_| {
+                matches!(
+                    request_initiator_type,
+                    crate::types::SubresourceRequestInitiatorType::Parser
+                )
+            })
+            .map(|document| {
+                crate::context_bootstrap::ResourceTimingInitiator::from_document(
+                    &self.document_url_for_handle(document),
+                )
+            })
+            .unwrap_or_default();
+        self.register_pending_image_load_event_with_initiator(
+            image_handle,
+            target,
+            request_initiator_type,
+            initiator,
+        )
+    }
+
+    pub(crate) fn register_pending_image_load_event_with_initiator(
+        &mut self,
+        image_handle: DomHandle,
+        target: WindowDocumentTaskTarget,
+        request_initiator_type: crate::types::SubresourceRequestInitiatorType,
+        initiator: crate::context_bootstrap::ResourceTimingInitiator,
+    ) -> Option<PendingImageLoadEvent> {
         let node = self.dom_host().node(image_handle)?;
         let element = node
             .as_element()
@@ -76,7 +106,8 @@ impl PageScriptHost {
             owner,
             request_initiator_type,
             resource_timing_initiator_type,
-        );
+        )
+        .with_resource_timing_initiator(initiator);
         if !self.insert_pending_image_load_event(image_handle, pending.clone()) {
             let _ = self.settle_pending_image_load_event(pending, true);
             return None;

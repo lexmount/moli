@@ -25,6 +25,7 @@ pub(in crate::native_bridge::context_host) struct PendingFrameOwnerResourceTimin
     initiator_type: &'static str,
     start_unix_millis_bits: u64,
     started_at: std::time::Instant,
+    initiator: crate::context_bootstrap::ResourceTimingInitiator,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,6 +83,8 @@ impl PendingFrameOwnerResourceTiming {
             timing.observe_native_timing(*native);
         }
         timing.apply_child_document_timing(entry, network, expose_document_response);
+        self.initiator
+            .apply_child_document(entry, network, expose_document_response);
     }
 
     fn start_unix_millis(&self) -> f64 {
@@ -113,6 +116,7 @@ impl PageScriptHost {
         handle: DomHandle,
         target_url: &url::Url,
         initiator: ChildDocumentNavigationInitiator,
+        resource_initiator: crate::context_bootstrap::ResourceTimingInitiator,
     ) -> Option<PendingFrameOwnerResourceTiming> {
         if initiator != ChildDocumentNavigationInitiator::FrameOwnerElement
             || !matches!(target_url.scheme(), "http" | "https")
@@ -129,6 +133,7 @@ impl PageScriptHost {
             initiator_type,
             start_unix_millis_bits: moli_time::unix_epoch_millis().to_bits(),
             started_at: std::time::Instant::now(),
+            initiator: resource_initiator,
         })
     }
 

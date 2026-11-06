@@ -293,6 +293,7 @@ fn source_failure_payload(
 
 fn external_script(script_handle: DomHandle, script_url: Url) -> PreparedScript {
     PreparedScript {
+        resource_timing_initiator_url: None,
         document_referrer_policy: None,
         position: 0,
         node_id: NodeId::new(script_handle.index()),
