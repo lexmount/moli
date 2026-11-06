@@ -68,6 +68,7 @@ pub enum FetchResourceTypeFilter {
     Stylesheet,
     Image,
     Media,
+    Font,
     TextTrack,
     Fetch,
     EventSource,
@@ -104,6 +105,7 @@ impl FetchResourceTypeFilter {
             Self::Stylesheet => resource_type == DevToolsNetworkResourceType::Stylesheet,
             Self::Image => resource_type == DevToolsNetworkResourceType::Image,
             Self::Media => resource_type == DevToolsNetworkResourceType::Media,
+            Self::Font => resource_type == DevToolsNetworkResourceType::Font,
             Self::TextTrack => resource_type == DevToolsNetworkResourceType::TextTrack,
             Self::Ping => resource_type == DevToolsNetworkResourceType::Ping,
             Self::CspViolationReport => {
@@ -117,6 +119,10 @@ impl FetchResourceTypeFilter {
     pub fn subresource_type(self) -> Option<SubresourceResourceType> {
         match self {
             Self::Stylesheet | Self::Media | Self::TextTrack => None,
+            // Fonts load through the standard pending-subresource pipeline
+            // (renderer font_face host reports SubresourceResourceType::Font),
+            // so the scheduler can pause them like images and scripts.
+            Self::Font => Some(SubresourceResourceType::Font),
             // Top-level navigations pause in the protocol; child frame
             // navigations pause in the renderer like subresources.
             Self::Document => Some(SubresourceResourceType::Document),
@@ -145,6 +151,7 @@ impl FetchResourceTypeFilter {
             Self::Document
                 | Self::Script
                 | Self::Image
+                | Self::Font
                 | Self::Fetch
                 | Self::EventSource
                 | Self::Xhr
@@ -1769,6 +1776,7 @@ mod tests {
             ("Stylesheet", FetchResourceTypeFilter::Stylesheet),
             ("Image", FetchResourceTypeFilter::Image),
             ("Media", FetchResourceTypeFilter::Media),
+            ("Font", FetchResourceTypeFilter::Font),
             ("TextTrack", FetchResourceTypeFilter::TextTrack),
             ("Fetch", FetchResourceTypeFilter::Fetch),
             ("EventSource", FetchResourceTypeFilter::EventSource),
