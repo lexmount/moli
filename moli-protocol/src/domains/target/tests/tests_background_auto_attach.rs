@@ -400,7 +400,7 @@ async fn runtime_add_binding_and_preload_on_auto_attached_background_target_sess
         "pre-document preload should return an identifier: {add_script:?}"
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 10358,
         "method": "Page.navigate",
         "sessionId": session_id,
@@ -421,6 +421,13 @@ async fn runtime_add_binding_and_preload_on_auto_attached_background_target_sess
         json!("payload-preload")
     );
     assert_eq!(binding_called["sessionId"], json!(session_id));
+    // A preload binding can fire before the parser reaches #ok. Observe this
+    // session's load event before inspecting the new document's contents.
+    ctx.wait_for_scheduler_message("pre-document background target load", |message| {
+        message["method"] == json!("Page.loadEventFired")
+            && message["sessionId"].as_str() == Some(session_id.as_str())
+    })
+    .await;
     assert!(
         ctx.sent.iter().all(|message| {
             message["method"] != json!("Runtime.executionContextCreated")
