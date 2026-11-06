@@ -1951,7 +1951,21 @@ async fn worker_main(
         }
 
         // Wait for either a message, a fetch completion, or a timer.
-        let wake = if pending_module_bootstrap.is_none()
+        let ready_csp_message = pending_module_bootstrap
+            .as_ref()
+            .filter(|bootstrap| bootstrap.is_waiting_for_evaluation())
+            .and_then(|_| {
+                pending_bootstrap_messages.iter().position(|message| {
+                    matches!(
+                        message,
+                        WorkerMessage::DispatchContentSecurityPolicyViolation { .. }
+                    )
+                })
+            })
+            .and_then(|index| pending_bootstrap_messages.remove(index));
+        let wake = if let Some(message) = ready_csp_message {
+            WorkerLoopWake::Message(Some(message))
+        } else if pending_module_bootstrap.is_none()
             && let Some(message) = pending_bootstrap_messages.pop_front()
         {
             WorkerLoopWake::Message(Some(message))
@@ -2629,11 +2643,20 @@ async fn worker_main(
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
             WorkerLoopWake::Message(Some(
-                WorkerMessage::DispatchContentSecurityPolicyViolation(violation),
+                WorkerMessage::DispatchContentSecurityPolicyViolation {
+                    violation,
+                    reports_admitted,
+                },
             )) => {
-                if pending_module_bootstrap.is_some() {
+                if pending_module_bootstrap
+                    .as_ref()
+                    .is_some_and(|bootstrap| !bootstrap.is_waiting_for_evaluation())
+                {
                     pending_bootstrap_messages.push_back(
-                        WorkerMessage::DispatchContentSecurityPolicyViolation(violation),
+                        WorkerMessage::DispatchContentSecurityPolicyViolation {
+                            violation,
+                            reports_admitted,
+                        },
                     );
                     continue;
                 }
@@ -2642,7 +2665,10 @@ async fn worker_main(
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 super::global_scope::dispatch_worker_csp_violation_event_for_state(
-                    scope, &state, &violation,
+                    scope,
+                    &state,
+                    &violation,
+                    reports_admitted,
                 );
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);

@@ -57,9 +57,8 @@ pub(super) fn dispatch_worker_content_security_policy_violation_event<'s>(
     dispatch_simple_event_target_event(scope, global, "securitypolicyviolation", event);
 }
 
-pub(super) fn dispatch_worker_content_security_policy_violation_event_for_state<'s>(
+fn dispatch_worker_csp_event_in_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    state: &Rc<RefCell<WorkerGlobalState>>,
     violation: &ContentSecurityPolicyUrlViolation,
 ) {
     let global = scope.get_current_context().global(scope);
@@ -67,8 +66,16 @@ pub(super) fn dispatch_worker_content_security_policy_violation_event_for_state<
     else {
         return;
     };
-    send_worker_content_security_policy_reports_for_state(state, violation);
     dispatch_simple_event_target_event(scope, global, "securitypolicyviolation", event);
+}
+
+pub(super) fn dispatch_worker_content_security_policy_violation_event_for_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    violation: &ContentSecurityPolicyUrlViolation,
+) {
+    send_worker_content_security_policy_reports_for_state(state, violation);
+    dispatch_worker_csp_event_in_scope(scope, violation);
 }
 
 pub(super) fn dispatch_worker_trusted_types_sink_violation_event_for_state<'s>(
@@ -1091,9 +1098,10 @@ fn worker_allows_compilation_by_csp(
     let allowed = enforce_violations.is_empty();
     for violation in report_only_violations.into_iter().chain(enforce_violations) {
         let _ = wake_tx.send(
-            crate::worker::handle::WorkerMessage::DispatchContentSecurityPolicyViolation(Box::new(
-                violation,
-            )),
+            crate::worker::handle::WorkerMessage::DispatchContentSecurityPolicyViolation {
+                violation: Box::new(violation),
+                reports_admitted: false,
+            },
         );
     }
     Some(allowed)
@@ -1103,8 +1111,72 @@ pub(in crate::worker) fn dispatch_worker_csp_violation_event_for_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
     violation: &crate::content_security_policy::ContentSecurityPolicyUrlViolation,
+    reports_admitted: bool,
 ) {
-    self::dispatch_worker_content_security_policy_violation_event_for_state(
-        scope, state, violation,
-    );
+    if !reports_admitted {
+        send_worker_content_security_policy_reports_for_state(state, violation);
+    }
+    if state.borrow().callback_task_delivery_allowed() {
+        dispatch_worker_csp_event_in_scope(scope, violation);
+    }
+}
+
+/// Capture policy and source information in the request turn, while author
+/// events run as later tasks on this exact Worker run's existing channel.
+pub(super) fn queue_worker_fetch_csp_violations(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    protected_url: &Url,
+    request_url: &Url,
+    kind: ContentSecurityPolicyResourceKind,
+) -> Option<String> {
+    let (enforced, report_only, wake_tx) = {
+        let state = state.borrow();
+        let collect = |policies: &[crate::content_security_policy::ContentSecurityPolicy],
+                       disposition| {
+            policies.iter().filter_map(|policy| {
+                content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
+                    std::slice::from_ref(policy), protected_url, request_url, kind,
+                    ContentSecurityPolicyRedirectStatus::NoRedirect, disposition,
+                    &state.content_security_reporting_endpoints,
+                )
+            }).collect::<Vec<_>>()
+        };
+        (
+            collect(
+                &state.content_security_policies,
+                ContentSecurityPolicyDisposition::Enforce,
+            ),
+            collect(
+                &state.content_security_report_only_policies,
+                ContentSecurityPolicyDisposition::Report,
+            ),
+            state.worker_wake_tx.clone(),
+        )
+    };
+    if enforced.is_empty() && report_only.is_empty() {
+        return None;
+    }
+    let message = enforced
+        .first()
+        .map(|violation| worker_content_security_policy_error_message(violation, "fetch"));
+    let location = crate::content_security_policy::current_script_violation_location(scope);
+    for mut violation in enforced.into_iter().chain(report_only) {
+        if let Some((source_file, line, column)) = &location {
+            violation.source_file.clone_from(source_file);
+            violation.line_number = *line;
+            violation.column_number = *column;
+        }
+        // A rejection handler may close the Worker before its event task runs.
+        // Admit the keepalive report now and mark this one task to avoid a
+        // second report when its event is delivered.
+        send_worker_content_security_policy_reports_for_state(state, &violation);
+        let _ = wake_tx.send(
+            crate::worker::handle::WorkerMessage::DispatchContentSecurityPolicyViolation {
+                violation: Box::new(violation),
+                reports_admitted: true,
+            },
+        );
+    }
+    message
 }

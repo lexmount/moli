@@ -526,6 +526,8 @@ async fn worker_fetch_csp_block_dispatches_securitypolicyviolation_event() {
         WorkerSpawnOptions::new(
             r#"
             const events = [];
+            let finishViolation;
+            const violation = new Promise(resolve => finishViolation = resolve);
             addEventListener("securitypolicyviolation", event => {
                 events.push({
                     type: event.type,
@@ -537,8 +539,10 @@ async fn worker_fetch_csp_block_dispatches_securitypolicyviolation_event() {
                     disposition: event.disposition,
                     instance: event instanceof SecurityPolicyViolationEvent
                 });
+                finishViolation();
             });
-            fetch("https://api.example/data").catch(error => {
+            fetch("https://api.example/data").catch(async error => {
+                await violation;
                 postMessage({
                     events,
                     error: error && error.message
