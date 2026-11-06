@@ -1378,7 +1378,7 @@ fn detached_native_remove_dispatches_through_runtime_pipeline() {
 }
 
 #[test]
-fn detached_document_state_accessors_are_declared_on_prototypes() {
+fn detached_document_state_accessors_preserve_prototype_and_location_placement() {
     let mut vm = new_storage_test_vm("https://detached-document-state-accessors.test/");
 
     let result = vm
@@ -1408,15 +1408,6 @@ fn detached_document_state_accessors_are_declared_on_prototypes() {
       descriptor.configurable
     ].join(",");
   };
-  const valueShape = (object, name, expected) => {
-    const descriptor = Object.getOwnPropertyDescriptor(object, name);
-    return [
-      descriptor.value === expected,
-      descriptor.enumerable,
-      descriptor.writable,
-      descriptor.configurable
-    ].join(",");
-  };
   const htmlKeysBefore = Object.keys(html)
     .filter(name => name === "implementation" || name === "fonts" || name === "location")
     .join(",");
@@ -1427,8 +1418,8 @@ fn detached_document_state_accessors_are_declared_on_prototypes() {
   const xmlFontsShape = shape(xmlProto, "fonts");
   const htmlImplementationShape = shape(htmlProto, "implementation");
   const xmlImplementationShape = shape(xmlProto, "implementation");
-  const htmlLocationShape = valueShape(html, "location", null);
-  const xmlLocationShape = valueShape(xml, "location", null);
+  const htmlLocationShape = shape(html, "location");
+  const xmlLocationShape = shape(xml, "location");
   const htmlImplementationCacheBefore = Object.getOwnPropertyDescriptor(html, "implementation") === undefined;
   const xmlImplementationCacheBefore = Object.getOwnPropertyDescriptor(xml, "implementation") === undefined;
   const htmlImplementation = html.implementation;
@@ -1442,8 +1433,17 @@ fn detached_document_state_accessors_are_declared_on_prototypes() {
   xml.implementation = { marker: "xml" };
   html.fonts = { marker: "html-fonts" };
   xml.fonts = { marker: "xml-fonts" };
-  html.location = { marker: "html-location" };
-  xml.location = { marker: "xml-location" };
+  const assignLocation = object => {
+    let converted = 0;
+    try {
+      object.location = { toString() { converted++; return '#ignored'; } };
+      return "accepted";
+    } catch (error) {
+      return [error.name, error instanceof TypeError, converted].join(",");
+    }
+  };
+  const htmlLocationAssignment = assignLocation(html);
+  const xmlLocationAssignment = assignLocation(xml);
   const prototypeSurface = [
     Object.prototype.hasOwnProperty.call(html, "createElement"),
     Object.prototype.hasOwnProperty.call(html, "querySelector"),
@@ -1468,6 +1468,8 @@ fn detached_document_state_accessors_are_declared_on_prototypes() {
     xmlLocationShape,
     htmlKeysBefore,
     xmlKeysBefore,
+    htmlLocationAssignment,
+    xmlLocationAssignment,
     htmlImplementationCacheBefore,
     xmlImplementationCacheBefore,
     htmlImplementationCache,
@@ -1491,7 +1493,15 @@ fn detached_document_state_accessors_are_declared_on_prototypes() {
 
     assert_eq!(
         result,
-        "function,get fonts,true,true,true|function,get fonts,true,true,true|function,get implementation,true,true,true|function,get implementation,true,true,true|true,false,false,true|true,false,false,true|||true|true|true|true|true|true|true|true|true|true|true|true|[object FontFaceSet]|[object FontFaceSet]|false,false,false,false,false,false,false,false,true,true,true,true"
+        concat!(
+            "function,get fonts,true,true,true|function,get fonts,true,true,true|",
+            "function,get implementation,true,true,true|function,get implementation,true,true,true|",
+            "function,get location,false,true,false|function,get location,false,true,false|",
+            "location|location|TypeError,true,0|TypeError,true,0|",
+            "true|true|true|true|true|true|true|true|true|true|true|true|",
+            "[object FontFaceSet]|[object FontFaceSet]|",
+            "false,false,false,false,false,false,false,false,true,true,true,true"
+        )
     );
 }
 
