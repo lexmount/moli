@@ -10,8 +10,10 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod audio_param;
 mod biquad;
+mod gain;
 mod graph;
 mod listener;
+mod media_element_source;
 mod node;
 
 use audio_param::{audio_param, detune_param};
@@ -353,6 +355,8 @@ struct AnalyserFftSizeArgs {
 struct AudioContextTemplateDeclaration {
     #[webapi(method = "close", length = 0, callback = audio_context_close_callback)]
     close: (),
+    #[webapi(method = "createMediaElementSource", length = 1, callback = media_element_source::create, receiver = web_api_interfaces::AudioContext::is_instance)]
+    create_media_element_source: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -394,6 +398,9 @@ struct BaseAudioContextPrototypeDeclaration {
 
     #[webapi(method = "createBiquadFilter", length = 0, callback = biquad::create_biquad_filter)]
     create_biquad_filter: (),
+
+    #[webapi(method = "createGain", length = 0, callback = gain::create)]
+    create_gain: (),
 
     #[webapi(
         method = "createOscillator",
@@ -465,6 +472,8 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
         "AudioParam" => audio_param::install(scope, template),
         "AudioListener" => listener::install(scope, template),
         "BiquadFilterNode" => biquad::install(scope, template),
+        "GainNode" => gain::install(scope, template),
+        "MediaElementAudioSourceNode" => media_element_source::install(scope, template),
         "BaseAudioContext" => {
             BaseAudioContextPrototypeDeclaration::initialize_prototype_template(
                 scope,

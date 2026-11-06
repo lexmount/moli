@@ -5,6 +5,7 @@ mod gamepad;
 mod geolocation;
 mod media_capabilities;
 mod media_devices;
+mod media_session;
 mod navigator;
 mod navigator_subobjects;
 mod screen;

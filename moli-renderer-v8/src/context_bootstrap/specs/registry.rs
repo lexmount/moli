@@ -1576,6 +1576,14 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::OscillatorNode,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::GainNode::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaElementAudioSourceNode::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::DynamicsCompressorNode::DESCRIPTOR,
         kind: ConstructorKind::DynamicsCompressorNode,
     },

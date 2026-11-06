@@ -190,6 +190,7 @@ interfaces! {
     FormData;
     FormDataIterator = "FormData Iterator";
     FormDataEvent: Event;
+    GainNode: AudioNode;
     Geolocation;
     GeolocationCoordinates;
     GeolocationPosition;
@@ -321,6 +322,7 @@ interfaces! {
     MediaStreamTrack: EventTarget;
     CanvasCaptureMediaStreamTrack: MediaStreamTrack;
     MediaDevices: EventTarget;
+    MediaElementAudioSourceNode: AudioNode;
     MediaError;
     MediaKeySession: EventTarget;
     MediaKeyStatusMap;

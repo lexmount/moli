@@ -42,6 +42,7 @@ mod input_event_init;
 mod legacy_event_init;
 mod media;
 mod media_devices;
+mod media_player_init;
 mod media_query_list_events;
 mod message_channel;
 mod message_port_events;
