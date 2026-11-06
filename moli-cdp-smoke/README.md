@@ -8,6 +8,19 @@ The `protocol` group also opens prompts with two attached Page sessions. Each
 session receives one opening and one closing notification; either session can
 handle the prompt and resume the original evaluation with its supplied text.
 
+The default `fetch-font` group enables mixed Font/Image patterns before
+navigation and loads the fixture's valid WOFF2 through CSS `@font-face` and
+`FontFace.load()`. Six font scenarios cover request-stage continue, fulfill,
+fail and disable, plus response-stage body reading and continuation. Two CSS
+image controls drive `Page.captureScreenshot` to demand real paint resources,
+then verify the shared admission path with continue and fail. A nonmatching
+`fetch()` uses the same URL pattern; font status, fixture request counts and a
+correlated Network terminal verify the actual outcome. Calibration against the
+pinned Chromium 145.0.7632.6 on 2026-11-07 also observed a failed initial font
+attempt followed by a new interception ID with the same Network ID. The group
+settles each interception and still requires exactly one successful response
+body at response stage and one Network terminal per request.
+
 ## Chromium Behavior Evidence
 
 CI runs every default group twice per engine: `CDP smoke` uses the HEAD Moli
@@ -153,6 +166,7 @@ or identical scenario counts:
 | Scrollbar startup / emulation | CLI/environment matrix; current document updates immediately | Default visible, `--hide-scrollbars`; emulation applies on navigation |
 | Locale/timezone across contexts | Shared process defaults and exclusive claims | Independent renderer defaults and claims |
 | Fetch body streams | Buffered seeking and explicit rejection of continuation after body take | Sequential reads; EOF may require a separate empty read |
+| Fetch.disable with paused subresources | Terminates pending Font and Image loads | Resumes pending Font and Image loads |
 | WebSocket events and URL blocking | Extra generic request events, payload lengths, and WebSocket URL blocking | Dedicated WebSocket events and payload data; URL blocking excludes WebSockets |
 | Hosted file URLs | Capability error before navigation/interception | File navigation and interception; missing file returns `ERR_FILE_NOT_FOUND` |
 | Other capability boundaries | Stack timing privacy, unsupported CPU throttling, PI rename extension | Observed stack timing, successful throttling, rejected PI rename |
