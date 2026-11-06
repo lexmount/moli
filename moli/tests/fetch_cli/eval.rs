@@ -538,6 +538,93 @@ fn eval_writes_objects_as_compact_json() -> Result<()> {
     Ok(())
 }
 
+fn run_surrogate_eval_process(expression: &str) -> Result<std::process::Output> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_moli"));
+    command.args([
+        "fetch",
+        "--log-level",
+        "error",
+        "--http-no-proxy",
+        "*",
+        "--wait-until",
+        "load",
+        "--timeout",
+        "5000",
+        "--eval",
+        expression,
+        "data:text/html,<p>ready</p>",
+    ]);
+    // A lost Inspector response leaves eval pending after readiness completes.
+    // Bound the entire child lifetime so a recurrence fails instead of hanging
+    // the test runner beyond the CLI's readiness-only timeout.
+    let output = super::subprocess::run_command_with_process_timeout(
+        command,
+        std::time::Duration::from_secs(10),
+    )?;
+    assert!(
+        output.status.success(),
+        "{expression}: {}",
+        clean_output(&output.stderr)
+    );
+    Ok(output)
+}
+
+#[test]
+fn eval_lone_surrogates_return_utf8_instead_of_hanging() -> Result<()> {
+    for (expression, expected) in [
+        ("String.fromCharCode(0xD800)", "�\n"),
+        ("String.fromCharCode(0xDFFF)", "�\n"),
+        (
+            "String.fromCharCode(0xD800, 0xD83D, 0xDE00, 0xDC00)",
+            "�😀�\n",
+        ),
+        (r"'\\ud800'", "\\ud800\n"),
+        (
+            "JSON.stringify(String.fromCharCode(0xD800))",
+            "\"\\ud800\"\n",
+        ),
+    ] {
+        assert_eq!(
+            run_surrogate_eval_process(expression)?.stdout,
+            expected.as_bytes(),
+            "{expression}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn eval_promise_lone_surrogates_complete_after_native_delivery() -> Result<()> {
+    for expression in [
+        "Promise.resolve(String.fromCharCode(0xD800))",
+        "new Promise(resolve => setTimeout(() => resolve(String.fromCharCode(0xDFFF)), 0))",
+    ] {
+        assert_eq!(
+            run_surrogate_eval_process(expression)?.stdout,
+            "�\n".as_bytes()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn eval_object_lone_surrogates_preserve_pairs_and_literal_escapes() -> Result<()> {
+    let output = run_surrogate_eval_process(
+        r"({
+        high: String.fromCharCode(0xD800), low: String.fromCharCode(0xDFFF),
+        pair: String.fromCharCode(0xD83D, 0xDE00), literal: '\\ud800',
+        serialized: JSON.stringify(String.fromCharCode(0xD800))
+    })",
+    )?;
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout)?,
+        serde_json::json!({
+            "high": "�", "low": "�", "pair": "😀", "literal": r"\ud800", "serialized": r#""\ud800""#,
+        })
+    );
+    Ok(())
+}
+
 #[test]
 fn eval_awaits_a_promise_result() -> Result<()> {
     let runtime = super::fixture_runtime()?;
