@@ -895,6 +895,21 @@ JSON.stringify(["xhr", "upload", "empty"].map(abortAt => {
 }
 
 #[test]
+fn xhr_bodyless_upload_abort_has_no_upload_events_in_window() {
+    let mut vm = new_storage_test_vm("https://xhr-bodyless-upload.test/");
+    let result = vm
+        .eval(concat!(
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/xhr-bodyless-upload.js"
+            )),
+            "\nprobeBodylessXhrUpload();"
+        ))
+        .expect("a missing body must be upload-complete before XHR loadstart callbacks");
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn xml_http_request_upload_listener_flag_is_captured_before_loadstart() {
     let mut vm = new_storage_test_vm("https://xhr-upload-listeners.test/");
     let result = vm
@@ -1161,6 +1176,49 @@ async fn xml_http_request_abort_preserves_request_started_by_readystatechange() 
         vm.eval("__xhrAbortReopenEvents.join('|')")
             .expect("replacement request events"),
         "abort-ready:4:0|reopened:1|abort:1|loadend:1|after-abort:1|load:second|loadend:4"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn xhr_bodyless_upload_reentrant_get_replaces_aborted_post_upload() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_test_vm("https://xhr-bodyless-reentry.test/");
+    vm.eval(
+        r#"
+const xhr = new XMLHttpRequest();
+const events = globalThis.__bodylessReentry = [];
+let restarted = false;
+xhr.onreadystatechange = () => {
+  if (xhr.readyState === 4 && !restarted) {
+    restarted = true;
+    events.push(`abort-ready:${xhr.readyState}`);
+    xhr.open('GET', 'data:text/plain,replacement');
+    events.push(`reopened:${xhr.readyState}`);
+    xhr.send(null);
+  }
+};
+xhr.onloadstart = () => {
+  events.push(`loadstart:${xhr.readyState}`);
+  if (!restarted) {
+    xhr.abort();
+    events.push(`after-abort:${xhr.readyState}`);
+  }
+};
+xhr.upload.onabort = () => events.push(`upload-abort:${xhr.readyState}`);
+xhr.upload.onloadend = () => events.push(`upload-loadend:${xhr.readyState}`);
+xhr.onabort = () => events.push(`abort:${xhr.readyState}`);
+xhr.onload = () => events.push(`load:${xhr.readyState}:${xhr.responseText}`);
+xhr.open('POST', '/unused');
+xhr.send('payload');
+"#,
+    )
+    .expect("abort readystatechange should admit the replacement GET");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("the replacement response should finish through Networking tasks");
+    assert_eq!(
+        vm.eval("__bodylessReentry.join('|')").unwrap(),
+        "loadstart:1|abort-ready:4|reopened:1|loadstart:1|abort:1|after-abort:1|load:4:replacement"
     );
 }
 

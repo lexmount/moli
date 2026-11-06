@@ -64,6 +64,68 @@ async fn collect_rejected_xhr_output(
 }
 
 #[tokio::test]
+async fn xhr_bodyless_upload_abort_has_no_upload_events_in_worker() {
+    ensure_v8();
+    let script = concat!(
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/xhr-bodyless-upload.js"
+        )),
+        "\npostMessage(probeBodylessXhrUpload()); close();"
+    );
+    let handle = spawn_test_worker_with_options(WorkerSpawnOptions::new(
+        script.to_owned(),
+        "http://example.test/worker.js".to_owned(),
+    ));
+    let (result, records) = collect_rejected_xhr_output(handle).await;
+    assert_eq!(result, serde_json::json!("ok"));
+    assert!(
+        records.is_empty(),
+        "loadstart aborts must precede transport admission"
+    );
+}
+
+#[tokio::test]
+async fn xhr_bodyless_upload_policy_failure_has_no_upload_events_in_worker() {
+    ensure_v8();
+    for (case, url, _) in REJECTIONS {
+        let script = r#"
+const events = [];
+const xhr = new XMLHttpRequest();
+xhr.onreadystatechange = () => events.push('state:' + xhr.readyState);
+for (const [target, prefix] of [[xhr, 'xhr'], [xhr.upload, 'upload']]) {
+  for (const type of ['loadstart', 'progress', 'error', 'abort', 'load', 'loadend']) {
+    target.addEventListener(type, () => events.push(`${prefix}:${type}`));
+  }
+}
+xhr.onloadend = () => {
+  postMessage({ events, readyState: xhr.readyState, status: xhr.status });
+  close();
+};
+xhr.open('GET', URL);
+xhr.send('ignored GET body');
+events.push('returned:' + xhr.readyState);
+queueMicrotask(() => events.push('microtask'));
+"#
+        .replace("URL", &serde_json::to_string(url).unwrap());
+        let (result, records) =
+            collect_rejected_xhr_output(rejected_xhr_worker(case, script)).await;
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "events": ["state:1", "xhr:loadstart", "returned:1", "microtask",
+                    "state:4", "xhr:error", "xhr:loadend"],
+                "readyState": 4,
+                "status": 0
+            }),
+            "{case}: upload listeners must not create a body for an error response"
+        );
+        assert_eq!(records.len(), 1, "{case}: retain the failed request record");
+        assert_eq!(records[0].url().as_str(), url);
+    }
+}
+
+#[tokio::test]
 async fn worker_xhr_early_failure_runs_after_send_and_microtasks() {
     ensure_v8();
     for (case, url, error_text) in REJECTIONS {
