@@ -403,6 +403,10 @@ impl FetchResourceTiming {
             .and_then(|timing| timing.connection_timing())
             .and_then(|timing| timing.connection)
         else {
+            // A response without a client connection (for example respondWith)
+            // uses fetchStart for DNS and connect timing. It performed no TLS
+            // handshake, regardless of the requested URL's scheme.
+            entry.connection_timing = Some(ResourceConnectionTiming::at(start, false));
             return;
         };
         // Reuse is decided by the selected connection's actual creation time,
