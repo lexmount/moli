@@ -1743,7 +1743,7 @@ impl ScriptVm {
                             trace_fields,
                             record_started,
                         );
-                        if let PendingSubresourceContinuation::Xhr { xhr, .. } =
+                        if let PendingSubresourceContinuation::Xhr { xhr, initiator_url, .. } =
                             streaming.pending.continuation
                             && let Some(response_body) = xhr_delivery_body
                         {
@@ -1757,7 +1757,12 @@ impl ScriptVm {
                                     None,
                                     &streaming.head,
                                     response_body_size,
-                                ),
+                                ).with_initiator_url(crate::resource_initiator::response_url(
+                                    initiator_url,
+                                    &streaming.pending.request_origin,
+                                    &streaming.head.final_url,
+                                    streaming.head.cache_state,
+                                )),
                             );
                             let xhr = v8::Local::new(scope, &xhr);
                             let mut observable_head = streaming.head;

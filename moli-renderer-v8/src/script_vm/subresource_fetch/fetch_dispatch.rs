@@ -708,7 +708,7 @@ impl ScriptVm {
                             }
                             resolver.resolve(scope, response_obj.into());
                         }
-                        PendingSubresourceContinuation::Xhr { xhr, .. } => {
+                        PendingSubresourceContinuation::Xhr { xhr, initiator_url, .. } => {
                             crate::context_bootstrap::record_resource_performance_entry(
                                 scope,
                                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
@@ -716,7 +716,12 @@ impl ScriptVm {
                                     "xmlhttprequest",
                                     None,
                                     &observable_response,
-                                ),
+                                ).with_initiator_url(crate::resource_initiator::response_url(
+                                    initiator_url,
+                                    &pending.request_origin,
+                                    &observable_response.final_url,
+                                    observable_response.cache_state,
+                                )),
                             );
                             let xhr = v8::Local::new(scope, &xhr);
                             let (head, body) = observable_response.into_body();

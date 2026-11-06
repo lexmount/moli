@@ -96,6 +96,7 @@ mod range_boundary;
 mod referrer_policy;
 mod render_runtime;
 mod renderer_resource_scheduler;
+mod resource_initiator;
 mod resource_owner;
 mod resource_ready;
 mod runtime;

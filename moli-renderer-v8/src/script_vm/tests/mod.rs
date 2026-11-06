@@ -264,6 +264,7 @@ fn register_pending_window_xhr_for_test(
         execution_context,
         v8::Global::new(scope, v8::Object::new(scope)),
         false,
+        String::new(),
         Some(cancel_handle),
         moli_fetch::RequestCredentialsMode::SameOrigin,
         None,
@@ -2367,6 +2368,7 @@ mod window_node_worlds;
 mod window_receiver_access;
 mod worklet_interfaces;
 
+mod resource_initiator;
 mod string_timers;
 
 mod history_replace_forward;

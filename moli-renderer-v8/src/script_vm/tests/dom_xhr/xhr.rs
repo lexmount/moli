@@ -2454,6 +2454,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                             continuation: super::PendingSubresourceContinuation::Xhr {
                                 xhr: v8::Global::new(scope, xhr),
                                 use_cors_preflight: false,
+                                initiator_url: String::new(),
                             },
                             load: crate::network::loads::resource_load_lease_for_test(
                                 load_client,
@@ -3684,6 +3685,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                         continuation: super::PendingSubresourceContinuation::Xhr {
                             xhr: v8::Global::new(scope, xhr),
                             use_cors_preflight: false,
+                            initiator_url: String::new(),
                         },
                         load: crate::network::loads::resource_load_lease_for_test(
                             load_client,

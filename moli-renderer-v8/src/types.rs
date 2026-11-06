@@ -93,6 +93,7 @@ pub(super) enum PendingSubresourceContinuation {
     Xhr {
         xhr: v8::Global<v8::Object>,
         use_cors_preflight: bool,
+        initiator_url: String,
     },
     WebSocket(PendingWebSocketConnection),
     /// A child frame navigation held before its request leaves the renderer.
