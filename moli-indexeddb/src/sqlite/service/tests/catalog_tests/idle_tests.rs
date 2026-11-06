@@ -414,8 +414,11 @@ fn completed_maintenance_before_blocking_does_not_count_as_pending() {
 
 fn assert_later_rounds_progress_with_blocked_database(prior_check: bool) {
     let directory = Directory::new();
-    let mut service = Service::on_disk(directory.0.join("idb-lite"), config()).unwrap();
-    let slow = resolve(&service, OWNER, "a-held");
+    // This checks the real maintenance timer and per-database FIFOs. Flat disk
+    // files avoid putting unrelated catalog directory syncs inside the held
+    // interval; catalog publication and recovery have their own tests.
+    let mut service = Service::new(config()).unwrap();
+    let slow = open(&service, "a-held", directory.location("a-held.sqlite"));
     if prior_check {
         slow.owner
             .maintain(Instant::now())
@@ -452,7 +455,7 @@ fn assert_later_rounds_progress_with_blocked_database(prior_check: bool) {
     }
     // This database did not exist in the blocked round. Its reclamation must
     // come from a subsequent real timer round, with no manual clock advance.
-    let fast = resolve(&service, OWNER, "b-later");
+    let fast = open(&service, "b-later", directory.location("b-later.sqlite"));
     let deadline = Instant::now() + Duration::from_secs(6);
     while physical_connection(&fast) {
         assert!(
@@ -465,6 +468,10 @@ fn assert_later_rounds_progress_with_blocked_database(prior_check: bool) {
         slow.owner.maintenance_submitted(),
         initial_submissions + 1,
         "only one check may wait behind held SQL"
+    );
+    assert!(
+        !slow.is_closed(),
+        "the held owner must remain live until the test releases it"
     );
     drop(held);
 }
