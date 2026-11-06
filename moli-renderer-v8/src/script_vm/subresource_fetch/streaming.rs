@@ -1105,6 +1105,11 @@ impl ScriptVm {
                             crate::network_host::EventSourceTerminalMode::Close,
                         );
                     }
+                    PendingSubresourceContinuation::InputImage(input) => {
+                        self._context_host.borrow_mut().finish_input_image_request(
+                            input.element, input.id, input.target, false,
+                        );
+                    }
                     PendingSubresourceContinuation::Image {
                         image_handle,
                         sequence,
@@ -1376,6 +1381,12 @@ impl ScriptVm {
                         metadata,
                     );
                     fetch_to_resolve = Some((resolver, response_obj, fetch.upload.clone()));
+                }
+                PendingSubresourceContinuation::InputImage(input) => {
+                    // Image buttons require the complete, decoded body too.
+                    self._context_host.borrow_mut().finish_input_image_request(
+                        input.element, input.id, input.target, false,
+                    );
                 }
                 PendingSubresourceContinuation::Image {
                     image_handle,
