@@ -259,6 +259,77 @@ async fn print_cached_fonts_do_not_consume_resource_admission() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn print_reuses_loaded_font_sources_without_new_preparation_entries() {
+    run_page_vm_async_test(async move {
+        use base64::Engine;
+        let data = base64::engine::general_purpose::STANDARD.encode(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        )));
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+            let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://cached-print-sources.test/")?,
+            );
+            page.layout_configuration.policy = policy;
+            page.vm_mut().set_layout_policy(policy);
+            assert_eq!(page.vm_mut().eval(&format!(r#"(() => {{
+                const rules=prefix=>Array.from({{length:65}},(_,i)=>
+                    `@font-face{{font-family:${{prefix}}${{i}};src:url(data:font/woff2;base64,{data})}}`).join('');
+                document.head.innerHTML='<style>@media screen{{'+rules('Screen')+
+                    '}}@media print{{'+rules('Print')+'p{{font-family:Print0}}}}</style>';
+                document.body.innerHTML='<p style="font-size:16px">Cached text</p>';
+                window.screenFonts=document.fonts;
+                window.screenFaces=[...screenFonts];
+                for(const face of screenFaces)face.load();
+                return JSON.stringify([screenFaces.length,screenFaces.every(face=>face.status==='loaded')]);
+            }})()"#))?, "[65,true]");
+            let fonts = page.vm_mut().document_web_font_counts_for_test();
+            let publishes = page.vm().layout_snapshot_cache_observability_for_test().2;
+            for raster in [false, true] {
+                let mut job = if raster {
+                    PrintCaptureJob::new(RendererCaptureScreenshotRequest {
+                        purpose: RendererScreenshotPurpose::Print {
+                            print_background: true,
+                        },
+                        ..RendererCaptureScreenshotRequest::viewport_png()
+                    })?
+                } else {
+                    PrintCaptureJob::new(RendererPrintToPdfRequest::default())?
+                };
+                let before = page.vm().layout_pass_observability_for_test().1;
+                match page.advance_print_capture(&mut job)? {
+                    PrintCaptureAdvance::Complete(PrintCaptureReply::Pdf(
+                        RendererPrintToPdfReply::Printed(bytes),
+                    )) => {
+                        let pdf = lopdf::Document::load_mem(&bytes)?;
+                        assert!(pdf.extract_text(&[1])?.contains("Cached text"));
+                    }
+                    PrintCaptureAdvance::Complete(PrintCaptureReply::Raster(
+                        RendererCaptureScreenshotReply::Captured(image),
+                    )) => assert!(!image.bytes.is_empty()),
+                    _ => anyhow::bail!("cached sources must satisfy new print declaration identities"),
+                }
+                assert_eq!(page.vm().layout_pass_observability_for_test().1 - before, 1);
+                assert!(job.entries.is_empty(), "cached sources are not new preparation work");
+                assert!(job.fetches.is_empty());
+                assert_eq!(job.overlay.retained_font_bytes(), 0, "shared decoded data must not be charged as new bytes");
+                assert_eq!(page.vm().layout_snapshot_cache_observability_for_test().2, publishes);
+                assert_eq!(page.vm_mut().document_web_font_counts_for_test(), fonts);
+                assert_eq!(page.vm_mut().eval(
+                    "JSON.stringify([document.fonts===screenFonts,document.fonts.size,screenFaces.every(face=>screenFonts.has(face)&&face.status==='loaded'),matchMedia('print').matches])"
+                )?, "[true,65,true,false]");
+                page.cancel_print_capture(&mut job);
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("cached sources survive temporary media declaration selection");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn print_new_fonts_still_respect_preparation_entry_limit() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
