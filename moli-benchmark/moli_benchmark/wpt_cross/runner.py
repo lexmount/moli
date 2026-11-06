@@ -811,6 +811,50 @@ async def _run_one_crashtest(
                 replacement = _NavigationIdentity(session_id, current.frame_id, loader, url)
         return replacement
 
+    async def wait_for_loaded_document(current: _NavigationIdentity) -> _NavigationIdentity:
+        latest = current
+        committed = False
+        loaded = False
+        cursor = 0
+        while True:
+            for message in seen[cursor:]:
+                if message.get("sessionId") != session_id:
+                    continue
+                method = message.get("method")
+                params = message.get("params") or {}
+                if method == "Page.frameNavigated":
+                    frame = params.get("frame") or {}
+                    if frame.get("id") != current.frame_id:
+                        continue
+                    loader = frame.get("loaderId")
+                    url = frame.get("url")
+                    if not committed:
+                        committed = loader == current.loader_id
+                    elif (
+                        isinstance(loader, str) and loader
+                        and loader != latest.loader_id and isinstance(url, str)
+                    ):
+                        latest = _NavigationIdentity(session_id, current.frame_id, loader, url)
+                        loaded = False
+                elif committed and method == "Page.documentOpened":
+                    frame = params.get("frame") or {}
+                    if frame.get("id") == latest.frame_id and frame.get("loaderId") == latest.loader_id:
+                        loaded = False
+                elif (
+                    committed
+                    and method == "Page.lifecycleEvent"
+                    and params.get("frameId") == latest.frame_id
+                    and params.get("loaderId") == latest.loader_id
+                ):
+                    if params.get("name") == "init":
+                        loaded = False
+                    elif params.get("name") == "load":
+                        loaded = True
+            cursor = len(seen)
+            if loaded:
+                return latest
+            await receive()
+
     try:
         await command("Inspector.enable")
         response = await command("Page.navigate", {"url": case.url})
@@ -825,6 +869,10 @@ async def _run_one_crashtest(
         if commit_error is not None:
             return result("error", commit_error)
         while True:
+            # document.open() can erase a load listener without destroying its
+            # realm. Observe the current main-frame load before injecting the
+            # unchanged WPT readiness sequence into that Document.
+            current = await wait_for_loaded_document(current)
             try:
                 response = await command(
                     "Runtime.evaluate",
