@@ -298,8 +298,12 @@ while a changed token triggers one fresh frame. Paint results are never reused.
 geometry current when scripts read it or coordinates are hit-tested. It also
 advances Window animation-frame callbacks, ResizeObserver and IntersectionObserver
 without requiring screenshots. Pending work shares rendering opportunities;
-an idle page does not continuously rebuild layout. Mutable layout work trees are
-still released after each pass, and retained box or paint caches are not enabled.
+an idle page does not continuously rebuild layout. Realtime can retain per-document
+construction boxes, child/source mappings, prepared inline text and eligible
+measurement and inline-layout results across passes. Pass-local numeric scratch
+is released after each pass. Paint and raster output remain demand-driven,
+without a cross-frame paint cache. Mock and OnDemand do not allocate these
+Realtime working sets.
 Realtime wheel input completes each event through its handler, default action
 and microtasks; the other modes retain their existing wheel batching window.
 
