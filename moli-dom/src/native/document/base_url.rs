@@ -134,8 +134,7 @@ impl NativeDom {
                 return None;
             }
             Some(
-                fallback_base_url
-                    .join(href)
+                moli_url::parse_url(href, Some(&fallback_base_url))
                     .ok()
                     .filter(|url| !matches!(url.scheme(), "data" | "javascript"))
                     .unwrap_or_else(|| fallback_base_url.clone()),

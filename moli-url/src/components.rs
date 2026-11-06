@@ -56,7 +56,7 @@ pub fn set_pathname(url: &mut Url, value: &str) {
     }
 }
 
-fn strip_tabs_and_newlines(value: &str) -> Cow<'_, str> {
+pub(crate) fn strip_tabs_and_newlines(value: &str) -> Cow<'_, str> {
     if value
         .bytes()
         .any(|byte| matches!(byte, b'\t' | b'\n' | b'\r'))
