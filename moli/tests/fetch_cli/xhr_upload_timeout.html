@@ -60,11 +60,14 @@ async function probeUploads(scope, base, pendingOrigin) {
         clearTimeout(watchdog);
         try {
           const expected = [];
-          if (bytes !== null) expected.push('upload:loadstart:0:' + bytes + ':true');
-          if (config.complete) {
-            for (const type of ['progress', 'load', 'loadend']) expected.push('upload:' + type + ':12:12:true');
-          } else if (config.expected !== 'load') {
-            expected.push('upload:' + config.expected + ':0:0:false', 'upload:loadend:0:0:false');
+          // A null body is upload-complete before loadstart, including errors.
+          if (bytes !== null) {
+            expected.push('upload:loadstart:0:' + bytes + ':true');
+            if (config.complete) {
+              for (const type of ['progress', 'load', 'loadend']) expected.push('upload:' + type + ':12:12:true');
+            } else if (config.expected !== 'load') {
+              expected.push('upload:' + config.expected + ':0:0:false', 'upload:loadend:0:0:false');
+            }
           }
           const upload = events.filter(event => event.startsWith('upload:'));
           if (JSON.stringify(upload) !== JSON.stringify(expected) || outcome !== config.expected || xhr.readyState !== 4 ||
