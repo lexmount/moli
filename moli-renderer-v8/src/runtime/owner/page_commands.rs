@@ -1033,10 +1033,39 @@ impl RendererOwnerHandle {
             Ok(entry) => entry,
             Err(error) => return Err(error).into(),
         };
+        let retire_page_on_failure = completion.retires_page_on_navigation_failure();
+        // Executing a renderer-owned javascript: URL can request another URL.
+        // Recheck the host route on every hop: claiming the javascript: task
+        // does not authorize a standalone network fetch on a browser Page.
+        if matches!(
+            entry.top_level_navigation_dispatch(),
+            RendererTopLevelNavigationDispatch::DelegateToBrowser
+        ) && !entry
+            .page_vm()
+            .vm()
+            .has_pending_javascript_location_navigation()
+        {
+            if let Err(error) = entry
+                .page_vm_mut()
+                .vm_mut()
+                .publish_pending_document_location_navigation()
+            {
+                return self
+                    .finish_live_page_navigation_failure(
+                        token,
+                        entry,
+                        retire_page_on_failure,
+                        LivePageNavigationFailureDisposition::ReturnToInitiator(error),
+                    )
+                    .await;
+            }
+            return self
+                .finish_live_page_navigation_completion(token, entry, completion)
+                .await;
+        }
         if follow_count == 0 {
             entry.begin_renderer_navigation_follow();
         }
-        let retire_page_on_failure = completion.retires_page_on_navigation_failure();
         if follow_count >= MAX_PENDING_LOCATION_NAVIGATION_TURNS {
             let failure = PageNavigationOwnerFailure::TooManyChainedLocationNavigations {
                 context: completion.chain_limit_error_context(),
