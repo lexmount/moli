@@ -25,6 +25,7 @@ fn default_runtime_hooks_reject_direct_no_owner_page_vm_construction() {
             document_policy_container: Default::default(),
             document_default_language: None,
             document_last_modified: None,
+            document_response_status: None,
             document_settings: Default::default(),
             network_offline: false,
             blocked_url_patterns: Vec::new(),

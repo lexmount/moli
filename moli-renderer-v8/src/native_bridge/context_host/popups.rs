@@ -220,6 +220,7 @@ enum LightweightPopupClassicScriptAdvance {
 }
 
 struct LightweightPopupDocumentProjectionSource<'a> {
+    response_status: Option<u16>,
     task: LightweightPopupNavigationTaskToken,
     document_url: &'a Url,
     markup: &'a str,
@@ -2388,6 +2389,7 @@ impl JsContextHost {
                     policy_container.response_content_security_policies.clone();
             }
             let loaded = LoadedChildDocument {
+                response_status: snapshot.response_status,
                 final_url: snapshot.url,
                 policy_container,
                 content_type: snapshot.content_type,
@@ -2469,6 +2471,7 @@ impl JsContextHost {
                 );
                 Ok(PopupDocumentLoadOutcome::Loaded(Box::new(
                     LoadedChildDocument {
+                        response_status: Some(head.status),
                         final_url: head.final_url,
                         policy_container,
                         content_type,
@@ -2657,6 +2660,7 @@ impl JsContextHost {
                     scope,
                     window,
                     LightweightPopupDocumentProjectionSource {
+                        response_status: loaded.response_status,
                         task,
                         document_url: &final_url,
                         markup: &loaded.markup,
@@ -3136,6 +3140,11 @@ impl JsContextHost {
         let document_handle =
             self.remember_lightweight_popup_document_handle(scope, popup_id, document);
         if let Some(document_handle) = document_handle {
+            self.dom_host_mut()
+                .set_document_source_response_status_for_handle(
+                    document_handle,
+                    source.response_status,
+                );
             let _ = crate::context_bootstrap::install_css_runtime_state_for_document(
                 scope,
                 window,
@@ -4049,6 +4058,7 @@ impl JsContextHost {
             scope,
             window,
             LightweightPopupDocumentProjectionSource {
+                response_status: None,
                 task,
                 document_url: &document_url,
                 markup: &markup,
