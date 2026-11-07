@@ -1545,6 +1545,7 @@ impl ChildModulepreloadFetchCompletion {
 
 #[derive(Debug)]
 pub(super) struct LoadedChildDocument {
+    pub(super) response_status: Option<u16>,
     pub(super) final_url: Url,
     pub(super) policy_container: DocumentPolicyContainer,
     pub(super) content_type: Option<String>,

@@ -91,7 +91,11 @@ impl ConcurrentParseTimeRuntime {
         debug_assert!(!response_headers_indicate_download(&response_headers));
         let response_final_url = response.final_url.clone();
         let mut env = env.clone();
-        env.apply_navigation_response_headers(&response_final_url, &response_headers);
+        env.apply_navigation_response_metadata(
+            &response_final_url,
+            response_status,
+            &response_headers,
+        );
 
         let mut body_source = RawDocumentBodySource::fetch_response(response);
         let (mut state, mut decoder) =
@@ -296,7 +300,7 @@ impl ConcurrentParseTimeRuntime {
             None => runtime_hooks,
         };
         let mut env = env.clone();
-        env.apply_navigation_response_headers(&final_url, &response_headers);
+        env.apply_navigation_response_metadata(&final_url, response_status, &response_headers);
 
         let mut body_source = RawDocumentBodySource::External(raw_body);
         if response_headers_indicate_xml_document(&response_headers) {
@@ -1069,6 +1073,7 @@ mod tests {
             document_policy_container: Default::default(),
             document_default_language: None,
             document_last_modified: None,
+            document_response_status: None,
             document_settings: Default::default(),
             network_offline: false,
             blocked_url_patterns: Vec::new(),
