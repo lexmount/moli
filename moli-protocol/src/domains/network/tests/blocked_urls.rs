@@ -1147,9 +1147,11 @@ async fn set_blocked_urls_runtime_xhr_emits_loading_failed() {
         "params": {
             "expression": r#"(() => {
   globalThis.__lm_blocked_xhr_result = "pending";
+  let resolveXhr;
+  globalThis.__lm_blocked_xhr_complete = new Promise(resolve => { resolveXhr = resolve; });
   const xhr = new XMLHttpRequest();
-  xhr.onload = () => { globalThis.__lm_blocked_xhr_result = "loaded"; };
-  xhr.onerror = () => { globalThis.__lm_blocked_xhr_result = "failed:" + xhr.status; };
+  xhr.onload = () => { globalThis.__lm_blocked_xhr_result = "loaded"; resolveXhr(__lm_blocked_xhr_result); };
+  xhr.onerror = () => { globalThis.__lm_blocked_xhr_result = "failed:" + xhr.status; resolveXhr(__lm_blocked_xhr_result); };
   xhr.open('GET', 'http://example.test/blocked/xhr');
   xhr.send();
   return "scheduled";
@@ -1179,8 +1181,19 @@ async fn set_blocked_urls_runtime_xhr_emits_loading_failed() {
         "id": 2815,
         "method": "Runtime.evaluate",
         "sessionId": "SID-1",
-        "params": { "expression": "globalThis.__lm_blocked_xhr_result" }
+        "params": {
+            "expression": "globalThis.__lm_blocked_xhr_complete",
+            "awaitPromise": true,
+            "returnByValue": true
+        }
     }))
+    .await;
+    wait_until_messages(
+        &mut ctx,
+        Some("SID-1"),
+        "blocked XHR DOM failure task should settle Runtime.evaluate",
+        |messages| messages.iter().any(|message| message["id"] == json!(2815)),
+    )
     .await;
     let result = ctx
         .sent
