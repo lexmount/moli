@@ -1277,3 +1277,6 @@ async fn popup_csp_task_does_not_retire_opener_continuation() -> Result<()> {
     assert_eq!(observed["scopeClosed"], false, "{observed}");
     Ok(())
 }
+
+#[path = "csp_referrer.rs"]
+mod csp_referrer;

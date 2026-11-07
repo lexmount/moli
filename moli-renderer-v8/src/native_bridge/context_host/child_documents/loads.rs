@@ -183,6 +183,8 @@ impl JsContextHost {
         let frame_owner_resource_timing =
             self.pending_frame_owner_resource_timing(handle, &target_url, initiator);
         let initiator_url = self.document_url_for_child_context(handle);
+        let referrer_policy = (initiator == ChildDocumentNavigationInitiator::FrameOwnerElement)
+            .then(|| self.child_document_navigation_referrer_policy(handle, initiator));
         let browser_context = self.host_document().cookie_browser_context();
         self.pending_child_document_navigations.insert(
             load_id,
@@ -211,13 +213,24 @@ impl JsContextHost {
             redirect: None,
             request: child_document_load_request(bootstrap)
                 .map(|request| {
-                    configure_child_document_navigation_request(
+                    let request = configure_child_document_navigation_request(
                         request,
                         &initiator_url,
                         &browser_context,
-                    )
-                    .with_page_network_policy()
-                    .with_network_partition_key(network_partition_key)
+                    );
+                    let request = if let Some(policy) = &referrer_policy {
+                        let mut metadata = request
+                            .subresource_request_metadata()
+                            .cloned()
+                            .unwrap_or_default();
+                        metadata.referrer_policy = Some(policy.clone());
+                        request.with_subresource_request_metadata(metadata)
+                    } else {
+                        request
+                    };
+                    request
+                        .with_page_network_policy()
+                        .with_network_partition_key(network_partition_key)
                 })
                 .map(|request| {
                     crate::network::navigation::NavigationInterception::new(
@@ -1082,6 +1095,10 @@ impl ChildDocumentFetch {
         }
         let navigation_url = request.navigation_url(&head);
         let request = request.request();
+        // NavigationInterception retains Fetch's reduced referrer across redirects.
+        let document_referrer = request
+            .referrer_header_value(&head.final_url)
+            .unwrap_or_default();
         child_document_load_outcome_from_response(
             request.url.as_str().to_owned(),
             request.method.clone(),
@@ -1091,7 +1108,12 @@ impl ChildDocumentFetch {
             navigation_url,
             &self.parent_character_set,
         )
-        .map(Some)
+        .map(|mut outcome| {
+            if let ChildDocumentLoadOutcome::Loaded(loaded) = &mut outcome {
+                loaded.policy_container.document_referrer = document_referrer;
+            }
+            Some(outcome)
+        })
     }
 
     fn complete_hop(self, result: Result<Option<ChildDocumentLoadOutcome>, String>) {
