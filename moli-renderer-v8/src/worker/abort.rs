@@ -587,45 +587,11 @@ pub(crate) fn worker_abort_signal_any_callback<'s>(
     let Some(parsed) = webidl::parse_args::<abort_signal::AnyArgs<'s>>(scope, &args) else {
         return;
     };
-    let Some(store) = worker_abort_store(scope) else {
-        rv.set_null();
-        return;
-    };
-    let Some(signal) = create_signal(scope, &mut store.borrow_mut(), false, None) else {
-        rv.set_null();
-        return;
-    };
-    let Some(composite_signal_id) = WorkerAbortStore::signal_id_from_object(scope, signal) else {
-        rv.set_null();
-        return;
-    };
-    let signals = parsed.signals;
-    for source_signal in &signals {
-        let Some(source_signal_id) = WorkerAbortStore::signal_id_from_object(scope, *source_signal)
-        else {
-            continue;
-        };
-        let reason = {
-            let store = store.borrow();
-            store
-                .signal_state(source_signal_id)
-                .filter(|signal_state| signal_state.aborted)
-                .and_then(|_| store.signal_reason(scope, *source_signal))
-        };
-        let Some(reason) = reason else {
-            continue;
-        };
-        abort_worker_signal(&store, scope, signal, reason);
+    if let Some(signal) = new_worker_dependent_abort_signal(scope, &parsed.signals) {
         rv.set(signal.into());
-        return;
+    } else {
+        rv.set_null();
     }
-    store.borrow_mut().set_signal_sources(
-        composite_signal_id,
-        signals
-            .into_iter()
-            .filter_map(|signal| WorkerAbortStore::signal_id_from_object(scope, signal)),
-    );
-    rv.set(signal.into());
 }
 
 pub(crate) fn worker_abort_signal_aborted_getter_function<'s>(
@@ -694,4 +660,45 @@ fn worker_abort_signal_timeout_fire_callback(
     let reason = worker_timeout_error_value(scope);
     abort_worker_signal(&store, scope, signal, reason);
     rv.set_undefined();
+}
+
+pub(crate) fn new_worker_dependent_abort_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signals: &[v8::Local<'s, v8::Object>],
+) -> Option<v8::Local<'s, v8::Object>> {
+    let store = worker_abort_store(scope)?;
+    let signal = create_signal(scope, &mut store.borrow_mut(), false, None)?;
+    let composite_signal_id = WorkerAbortStore::signal_id_from_object(scope, signal)?;
+    for source_signal in signals {
+        let Some(source_signal_id) = WorkerAbortStore::signal_id_from_object(scope, *source_signal)
+        else {
+            continue;
+        };
+        let reason = {
+            let store = store.borrow();
+            store
+                .signal_state(source_signal_id)
+                .filter(|signal_state| signal_state.aborted)
+                .and_then(|_| store.signal_reason(scope, *source_signal))
+        };
+        let Some(reason) = reason else {
+            continue;
+        };
+        abort_worker_signal(&store, scope, signal, reason);
+        return Some(signal);
+    }
+    store.borrow_mut().set_signal_sources(
+        composite_signal_id,
+        signals
+            .iter()
+            .filter_map(|signal| WorkerAbortStore::signal_id_from_object(scope, *signal)),
+    );
+    Some(signal)
+}
+
+pub(crate) fn new_worker_abort_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let store = worker_abort_store(scope)?;
+    create_signal(scope, &mut store.borrow_mut(), false, None)
 }

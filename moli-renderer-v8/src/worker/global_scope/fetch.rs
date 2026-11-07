@@ -3059,3 +3059,18 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
         }
     }
 }
+
+pub(crate) fn fetch_native_request<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Promise>> {
+    let function = v8::Function::new(scope, worker_fetch_callback)?;
+    let global = scope.get_current_context().global(scope);
+    v8::Local::<v8::Promise>::try_from(crate::script_execution::call_function(
+        scope,
+        function,
+        global.into(),
+        &[request.into()],
+    )?)
+    .ok()
+}

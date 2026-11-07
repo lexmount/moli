@@ -526,3 +526,5 @@ pub(crate) fn create_signal<'s>(
         .init_signal(scope, signal, aborted, reason);
     Some(signal)
 }
+
+pub(crate) use self::statics::new_dependent_abort_signal;

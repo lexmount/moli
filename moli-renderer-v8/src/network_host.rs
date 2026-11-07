@@ -86,6 +86,7 @@ pub(crate) use self::event_source::{
     fail_event_source_connection, install_event_source_bindings, open_event_source_connection,
     update_event_source_stream_state,
 };
+pub(crate) use self::fetch::fetch_native_request;
 pub(crate) use self::fetch::validate_no_cors_http_redirect_mode;
 pub(crate) use self::fetch_surface::set_response_slot_string;
 pub(in crate::network_host) use self::fetch_surface::{
@@ -231,3 +232,5 @@ use super::{
 
 #[cfg(test)]
 pub(crate) use self::body_source::consume_native_body_value_for_teardown_test;
+
+pub(crate) use self::request::request_input_snapshot;

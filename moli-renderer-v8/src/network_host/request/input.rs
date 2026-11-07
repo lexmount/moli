@@ -498,3 +498,10 @@ fn current_request_context_origin(scope: &mut v8::PinScope<'_, '_>) -> Option<We
         crate::worker::worker_global_origin(scope)
     }
 }
+
+pub(crate) fn request_input_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<Option<RequestInputSnapshot>, webidl::WebIdlError> {
+    request_input_snapshot_inner(scope, value, false)
+}
