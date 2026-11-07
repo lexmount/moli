@@ -2,7 +2,7 @@ use super::*;
 use crate::web_api_interfaces;
 use moli_browser_profile::BrowserIdentityProfile;
 use moli_storage_service::SqlBucketOperation;
-use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use crate::context_bootstrap::navigator_runtime::{
     STORAGE_BUCKET_MANAGER_CHILD_HANDLE_SLOT, STORAGE_BUCKET_MANAGER_POPUP_ID_SLOT,
@@ -23,6 +23,7 @@ use crate::util::{get_private_value, set_private_value};
 use crate::webidl;
 
 mod bucket_maintenance;
+mod cache_results;
 mod legacy_storage_quota;
 pub(in crate::context_bootstrap) use bucket_maintenance::settle_storage_bucket_operation;
 use bucket_maintenance::{dispatch_sql_bucket_operation, dispatch_sql_expired_bucket_cleanup};
@@ -1478,6 +1479,8 @@ fn storage_bucket_cache_storage_open_callback<'s>(
         reject_type_error(scope, resolver, "CacheStorage.open requires a cache name.");
         return;
     };
+    let (owner, resolver) = cache_results::owner_resolver(scope, args.this(), resolver, &mut rv);
+    let scope = &mut v8::ContextScope::new(scope, owner);
     let Some(handle) =
         storage_bucket_cache_storage_live_handle(scope, args.this(), resolver, "open")
     else {
@@ -1520,6 +1523,8 @@ fn storage_bucket_cache_storage_match_callback<'s>(
     };
     let options = parsed.options;
     let query = storage_bucket_cache_query(request, &options.base);
+    let (owner, resolver) = cache_results::owner_resolver(scope, args.this(), resolver, &mut rv);
+    let scope = &mut v8::ContextScope::new(scope, owner);
     let Some(handle) =
         storage_bucket_cache_storage_live_handle(scope, args.this(), resolver, "match")
     else {
@@ -1582,6 +1587,8 @@ fn storage_bucket_cache_storage_has_callback<'s>(
         reject_type_error(scope, resolver, "CacheStorage.has requires a cache name.");
         return;
     };
+    let (owner, resolver) = cache_results::owner_resolver(scope, args.this(), resolver, &mut rv);
+    let scope = &mut v8::ContextScope::new(scope, owner);
     let Some(handle) =
         storage_bucket_cache_storage_live_handle(scope, args.this(), resolver, "has")
     else {
@@ -1613,6 +1620,8 @@ fn storage_bucket_cache_storage_keys_callback<'s>(
     else {
         return;
     };
+    let (owner, resolver) = cache_results::owner_resolver(scope, args.this(), resolver, &mut rv);
+    let scope = &mut v8::ContextScope::new(scope, owner);
     let Some(handle) =
         storage_bucket_cache_storage_live_handle(scope, args.this(), resolver, "keys")
     else {
@@ -1653,6 +1662,8 @@ fn storage_bucket_cache_storage_delete_callback<'s>(
         );
         return;
     };
+    let (owner, resolver) = cache_results::owner_resolver(scope, args.this(), resolver, &mut rv);
+    let scope = &mut v8::ContextScope::new(scope, owner);
     let Some(handle) =
         storage_bucket_cache_storage_live_handle(scope, args.this(), resolver, "delete")
     else {
@@ -2030,6 +2041,8 @@ fn storage_bucket_cache_match_callback<'s>(
     };
     let options = parsed.options;
     let query = storage_bucket_cache_query(request, &options);
+    let (owner, resolver) = cache_results::owner_resolver(scope, args.this(), resolver, &mut rv);
+    let scope = &mut v8::ContextScope::new(scope, owner);
     let Some(handle) = storage_bucket_cache_live_handle(scope, args.this(), resolver, "match")
     else {
         return;
@@ -2087,6 +2100,8 @@ fn storage_bucket_cache_match_all_callback<'s>(
     };
     let options = parsed.options;
     let query = request.map(|request| storage_bucket_cache_query(request, &options));
+    let (owner, resolver) = cache_results::owner_resolver(scope, args.this(), resolver, &mut rv);
+    let scope = &mut v8::ContextScope::new(scope, owner);
     let Some(handle) = storage_bucket_cache_live_handle(scope, args.this(), resolver, "matchAll")
     else {
         return;
@@ -2160,6 +2175,8 @@ fn storage_bucket_cache_keys_callback<'s>(
     };
     let options = parsed.options;
     let query = request.map(|request| storage_bucket_cache_query(request, &options));
+    let (owner, resolver) = cache_results::owner_resolver(scope, args.this(), resolver, &mut rv);
+    let scope = &mut v8::ContextScope::new(scope, owner);
     let Some(handle) = storage_bucket_cache_live_handle(scope, args.this(), resolver, "keys")
     else {
         return;
@@ -2210,6 +2227,8 @@ fn storage_bucket_cache_delete_callback<'s>(
     };
     let options = parsed.options;
     let query = storage_bucket_cache_query(request, &options);
+    let (owner, resolver) = cache_results::owner_resolver(scope, args.this(), resolver, &mut rv);
+    let scope = &mut v8::ContextScope::new(scope, owner);
     let Some(handle) = storage_bucket_cache_live_handle(scope, args.this(), resolver, "delete")
     else {
         return;
@@ -2953,24 +2972,16 @@ fn build_storage_bucket_cached_response_object<'s>(
     } else {
         crate::blob::array_buffer_from_bytes(scope, response.body)?.into()
     };
-    let init = ObjectLiteralDeclaration::bind(scope);
-    init.set_string_property(
+    let init = cache_results::response_init(scope, response.status, &response.status_text)?;
+    let constructor =
+        crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "Response").ok()?;
+    let response_obj =
+        crate::script_execution::construct(scope, constructor, &[body, init.into()])?;
+    crate::network_host::set_cached_response_headers(
         scope,
-        "status",
-        v8::Integer::new(scope, response.status as i32).into(),
-    );
-    let status_text = v8_string(scope, &response.status_text)?;
-    init.set_string_property(scope, "statusText", status_text.into());
-    let headers = headers_entries_to_init_array(
-        scope,
+        response_obj,
         &moli_fetch::headers_to_byte_strings(&response.headers),
     );
-    init.set_string_property(scope, "headers", headers.into());
-    let global = scope.get_current_context().global(scope);
-    let constructor = global
-        .get(scope, v8str(scope, "Response").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let response_obj = constructor.new_instance(scope, &[body, init.into_value()])?;
     crate::network_host::set_response_slot_string(
         scope,
         response_obj,
@@ -2996,42 +3007,23 @@ fn cache_entries_to_request_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entries: &[StorageBucketCacheMatch],
 ) -> Option<v8::Local<'s, v8::Array>> {
-    let global = scope.get_current_context().global(scope);
-    let constructor = global
-        .get(scope, v8str(scope, "Request").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
+    let constructor =
+        crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "Request").ok()?;
     let requests = v8::Array::new(scope, entries.len() as i32);
     for (index, entry) in entries.iter().enumerate() {
         let request_url = v8_string(scope, &entry.request_url)?;
-        let init = ObjectLiteralDeclaration::bind(scope);
-        let method = v8_string(scope, &entry.request.method)?;
-        init.set_string_property(scope, "method", method.into());
-        let headers = headers_entries_to_init_array(scope, &entry.request.headers);
-        init.set_string_property(scope, "headers", headers.into());
-        let request = constructor.new_instance(scope, &[request_url.into(), init.into_value()])?;
+        let init = cache_results::request_init(scope, &entry.request.method)?;
+        let request = crate::script_execution::construct(
+            scope,
+            constructor,
+            &[request_url.into(), init.into()],
+        )?;
+        crate::network_host::set_cached_request_headers(scope, request, &entry.request.headers);
         if requests.set_index(scope, index as u32, request.into()) != Some(true) {
             return None;
         }
     }
     Some(requests)
-}
-
-fn headers_entries_to_init_array<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entries: &[(String, String)],
-) -> v8::Local<'s, v8::Array> {
-    let array = v8::Array::new(scope, entries.len() as i32);
-    for (index, (name, value)) in entries.iter().enumerate() {
-        let pair = v8::Array::new(scope, 2);
-        if let Some(name) = v8_string(scope, name) {
-            let _ = pair.set_index(scope, 0, name.into());
-        }
-        if let Some(value) = v8_string(scope, value) {
-            let _ = pair.set_index(scope, 1, value.into());
-        }
-        let _ = array.set_index(scope, index as u32, pair.into());
-    }
-    array
 }
 
 fn cache_entry_usage_bytes(
