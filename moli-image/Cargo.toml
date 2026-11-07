@@ -5,13 +5,20 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+avif-parse = "2.1"
 image = { version = "0.25.10", default-features = false, features = ["gif", "webp", "bmp"] }
 jpeg-decoder = "0.3"
 jpeg-encoder = "0.6"
+libc = "0.2"
 png = "0.18"
+rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
 thiserror = "2.0.17"
 usvg = { version = "=0.48.1", default-features = true }
 xmlparser = "0.13.6"
+yuv = "0.8"
+
+[target.'cfg(not(all(windows, target_arch = "aarch64")))'.dependencies]
+rav1d = { version = "1.1", default-features = false, features = ["asm"] }
 
 [lints]
 workspace = true
