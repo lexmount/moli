@@ -10,6 +10,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod audio_param;
 mod biquad;
+mod channel_nodes;
 mod gain;
 mod graph;
 mod listener;
@@ -18,6 +19,9 @@ mod node;
 mod param_nodes;
 mod source;
 
+pub(in crate::context_bootstrap) use channel_nodes::{
+    channel_merger_constructor, channel_splitter_constructor,
+};
 pub(in crate::context_bootstrap) use param_nodes::{delay_constructor, stereo_panner_constructor};
 pub(in crate::context_bootstrap) use source::{
     audio_buffer_source_constructor_callback, constant_source_constructor_callback,
@@ -404,6 +408,10 @@ struct BaseAudioContextPrototypeDeclaration {
     )]
     onstatechange: (),
 
+    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = channel_nodes::create_channel_merger)]
+    create_channel_merger: (),
+    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = channel_nodes::create_channel_splitter)]
+    create_channel_splitter: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = param_nodes::create_delay)]
     create_delay: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = param_nodes::create_stereo_panner)]

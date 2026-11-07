@@ -11,6 +11,10 @@ const ANALYSERS: &str = "__moliAudioContextActiveAnalysers";
 const DESTINATION: &str = "__moliAudioContextDestination";
 const INPUTS: &str = "__moliAudioNodeInputs";
 const OUTPUTS: &str = "__moliAudioNodeOutputs";
+const EDGE_SOURCE: &str = "__moliAudioConnectionSource";
+const EDGE_DESTINATION: &str = "__moliAudioConnectionDestination";
+const EDGE_OUTPUT: &str = "__moliAudioConnectionOutput";
+const EDGE_INPUT: &str = "__moliAudioConnectionInput";
 const START_TIME: &str = "__moliAudioSourceStartTime";
 const STOP_TIME: &str = "__moliAudioSourceStopTime";
 const RENDERED_INPUT: &str = "__moliAudioNodeRenderedInput";
@@ -53,8 +57,6 @@ pub(super) fn set_destination<'s>(
     set_private_value(scope, context, DESTINATION, node.into());
 }
 
-// Receivers are validated by the AudioNode declaration; destination arguments
-// are validated by the derived parsers below. This helper only reads graph state.
 pub(super) fn node_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
@@ -118,6 +120,58 @@ fn remove_edge<'s>(
     set_private_value(scope, node, slot, array.into());
 }
 
+// Both endpoints retain the same GC-managed record. Port identity is necessary
+// for duplicate connections and for disconnecting only one of several routes.
+struct Connection<'s> {
+    record: v8::Local<'s, v8::Object>,
+    source: v8::Local<'s, v8::Object>,
+    destination: v8::Local<'s, v8::Object>,
+    output: u32,
+    input: u32,
+}
+
+fn connections<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+    slot: &'static str,
+) -> Vec<Connection<'s>> {
+    objects(scope, node, slot)
+        .into_iter()
+        .filter_map(|record| {
+            Some(Connection {
+                record,
+                source: web_audio_object_slot(scope, record, EDGE_SOURCE)?,
+                destination: web_audio_object_slot(scope, record, EDGE_DESTINATION)?,
+                output: web_audio_number_slot(scope, record, EDGE_OUTPUT)? as u32,
+                input: web_audio_number_slot(scope, record, EDGE_INPUT)? as u32,
+            })
+        })
+        .collect()
+}
+
+fn input_nodes<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+) -> Vec<v8::Local<'s, v8::Object>> {
+    connections(scope, node, INPUTS)
+        .into_iter()
+        .map(|connection| connection.source)
+        .collect()
+}
+
+fn port_in_range(scope: &mut v8::PinScope<'_, '_>, port: u32, count: u32) -> bool {
+    if port >= count {
+        throw_dom_exception(
+            scope,
+            "IndexSizeError",
+            1,
+            "Audio node port index is out of range.",
+        );
+        return false;
+    }
+    true
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "AudioNode.connect")]
 struct ConnectArgs<'s> {
@@ -156,6 +210,13 @@ pub(super) fn connect<'s>(
     let destination = parsed.destination;
     let context = node_context(scope, source)?;
     let target_context = node_context(scope, destination)?;
+    let output = parsed.output;
+    let input = parsed.input;
+    let output_count = node::output_count(scope, source);
+    let input_count = node::input_count(scope, destination);
+    if !port_in_range(scope, output, output_count) || !port_in_range(scope, input, input_count) {
+        return None;
+    }
     if context != target_context {
         throw_dom_exception(
             scope,
@@ -165,29 +226,23 @@ pub(super) fn connect<'s>(
         );
         return None;
     }
-    if web_audio_object_slot(scope, context, DESTINATION) == Some(source)
-        || get_private_value(scope, destination, START_TIME).is_some()
+    if connections(scope, source, OUTPUTS)
+        .iter()
+        .any(|connection| {
+            connection.destination == destination
+                && connection.output == output
+                && connection.input == input
+        })
     {
-        throw_dom_exception(
-            scope,
-            "IndexSizeError",
-            1,
-            "The audio node has no port in this direction.",
-        );
-        return None;
+        return Some(destination);
     }
-    // The remaining node implementations each expose a single output/input port.
-    if parsed.output != 0 || parsed.input != 0 {
-        throw_dom_exception(
-            scope,
-            "IndexSizeError",
-            1,
-            "Audio node port index is out of range.",
-        );
-        return None;
-    }
-    add_edge(scope, source, OUTPUTS, destination);
-    add_edge(scope, destination, INPUTS, source);
+    let record = v8::Object::new(scope);
+    set_private_value(scope, record, EDGE_SOURCE, source.into());
+    set_private_value(scope, record, EDGE_DESTINATION, destination.into());
+    set_web_audio_number_slot(scope, record, EDGE_OUTPUT, f64::from(output));
+    set_web_audio_number_slot(scope, record, EDGE_INPUT, f64::from(input));
+    add_edge(scope, source, OUTPUTS, record);
+    add_edge(scope, destination, INPUTS, record);
     if get_private_value(scope, destination, ANALYSER_FFT_SIZE_SLOT).is_some() {
         // Track candidates for offline automatic pull: analysers with input
         // can process even without an output connection.
@@ -200,73 +255,95 @@ pub(super) fn disconnect<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) {
-    // Only the one-argument overload can select an output number. Platform
-    // interface identity distinguishes it from a destination; ordinary objects
-    // follow unsigned-long conversion, including their numeric coercion hooks.
-    let destination_overload = if args.length() == 1 {
-        match v8::Local::<v8::Object>::try_from(args.get(0)) {
-            Ok(object) => {
-                web_api_interfaces::AudioNode::is_instance(scope, object)
-                    || web_api_interfaces::AudioParam::is_instance(scope, object)
-            }
-            Err(_) => false,
-        }
-    } else {
-        args.length() > 1
+    // Finish all Web IDL conversions before reading graph state or removing edges.
+    let Some(selection) = DisconnectSelection::parse(scope, args) else {
+        return;
     };
-    let (selected, output, input) = if destination_overload {
-        let Some(parsed) = webidl::parse_args::<DisconnectNodeArgs>(scope, args) else {
-            return;
-        };
-        (Some(parsed.destination), parsed.output, parsed.input)
-    } else if args.length() == 1 {
-        let Some(parsed) = webidl::parse_args::<DisconnectOutputArgs>(scope, args) else {
-            return;
-        };
-        (None, parsed.output, 0)
-    } else {
-        (None, 0, 0)
-    };
-    // Finish conversion before observing graph state, validating ports, or
-    // removing any edge. A later conversion exception must leave edges intact.
     let source = args.this();
     let Some(context) = node_context(scope, source) else {
         return;
     };
-    if output != 0 || input != 0 {
+    if let Some(output) = selection.output {
+        let count = node::output_count(scope, source);
+        if !port_in_range(scope, output, count) {
+            return;
+        }
+    }
+    if let (Some(destination), Some(input)) = (selection.destination, selection.input) {
+        let count = node::input_count(scope, destination);
+        if !port_in_range(scope, input, count) {
+            return;
+        }
+    }
+    let selected: Vec<_> = connections(scope, source, OUTPUTS)
+        .into_iter()
+        .filter(|connection| selection.matches(connection))
+        .collect();
+    if selection.destination.is_some() && selected.is_empty() {
         throw_dom_exception(
             scope,
-            "IndexSizeError",
-            1,
-            "Audio node port index is out of range.",
+            "InvalidAccessError",
+            15,
+            "The selected audio ports are not connected.",
         );
         return;
     }
-    let outputs = objects(scope, source, OUTPUTS);
-    if let Some(destination) = selected {
-        if node_context(scope, destination).is_none() {
-            return;
-        }
-        if !outputs.contains(&destination) {
-            throw_dom_exception(
-                scope,
-                "InvalidAccessError",
-                15,
-                "The audio nodes are not connected.",
-            );
-            return;
+    for connection in selected {
+        remove_edge(scope, source, OUTPUTS, connection.record);
+        remove_edge(scope, connection.destination, INPUTS, connection.record);
+        if get_private_value(scope, connection.destination, ANALYSER_FFT_SIZE_SLOT).is_some()
+            && objects(scope, connection.destination, INPUTS).is_empty()
+        {
+            remove_edge(scope, context, ANALYSERS, connection.destination);
         }
     }
-    for destination in outputs {
-        if selected.is_none_or(|selected| selected == destination) {
-            remove_edge(scope, source, OUTPUTS, destination);
-            remove_edge(scope, destination, INPUTS, source);
-            if get_private_value(scope, destination, ANALYSER_FFT_SIZE_SLOT).is_some()
-                && objects(scope, destination, INPUTS).is_empty()
-            {
-                remove_edge(scope, context, ANALYSERS, destination);
-            }
+}
+
+#[derive(Default)]
+struct DisconnectSelection<'s> {
+    destination: Option<v8::Local<'s, v8::Object>>,
+    output: Option<u32>,
+    input: Option<u32>,
+}
+
+impl<'s> DisconnectSelection<'s> {
+    fn parse(
+        scope: &mut v8::PinScope<'s, '_>,
+        args: &v8::FunctionCallbackArguments<'s>,
+    ) -> Option<Self> {
+        if args.length() == 0 {
+            return Some(Self::default());
         }
+        let value = args.get(0);
+        // The single-argument overload accepts a number, including objects
+        // convertible to a number. Author Proxies do not acquire native brands.
+        let interface = v8::Local::<v8::Object>::try_from(value)
+            .ok()
+            .is_some_and(|object| {
+                web_api_interfaces::AudioNode::is_instance(scope, object)
+                    || web_api_interfaces::AudioParam::is_instance(scope, object)
+            });
+        if args.length() == 1 && !interface {
+            let parsed = webidl::parse_args::<DisconnectOutputArgs>(scope, args)?;
+            return Some(Self {
+                output: Some(parsed.output),
+                ..Self::default()
+            });
+        }
+        let parsed = webidl::parse_args::<DisconnectNodeArgs>(scope, args)?;
+        node_context(scope, parsed.destination)?;
+        Some(Self {
+            destination: Some(parsed.destination),
+            output: (args.length() >= 2).then_some(parsed.output),
+            input: (args.length() >= 3).then_some(parsed.input),
+        })
+    }
+
+    fn matches(&self, connection: &Connection<'s>) -> bool {
+        self.destination
+            .is_none_or(|destination| destination == connection.destination)
+            && self.output.is_none_or(|output| output == connection.output)
+            && self.input.is_none_or(|input| input == connection.input)
     }
 }
 
@@ -354,7 +431,7 @@ fn has_started_source<'s>(
             // signal. A null-buffer source must continue to render silence.
             has_input |= web_api_interfaces::OscillatorNode::is_instance(scope, node);
         }
-        pending.extend(objects(scope, node, INPUTS));
+        pending.extend(input_nodes(scope, node));
     }
     Some(has_input)
 }
@@ -377,7 +454,7 @@ pub(super) fn prepare_offline_render<'s>(
             continue;
         }
         visited.push(node);
-        pending.extend(objects(scope, node, INPUTS));
+        pending.extend(input_nodes(scope, node));
         let has_input = has_started_source(scope, node, end_time)?;
         if has_input
             && get_private_value(scope, node, UNSUPPORTED_PROCESSOR)
