@@ -1924,6 +1924,58 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 pass
             return True
 
+        def _serve_resource_timing_font(self) -> bool:
+            parsed = urlsplit(self.path)
+            if unquote(parsed.path) != "/resource-timing/resources/cors-ahem.py":
+                return False
+            # Like the upstream handler, respond without consuming an upload.
+            self.close_connection = True
+            try:
+                operations = _pipe_response_header_operations(parsed.query)
+                pipe_status = _pipe_response_status(parsed.query)
+                delay = _pipe_trickle_delay_seconds(parsed.query)
+                trickle = any(name == "trickle" for name, _ in parse_pipe_commands(parsed.query))
+            except WptPipeError:
+                self.send_error(500)
+                return True
+            # 304 deliberately omits TAO/CORS/cache headers: the client must
+            # reuse cached metadata unless the request explicitly overrides it.
+            if self.headers.get("If-None-Match") == "123abc":
+                status, font = 304, b""
+                headers = [("X-HTTP-STATUS", "304")]
+            else:
+                try:
+                    font = (wpt_root / "fonts/Ahem.ttf").read_bytes()
+                except OSError:
+                    self.send_error(500)
+                    return True
+                status = 200
+                headers = [
+                    ("Content-Type", "font/truetype"),
+                    ("Cache-Control", "public, max-age=86400"),
+                    ("Access-Control-Allow-Origin", "*"),
+                    ("Timing-Allow-Origin", "*"),
+                    ("ETag", "123abc"),
+                ]
+            headers = _apply_header_operations(headers, operations)
+            status = pipe_status or status
+            emit_body = self.command != "HEAD" and status not in {204, 304}
+            self._send_bytes(
+                None, font, emit_body=emit_body and not trickle,
+                extra_headers=headers, status_code=status, cache_control=None,
+                auto_content_length=status != 304 and not trickle,
+            )
+            if emit_body and trickle:
+                # The font timestamp test needs headers before the body delay.
+                self.wfile.flush()
+                if delay:
+                    time.sleep(delay)
+                try:
+                    self.wfile.write(font)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            return True
+
         def _serve_document_charset_resource(self) -> bool:
             path = unquote(urlsplit(self.path).path)
             if path not in DOCUMENT_CHARSET_FIXTURES:
@@ -1946,6 +1998,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if self._serve_resource_timing_font():
+                return
             if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
@@ -1996,6 +2050,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if self._serve_resource_timing_font():
+                return
             if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
@@ -2087,6 +2143,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if self._serve_resource_timing_font():
+                return
             if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
@@ -2148,6 +2206,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if self._serve_resource_timing_font():
+                return
             if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
@@ -2369,6 +2429,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             return True
 
         def _serve(self, *, emit_body: bool) -> None:
+            if self._serve_resource_timing_font():
+                return
             if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
@@ -3368,6 +3430,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                     return self._serve_empty_location_resource
                 if path == FETCH_CONTENT_TYPE_PATH:
                     return self._serve_content_type_resource
+                if path == "/resource-timing/resources/cors-ahem.py":
+                    return self._serve_resource_timing_font
                 if path in DOCUMENT_CHARSET_FIXTURES:
                     return self._serve_document_charset_resource
                 if path == NAVIGATION_SECOND_VISIT_PATH:
