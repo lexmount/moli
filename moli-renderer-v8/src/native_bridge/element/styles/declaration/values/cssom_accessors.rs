@@ -179,9 +179,19 @@ pub(in crate::native_bridge::element::styles) fn computed_style_applies(
     runtime: &JsContextHost,
     handle: DomHandle,
 ) -> bool {
-    runtime
-        .dom_host()
-        .containing_shadow_root(handle)
+    computed_style_applies_with_observation(runtime, handle, None)
+}
+
+pub(super) fn computed_style_applies_with_observation(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    observation: Option<&dyn RetainedStyleObservation>,
+) -> bool {
+    observation
+        .map_or_else(
+            || runtime.dom_host().containing_shadow_root(handle),
+            |observation| observation.containing_shadow_root(handle),
+        )
         .is_none_or(|shadow_root| !runtime.shadow_root_is_disconnected_for_style(shadow_root))
 }
 
