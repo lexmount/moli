@@ -92,6 +92,12 @@ pub fn should_opaque_response_be_blocked_by_orb_with_body(
         return false;
     }
 
+    // Once nosniff requires blocking at the header boundary, body signatures
+    // cannot make the opaque response readable through a different MIME type.
+    if determine_nosniff(headers) {
+        return true;
+    }
+
     if sniff_image_mime_type(body).is_some() {
         return false;
     }
