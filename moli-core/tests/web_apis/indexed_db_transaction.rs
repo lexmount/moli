@@ -445,15 +445,35 @@ async fn indexed_db_unique_index_builds_abort_in_order_and_deduplicate_multi_ent
     let browser = Browser::new(AppConfig::default())?;
     let fixture = include_str!("fixtures/indexeddb-index-build.js");
     for target in ["window", "child", "worker"] {
-        let source = format!(
-            "{fixture}\nindexBuildProbe('index-build-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: indexBuildChecks}}));"
-        );
-        let result = run_probe(&browser, &server, target, &source).await?;
-        assert_eq!(result["state"], "pass", "{target}: {result}");
+        // Each independent Realm matrix keeps the original 30-second runtime
+        // command budget. Transaction ordering within a matrix is unchanged.
+        let sections: &[&str] = if target == "worker" {
+            &["local"]
+        } else {
+            &[
+                "local",
+                "foreign-method",
+                "foreign-receiver",
+                "foreign-wrapper",
+            ]
+        };
+        let mut checks = 0;
+        for section in sections {
+            let source = format!(
+                "{fixture}\nindexBuildProbe('index-build-{target}', '{section}').then(finish, error => finish({{state: 'error', error: String(error), checks: indexBuildChecks}}));"
+            );
+            let result = run_probe(&browser, &server, target, &source)
+                .await
+                .map_err(|error| error.context(format!("index build probe {target}/{section}")))?;
+            assert_eq!(result["state"], "pass", "{target}/{section}: {result}");
+            let count = result["checks"].as_array().unwrap().len();
+            assert_eq!(count, 189, "{target}/{section}: {result}");
+            checks += count;
+        }
         assert_eq!(
-            result["checks"].as_array().unwrap().len(),
+            checks,
             if target == "worker" { 189 } else { 756 },
-            "{target}: {result}"
+            "{target}: all original Realm matrices must run"
         );
     }
     server.shutdown().await;

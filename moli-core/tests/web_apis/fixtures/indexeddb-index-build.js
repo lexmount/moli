@@ -1,4 +1,4 @@
-globalThis.indexBuildProbe = async function (name = "idb-index-build") {
+globalThis.indexBuildProbe = async function (name = "idb-index-build", section = "all") {
   const checks = globalThis.indexBuildChecks = [];
   const record = (label, pass, actual) => checks.push({ label, pass, actual });
   const exercise = async (caseName, Realm, MethodRealm, StoreRealm = Realm) => {
@@ -249,16 +249,24 @@ globalThis.indexBuildProbe = async function (name = "idb-index-build") {
     for (const db of connections) db.close();
   }
   };
-  await exercise(name + '-local', globalThis, globalThis);
-  if (typeof document !== 'undefined') {
+  if (section === 'all' || section === 'local') {
+    await exercise(name + '-local', globalThis, globalThis);
+  }
+  if (typeof document !== 'undefined' && section !== 'local') {
     if (!document.body) await new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, {once:true}));
     const frame = document.createElement('iframe');
     const loaded = new Promise(resolve => { frame.onload = resolve; });
     frame.src = 'about:blank'; document.body.appendChild(frame); await loaded;
     try {
-      await exercise(name + '-foreign-method', globalThis, frame.contentWindow);
-      await exercise(name + '-foreign-receiver', frame.contentWindow, globalThis);
-      await exercise(name + '-foreign-wrapper', globalThis, globalThis, frame.contentWindow);
+      if (section === 'all' || section === 'foreign-method') {
+        await exercise(name + '-foreign-method', globalThis, frame.contentWindow);
+      }
+      if (section === 'all' || section === 'foreign-receiver') {
+        await exercise(name + '-foreign-receiver', frame.contentWindow, globalThis);
+      }
+      if (section === 'all' || section === 'foreign-wrapper') {
+        await exercise(name + '-foreign-wrapper', globalThis, globalThis, frame.contentWindow);
+      }
     } finally { frame.remove(); }
   }
   return { state: checks.every(check => check.pass) ? 'pass' : 'fail', checks };
