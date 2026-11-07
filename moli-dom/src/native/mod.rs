@@ -1517,8 +1517,10 @@ mod tests {
 
         assert!(host.remove_child(body, subtree));
         assert_eq!(host.form_control_owner(input), Some(parser_form));
+        assert_eq!(host.form_control_elements(parser_form), vec![input]);
         assert!(host.append_child(destination, subtree));
         assert_eq!(host.form_control_owner(input), Some(parser_form));
+        assert_eq!(host.form_control_elements(parser_form), vec![input]);
 
         assert!(host.append_child(destination, input));
         assert_eq!(host.form_control_owner(input), None);
@@ -1578,6 +1580,219 @@ mod tests {
         assert!(host.remove_child(body, form));
         assert!(!host.is_connected_to_document(nested_input));
         assert_eq!(host.form_control_owner(nested_input), Some(form));
+    }
+
+    #[test]
+    fn external_checked_radios_regroup_when_their_parser_form_moves_or_is_removed() {
+        for wrap_form in [false, true] {
+            for remove in [false, true] {
+                for has_ancestor_form in [false, true] {
+                    let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+                    host.reset_html_document_shell();
+                    let body = host.document_body_handle().expect("document body");
+                    let parser_form = host.create_element("form");
+                    let container = host.create_element("section");
+                    let destination = host.create_element("div");
+                    let ancestor_form = host.create_element("form");
+                    let input = host.create_parser_element_without_attributes(
+                        "input".to_owned(),
+                        "http://www.w3.org/1999/xhtml".to_owned(),
+                        None,
+                    );
+                    let peer = host.create_element("input");
+                    assert!(host.append_child(body, container));
+                    assert!(host.append_child(container, parser_form));
+                    assert!(host.append_child(body, destination));
+                    assert!(host.append_child(body, ancestor_form));
+                    let controls_parent = if has_ancestor_form {
+                        ancestor_form
+                    } else {
+                        body
+                    };
+                    for radio in [input, peer] {
+                        assert!(host.set_attribute(radio, "type", "radio"));
+                        assert!(host.set_attribute(radio, "name", "group"));
+                        assert!(host.append_child(controls_parent, radio));
+                    }
+                    // Associate before setting checkedness so that the two
+                    // initially checked radios belong to distinct groups.
+                    assert!(host.associate_parser_form_owner(input, parser_form));
+                    assert!(host.set_checked_state(input, true));
+                    assert!(host.set_checked_state(peer, true));
+                    assert_eq!(host.form_control_owner(input), Some(parser_form));
+                    assert!(host.node(input).unwrap().as_element().unwrap().checked());
+
+                    let moved = if wrap_form { container } else { parser_form };
+                    let parent = if wrap_form { body } else { container };
+                    if remove {
+                        assert!(host.remove_child(parent, moved));
+                    } else {
+                        assert!(host.append_child(destination, moved));
+                    }
+                    assert_eq!(
+                        host.form_control_owner(input),
+                        has_ancestor_form.then_some(ancestor_form)
+                    );
+                    assert!(host.node(input).unwrap().as_element().unwrap().checked());
+                    assert!(
+                        !host.node(peer).unwrap().as_element().unwrap().checked(),
+                        "external radio regrouping: wrap={wrap_form}, remove={remove}, ancestor={has_ancestor_form}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn checked_radios_regroup_after_form_attribute_changes() {
+        for mutation in ["set", "set_ns", "remove", "remove_ns"] {
+            let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+            host.reset_html_document_shell();
+            let body = host.document_body_handle().unwrap();
+            let form = host.create_element("form");
+            let radio = host.create_parser_element_without_attributes(
+                "input".to_owned(),
+                "http://www.w3.org/1999/xhtml".to_owned(),
+                None,
+            );
+            let peer = host.create_element("input");
+            assert!(host.set_attribute(form, "id", "owner"));
+            assert!(host.append_child(body, form));
+            assert!(host.associate_parser_form_owner(radio, form));
+            for control in [radio, peer] {
+                assert!(host.set_attribute(control, "type", "radio"));
+                assert!(host.set_attribute(control, "name", "group"));
+                assert!(host.append_child(body, control));
+            }
+            if mutation.starts_with("remove") {
+                assert!(host.set_attribute(radio, "form", "owner"));
+            }
+            assert!(host.set_checked_state(radio, true));
+            assert!(host.set_checked_state(peer, true));
+            assert_eq!(host.form_control_owner(radio), Some(form));
+            match mutation {
+                "set" => assert!(host.set_attribute(radio, "FORM", "missing")),
+                "set_ns" => assert!(host.set_attribute_ns(radio, None, None, "form", "missing")),
+                "remove" => assert!(host.remove_attribute(radio, "FORM")),
+                "remove_ns" => assert!(
+                    host.remove_attribute_ns_effects(radio, Some(""), "form")
+                        .did_change()
+                ),
+                _ => unreachable!(),
+            }
+            assert_eq!(host.form_control_owner(radio), None);
+            assert!(host.node(radio).unwrap().as_element().unwrap().checked());
+            assert!(
+                !host.node(peer).unwrap().as_element().unwrap().checked(),
+                "{mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn checked_radios_regroup_when_their_explicit_form_is_removed() {
+        for wrap_form in [false, true] {
+            for mutation in ["remove", "move", "detach", "invalid", "cycle"] {
+                let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+                host.reset_html_document_shell();
+                let body = host.document_body_handle().unwrap();
+                let carrier = host.create_element("section");
+                let destination = host.create_element("div");
+                let form = host.create_element("form");
+                let style = host.create_element("style");
+                let radio = host.create_element("input");
+                let peer = host.create_element("input");
+                assert!(host.set_attribute(form, "id", "owner"));
+                assert!(host.append_child(body, carrier));
+                assert!(host.append_child(body, destination));
+                assert!(host.append_child(carrier, form));
+                assert!(host.append_child(form, style));
+                assert!(host.set_attribute(radio, "form", "owner"));
+                for control in [radio, peer] {
+                    assert!(host.set_attribute(control, "type", "radio"));
+                    assert!(host.set_attribute(control, "name", "group"));
+                    assert!(host.append_child(body, control));
+                    assert!(host.set_checked_state(control, true));
+                }
+                assert_eq!(host.form_control_owner(radio), Some(form));
+                assert!(
+                    host.stylesheet_candidate_handles_for_tree_scope(host.document_handle())
+                        .contains(&style)
+                );
+                let moved = if wrap_form { carrier } else { form };
+                if mutation == "remove" {
+                    let parent = if wrap_form { body } else { carrier };
+                    assert!(host.remove_child(parent, moved));
+                } else if mutation == "detach" {
+                    let fragment = host.create_document_fragment();
+                    assert!(host.append_child(fragment, moved));
+                } else if mutation == "invalid" {
+                    assert!(!host.insert_before(destination, moved, Some(peer)));
+                } else if mutation == "cycle" {
+                    assert!(!host.append_child(form, moved));
+                } else {
+                    assert!(host.append_child(destination, moved));
+                }
+                let keeps_owner = matches!(mutation, "move" | "invalid" | "cycle");
+                assert_eq!(host.form_control_owner(radio), keeps_owner.then_some(form));
+                assert!(host.node(radio).unwrap().as_element().unwrap().checked());
+                assert_eq!(
+                    host.node(peer).unwrap().as_element().unwrap().checked(),
+                    matches!(mutation, "invalid" | "cycle")
+                );
+                assert_eq!(
+                    host.stylesheet_candidate_handles_for_tree_scope(host.document_handle())
+                        .contains(&style),
+                    keeps_owner
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn namespaced_form_attribute_mutations_preserve_case_and_namespace() {
+        for namespace in [None, Some(""), Some("urn:form-owner-test")] {
+            let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+            host.reset_html_document_shell();
+            let body = host.document_body_handle().expect("document body");
+            let form = host.create_element("form");
+            let input = host.create_parser_element_without_attributes(
+                "input".to_owned(),
+                "http://www.w3.org/1999/xhtml".to_owned(),
+                None,
+            );
+            assert!(host.append_child(body, form));
+            assert!(host.associate_parser_form_owner(input, form));
+            assert!(host.append_child(body, input));
+
+            assert!(host.set_attribute_ns(input, namespace, None, "FORM", "missing"));
+            assert_eq!(host.form_control_owner(input), Some(form));
+            assert!(
+                host.remove_attribute_ns_effects(input, namespace, "FORM")
+                    .did_change()
+            );
+            assert_eq!(host.form_control_owner(input), Some(form));
+            if namespace.is_some_and(|namespace| !namespace.is_empty()) {
+                assert!(host.set_attribute_ns(input, namespace, Some("x"), "form", "missing"));
+                assert_eq!(host.form_control_owner(input), Some(form));
+                assert!(
+                    host.remove_attribute_ns_effects(input, namespace, "form")
+                        .did_change()
+                );
+                assert_eq!(host.form_control_owner(input), Some(form));
+            }
+            assert!(host.set_attribute_ns(input, None, None, "form", "missing"));
+            assert_eq!(host.form_control_owner(input), None);
+            assert!(
+                host.remove_attribute_ns_effects(input, Some(""), "form")
+                    .did_change()
+            );
+            assert_eq!(host.form_control_owner(input), None);
+            assert!(host.associate_parser_form_owner(input, form));
+            assert_eq!(host.form_control_owner(input), Some(form));
+            assert!(host.set_attribute(input, "FORM", "missing"));
+            assert_eq!(host.form_control_owner(input), None);
+        }
     }
 
     #[test]
@@ -1647,6 +1862,17 @@ mod tests {
         assert!(host.is_connected_to_document(external_input));
         assert_eq!(host.form_control_owner(external_input), Some(form));
         assert_eq!(host.form_control_owner(nested_input), None);
+        assert_eq!(host.form_control_elements(form), vec![external_input]);
+
+        assert!(host.remove_child(root, form));
+        assert_eq!(host.form_control_owner(external_input), None);
+        assert_eq!(host.form_control_owner(nested_input), Some(form));
+        assert_eq!(host.form_control_elements(form), vec![nested_input]);
+
+        assert!(host.append_child(root, form));
+        assert_eq!(host.form_control_owner(external_input), Some(form));
+        assert_eq!(host.form_control_owner(nested_input), None);
+        assert_eq!(host.form_control_elements(form), vec![external_input]);
     }
 
     #[test]

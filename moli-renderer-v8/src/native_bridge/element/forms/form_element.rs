@@ -305,11 +305,11 @@ impl FormControlScope {
         if !dom.is_html_element_named(form, "form") {
             return None;
         }
-        let root = if dom.is_connected(form) {
+        let root = if dom.is_connected_to_document(form) {
             dom.owner_document_handle(form)
                 .unwrap_or_else(|| dom.document_handle())
         } else {
-            form
+            dom.root_node_handle(form).unwrap_or(form)
         };
         Some(Self {
             root,
@@ -336,28 +336,12 @@ pub(crate) fn form_data_control_elements(
     runtime: &JsContextHost,
     form_handle: DomHandle,
 ) -> Vec<DomHandle> {
-    if !runtime
-        .dom_host()
-        .is_html_element_named(form_handle, "form")
-    {
+    let Some(scope) = FormControlScope::new(runtime, form_handle)
+        .filter(|scope| scope.owner == Some(form_handle))
+    else {
         return Vec::new();
-    }
-
-    if !runtime.dom_host().is_connected(form_handle) {
-        return collect_form_control_elements_from(
-            runtime,
-            form_handle,
-            false,
-            Some(form_handle),
-            true,
-        );
-    }
-
-    let document_handle = runtime
-        .dom_host()
-        .owner_document_handle(form_handle)
-        .unwrap_or_else(|| runtime.dom_host().document_handle());
-    collect_form_control_elements_from(runtime, document_handle, false, Some(form_handle), true)
+    };
+    collect_form_control_elements_from(runtime, scope.root, false, scope.owner, true)
 }
 
 pub(crate) fn autofill_related_form_control_elements(
