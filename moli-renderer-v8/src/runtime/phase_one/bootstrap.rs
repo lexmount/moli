@@ -69,14 +69,16 @@ impl ConcurrentParseTimeRuntime {
         html: String,
         started: Instant,
     ) -> Result<ParseTimePageVmCreationOutcome> {
+        let mut env = env.clone();
+        runtime_hooks.apply_auxiliary_sandbox(&mut env);
         let mut state = ParseTimeDriverState::new_with_scripting_enabled(
             final_url.clone(),
-            main_document_parser_scripting_enabled(env),
+            main_document_parser_scripting_enabled(&env),
         );
         state
             .buffered_document_preloads
             .set_script_fetch_requires_owner_admission(script_preloads_require_owner_admission(
-                env,
+                &env,
             ));
         state
             .buffered_document_preloads
@@ -117,7 +119,7 @@ impl ConcurrentParseTimeRuntime {
                 page_id,
                 local_executor.clone(),
                 loader.clone(),
-                env.clone(),
+                env,
                 runtime_hooks,
                 state,
                 started,
