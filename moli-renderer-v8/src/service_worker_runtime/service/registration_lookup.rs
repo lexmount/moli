@@ -446,7 +446,6 @@ pub(super) fn select_controller_for_new_client_locked(
         .registrations
         .values()
         .filter(|registration| !registration.pending_unregistration)
-        .filter(|registration| registration.active_version_id.is_some())
         .filter(|registration| {
             service_worker_registration_matches_url(registration, document_url, storage_key)
         })
@@ -454,9 +453,10 @@ pub(super) fn select_controller_for_new_client_locked(
         .map(|registration| registration.id);
     if let Some(registration_id) = registration_id
         && let Some(registration) = state.registrations.get_mut(&registration_id)
+        && let Some(version_id) = registration.active_version_id
         && registration.controlled_client_ids.insert(client_id)
     {
-        return registration.active_version_id;
+        return Some(version_id);
     }
     None
 }
