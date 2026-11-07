@@ -19,9 +19,11 @@ UTF-8 business equality is intended.
 
 Raw construction rejects the reserved top-level parameter names used for Moli
 host metadata, including Unicode-escaped spellings. Host-generated messages use
-`Parsed(Value)` and the existing output filter. Names inside user objects in a
-payload are unaffected. `Fetch.requestPaused` retains its existing Parsed-only
-interceptor projection policy.
+`Parsed(Value)` and the existing output filter. Other parameter names, including
+unpaired surrogate escapes, and names inside user objects remain opaque. The
+reserved-name check uses serde_json's byte decoder instead of requiring UTF-8
+field names. `Fetch.requestPaused` retains its existing Parsed-only interceptor
+projection policy.
 
 The structured view has the Value parser's depth limit. If a valid raw payload
 exceeds it, `value()` returns a synthetic `-32603` error view; CDP still serializes

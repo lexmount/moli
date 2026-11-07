@@ -4,7 +4,11 @@
 //! and `params` retain their JSON escapes through serialization. UTF-8 adapters
 //! explicitly request a structured view; reading it never changes wire output.
 
-use serde::{Serialize, Serializer, ser::SerializeMap};
+use serde::{
+    Serialize, Serializer,
+    de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, Visitor},
+    ser::SerializeMap,
+};
 use serde_json::{Number, Value, value::RawValue};
 use std::{
     collections::BTreeMap,
@@ -255,16 +259,59 @@ fn validate_inspector_params(params: &RawValue) -> serde_json::Result<()> {
     {
         return Ok(());
     }
-    let fields: BTreeMap<String, &RawValue> = serde_json::from_str(text)?;
-    if PRIVATE_PROTOCOL_PARAM_FIELDS
-        .iter()
-        .any(|key| fields.contains_key(*key))
-    {
-        return Err(<serde_json::Error as serde::de::Error>::custom(
-            "Moli protocol metadata requires a Parsed message",
-        ));
+    let mut deserializer = serde_json::Deserializer::from_str(text);
+    deserializer.deserialize_map(InspectorParamsVisitor)?;
+    deserializer.end()
+}
+
+struct InspectorParamsVisitor;
+
+impl<'de> Visitor<'de> for InspectorParamsVisitor {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("Inspector parameters without Moli host metadata")
     }
-    Ok(())
+
+    fn visit_map<M: MapAccess<'de>>(self, mut fields: M) -> Result<(), M::Error> {
+        while fields.next_key_seed(InspectorParamName)?.is_some() {
+            fields.next_value::<IgnoredAny>()?;
+        }
+        Ok(())
+    }
+}
+
+struct InspectorParamName;
+
+impl<'de> DeserializeSeed<'de> for InspectorParamName {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        // serde_json's byte decoder handles escapes and preserves lone surrogates
+        // as WTF-8. Only the reserved ASCII names matter here; no UTF-8 String is
+        // needed, and the original payload remains untouched.
+        deserializer.deserialize_bytes(self)
+    }
+}
+
+impl Visitor<'_> for InspectorParamName {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("an Inspector parameter name")
+    }
+
+    fn visit_bytes<E: serde::de::Error>(self, name: &[u8]) -> Result<(), E> {
+        if PRIVATE_PROTOCOL_PARAM_FIELDS
+            .iter()
+            .any(|reserved| name == reserved.as_bytes())
+        {
+            return Err(E::custom(
+                "Moli protocol metadata requires a Parsed message",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl From<&Value> for InspectorJson {
