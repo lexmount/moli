@@ -190,7 +190,7 @@ async fn navigator_service_worker_register_identical_main_script_keeps_existing_
               (async () => {
                 const sw = navigator.serviceWorker;
                 const first = await sw.register("worker.js", { scope: "./" });
-                await sw.ready;
+                await __moliTestActivatedServiceWorker(sw);
                 let updatefoundCount = 0;
                 first.addEventListener("updatefound", () => {
                   updatefoundCount += 1;
@@ -277,7 +277,7 @@ async fn navigator_service_worker_register_changed_main_script_fires_updatefound
               (async () => {
                 const sw = navigator.serviceWorker;
                 const registration = await sw.register("worker.js", { scope: "./" });
-                await sw.ready;
+                await __moliTestActivatedServiceWorker(sw);
                 const events = [];
                 registration.addEventListener("updatefound", () => {
                   const installing = registration.installing;
@@ -359,6 +359,15 @@ async fn navigator_service_worker_registration_lifecycle_attributes_reflect_acti
                   scope: "./"
                 });
                 const registration = await sw.ready;
+                {
+                  // ready may resolve while activate (and its claim) is still pending.
+                  const active = (await sw.ready).active;
+                  if (active.state !== "activated") {
+                    await new Promise(resolve => active.addEventListener("statechange", () => {
+                      if (active.state === "activated") resolve();
+                    }));
+                  }
+                }
                 const newest = registration.active;
                 const log = [
                   [
@@ -521,6 +530,14 @@ async fn navigator_service_worker_update_via_cache_all_uses_fresh_main_script_ca
                   updateViaCache: "all"
                 });
                 await sw.ready;
+                {
+                  const worker = registration.active;
+                  if (worker.state !== "activated") {
+                    await new Promise(resolve => worker.addEventListener("statechange", () => {
+                      if (worker.state === "activated") resolve();
+                    }));
+                  }
+                }
                 let updatefoundCount = 0;
                 registration.addEventListener("updatefound", () => {
                   updatefoundCount += 1;
@@ -614,7 +631,7 @@ async fn navigator_service_worker_default_update_via_cache_revalidates_fresh_mai
               (async () => {
                 const sw = navigator.serviceWorker;
                 const registration = await sw.register("worker.js", { scope: "./" });
-                await sw.ready;
+                await __moliTestActivatedServiceWorker(sw);
                 const events = [];
                 registration.addEventListener("updatefound", () => {
                   const installing = registration.installing;
@@ -710,6 +727,15 @@ async fn navigator_service_worker_register_resolves_when_activate_wait_until_rej
                   Boolean(registration.active)
                 ].join(":");
                 const readyRegistration = await navigator.serviceWorker.ready;
+                {
+                  // ready may resolve while activate (and its claim) is still pending.
+                  const active = (await navigator.serviceWorker.ready).active;
+                  if (active.state !== "activated") {
+                    await new Promise(resolve => active.addEventListener("statechange", () => {
+                      if (active.state === "activated") resolve();
+                    }));
+                  }
+                }
                 globalThis.__serviceWorkerActivateRejectProbe =
                   "resolved:" + registerState + "|" +
                   Boolean(readyRegistration.active) + ":" +
@@ -787,7 +813,7 @@ async fn navigator_service_worker_update_waits_without_skip_waiting() {
           (async () => {
             const sw = navigator.serviceWorker;
             await sw.register("worker-v1.js", { scope: "./" });
-            await sw.ready;
+            await __moliTestActivatedServiceWorker(sw);
             const update = await sw.register("worker-v2.js", { scope: "./" });
             let lookup = await sw.getRegistration();
             for (let i = 0; i < 20 && !lookup.waiting; i++) {
@@ -879,8 +905,23 @@ async fn navigator_service_worker_updatefound_and_statechange_are_runtime_driven
           globalThis.__serviceWorkerRuntimeEventsProbe = "pending";
           (async () => {
             const sw = navigator.serviceWorker;
+            const initiallyControlled = new Promise(resolve => {
+              sw.addEventListener("controllerchange", resolve, { once: true });
+            });
             const registration = await sw.register("worker-v1.js", { scope: "./" });
             await sw.ready;
+            {
+              // ready may resolve while activate (and its claim) is still pending.
+              const active = (await sw.ready).active;
+              if (active.state !== "activated") {
+                await new Promise(resolve => active.addEventListener("statechange", () => {
+                  if (active.state === "activated") resolve();
+                }));
+              }
+            }
+            // Native activation and the Window controllerchange task can settle
+            // separately. Consume the initial event before observing replacement.
+            await initiallyControlled;
             const events = [];
             const expectedV2Url = new URL("worker-v2.js", location.href).href;
             const publishProbe = () => {
@@ -1211,4 +1252,61 @@ async fn navigator_service_worker_periodic_sync_register_respects_permission() {
     server
         .await
         .expect("service worker periodic sync permission script server should finish");
+}
+
+#[tokio::test]
+async fn navigator_service_worker_module_bootstrap_claim_rejects_and_activation_claim_completes() {
+    let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![(
+        "/app/claim-bootstrap.js",
+        "text/javascript; charset=utf-8",
+        Vec::new(),
+        r#"
+        const startupClaim = clients.claim().then(
+          () => "resolved", error => error.name
+        );
+        self.addEventListener("activate", event => {
+          event.waitUntil(startupClaim.then(() => clients.claim()));
+        });
+        self.addEventListener("message", event => {
+          event.waitUntil(startupClaim.then(result => event.ports[0].postMessage(result)));
+        });
+        "#,
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+      globalThis.__claimBootstrapProbe = "pending";
+      (async () => {
+        await navigator.serviceWorker.register("claim-bootstrap.js", { scope: "./", type: "module" });
+        const registration = await navigator.serviceWorker.ready;
+        const worker = registration.active;
+        if (worker.state !== "activated") {
+          await new Promise(resolve => worker.addEventListener("statechange", () => {
+            if (worker.state === "activated") resolve();
+          }));
+        }
+        const channel = new MessageChannel();
+        const result = new Promise(resolve => channel.port1.onmessage = event => resolve(event.data));
+        worker.postMessage("startup-claim", [channel.port2]);
+        globalThis.__claimBootstrapProbe = (await result) + ":" + worker.state + ":" + String(navigator.serviceWorker.controller !== null);
+        channel.port1.close();
+      })().catch(error => {
+        globalThis.__claimBootstrapProbe = "error:" + error.name + ":" + error.message;
+      });
+    "#).expect("module claim bootstrap probe should evaluate");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(globalThis.__claimBootstrapProbe)",
+        "InvalidStateError:activated:true",
+    )
+    .await;
+    server
+        .await
+        .expect("module worker script should be fetched");
 }

@@ -156,6 +156,11 @@ pub(crate) struct WorkerGlobalState {
     /// In-flight Service Worker `periodicsync` events keyed by runtime event id.
     pub(in crate::worker) pending_service_worker_periodic_sync_events:
         HashMap<ServiceWorkerEventId, PendingServiceWorkerPeriodicSyncEvent>,
+    /// clients.claim() promises waiting for their owner to complete the operation.
+    pub(in crate::worker) pending_service_worker_clients_claims:
+        HashMap<u64, v8::Global<v8::PromiseResolver>>,
+    pub(in crate::worker) service_worker_clients_claim_request_ids:
+        WorkerServiceWorkerRequestIdAllocator,
     /// In-flight Service Worker `clients.get()` / `clients.matchAll()` queries keyed by request id.
     pub(in crate::worker) pending_service_worker_client_queries:
         HashMap<u64, PendingServiceWorkerClientQuery>,

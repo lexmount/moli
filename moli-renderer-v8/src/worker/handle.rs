@@ -129,6 +129,8 @@ pub(crate) enum WorkerMessage {
     ServiceWorkerPushUnsubscribeResult(ServiceWorkerPushUnsubscribeResult),
     /// Resolve a Service Worker `clients.get()` / `clients.matchAll()` query in the worker.
     ServiceWorkerClientQueryResult(ServiceWorkerClientQueryResult),
+    /// Settle clients.claim() after the owning runtime has applied the claim.
+    ServiceWorkerClientsClaimResult { request_id: u64, claimed: bool },
     /// Resolve a Service Worker `WindowClient.navigate()` request in the worker.
     ServiceWorkerClientNavigateResult(ServiceWorkerClientNavigateResult),
     /// Resolve a Service Worker `WindowClient.focus()` request in the worker.
@@ -366,6 +368,7 @@ pub(crate) enum WorkerToParentMessage {
     },
     /// A Service Worker requested `clients.claim()`.
     ServiceWorkerClientsClaim {
+        request_id: u64,
         registration_id: crate::runtime::ServiceWorkerRegistrationId,
         version_id: crate::runtime::ServiceWorkerVersionId,
     },
@@ -1123,6 +1126,19 @@ impl WorkerHandle {
         let _ = self
             .tx
             .send(WorkerMessage::ServiceWorkerPushUnsubscribeResult(result));
+    }
+
+    pub(crate) fn dispatch_service_worker_clients_claim_result(
+        &self,
+        request_id: u64,
+        claimed: bool,
+    ) {
+        let _ = self
+            .tx
+            .send(WorkerMessage::ServiceWorkerClientsClaimResult {
+                request_id,
+                claimed,
+            });
     }
 
     pub(crate) fn dispatch_service_worker_client_query_result(

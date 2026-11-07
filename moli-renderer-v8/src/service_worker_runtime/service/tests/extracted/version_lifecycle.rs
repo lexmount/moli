@@ -1198,7 +1198,6 @@ fn devtools_skip_waiting_scope_uses_activation_progress() {
                 run: waiting_run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1212,8 +1211,8 @@ fn devtools_skip_waiting_scope_uses_activation_progress() {
 
     let state = service.inner.state.lock();
     let registration = state.registrations.get(&registration_id).unwrap();
-    assert_eq!(registration.active_version_id, Some(active_version_id));
-    assert_eq!(registration.waiting_version_id, Some(waiting_version_id));
+    assert_eq!(registration.active_version_id, Some(waiting_version_id));
+    assert_eq!(registration.waiting_version_id, None);
     let waiting = state.versions.get(&waiting_version_id).unwrap();
     assert!(waiting.skip_waiting_requested);
     assert_eq!(
@@ -1273,7 +1272,8 @@ fn activate_rejection_still_commits_active_version() {
         let mut state = service.inner.state.lock();
         let registration = state.registrations.get_mut(&registration_id).unwrap();
         registration.installing_version_id = None;
-        registration.waiting_version_id = Some(version_id);
+        registration.waiting_version_id = None;
+        registration.active_version_id = Some(version_id);
         let version = state.versions.get_mut(&version_id).unwrap();
         version.lifecycle_state = ServiceWorkerVersionLifecycleState::Activating;
         version.in_flight_event_count = 1;
@@ -1323,8 +1323,8 @@ fn activate_completion_does_not_clear_newer_installing_version() {
                 scope_url: scope_url.clone(),
                 script_url: installing_script_url.clone(),
                 installing_version_id: Some(installing_version_id),
-                waiting_version_id: Some(activating_version_id),
-                active_version_id: Some(previous_active_version_id),
+                waiting_version_id: None,
+                active_version_id: Some(activating_version_id),
                 pending_unregistration: false,
                 update_via_cache: ServiceWorkerUpdateViaCache::Imports,
                 navigation_preload_state: ServiceWorkerNavigationPreloadState::default(),
@@ -1337,7 +1337,7 @@ fn activate_completion_does_not_clear_newer_installing_version() {
             (
                 previous_active_version_id,
                 previous_script_url,
-                ServiceWorkerVersionLifecycleState::Activated,
+                ServiceWorkerVersionLifecycleState::Redundant,
                 0,
             ),
             (
@@ -1376,7 +1376,6 @@ fn activate_completion_does_not_clear_newer_installing_version() {
                     run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
                     idle_timeout_token: None,
                     skip_waiting_requested: false,
-                    clients_claim_requested: false,
                     last_start_error: None,
                 },
             );
@@ -1419,6 +1418,7 @@ fn activate_completion_does_not_clear_newer_installing_version() {
 #[test]
 fn activate_completion_does_not_clear_newer_waiting_version() {
     let service = new_service_worker_runtime_service();
+    let client_id = register_client_for_test(&service, url("https://example.test/app/page.html"));
     let registration_id = ServiceWorkerRegistrationId(1);
     let previous_active_version_id = ServiceWorkerVersionId(1);
     let activating_version_id = ServiceWorkerVersionId(2);
@@ -1438,20 +1438,20 @@ fn activate_completion_does_not_clear_newer_waiting_version() {
                 script_url: waiting_script_url.clone(),
                 installing_version_id: None,
                 waiting_version_id: Some(waiting_version_id),
-                active_version_id: Some(previous_active_version_id),
+                active_version_id: Some(activating_version_id),
                 pending_unregistration: false,
                 update_via_cache: ServiceWorkerUpdateViaCache::Imports,
                 navigation_preload_state: ServiceWorkerNavigationPreloadState::default(),
                 last_update_check_time_ms: None,
                 pending_register_jobs: HashMap::new(),
-                controlled_client_ids: HashSet::new(),
+                controlled_client_ids: HashSet::from([client_id]),
             },
         );
         for (version_id, script_url, lifecycle_state, in_flight_event_count) in [
             (
                 previous_active_version_id,
                 previous_script_url,
-                ServiceWorkerVersionLifecycleState::Activated,
+                ServiceWorkerVersionLifecycleState::Redundant,
                 0,
             ),
             (
@@ -1490,7 +1490,6 @@ fn activate_completion_does_not_clear_newer_waiting_version() {
                     run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
                     idle_timeout_token: None,
                     skip_waiting_requested: false,
-                    clients_claim_requested: false,
                     last_start_error: None,
                 },
             );
@@ -1572,6 +1571,7 @@ fn pending_ready_job_waits_for_target_registration_activation() {
         root_version.lifecycle_state = ServiceWorkerVersionLifecycleState::Activating;
         root_version.in_flight_event_count = 1;
     }
+    publish_activating_version_for_test(&service, root_registration_id, root_version_id);
     let root_run = exact_version_run(&service, root_version_id);
     service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
         event_id: ServiceWorkerEventId(2),
@@ -1600,6 +1600,7 @@ fn pending_ready_job_waits_for_target_registration_activation() {
         admin_version.lifecycle_state = ServiceWorkerVersionLifecycleState::Activating;
         admin_version.in_flight_event_count = 1;
     }
+    publish_activating_version_for_test(&service, admin_registration_id, admin_version_id);
     let admin_run = exact_version_run(&service, admin_version_id);
     service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
         event_id: ServiceWorkerEventId(3),
@@ -1694,7 +1695,6 @@ fn update_install_waits_when_existing_active_version_has_not_been_skipped() {
                 run: RendererServiceWorkerRunIdentity::fresh(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1721,7 +1721,6 @@ fn update_install_waits_when_existing_active_version_has_not_been_skipped() {
                 run: installing_run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1756,8 +1755,8 @@ fn update_install_waits_when_existing_active_version_has_not_been_skipped() {
 
     let state = service.inner.state.lock();
     let registration = state.registrations.get(&registration_id).unwrap();
-    assert_eq!(registration.active_version_id, Some(active_version_id));
-    assert_eq!(registration.waiting_version_id, Some(installing_version_id));
+    assert_eq!(registration.active_version_id, Some(installing_version_id));
+    assert_eq!(registration.waiting_version_id, None);
     let activating = state.versions.get(&installing_version_id).unwrap();
     assert_eq!(
         activating.lifecycle_state,
@@ -1869,7 +1868,6 @@ fn force_update_install_skips_waiting_even_with_active_controllee() {
                 run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1896,7 +1894,6 @@ fn force_update_install_skips_waiting_even_with_active_controllee() {
                 run: installing_run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -1911,8 +1908,8 @@ fn force_update_install_skips_waiting_even_with_active_controllee() {
 
     let state = service.inner.state.lock();
     let registration = state.registrations.get(&registration_id).unwrap();
-    assert_eq!(registration.active_version_id, Some(active_version_id));
-    assert_eq!(registration.waiting_version_id, Some(installing_version_id));
+    assert_eq!(registration.active_version_id, Some(installing_version_id));
+    assert_eq!(registration.waiting_version_id, None);
     let activating = state.versions.get(&installing_version_id).unwrap();
     assert_eq!(
         activating.lifecycle_state,
@@ -1975,7 +1972,6 @@ fn update_install_activates_when_existing_active_has_no_controllees() {
                 run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -2002,7 +1998,6 @@ fn update_install_activates_when_existing_active_has_no_controllees() {
                 run: installing_run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -2017,8 +2012,8 @@ fn update_install_activates_when_existing_active_has_no_controllees() {
 
     let state = service.inner.state.lock();
     let registration = state.registrations.get(&registration_id).unwrap();
-    assert_eq!(registration.active_version_id, Some(active_version_id));
-    assert_eq!(registration.waiting_version_id, Some(installing_version_id));
+    assert_eq!(registration.active_version_id, Some(installing_version_id));
+    assert_eq!(registration.waiting_version_id, None);
     let installing = state.versions.get(&installing_version_id).unwrap();
     assert_eq!(
         installing.lifecycle_state,
@@ -2080,7 +2075,6 @@ fn activate_completion_queues_service_worker_target_activated_version_update() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -2186,7 +2180,6 @@ fn skip_waiting_update_activation_replaces_previous_active_version() {
                 run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -2213,12 +2206,31 @@ fn skip_waiting_update_activation_replaces_previous_active_version() {
                 run: waiting_run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: true,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
     }
 
+    publish_activating_version_for_test(&service, registration_id, waiting_version_id);
+    {
+        let state = service.inner.state.lock();
+        assert_eq!(
+            state
+                .registrations
+                .get(&registration_id)
+                .unwrap()
+                .active_version_id,
+            Some(waiting_version_id)
+        );
+        assert_eq!(
+            state
+                .versions
+                .get(&active_version_id)
+                .unwrap()
+                .lifecycle_state,
+            ServiceWorkerVersionLifecycleState::Redundant
+        );
+    }
     service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
         event_id: ServiceWorkerEventId(2),
         owner: test_run_owner(waiting_version_id, &waiting_run),
