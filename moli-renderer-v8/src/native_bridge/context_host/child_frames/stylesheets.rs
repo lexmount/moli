@@ -58,7 +58,7 @@ impl JsContextHost {
                     crate::document_runtime::ConnectedStyleImportRoot::new(
                         style_owner,
                         &stylesheet,
-                        false,
+                        None,
                     )
                 })
             } else {
@@ -75,7 +75,12 @@ impl JsContextHost {
                     FrameDocumentStylesheetAdmission::Joined => continue,
                 };
             accepted += 1;
-            let Some(fetcher) = fetcher.clone() else {
+            let Some(fetcher) = fetcher.clone().and_then(|fetcher| {
+                self.stylesheet_fetch_csp_context_for_owner(
+                    crate::native_bridge::OwnerDispatchScope::Child(child_handle),
+                )
+                .map(|context| fetcher.with_csp_context(context))
+            }) else {
                 self.frame_document_stylesheets
                     .take_completion(owner.document_owner(), &signature, load_delay_token)
                     .expect("accepted child stylesheet must own a load-delay token");
@@ -125,74 +130,54 @@ impl JsContextHost {
             .document_resource_loader_for_owner(owner)
             .expect("accepted child stylesheet requires its Document authority");
         resource_loader.spawn_resource_task(async move {
-            let observe =
-                |request_url, initiator_type, terminal| ChildBlockingStylesheetNetworkResult {
+            let csp_context = fetcher.csp_context().cloned();
+            let linked = matches!(&signature, DocumentBlockingStylesheetSignature::Link { .. });
+            let graph = match &signature {
+                DocumentBlockingStylesheetSignature::Link { url, options } => {
+                    let started = moli_time::unix_epoch_millis();
+                    let terminal = fetcher
+                        .fetch_stylesheet_resource(
+                            document_url.clone(),
+                            url.clone(),
+                            options.clone(),
+                        )
+                        .await;
+                    crate::document_runtime::fetch_complete_stylesheet_import_graph_from_root(
+                        fetcher,
+                        document_url.clone(),
+                        crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
+                            url.clone(),
+                            started,
+                            terminal,
+                        ),
+                    )
+                    .await
+                }
+                DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls } => {
+                    crate::document_runtime::fetch_complete_stylesheet_import_graph(
+                        fetcher,
+                        document_url.clone(),
+                        urls.clone(),
+                    )
+                    .await
+                }
+            };
+            let network_results = graph
+                .network_results()
+                .iter()
+                .enumerate()
+                .map(|(index, result)| ChildBlockingStylesheetNetworkResult {
                     frame_id: frame_id.clone(),
                     document_url: document_url.clone(),
-                    request_url,
-                    initiator_type,
-                    terminal,
-                };
-            let (network_results, import_graph) =
-                match &signature {
-                    DocumentBlockingStylesheetSignature::Link { url, options } => {
-                        let started = moli_time::unix_epoch_millis();
-                        let terminal = fetcher
-                            .fetch_stylesheet_resource(
-                                document_url.clone(),
-                                url.clone(),
-                                options.clone(),
-                            )
-                            .await;
-                        let graph = std::sync::Arc::new(
-                        crate::document_runtime::fetch_complete_stylesheet_import_graph_from_root(
-                            fetcher, document_url.clone(),
-                            crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
-                                url.clone(), started, terminal,
-                            ),
-                        ).await,
-                    );
-                        let observations = graph
-                            .network_results()
-                            .iter()
-                            .enumerate()
-                            .map(|(index, result)| {
-                                observe(
-                                    result.request_url().clone(),
-                                    if index == 0 {
-                                        crate::types::SubresourceRequestInitiatorType::Parser
-                                    } else {
-                                        crate::types::SubresourceRequestInitiatorType::Css
-                                    },
-                                    result.terminal().clone(),
-                                )
-                            })
-                            .collect();
-                        (observations, Some(graph))
-                    }
-                    DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls } => {
-                        let graph = std::sync::Arc::new(
-                            crate::document_runtime::fetch_complete_stylesheet_import_graph(
-                                fetcher,
-                                document_url.clone(),
-                                urls.clone(),
-                            )
-                            .await,
-                        );
-                        let observations = graph
-                            .network_results()
-                            .iter()
-                            .map(|result| {
-                                observe(
-                                    result.request_url().clone(),
-                                    crate::types::SubresourceRequestInitiatorType::Css,
-                                    result.terminal().clone(),
-                                )
-                            })
-                            .collect();
-                        (observations, Some(graph))
-                    }
-                };
+                    request_url: result.request_url().clone(),
+                    initiator_type: if linked && index == 0 {
+                        crate::types::SubresourceRequestInitiatorType::Parser
+                    } else {
+                        crate::types::SubresourceRequestInitiatorType::Css
+                    },
+                    terminal: result.terminal().clone(),
+                })
+                .collect();
             let _ = completion_tx.send_child_blocking_stylesheet(
                 ChildBlockingStylesheetLoadCompletion {
                     child_handle,
@@ -200,7 +185,9 @@ impl JsContextHost {
                     signature,
                     load_delay_token,
                     network_results,
-                    import_graph,
+                    import_graph: Some(std::sync::Arc::new(graph)),
+                    csp_violations: csp_context
+                        .map_or_else(Vec::new, |context| context.take_violations()),
                 },
             );
         });
@@ -249,6 +236,23 @@ impl JsContextHost {
             return;
         };
         let load_delay_token = subscribers.load_delay_token;
+        if let Some((root_owner, target)) = self.current_main_document_task_owner().zip(
+            self.current_window_document_task_target_for_dispatch_scope(
+                crate::native_bridge::OwnerDispatchScope::Child(completion.child_handle),
+            ),
+        ) {
+            for violation in &completion.csp_violations {
+                // Use the existing Page task path: no JavaScript may run while
+                // this completion is still installing CSSOM and releasing blockers.
+                unsafe { &mut *self.runtime }.enqueue_content_security_policy_violation_event_task(
+                    crate::page_task_queue::ContentSecurityPolicyViolationEventTask::for_window(
+                        root_owner,
+                        target,
+                        violation.clone(),
+                    ),
+                );
+            }
+        }
         let installed_stylesheet_count = self.install_child_parser_stylesheet_result(
             &completion,
             &subscribers.node_ids,
@@ -432,7 +436,9 @@ impl JsContextHost {
                     );
                     if let Some(sheet) = self.linked_live_stylesheet(owner) {
                         import_roots.push(crate::document_runtime::ConnectedStyleImportRoot::new(
-                            owner, &sheet, true,
+                            owner,
+                            &sheet,
+                            Some(result.request_url.clone()),
                         ));
                     }
                     installed += 1;

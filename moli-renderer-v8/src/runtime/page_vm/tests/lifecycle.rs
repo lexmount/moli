@@ -3372,6 +3372,7 @@ document.body.appendChild(replacementFrame);
                         RendererPageResourceCompletion::child_blocking_stylesheet(
                             old_root_document,
                             ChildBlockingStylesheetLoadCompletion {
+                                csp_violations: Vec::new(),
                                 import_graph: None,
                                 load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId(1),
             child_handle: old_child_handle,

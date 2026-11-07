@@ -2,7 +2,9 @@
 
 pub(crate) use moli_csp::*;
 mod module_fetch;
+mod stylesheet_fetch;
 pub(crate) use module_fetch::ModuleFetchCspContext;
+pub(crate) use stylesheet_fetch::StylesheetFetchCspContext;
 
 use crate::context_bootstrap::{initialize_event_object, mark_event_trusted};
 use crate::network::ResourceRequestClient;

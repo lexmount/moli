@@ -1026,6 +1026,7 @@ mod tests {
         owner: FrameDocumentTaskOwner,
     ) -> ChildBlockingStylesheetLoadCompletion {
         ChildBlockingStylesheetLoadCompletion {
+            csp_violations: Vec::new(),
             import_graph: None,
             load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId(1),
             child_handle,

@@ -836,6 +836,60 @@ impl DocumentRuntime {
         )
     }
 
+    pub(crate) fn stylesheet_fetch_csp_context_for_document(
+        &self,
+        document_handle: Option<DomHandle>,
+        document_url: &Url,
+        container: &DocumentPolicyContainer,
+        origin_url: Option<Url>,
+    ) -> crate::content_security_policy::StylesheetFetchCspContext {
+        if self.bypass_content_security_policy() {
+            return crate::content_security_policy::StylesheetFetchCspContext::new(|_, _, _| {
+                (None, None)
+            });
+        }
+        let enforce = self.document_content_security_policies_for_optional_document(
+            document_handle,
+            &container.response_content_security_policies,
+            &container.content_security_reporting_endpoints,
+        );
+        let report = document_response_content_security_policies(
+            &container.response_content_security_report_only_policies,
+            &container.content_security_reporting_endpoints,
+        );
+        let document_uri = origin_url.as_ref().map(|_| {
+            crate::content_security_policy::content_security_policy_source_file_for_report(
+                document_url.as_str(),
+            )
+        });
+        let policy_url = origin_url.unwrap_or_else(|| document_url.clone());
+        crate::content_security_policy::StylesheetFetchCspContext::new(
+            move |url, nonce, redirect_status| {
+                let check = |policies: &[DocumentContentSecurityPolicy], disposition| {
+                    document_style_element_url_policy_violation_from_document_policies(
+                        policies,
+                        &policy_url,
+                        url,
+                        redirect_status,
+                        disposition,
+                        ContentSecurityPolicyStyleElementRequest { nonce },
+                    )
+                    .map(|mut violation| {
+                        if let Some(uri) = &document_uri {
+                            violation.document_uri.clone_from(uri);
+                            violation.source_file.clone_from(uri);
+                        }
+                        violation
+                    })
+                };
+                (
+                    check(&report, ContentSecurityPolicyDisposition::Report),
+                    check(&enforce, ContentSecurityPolicyDisposition::Enforce),
+                )
+            },
+        )
+    }
+
     pub(crate) fn module_fetch_csp_context_for_document(
         &self,
         document_handle: Option<DomHandle>,
@@ -1023,7 +1077,7 @@ impl DocumentRuntime {
             &self.policy_container.content_security_reporting_endpoints,
         );
         let enforced_violation = document_style_element_url_policy_violation_from_document_policies(
-            enforced_policies,
+            &enforced_policies,
             document_url,
             request_url,
             ContentSecurityPolicyRedirectStatus::NoRedirect,
@@ -1038,7 +1092,7 @@ impl DocumentRuntime {
         );
         let report_only_violation =
             document_style_element_url_policy_violation_from_document_policies(
-                report_only_policies,
+                &report_only_policies,
                 document_url,
                 request_url,
                 ContentSecurityPolicyRedirectStatus::NoRedirect,
@@ -1062,7 +1116,7 @@ impl DocumentRuntime {
             &self.policy_container.content_security_reporting_endpoints,
         );
         let enforced_violation = document_style_element_url_policy_violation_from_document_policies(
-            enforced_policies,
+            &enforced_policies,
             document_url,
             request_url,
             ContentSecurityPolicyRedirectStatus::NoRedirect,
@@ -1077,7 +1131,7 @@ impl DocumentRuntime {
         );
         let report_only_violation =
             document_style_element_url_policy_violation_from_document_policies(
-                report_only_policies,
+                &report_only_policies,
                 document_url,
                 request_url,
                 ContentSecurityPolicyRedirectStatus::NoRedirect,
@@ -2120,14 +2174,14 @@ fn document_script_element_url_policy_violation_from_document_policies(
 }
 
 fn document_style_element_url_policy_violation_from_document_policies(
-    policies: Vec<DocumentContentSecurityPolicy>,
+    policies: &[DocumentContentSecurityPolicy],
     document_url: &Url,
     request_url: &Url,
     redirect_status: ContentSecurityPolicyRedirectStatus,
     disposition: ContentSecurityPolicyDisposition,
     request: ContentSecurityPolicyStyleElementRequest<'_>,
 ) -> Option<DocumentContentSecurityPolicyViolation> {
-    policies.into_iter().find_map(|policy| {
+    policies.iter().find_map(|policy| {
         let single_policy = [policy.policy.clone()];
         let mut violation = document_style_element_url_policy_violation(
             &single_policy,
@@ -2138,7 +2192,7 @@ fn document_style_element_url_policy_violation_from_document_policies(
             disposition,
             request,
         )?;
-        apply_document_policy_reporting_flags(&mut violation, &policy);
+        apply_document_policy_reporting_flags(&mut violation, policy);
         Some(violation)
     })
 }
