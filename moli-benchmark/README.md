@@ -143,6 +143,14 @@ pointer geometry properties, and cross-origin or transformed frame pointer
 coordinates reject the automation request. CLI mode cannot run these input
 cases. The bridge preserves the engine's DOM geometry and hit-test APIs.
 
+The fixture requires `openssl` and serves HTTP and HTTPS on independent ports.
+WSS uses the HTTPS listeners. `.https` tests and HTTPS/WSS template URLs retain
+those transports. Each run creates an ephemeral certificate authority: Moli
+uses `--ca-cert` with normal certificate and hostname verification; Chrome trusts
+only the fixture server public key, following upstream wptrunner's SPKI setup.
+No system trust store is modified. Engines without a fixture trust configuration
+report a setup error rather than silently substituting HTTP for HTTPS.
+
 ### Cross-engine layout WPT
 
 The standalone cross-engine runner has separate layout profiles, so its
