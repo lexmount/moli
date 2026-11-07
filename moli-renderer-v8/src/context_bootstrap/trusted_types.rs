@@ -657,7 +657,9 @@ fn build_trusted_type_object<'s>(
         .initialize(scope, object)
         .expect("TrustedType object declaration should initialize");
     kind.interface().initialize(scope, object).ok()?;
-    let _ = object.set_prototype(scope, prototype.into());
+    object
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     Some(object)
 }
 
@@ -895,13 +897,18 @@ fn install_function_constructor_wrappers<'s>(
             .build(scope)
             .ok_or_else(|| anyhow!("failed to build {} Trusted Types wrapper", kind.name()))?;
         constructor.set_name(v8str(scope, kind.name()));
-        if let Some(prototype) = eval_object(scope, kind.prototype_expression()) {
-            let _ = prototype.define_own_property(
+        if let Some(prototype) = eval_object(scope, kind.prototype_expression())
+            && prototype.define_own_property(
                 scope,
                 v8str(scope, "constructor").into(),
                 constructor.into(),
                 v8::PropertyAttribute::DONT_ENUM,
-            );
+            ) != Some(true)
+        {
+            return Err(anyhow!(
+                "failed to install {} Trusted Types wrapper",
+                kind.name()
+            ));
         }
         if kind == TrustedFunctionConstructorKind::Function {
             define_global_value(scope, global, "Function", constructor.into())?;

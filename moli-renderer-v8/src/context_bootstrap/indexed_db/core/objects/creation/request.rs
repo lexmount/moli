@@ -164,7 +164,9 @@ fn create_request_object_in_current_context<'s>(
     } else {
         global_constructor_prototype(scope, "IDBRequest")?
     };
-    let _ = request.set_prototype(scope, prototype.into());
+    request
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     let kind = if is_open {
         IndexedDbWrapperKind::OpenRequest
     } else {

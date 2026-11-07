@@ -326,10 +326,13 @@ fn descriptor_registers_unexposed_ancestry_and_rejects_forged_receivers() {
     assert!(interfaces::TestBase::is_instance(scope, real));
     assert!(interfaces::TestDerived::is_instance(scope, real));
     let forged = v8::Object::new(scope);
-    forged.set_prototype(scope, real.into()).unwrap();
+    assert_eq!(forged.set_prototype(scope, real.into()), Some(true));
     assert!(!interfaces::TestBase::is_instance(scope, forged));
     assert!(!interfaces::TestDerived::is_instance(scope, forged));
-    real.set_prototype(scope, v8::null(scope).into()).unwrap();
+    assert_eq!(
+        real.set_prototype(scope, v8::null(scope).into()),
+        Some(true)
+    );
     assert!(interfaces::TestBase::is_instance(scope, real));
 }
 
@@ -370,7 +373,7 @@ fn shared_fragments_preserve_target_identity_and_prototype() {
     let scope = &mut v8::ContextScope::new(scope, context);
     let real = Derived::new().bind(scope).unwrap();
     let prototype = v8::Object::new(scope);
-    real.set_prototype(scope, prototype.into()).unwrap();
+    assert_eq!(real.set_prototype(scope, prototype.into()), Some(true));
     SharedState::new(7).bind_into(scope, real).unwrap();
     assert!(
         real.get_prototype(scope)

@@ -353,12 +353,14 @@ fn build_plugin<'s>(
     }
     define_collection_indices(scope, plugin, mime_types.iter().map(|(_, item)| *item))?;
     for (type_name, mime_type) in mime_types {
-        let _ = plugin.define_own_property(
-            scope,
-            v8str(scope, type_name).into(),
-            mime_type.into(),
-            v8::PropertyAttribute::DONT_ENUM,
-        );
+        plugin
+            .define_own_property(
+                scope,
+                v8str(scope, type_name).into(),
+                mime_type.into(),
+                v8::PropertyAttribute::DONT_ENUM,
+            )?
+            .then_some(())?;
     }
 
     Some(plugin)
@@ -384,12 +386,14 @@ fn build_mime_type_array<'s>(
     }
     define_collection_indices(scope, array, mime_types.iter().map(|(_, item)| *item))?;
     for (type_name, mime_type) in mime_types {
-        let _ = array.define_own_property(
-            scope,
-            v8str(scope, type_name).into(),
-            mime_type.into(),
-            v8::PropertyAttribute::DONT_ENUM,
-        );
+        array
+            .define_own_property(
+                scope,
+                v8str(scope, type_name).into(),
+                mime_type.into(),
+                v8::PropertyAttribute::DONT_ENUM,
+            )?
+            .then_some(())?;
     }
     Some(array)
 }
@@ -405,12 +409,14 @@ fn build_plugin_array<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<
     }
     define_collection_indices(scope, array, plugins.iter().map(|(_, item)| *item))?;
     for (name, plugin) in plugins {
-        let _ = array.define_own_property(
-            scope,
-            v8str(scope, name).into(),
-            plugin.into(),
-            v8::PropertyAttribute::DONT_ENUM,
-        );
+        array
+            .define_own_property(
+                scope,
+                v8str(scope, name).into(),
+                plugin.into(),
+                v8::PropertyAttribute::DONT_ENUM,
+            )?
+            .then_some(())?;
     }
     Some(array)
 }

@@ -118,7 +118,9 @@ pub(super) fn native_description<'s>(
         "RTCSessionDescription",
     )
     .ok()?;
-    object.set_prototype(scope, prototype.into())?;
+    object
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     let kind = v8str(scope, webidl::WebIdlEnumSnapshot::snapshot_token(&kind));
     SessionDescriptionObjectDeclaration::new(kind.into(), sdp)
         .initialize(scope, object)

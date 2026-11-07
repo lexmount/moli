@@ -327,7 +327,10 @@ pub(super) fn build_blob_object_unpublished<'s>(
             release_blob_wrapper_ref(blob_id);
             None
         })?;
-    let _ = object.set_prototype(scope, prototype.into());
+    if object.set_prototype(scope, prototype.into()) != Some(true) {
+        release_blob_wrapper_ref(blob_id);
+        return None;
+    }
     track_blob_ref_lifetime(scope, object, move || release_blob_wrapper_ref(blob_id));
     Some((object, blob_id))
 }
@@ -358,7 +361,9 @@ pub(crate) fn world_wrapper<'s>(
         .ok()?;
     let prototype =
         crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Blob").ok()?;
-    object.set_prototype(scope, prototype.into())?;
+    object
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     Some(object)
 }
 

@@ -132,7 +132,9 @@ pub(in crate::context_bootstrap) fn static_range_snapshot<'s>(
         "StaticRange",
     )
     .ok()?;
-    range.set_prototype(scope, prototype.into())?;
+    range
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     crate::web_api_interfaces::initialize(scope, range, "StaticRange").ok()?;
     Some(range)
 }

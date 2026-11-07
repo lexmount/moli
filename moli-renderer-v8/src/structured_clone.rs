@@ -1786,7 +1786,13 @@ pub(crate) fn deserialize_message_event_from_wire<'s>(
             return None;
         }
     }
-    let _ = ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
+    if ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen) != Some(true) {
+        if let Some(closed) = closed {
+            closed.discard(scope);
+        }
+        discard_all_transferred_stream_channels(scope, payload);
+        return None;
+    }
     Some((value, ports))
 }
 

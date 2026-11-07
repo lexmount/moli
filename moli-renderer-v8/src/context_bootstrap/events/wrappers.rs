@@ -266,7 +266,9 @@ fn bind_attribute<'s>(
             }
         }?;
         getter.set_name(v8_string(scope, &format!("get {field}"))?);
-        getters.create_data_property(scope, name, getter.into())?;
+        getters
+            .create_data_property(scope, name, getter.into())?
+            .then_some(())?;
         getter
     };
     let mut accessor_attributes = v8::PropertyAttribute::NONE;
@@ -375,4 +377,62 @@ pub(crate) fn set_event_private_value(
 ) {
     let state = event_backing(scope, event);
     set_private_value(scope, state, slot, value);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_attribute_binding_rejects_failed_getter_cache_writes() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        v8::tc_scope!(let scope, scope);
+        for scenario in ["extensible", "frozen", "readonly"] {
+            let getters = v8::Object::new(scope);
+            let wrapper = v8::Object::new(scope);
+            let property = v8str(scope, "detail");
+            match scenario {
+                "frozen" => assert_eq!(
+                    getters.set_integrity_level(scope, v8::IntegrityLevel::Frozen),
+                    Some(true)
+                ),
+                "readonly" => assert_eq!(
+                    getters.define_own_property(
+                        scope,
+                        property.into(),
+                        v8::Integer::new(scope, 1).into(),
+                        v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_DELETE,
+                    ),
+                    Some(true)
+                ),
+                _ => {}
+            }
+            let expected = scenario == "extensible";
+            assert_eq!(
+                bind_attribute(
+                    scope,
+                    getters,
+                    wrapper,
+                    property.into(),
+                    v8::PropertyAttribute::NONE,
+                ),
+                expected.then_some(()),
+                "{scenario}: rejected cache writes must stop attribute binding"
+            );
+            assert_eq!(
+                wrapper.has_own_property(scope, property.into()),
+                Some(expected),
+                "{scenario}: only successful cache writes may publish an accessor"
+            );
+            assert!(
+                !scope.has_caught(),
+                "V8 rejection need not throw an exception"
+            );
+        }
+    }
 }

@@ -1564,7 +1564,9 @@ fn ensure_data_transfer_types_snapshot<'s>(
     };
     let types_array = crate::util::serialize_v8_array(scope, types.as_slice())
         .unwrap_or_else(|| v8::Array::new(scope, 0));
-    let _ = types_array.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
+    types_array
+        .set_integrity_level(scope, v8::IntegrityLevel::Frozen)?
+        .then_some(())?;
     set_private_value(scope, owner, DATA_TRANSFER_TYPES_SLOT, types_array.into());
     Some(types_array.into())
 }

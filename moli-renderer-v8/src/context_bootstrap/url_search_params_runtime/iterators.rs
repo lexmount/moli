@@ -60,7 +60,9 @@ pub(super) fn live_url_search_params_iterator<'s>(
         .bind(scope)
         .ok()?;
     let prototype = url_search_params_iterator_prototype(scope)?;
-    iterator.set_prototype(scope, prototype.into())?;
+    iterator
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     Some(iterator.into())
 }
 

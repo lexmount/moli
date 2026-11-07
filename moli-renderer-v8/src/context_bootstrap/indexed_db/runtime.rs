@@ -252,7 +252,9 @@ fn ensure_runtime_factory_field<'s>(
     if object_bool_property(scope, state, INDEXED_DB_FACTORY_INITIALIZED_FIELD).unwrap_or(false) {
         return Some(factory);
     }
-    let _ = factory.set_prototype(scope, factory_proto.into());
+    factory
+        .set_prototype(scope, factory_proto.into())?
+        .then_some(())?;
     define_non_enumerable_bool_property(scope, state, INDEXED_DB_FACTORY_INITIALIZED_FIELD, true);
     Some(factory)
 }

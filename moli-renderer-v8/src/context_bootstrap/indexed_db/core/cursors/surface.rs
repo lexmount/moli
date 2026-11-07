@@ -26,7 +26,7 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_cursor_surface<'s>(
     // for a new record chooses the realm in which its value is materialized.
     for name in [KEY_CACHE, PRIMARY_KEY_CACHE, VALUE_CACHE] {
         let key = crate::util::private_key(scope, name)?;
-        cursor.delete_private(scope, key)?;
+        cursor.delete_private(scope, key)?.then_some(())?;
     }
     Some(())
 }
@@ -81,7 +81,9 @@ fn create_cursor_object_in_current_context<'s>(
     } else {
         global_constructor_prototype(scope, "IDBCursorWithValue")?
     };
-    let _ = cursor.set_prototype(scope, prototype.into());
+    cursor
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     let interface = if key_only {
         "IDBCursor"
     } else {

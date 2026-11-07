@@ -388,10 +388,14 @@ pub(crate) fn write_clone<'s>(
     let object = target(scope, object);
     if matches!(kind, FrameKind::Video) {
         let value = get_private_value(scope, object, TYPE)?;
-        serializer.write_value(scope.get_current_context(), value)?;
+        if !serializer.write_value(scope.get_current_context(), value)? {
+            return Some(false);
+        }
     }
     let metadata = frame_metadata(scope, object);
-    serializer.write_value(scope.get_current_context(), metadata.into())?;
+    if !serializer.write_value(scope.get_current_context(), metadata.into())? {
+        return Some(false);
+    }
     let data = frame_data(scope, object);
     serializer.write_value(scope.get_current_context(), data.into())
 }
