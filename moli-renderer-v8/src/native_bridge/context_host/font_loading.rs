@@ -1,6 +1,6 @@
 use super::{
     OwnerDispatchScope, PageScriptHost, WindowDocumentOwner, WindowDocumentTaskTarget,
-    window_document_tasks::ExactWindowDocumentTaskLedger,
+    font_loading_tasks::FontLoadingPayload,
 };
 use crate::{
     document_runtime::DomHandle,
@@ -19,17 +19,6 @@ struct DocumentFontReadiness {
 pub(super) struct RealtimeFontReadiness {
     documents: Vec<DocumentFontReadiness>,
     checking: Option<WindowDocumentTaskTarget>,
-    tasks: ExactWindowDocumentTaskLedger<
-        RendererPageFontLoadingTaskId,
-        RendererPageFontLoadingTaskKind,
-        (),
-    >,
-}
-
-impl RealtimeFontReadiness {
-    pub(super) fn is_idle(&self) -> bool {
-        self.checking.is_none() && self.tasks.iter().next().is_none()
-    }
 }
 
 impl PageScriptHost {
@@ -111,7 +100,7 @@ impl PageScriptHost {
             return;
         }
         let state = self.realtime_layout_state.as_ref().unwrap();
-        let mut fonts = state.font_readiness.borrow_mut();
+        let fonts = state.font_readiness.borrow();
         if fonts.checking == Some(target) {
             return;
         }
@@ -122,31 +111,23 @@ impl PageScriptHost {
         {
             return;
         }
-        let kind = RendererPageFontLoadingTaskKind::CheckReadiness;
-        if !fonts.tasks.enqueue_notification(
+        drop(fonts);
+        if !self.enqueue_font_loading_task(
             target,
-            kind,
-            RendererPageFontLoadingTaskId::from_raw,
-            |id| {
-                self.page_font_loading_sender()
-                    .send(target, id, kind)
-                    .is_ok()
-            },
+            RendererPageFontLoadingTaskKind::CheckReadiness,
+            FontLoadingPayload::Readiness(document),
         ) {
             tracing::debug!(?target, "font readiness route closed");
         }
     }
 
-    pub(crate) fn current_pending_font_loading_task(
-        &self,
-        id: RendererPageFontLoadingTaskId,
-    ) -> Option<(WindowDocumentTaskTarget, RendererPageFontLoadingTaskKind)> {
-        let fonts = self.realtime_layout_state.as_ref()?.font_readiness.borrow();
-        let pending = fonts.tasks.pending(id)?;
-        let target = self.current_window_document_task_target_for_dispatch_scope(
-            pending.target().dispatch_scope(),
-        )?;
-        Some((target, pending.kind()))
+    pub(super) fn realtime_font_readiness_is_idle(&self) -> bool {
+        self.realtime_layout_state.as_ref().is_none_or(|state| {
+            state.font_readiness.borrow().checking.is_none()
+                && self.font_loading_tasks.borrow().iter().all(|pending| {
+                    pending.kind() != RendererPageFontLoadingTaskKind::CheckReadiness
+                })
+        })
     }
 
     pub(crate) fn take_pending_font_loading_task(
@@ -155,18 +136,15 @@ impl PageScriptHost {
         target: WindowDocumentTaskTarget,
         kind: RendererPageFontLoadingTaskKind,
     ) -> Option<DomHandle> {
-        let mut fonts = self
-            .realtime_layout_state
-            .as_ref()?
-            .font_readiness
-            .borrow_mut();
-        fonts.tasks.remove_exact(id, target, kind)?;
-        let document = fonts
-            .documents
-            .iter()
-            .find(|entry| entry.target == target)
-            .map(|entry| entry.document)?;
-        fonts.checking = Some(target);
+        let state = self.realtime_layout_state.as_ref()?;
+        let pending = self
+            .font_loading_tasks
+            .borrow_mut()
+            .remove_exact(id, target, kind)?;
+        let FontLoadingPayload::Readiness(document) = pending.into_payload() else {
+            return None;
+        };
+        state.font_readiness.borrow_mut().checking = Some(target);
         Some(document)
     }
 
@@ -205,15 +183,6 @@ impl PageScriptHost {
         }
     }
 
-    pub(crate) fn discard_pending_font_loading_task(
-        &self,
-        id: RendererPageFontLoadingTaskId,
-    ) -> bool {
-        self.realtime_layout_state
-            .as_ref()
-            .is_some_and(|state| state.font_readiness.borrow_mut().tasks.remove(id).is_some())
-    }
-
     pub(crate) fn mark_realtime_document_fonts_ready(&self, document: DomHandle) {
         let Some(target) = self.realtime_font_target(document) else {
             return;
@@ -229,7 +198,10 @@ impl PageScriptHost {
         }
         // A synchronous data font can finish during this check. Its coalesced
         // continuation is redundant once this same input is known ready.
-        fonts.tasks.retain(|pending| pending.target() != target);
+        self.font_loading_tasks.borrow_mut().retain(|pending| {
+            pending.kind() != RendererPageFontLoadingTaskKind::CheckReadiness
+                || pending.target() != target
+        });
     }
 
     pub(crate) fn ensure_realtime_font_layout(&self) -> Result<(), moli_layout::LayoutError> {
@@ -254,9 +226,10 @@ impl PageScriptHost {
         };
         let document = {
             let mut fonts = state.font_readiness.borrow_mut();
-            fonts
-                .tasks
-                .retain(|pending| pending.target().owner() != retired);
+            self.font_loading_tasks.borrow_mut().retain(|pending| {
+                pending.kind() != RendererPageFontLoadingTaskKind::CheckReadiness
+                    || pending.target().owner() != retired
+            });
             fonts
                 .documents
                 .iter_mut()
@@ -278,9 +251,10 @@ impl PageScriptHost {
     pub(super) fn retire_realtime_font_readiness(&self, retired: WindowDocumentOwner) {
         if let Some(state) = &self.realtime_layout_state {
             let mut fonts = state.font_readiness.borrow_mut();
-            fonts
-                .tasks
-                .retain(|pending| pending.target().owner() != retired);
+            self.font_loading_tasks.borrow_mut().retain(|pending| {
+                pending.kind() != RendererPageFontLoadingTaskKind::CheckReadiness
+                    || pending.target().owner() != retired
+            });
             fonts
                 .documents
                 .retain(|entry| entry.target.owner() != retired);

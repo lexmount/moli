@@ -5,7 +5,7 @@
 //! but only the Page owner may authorize its exact Window/Document and the
 //! selected-task dispatcher remains the sole task-completion authority.
 
-use crate::runtime::PageOwnerTurnOutcome;
+use crate::{native_bridge::WindowDocumentTaskTarget, runtime::PageOwnerTurnOutcome};
 
 use super::{
     PageWindowDocumentTaskTurnAction, RendererPageWindowDocumentTask,
@@ -33,6 +33,9 @@ impl RendererPageFontLoadingTaskId {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageFontLoadingTaskKind {
     CheckReadiness,
+    FontFaceSetLoading,
+    FontFaceSetCompletion,
+    FontFaceLoad,
 }
 
 pub(crate) type RendererPageFontLoadingOwner = RendererPageWindowDocumentTaskOwner;
@@ -55,6 +58,8 @@ pub(super) type RendererPageFontLoadingSource = RendererPageWindowDocumentTaskSo
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PageFontLoadingTargetEffect {
     ReadinessCheckedForCurrentOwner,
+    CallbackInvokedForCurrentOwner,
+    CurrentOwnerCallbackRetired,
     DiscardedStaleOwner {
         current_owner: Option<RendererPageFontLoadingOwner>,
     },

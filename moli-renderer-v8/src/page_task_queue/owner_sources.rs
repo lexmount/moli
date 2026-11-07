@@ -887,6 +887,7 @@ impl RendererPageOwnedTaskSources {
             && self
                 .misc_platform_api
                 .route_matches(&routes.misc_platform_api)
+            && self.font_loading.route_matches(&routes.font_loading)
             && self.device_sensor.route_matches(&routes.device_sensor)
             && self
                 .intersection_observer
@@ -1080,7 +1081,7 @@ impl RendererPageOwnedTaskSources {
                 owner: self
                     .font_loading
                     .next_ready_owner()
-                    .expect("ready FontLoading task must retain its exact owner"),
+                    .expect("ready font-loading task must retain its exact owner"),
             }
         });
         let device_sensor = self.device_sensor.next_ready_metadata().map(|ready| {
@@ -1474,10 +1475,10 @@ impl RendererPageOwnedTaskSources {
                 let (actual, task) = self
                     .font_loading
                     .pop_front()
-                    .expect("selected FontLoading task must remain queued");
+                    .expect("selected font-loading task must remain queued");
                 assert_eq!(
                     actual, ready,
-                    "selected FontLoading head changed before dequeue"
+                    "selected font-loading head changed before dequeue"
                 );
                 RendererPageSchedulerTask::FontLoading(task)
             }

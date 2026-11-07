@@ -156,7 +156,7 @@ impl PageScriptHost {
                 .as_ref()
                 .is_none_or(|state| state.frame.borrow().is_idle()
                     && state.animation_frames.borrow().is_empty()
-                    && state.font_readiness.borrow().is_idle()),
+                    && self.realtime_font_readiness_is_idle()),
             "layout policy can change only at an idle realtime boundary"
         );
         if !policy.uses_real_layout() {

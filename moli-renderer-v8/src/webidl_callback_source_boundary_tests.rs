@@ -45,6 +45,11 @@ const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
     ("abort_signal_route.rs", 1),
     ("custom_elements/construction.rs", 1),
     ("host/timers.rs", 1),
+    // Font Loading retains only the native algorithm functions created by
+    // run_font_face_set_task and run_requested_font_load. Author loading event
+    // listeners stay in the typed EventTarget registry; the Page source owns
+    // exact Window/Document/Realm retirement and the task-end checkpoint.
+    ("native_bridge/context_host/font_loading_tasks.rs", 1),
     ("native_bridge/history_queue.rs", 3),
     ("script_vm/frame_script_jobs.rs", 3),
     ("worker/timer_callback.rs", 1),

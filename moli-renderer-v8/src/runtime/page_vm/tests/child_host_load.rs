@@ -51,7 +51,10 @@ document.body.append(frame);
             .await;
             for _ in 0..8 {
                 if !page_vm
-                    .run_one_due_timer_selected_task_for_test(&loader)
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::FontLoading,
+                        &loader,
+                    )
                     .await?
                 {
                     break;
@@ -79,7 +82,10 @@ document.body.append(frame);
             }
             for _ in 0..8 {
                 if !page_vm
-                    .run_one_due_timer_selected_task_for_test(&loader)
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::FontLoading,
+                        &loader,
+                    )
                     .await?
                 {
                     break;
@@ -102,7 +108,10 @@ document.body.append(frame);
             );
             for _ in 0..8 {
                 if !page_vm
-                    .run_one_due_timer_selected_task_for_test(&loader)
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::FontLoading,
+                        &loader,
+                    )
                     .await?
                 {
                     break;

@@ -12,8 +12,12 @@ use super::{
 impl IntoPageTaskCompletion for PageFontLoadingTurnAction {
     fn into_page_task_completion(self) -> PageTaskCompletion {
         match self.target_effect {
-            PageFontLoadingTargetEffect::ReadinessCheckedForCurrentOwner => {
+            PageFontLoadingTargetEffect::ReadinessCheckedForCurrentOwner
+            | PageFontLoadingTargetEffect::CallbackInvokedForCurrentOwner => {
                 PageTaskCompletion::CallbackCompletion
+            }
+            PageFontLoadingTargetEffect::CurrentOwnerCallbackRetired => {
+                PageTaskCompletion::CheckpointOnly
             }
             PageFontLoadingTargetEffect::DiscardedStaleOwner { .. } => {
                 PageTaskCompletion::NoCompletion

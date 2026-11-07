@@ -242,6 +242,7 @@ impl PageScriptHost {
         drop(std::mem::take(&mut self.file_reading_tasks));
         drop(std::mem::take(&mut self.misc_platform_api_tasks));
         self.intersection_observer_tasks.take();
+        drop(std::mem::take(self.font_loading_tasks.get_mut()));
         drop(std::mem::take(&mut self.device_sensor_tasks));
         drop(std::mem::take(&mut self.file_entry_file_callbacks));
         drop(std::mem::take(&mut self.user_interaction_tasks));

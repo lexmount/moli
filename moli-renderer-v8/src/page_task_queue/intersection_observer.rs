@@ -5,7 +5,7 @@
 //! but only the Page owner may authorize its exact Window/Document and the
 //! selected-task dispatcher remains the sole task-completion authority.
 
-use crate::runtime::PageOwnerTurnOutcome;
+use crate::{native_bridge::WindowDocumentTaskTarget, runtime::PageOwnerTurnOutcome};
 
 use super::{
     PageWindowDocumentTaskTurnAction, RendererPageWindowDocumentTask,

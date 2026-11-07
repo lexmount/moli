@@ -514,6 +514,7 @@ impl PageScriptHost {
             misc_platform_api_tasks:
                 super::misc_platform_api_tasks::MiscPlatformApiTaskState::default(),
             intersection_observer_tasks: None,
+            font_loading_tasks: Default::default(),
             device_sensor_tasks: super::device_sensor_tasks::DeviceSensorTaskState::default(),
             canvas_blob_serialization_tasks:
                 super::canvas_blob_serialization_tasks::CanvasBlobSerializationTaskState::default(),
@@ -1103,6 +1104,17 @@ impl PageScriptHost {
             .misc_platform_api()
             .clone()
     }
+    pub(crate) fn page_font_loading_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageFontLoadingSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before font-loading callback admission",
+            )
+            .font_loading()
+            .clone()
+    }
     pub(crate) fn page_device_sensor_sender(
         &self,
     ) -> crate::page_task_queue::RendererPageDeviceSensorSender {
@@ -1135,17 +1147,6 @@ impl PageScriptHost {
                 "a live Page Window must install its complete Page task capabilities before miscellaneous-platform callback admission",
             )
             .intersection_observer()
-            .clone()
-    }
-    pub(crate) fn page_font_loading_sender(
-        &self,
-    ) -> crate::page_task_queue::RendererPageFontLoadingSender {
-        self.page_task_capabilities
-            .get()
-            .expect(
-                "a live Page Window must install its complete Page task capabilities before font readiness admission",
-            )
-            .font_loading()
             .clone()
     }
 

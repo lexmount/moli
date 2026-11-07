@@ -72,10 +72,6 @@ impl<I: Copy + Eq, K: Copy + Eq, P, T: Copy + Eq> WindowTaskLedger<I, K, P, T> {
         self.pending.iter()
     }
 
-    pub(super) fn retain(&mut self, keep: impl FnMut(&PendingWindowTask<I, K, P, T>) -> bool) {
-        self.pending.retain(keep);
-    }
-
     pub(super) fn prepend(&mut self, pending: PendingWindowTask<I, K, P, T>) {
         self.pending.insert(0, pending);
     }

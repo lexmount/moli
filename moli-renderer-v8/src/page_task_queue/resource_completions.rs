@@ -194,6 +194,7 @@ pub(crate) enum RendererOwnerWakeSource {
     /// task source. The Host-local payload owns callback Realm identity.
     MiscPlatformApiTask,
     IntersectionObserverTask,
+    /// A font algorithm entered its exact Window/Document font-loading source.
     FontLoadingTask,
     DeviceSensorTask,
     CanvasBlobSerializationTask,
