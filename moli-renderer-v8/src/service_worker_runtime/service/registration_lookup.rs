@@ -1,6 +1,39 @@
 use super::*;
 
 impl ServiceWorkerRuntimeService {
+    pub(crate) fn watch_registration_from_worker_client(
+        &self,
+        scope_url: &Url,
+        storage_key: &str,
+        completion_tx: &tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerMessage>,
+    ) {
+        let mut state = self.inner.state.lock();
+        state
+            .worker_client_lifecycle_watchers
+            .retain(|watcher| watcher.completion_tx.strong_count() > 0);
+        if state
+            .worker_client_lifecycle_watchers
+            .iter()
+            .any(|watcher| {
+                watcher.scope_url == *scope_url
+                    && watcher.storage_key == storage_key
+                    && watcher
+                        .completion_tx
+                        .upgrade()
+                        .is_some_and(|sender| sender.same_channel(completion_tx))
+            })
+        {
+            return;
+        }
+        state.worker_client_lifecycle_watchers.push(
+            super::super::state::ServiceWorkerWorkerClientLifecycleWatcher {
+                scope_url: scope_url.clone(),
+                storage_key: storage_key.to_owned(),
+                completion_tx: completion_tx.downgrade(),
+            },
+        );
+    }
+
     pub(crate) fn watch_registration_in_worker(
         &self,
         registration_id: ServiceWorkerRegistrationId,
