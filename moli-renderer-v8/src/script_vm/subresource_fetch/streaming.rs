@@ -137,7 +137,10 @@ impl ScriptVm {
                 } else {
                     response
                 };
+                // SW responses already satisfy HTTP fetch. Only completions
+                // from the network/cache loader can initiate authentication.
                 if handle_auth_requests
+                    && !skip_fetch_security_validation
                     && matches!(response.status, 401 | 407)
                     && let Some(challenge) =
                         crate::network_host::extract_subresource_auth_challenge(&response.headers)
