@@ -39,6 +39,11 @@ const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
     ("custom_elements/definition.rs", 10),
     ("custom_elements/definition_callbacks.rs", 1),
     ("host/timers.rs", 1),
+    // Font Loading retains only the native algorithm functions created by
+    // run_font_face_set_task and run_requested_font_load. Author loading event
+    // listeners stay in the typed EventTarget registry; the Page source owns
+    // exact Window/Document/Realm retirement and the task-end checkpoint.
+    ("native_bridge/context_host/font_loading_tasks.rs", 1),
     // AbortSignal listeners and onabort now use the shared typed EventTarget
     // registry. These remaining roots own browser-created abort algorithms.
     // Native abort algorithms reside in the store or its extracted dispatch

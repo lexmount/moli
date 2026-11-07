@@ -53,3 +53,5 @@ pub(super) use self::scripts::{
     DynamicScriptBatch, ScriptHandleExecutionSubject, ScriptHostEventSubject,
 };
 pub(super) use self::timers::{HostTimeoutRunResult, HostTimeoutScheduler, HostTimerOwner};
+
+pub(crate) use self::timers::report_window_timer_exception;

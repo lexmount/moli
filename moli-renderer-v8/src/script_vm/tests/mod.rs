@@ -584,10 +584,10 @@ fn refresh_layout_for_test(vm: &mut StandaloneScriptVmHarness) {
 // separately by the font event ordering and Window retirement tests.
 fn run_font_tasks(vm: &mut ScriptVm) {
     for _ in 0..16 {
-        if !vm.has_ready_timeout() {
+        if !vm.apply_next_font_loading_body_for_test().unwrap() {
             return;
         }
-        assert!(vm.run_next_timeout_for_test().unwrap().consumed_heap_head());
+        vm.perform_owner_lane_task_microtask_checkpoints().unwrap();
     }
     panic!("font loading tasks did not become idle");
 }

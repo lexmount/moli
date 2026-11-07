@@ -94,6 +94,17 @@ pub(crate) struct PageVmTaskExecutorTestHarness {
 }
 
 impl PageVmTaskExecutorTestHarness {
+    pub(crate) fn has_ready_font_loading_task_for_test(&self) -> bool {
+        self.page_vm
+            .page_task_executor_sources_for_test()
+            .has_scheduler_task_for_executor_test(|descriptor| {
+                matches!(
+                    descriptor,
+                    crate::page_task_queue::RendererPageReadyDescriptor::FontLoading { .. }
+                )
+            })
+    }
+
     pub(crate) fn has_ready_dom_manipulation_family_for_test(
         &self,
         family: super::PageDomManipulationTestFamily,
@@ -193,6 +204,20 @@ impl PageVmTaskExecutorTestHarness {
             .run_until(
                 self.page_vm
                     .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader),
+            )
+            .await
+    }
+
+    /// Select one exact source through the shared production dispatcher.
+    pub(crate) async fn run_one_exact_selected_page_task_executor_turn(
+        &mut self,
+        selector: PageSelectedTaskTestSelector,
+        loader: &ResourceRequestClient,
+    ) -> anyhow::Result<bool> {
+        self.selected_task_local_set
+            .run_until(
+                self.page_vm
+                    .run_exact_selected_page_task_for_test(selector, loader),
             )
             .await
     }

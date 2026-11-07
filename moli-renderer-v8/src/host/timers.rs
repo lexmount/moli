@@ -1367,7 +1367,7 @@ fn run_window_timer_source(
     }
 }
 
-fn report_window_timer_exception<'s>(
+pub(crate) fn report_window_timer_exception<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     relevant_identity: Option<WindowExecutionContextIdentity>,
     callback: Option<v8::Local<'s, v8::Function>>,

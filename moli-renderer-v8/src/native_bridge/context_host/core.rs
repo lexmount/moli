@@ -454,6 +454,7 @@ impl JsContextHost {
             file_reading_tasks: super::file_reading_tasks::FileReadingState::default(),
             misc_platform_api_tasks:
                 super::misc_platform_api_tasks::MiscPlatformApiTaskState::default(),
+            font_loading_tasks: super::font_loading_tasks::FontLoadingTaskState::default(),
             file_entry_file_callbacks:
                 super::file_entry_file_callbacks::FileEntryFileCallbackState::default(),
             user_interaction_tasks:
@@ -917,6 +918,17 @@ impl JsContextHost {
                 "a live Page Window must install its complete Page task capabilities before miscellaneous-platform callback admission",
             )
             .misc_platform_api()
+            .clone()
+    }
+    pub(crate) fn page_font_loading_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageFontLoadingSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before font-loading callback admission",
+            )
+            .font_loading()
             .clone()
     }
 
