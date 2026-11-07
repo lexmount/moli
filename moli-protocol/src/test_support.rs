@@ -148,6 +148,14 @@ pub fn protocol_work_from_renderer_output(
     work
 }
 
+/// Constructs a completed command turn that owns concrete scheduler work.
+pub fn command_turn_with_scheduler_events(
+    events: Vec<crate::CdpSchedulerEvent>,
+) -> crate::CdpRendererOwnerTurnOutcome {
+    crate::CdpTurnOutcome::new_with_protocol_events(Vec::new(), events)
+        .with_renderer_output_predecessor(None)
+}
+
 pub fn root_frame_stopped_loading_work_for_target(
     publish_sequence: u64,
     session_ids: Vec<Option<String>>,
