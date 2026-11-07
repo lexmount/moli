@@ -1678,16 +1678,27 @@ fn replacement_navigation_cancels_and_exactly_settles_the_target_owned_request()
 
 #[tokio::test]
 async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_owner() {
-    for (snapshot_drain, inherits_load_predecessor) in
-        [(false, false), (true, false), (false, true), (true, true)]
-    {
+    for (snapshot_drain, inherits_load_predecessor, pending_load) in [
+        (false, false, false),
+        (false, false, true),
+        (false, true, false),
+        (false, true, true),
+        (true, false, false),
+        (true, false, true),
+        (true, true, false),
+        (true, true, true),
+    ] {
         let mut conn = CdpConnection::new();
         let navigation = arm_background_navigation_request(&mut conn, "LOADER-pending");
         let target = navigation.target_id().to_owned();
         let context = conn.default_browser_context_id().to_owned();
+        if !pending_load {
+            assert!(settle_background_navigation_request(&mut conn, &navigation));
+        }
         let (mut scheduler, _protocol_completions) = CdpScheduler::new(conn);
-        let events = vec![
-            CdpSchedulerEvent::ProtocolWorkPublished {
+        let load = deferred_main_document_load_observation_id(1);
+        scheduler.apply_scheduler_events_with_load_predecessors(
+            vec![CdpSchedulerEvent::ProtocolWorkPublished {
                 work: root_frame_stopped_loading_work_for_target(
                     1,
                     vec![None],
@@ -1696,24 +1707,21 @@ async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_
                     "FRAME-pending".to_owned(),
                     "LOADER-pending".to_owned(),
                 ),
-            },
-            CdpSchedulerEvent::ProtocolWorkPublished {
-                work: moli_protocol::test_support::retired_location_navigation_work_for_target(
-                    2,
-                    context,
-                    target,
-                    root_document_lifecycle_identity(PageId::new_for_testing(99), 1),
-                ),
-            },
-        ];
+            }],
+            &[load],
+            None,
+        );
+        scheduler.queues.satisfy_front_client_turn_predecessor();
+        let events = vec![CdpSchedulerEvent::ProtocolWorkPublished {
+            work: moli_protocol::test_support::retired_location_navigation_work_for_target(
+                2,
+                context,
+                target,
+                root_document_lifecycle_identity(PageId::new_for_testing(99), 1),
+            ),
+        }];
         if inherits_load_predecessor {
-            // A navigation published by a still-loading document must reach
-            // its owner before that load completes, so it can cancel the load.
-            scheduler.apply_scheduler_events_with_load_predecessors(
-                events,
-                &[deferred_main_document_load_observation_id(1)],
-                None,
-            );
+            scheduler.apply_scheduler_events_with_load_predecessors(events, &[load], None);
         } else {
             scheduler.apply_scheduler_events(events);
         }
@@ -1742,18 +1750,24 @@ async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_
             !navigation.is_cancelled(),
             "an action from a retired owner has no execution authority"
         );
-        assert!(
+        assert_eq!(
             scheduler
                 .state
                 .with_state(|state| state.has_inflight_background_navigation())
-                .expect("live protocol actor state")
+                .expect("live protocol actor state"),
+            pending_load,
         );
-        assert!(
-            scheduler
-                .state
-                .with_state(|state| state.settle_background_navigation_for_test(&navigation))
-                .unwrap()
-        );
+        if pending_load {
+            assert!(
+                scheduler
+                    .state
+                    .with_state(|state| {
+                        state.settle_background_navigation_for_test(&navigation)
+                    })
+                    .unwrap()
+            );
+        }
+        scheduler.queues.satisfy_load_predecessor(load);
         assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(0));
     }
 }
