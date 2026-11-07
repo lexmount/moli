@@ -1104,3 +1104,48 @@ async fn http_worker_indexeddb_uses_storage_manager_and_rejects_wasm_module_stor
         r#"{"stage":"put","name":"DataCloneError"}"#
     );
 }
+
+#[tokio::test]
+async fn worker_explicit_insecure_creator_cannot_be_elevated_by_https_script() {
+    ensure_v8();
+    for secure in [false, true] {
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut worker = crate::worker::thread::spawn_worker_with_request_client_and_network_policy(
+            "postMessage([isSecureContext, typeof crypto.subtle, typeof navigator.storage]); close();".to_owned(),
+            "https://worker-settings.test/worker.js".to_owned(),
+            loader,
+            crate::worker::WorkerNetworkPolicy { secure_context: secure, ..Default::default() },
+        );
+        let message = timeout(TIMEOUT, worker.recv()).await.unwrap().unwrap();
+        assert_eq!(
+            expect_post_json(message),
+            if secure {
+                "[true,\"object\",\"object\"]"
+            } else {
+                "[false,\"undefined\",\"undefined\"]"
+            }
+        );
+    }
+}
+
+#[test]
+fn worker_context_requires_a_secure_creator_for_trusted_and_inherited_urls() {
+    for (url, inherited) in [
+        ("https://worker-settings.test/a.js", true),
+        ("http://localhost/a.js", true),
+        ("blob:https://worker-settings.test/id", true),
+        ("data:text/javascript,close()", true),
+        ("http://untrusted-settings.test/a.js", false),
+    ] {
+        let url = url::Url::parse(url).unwrap();
+        assert!(
+            !crate::worker::worker_secure_context_for_script_url(&url, false),
+            "{url}"
+        );
+        assert_eq!(
+            crate::worker::worker_secure_context_for_script_url(&url, true),
+            inherited,
+            "{url}"
+        );
+    }
+}

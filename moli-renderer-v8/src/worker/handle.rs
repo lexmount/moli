@@ -60,7 +60,7 @@ pub(crate) fn worker_secure_context_for_script_url(
         // workers created by a secure page as secure, even though a standalone
         // data URL is not itself a trustworthy URL.
         "blob" | "data" => creator_secure_context,
-        _ => moli_url::is_potentially_trustworthy_url(script_url),
+        _ => creator_secure_context && moli_url::is_potentially_trustworthy_url(script_url),
     }
 }
 

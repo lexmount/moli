@@ -379,11 +379,11 @@ fn form_tools(
     {
         return Vec::new();
     }
-    let secure_url = host
-        .child_browsing_context_host_for_document_handle(document)
-        .and_then(|child| host.child_browsing_context_secure_context_url(child))
-        .unwrap_or_else(|| host.document_url_for_handle(document));
-    if !moli_url::is_potentially_trustworthy_url(&secure_url) {
+    let secure = match host.child_browsing_context_host_for_document_handle(document) {
+        Some(child) => host.child_browsing_context_secure_context_available(child),
+        None => moli_url::is_potentially_trustworthy_url(&host.document_url_for_handle(document)),
+    };
+    if !secure {
         return Vec::new();
     }
     let dom = host.dom_host();

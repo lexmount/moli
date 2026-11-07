@@ -375,10 +375,8 @@ impl ScriptVmContextBootstrap {
                 ),
             );
         }
-        // SecureContext is origin-based, not document-URL-based. Initial
-        // about:blank/srcdoc child contexts can keep about:* document URLs while
-        // inheriting the creator's origin, so child bootstrap must ask the
-        // context host for the origin-aware URL instead of using current_url().
+        // Capture the native settings state, including inherited origins and
+        // the complete frame ancestor chain, before installing secure APIs.
         let secure_context_available = match mode {
             WindowContextBootstrapMode::PopupDefault { popup_id, .. } => {
                 unsafe { &*host_ptr }.popup_secure_context_available(popup_id)
@@ -388,11 +386,7 @@ impl ScriptVmContextBootstrap {
                 ..
             }
             | WindowContextBootstrapMode::ChildDefault { child_handle, .. } => {
-                moli_url::is_potentially_trustworthy_url(
-                    &unsafe { &*host_ptr }
-                        .child_browsing_context_secure_context_url(child_handle)
-                        .unwrap_or_else(|| unsafe { &*host_ptr }.document_url().clone()),
-                )
+                unsafe { &*host_ptr }.child_browsing_context_secure_context_available(child_handle)
             }
             WindowContextBootstrapMode::MainDefault
             | WindowContextBootstrapMode::Isolated {

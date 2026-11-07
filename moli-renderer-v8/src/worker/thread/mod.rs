@@ -329,6 +329,13 @@ impl WorkerSpawnOptions {
         script_url: String,
         request_client: ResourceRequestClient,
     ) -> Self {
+        // A standalone embedder has no Window creator. Its default follows
+        // the script origin; a browser-created worker supplies its captured
+        // creator policy explicitly through with_network_policy below.
+        let secure_context = url::Url::parse(&script_url).ok().is_some_and(|url| {
+            !matches!(url.scheme(), "blob" | "data")
+                && moli_url::is_potentially_trustworthy_url(&url)
+        });
         Self {
             script_source,
             script_url,
@@ -344,7 +351,10 @@ impl WorkerSpawnOptions {
             content_security_report_only_policies: Vec::new(),
             content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints::default(
             ),
-            network_policy: WorkerNetworkPolicy::default(),
+            network_policy: WorkerNetworkPolicy {
+                secure_context,
+                ..WorkerNetworkPolicy::default()
+            },
             policy_context: Default::default(),
             shared_memory_agent_cluster: None,
             worker_context_runtime: RendererWorkerContextRuntime::new(
@@ -1795,10 +1805,10 @@ async fn worker_main(
         } else {
             moli_fetch::RequestMixedContentPolicy::Allow
         };
-    let secure_context = network_policy.secure_context
-        || current_script_url
-            .as_ref()
-            .is_some_and(|url| crate::worker::worker_secure_context_for_script_url(url, false));
+    // An HTTPS script cannot elevate an insecure creator. Service workers
+    // have secure settings by definition, independently of any current client.
+    let secure_context =
+        matches!(global_kind, WorkerGlobalKind::Service { .. }) || network_policy.secure_context;
     let storage_key = worker_global_storage_key(
         current_script_url.as_ref(),
         api_storage_key.clone(),

@@ -2058,9 +2058,10 @@ async fn worker_notification_data_rejects_webassembly_module_for_storage() {
 #[tokio::test]
 async fn worker_notification_permission_tracks_permission_overrides() {
     ensure_v8();
-    let mut handle = spawn_test_worker_with_options(
-        WorkerSpawnOptions::new(
-            r#"
+    for (secure_context, expected) in [(false, "denied|denied"), (true, "granted|granted")] {
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(
+                r#"
             (async () => {
               const requested = await Notification.requestPermission();
               postMessage([Notification.permission, requested].join("|"));
@@ -2068,25 +2069,30 @@ async fn worker_notification_permission_tracks_permission_overrides() {
               postMessage("error:" + error.name);
             });
             "#
-            .into(),
-            "https://example.test/worker-notification-permission.js".into(),
-        )
-        .with_network_policy(WorkerNetworkPolicy {
-            permission_overrides: vec![crate::protocol_types::PermissionOverrideRegistration {
-                permission: serde_json::Value::String("notifications".to_owned()),
-                setting: "granted".to_owned(),
-                origin: None,
-                embedded_origin: None,
-            }],
-            ..WorkerNetworkPolicy::default()
-        }),
-    );
+                .into(),
+                "https://example.test/worker-notification-permission.js".into(),
+            )
+            .with_network_policy(WorkerNetworkPolicy {
+                secure_context,
+                permission_overrides: vec![crate::protocol_types::PermissionOverrideRegistration {
+                    permission: serde_json::Value::String("notifications".to_owned()),
+                    setting: "granted".to_owned(),
+                    origin: None,
+                    embedded_origin: None,
+                }],
+                ..WorkerNetworkPolicy::default()
+            }),
+        );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    assert_eq!(expect_post_json(msg), r#""granted|granted""#);
+        let msg = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+        assert_eq!(
+            expect_post_json(msg),
+            serde_json::to_string(expected).unwrap()
+        );
+    }
 }
 
 #[tokio::test]

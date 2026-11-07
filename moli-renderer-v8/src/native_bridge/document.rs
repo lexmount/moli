@@ -1943,14 +1943,12 @@ fn document_storage_access_has_secure_context(
     scope: &mut v8::PinScope<'_, '_>,
     runtime: &JsContextHost,
 ) -> bool {
-    let secure_context_url = runtime
+    runtime
         .current_runtime_window_execution_context_identity(scope)
         .and_then(|identity| {
-            runtime.secure_context_url_for_window_execution_context_identity(identity)
-        });
-    secure_context_url
-        .as_ref()
-        .is_some_and(moli_url::is_potentially_trustworthy_url)
+            runtime.secure_context_available_for_window_execution_context_identity(identity)
+        })
+        .unwrap_or(false)
 }
 
 fn reject_document_storage_access_receiver<'s>(

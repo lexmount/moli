@@ -291,7 +291,12 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     return;
                 }
             };
-        let creator_secure_context = moli_url::is_potentially_trustworthy_url(&base_url);
+        let creator_secure_context = host
+            .current_runtime_window_execution_context_identity(scope)
+            .and_then(|identity| {
+                host.secure_context_available_for_window_execution_context_identity(identity)
+            })
+            .unwrap_or(false);
         let worker_id = if let Some(script_source) = materialized {
             let (inherited_policy, inherited_referrer_policy) = if let Some(policy) = blob_policy {
                 let policy = policy.unwrap_or_default();

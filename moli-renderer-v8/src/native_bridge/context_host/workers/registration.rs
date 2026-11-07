@@ -297,7 +297,9 @@ impl JsContextHost {
         let request_client = outside_settings_load.request_client();
         let cancel_handle = moli_fetch::FetchCancelHandle::new();
         outside_settings_load.attach_cancel_handle(cancel_handle.clone());
-        let creator_secure_context = moli_url::is_potentially_trustworthy_url(&initiator_url);
+        let creator_secure_context = self
+            .secure_context_available_for_window_execution_context_identity(creator)
+            .unwrap_or(false);
         let module_static_import_policy = Box::new(WorkerModuleStaticImportPolicySnapshot {
             initiator_url: initiator_url.clone(),
             content_security_policies: document_content_security_policies,
