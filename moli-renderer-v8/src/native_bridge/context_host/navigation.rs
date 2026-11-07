@@ -334,6 +334,13 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn cancel_pending_location_navigation(&mut self) {
+        if let Some(window) = self.auxiliary_window() {
+            window.cancel_pending_navigation();
+        }
+        self.clear_pending_location_navigation();
+    }
+
     pub(crate) fn record_pending_top_level_history_traversal(&mut self, delta: i64) {
         self.clear_pending_top_level_navigation();
         let traversal = RendererPendingTopLevelHistoryTraversal { delta };
