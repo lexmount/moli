@@ -606,6 +606,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -645,6 +646,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
@@ -682,6 +684,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
@@ -717,6 +720,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
@@ -755,6 +759,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
@@ -792,6 +797,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
@@ -830,6 +836,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
@@ -887,6 +894,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -942,6 +950,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -967,6 +976,7 @@ impl JsContextHost {
         sequence: crate::native_bridge::MediaLoadSequenceId,
         owner: OwnerDispatchScope,
         registration: SubresourceFetchRegistration,
+        dispatch: &crate::network_host::SubresourceRequestDispatch,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
         network_partition_key: Option<String>,
@@ -988,11 +998,13 @@ impl JsContextHost {
             ResourceLoadDisposition::Ordinary,
             registration.cancel_handle(),
         );
+        let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
+            .then(|| Box::new(dispatch.clone()));
         match registration {
             SubresourceFetchRegistration::Intercepted => {
                 self.push_pending_subresource_fetch_info(info.clone());
             }
-            SubresourceFetchRegistration::Dispatched(_) => {
+            SubresourceFetchRegistration::Direct(_) => {
                 self.record_pending_subresource_request_started_with_initiator(
                     &info,
                     SubresourceRequestInitiatorType::Other,
@@ -1003,6 +1015,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1057,7 +1070,7 @@ impl JsContextHost {
             SubresourceFetchRegistration::Intercepted => {
                 self.push_pending_subresource_fetch_info(info.clone());
             }
-            SubresourceFetchRegistration::Dispatched(_) => {
+            SubresourceFetchRegistration::Direct(_) => {
                 self.record_pending_subresource_request_started_with_initiator(
                     &info,
                     request_initiator_type,
@@ -1068,6 +1081,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1139,7 +1153,7 @@ impl JsContextHost {
             sequence,
             owner,
             request_initiator_type,
-            SubresourceFetchRegistration::Dispatched(cancel_handle),
+            SubresourceFetchRegistration::Direct(cancel_handle),
             credentials_mode,
             request_mode,
             network_partition_key,
@@ -1156,6 +1170,7 @@ impl JsContextHost {
         sequence: crate::native_bridge::TextTrackLoadSequenceId,
         owner: OwnerDispatchScope,
         registration: SubresourceFetchRegistration,
+        dispatch: &crate::network_host::SubresourceRequestDispatch,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
         network_partition_key: Option<String>,
@@ -1177,11 +1192,13 @@ impl JsContextHost {
             ResourceLoadDisposition::Ordinary,
             registration.cancel_handle(),
         );
+        let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
+            .then(|| Box::new(dispatch.clone()));
         match registration {
             SubresourceFetchRegistration::Intercepted => {
                 self.push_pending_subresource_fetch_info(info.clone());
             }
-            SubresourceFetchRegistration::Dispatched(_) => {
+            SubresourceFetchRegistration::Direct(_) => {
                 self.record_pending_subresource_request_started_with_initiator(
                     &info,
                     SubresourceRequestInitiatorType::Other,
@@ -1192,6 +1209,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1219,6 +1237,7 @@ impl JsContextHost {
         binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
         owner: OwnerDispatchScope,
         registration: SubresourceFetchRegistration,
+        dispatch: &crate::network_host::SubresourceRequestDispatch,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
         network_partition_key: Option<String>,
@@ -1239,11 +1258,13 @@ impl JsContextHost {
                 registration.cancel_handle(),
             )
             .expect("current stylesheet owner must have a Document resource authority");
+        let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
+            .then(|| Box::new(dispatch.clone()));
         match registration {
             SubresourceFetchRegistration::Intercepted => {
                 self.push_pending_subresource_fetch_info(info.clone());
             }
-            SubresourceFetchRegistration::Dispatched(_) => {
+            SubresourceFetchRegistration::Direct(_) => {
                 self.record_pending_subresource_request_started_with_initiator(
                     &info,
                     SubresourceRequestInitiatorType::Css,
@@ -1254,6 +1275,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1281,6 +1303,7 @@ impl JsContextHost {
         face: v8::Global<v8::Object>,
         owner: OwnerDispatchScope,
         registration: SubresourceFetchRegistration,
+        dispatch: &crate::network_host::SubresourceRequestDispatch,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
         mut info: PendingSubresourceFetchInfo,
@@ -1293,11 +1316,13 @@ impl JsContextHost {
             ResourceLoadDisposition::Ordinary,
             registration.cancel_handle(),
         );
+        let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
+            .then(|| Box::new(dispatch.clone()));
         match registration {
             SubresourceFetchRegistration::Intercepted => {
                 self.push_pending_subresource_fetch_info(info.clone());
             }
-            SubresourceFetchRegistration::Dispatched(_) => {
+            SubresourceFetchRegistration::Direct(_) => {
                 self.record_pending_subresource_request_started_with_initiator(
                     &info,
                     SubresourceRequestInitiatorType::Script,
@@ -1308,6 +1333,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch,
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
@@ -1344,6 +1370,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1385,6 +1412,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1422,6 +1450,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1463,6 +1492,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1505,6 +1535,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1545,6 +1576,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1580,6 +1612,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1623,6 +1656,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,

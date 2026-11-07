@@ -118,14 +118,11 @@ pub(crate) fn start_font_face_fetch(
         v8::Global::new(scope, face),
         owner,
         prepared.registration.clone(),
+        &prepared.dispatch,
         prepared.network_partition_key.clone(),
         prepared.network_context.policy_context,
         prepared.pending_info.clone(),
     );
-    prepared.dispatch(
-        host,
-        internal_id,
-        "service worker font request dispatch failed",
-    );
+    prepared.dispatch(host, internal_id);
     Ok(FontFaceFetchStart::Pending)
 }
