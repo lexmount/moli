@@ -469,6 +469,7 @@ fn font_face_set_listener_uses_callback_realm_and_exact_window_lifetime() {
 #[test]
 fn font_face_load_updates_owner_sets_once_and_unlinks_removed_faces() {
     let mut vm = new_storage_test_vm("https://font-face-owner-sets.test/");
+    finish_main_document_load_for_test(&mut vm);
     vm.eval(&format!(
         "globalThis.fixtureFontSource = {:?}",
         format!(
@@ -569,6 +570,7 @@ fn font_face_load_updates_owner_sets_once_and_unlinks_removed_faces() {
 #[test]
 fn stylesheet_font_face_load_updates_document_font_set() {
     let mut vm = new_storage_test_vm("https://stylesheet-font-face-owner.test/");
+    finish_main_document_load_for_test(&mut vm);
     vm.eval(&format!(
         "globalThis.fixtureFontSource = {:?}",
         format!(

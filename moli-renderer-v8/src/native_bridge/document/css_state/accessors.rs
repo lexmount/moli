@@ -1,8 +1,6 @@
 use super::{
     font_faces::sync_document_fonts,
-    shared::{
-        ADOPTED_STYLE_SHEETS_SLOT, FONT_FACE_SET_OWNER_DOCUMENT_SLOT, FONTS_SLOT, STYLE_SHEETS_SLOT,
-    },
+    shared::{ADOPTED_STYLE_SHEETS_SLOT, FONTS_SLOT, STYLE_SHEETS_SLOT},
     style_sheets::sync_document_style_sheets,
 };
 use crate::{
@@ -671,13 +669,7 @@ fn create_document_font_face_set<'s>(
     // public FontFaceSet interface object is not a callable constructor.
     let context = holder.get_creation_context(scope)?;
     let scope = &mut v8::ContextScope::new(scope, context);
-    let fonts = crate::context_bootstrap::new_font_face_set(scope)?;
-    set_private_value(
-        scope,
-        fonts,
-        FONT_FACE_SET_OWNER_DOCUMENT_SLOT,
-        holder.into(),
-    );
+    let fonts = crate::context_bootstrap::new_font_face_set(scope, Some(holder))?;
     let _ = holder.set(scope, v8str(scope, FONTS_SLOT).into(), fonts.into());
     Some(fonts)
 }

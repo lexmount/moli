@@ -385,6 +385,13 @@ impl JsContextHost {
                     self.arm_child_meta_refresh_navigation(scope, runtime, finished_child_handle);
                     self.publish_child_frame_load_finish(finish);
                     self.note_lightweight_popup_child_frame_load_finished(finished_child_handle);
+                    if let Some(document) =
+                        self.child_browsing_context_document_handle(finished_child_handle)
+                    {
+                        crate::context_bootstrap::settle_document_font_face_set_ready(
+                            scope, host_ptr, document,
+                        );
+                    }
                     if moli_trace::window_message_trace_enabled() {
                         tracing::info!(
                             target: "moli_window_message_trace",
