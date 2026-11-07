@@ -48,6 +48,9 @@ impl JsContextHost {
             });
         let mut accepted = 0;
         for input in inputs {
+            if self.stylesheet_owner_is_csp_blocked(DomHandle::new(input.node_id().index())) {
+                continue;
+            }
             let signature = input.signature().clone();
             let import_root = if matches!(
                 signature,
