@@ -34,8 +34,10 @@ pub(crate) use completion::{
     StylesheetImportCompletionAuthority,
 };
 pub(crate) use connected::{ConnectedStyleLoadPrimeResult, PreparedConnectedStyleLoad};
-pub(crate) use import_graph::fetch_complete_stylesheet_import_graph;
 pub(super) use import_graph::{ConnectedStyleImportReadiness, connected_style_import_readiness};
+pub(crate) use import_graph::{
+    fetch_complete_stylesheet_import_graph, fetch_complete_stylesheet_import_graph_from_root,
+};
 pub(super) use import_graph_projection::fetch_observed_stylesheet_import_graph;
 pub(crate) use import_graph_projection::live_stylesheet_import_responses;
 pub(super) use link_state::{LinkStyleSettlement, LinkStyleState, StylesheetCompletionState};

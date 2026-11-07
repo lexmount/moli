@@ -58,38 +58,68 @@ pub(crate) async fn fetch_complete_stylesheet_import_graph(
     document_url: Url,
     urls: Vec<Url>,
 ) -> crate::stylesheet_blocking::StylesheetImportGraphFetchResult {
+    fetch_stylesheet_import_graph(stylesheet_fetcher, document_url, urls, None).await
+}
+
+/// Continue from a root fetched with its link-specific request options. Seed
+/// both URL identities so an import cycle cannot fetch that root a second time.
+pub(crate) async fn fetch_complete_stylesheet_import_graph_from_root(
+    stylesheet_fetcher: crate::stylesheet_blocking::RendererStylesheetFetcher,
+    document_url: Url,
+    root: crate::stylesheet_blocking::StylesheetImportNetworkResult,
+) -> crate::stylesheet_blocking::StylesheetImportGraphFetchResult {
+    fetch_stylesheet_import_graph(stylesheet_fetcher, document_url, Vec::new(), Some(root)).await
+}
+
+async fn fetch_stylesheet_import_graph(
+    stylesheet_fetcher: crate::stylesheet_blocking::RendererStylesheetFetcher,
+    document_url: Url,
+    urls: Vec<Url>,
+    root: Option<crate::stylesheet_blocking::StylesheetImportNetworkResult>,
+) -> crate::stylesheet_blocking::StylesheetImportGraphFetchResult {
     let (mut successful, urls) = match connected_style_import_readiness(urls) {
-        ConnectedStyleImportReadiness::Ready(successful) => {
-            return crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(
-                successful,
-                Vec::new(),
-            );
-        }
+        ConnectedStyleImportReadiness::Ready(successful) => (successful, Vec::new()),
         ConnectedStyleImportReadiness::Pending(urls) => (true, urls),
     };
     let mut network_results = Vec::new();
     let mut import_graph = ConnectedNetworkStyleImportGraph::default();
+    let mut pending_results: Vec<_> = root.into_iter().collect();
+    for root in &pending_results {
+        import_graph
+            .admitted_identities
+            .insert(import_url_identity(root.request_url()));
+        if let Some(response) = root.terminal().ready_response() {
+            import_graph
+                .admitted_identities
+                .insert(import_url_identity(&response.final_url));
+        }
+    }
     import_graph.extend(urls);
-    while !import_graph.is_empty() {
-        let current_urls = import_graph.take_pending();
-        let pending_fetches = join_all(current_urls.into_iter().map(|url| {
-            let stylesheet_fetcher = stylesheet_fetcher.clone();
-            let fetch_document_url = document_url.clone();
-            let request_url = url.clone();
-            let start_unix_millis = moli_time::unix_epoch_millis();
-            async move {
-                let terminal = stylesheet_fetcher
-                    .fetch_stylesheet_resource(
-                        fetch_document_url,
-                        request_url,
-                        StylesheetFetchOptions::default(),
+    while !import_graph.is_empty() || !pending_results.is_empty() {
+        if pending_results.is_empty() {
+            pending_results = join_all(import_graph.take_pending().into_iter().map(|url| {
+                let stylesheet_fetcher = stylesheet_fetcher.clone();
+                let fetch_document_url = document_url.clone();
+                let start_unix_millis = moli_time::unix_epoch_millis();
+                async move {
+                    let terminal = stylesheet_fetcher
+                        .fetch_stylesheet_resource(
+                            fetch_document_url,
+                            url.clone(),
+                            StylesheetFetchOptions::default(),
+                        )
+                        .await;
+                    crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
+                        url,
+                        start_unix_millis,
+                        terminal,
                     )
-                    .await;
-                (url, start_unix_millis, terminal)
-            }
-        }))
-        .await;
-        for (url, start_unix_millis, terminal) in pending_fetches {
+                }
+            }))
+            .await;
+        }
+        for result in std::mem::take(&mut pending_results) {
+            let terminal = result.terminal();
             successful &= terminal.is_ready();
             if let Some(response) = terminal.ready_response() {
                 let nested_urls = crate::style_engine::stylesheet_top_level_import_urls(
@@ -102,18 +132,10 @@ pub(crate) async fn fetch_complete_stylesheet_import_graph(
                     ConnectedStyleImportReadiness::Ready(nested_successful) => {
                         successful &= nested_successful;
                     }
-                    ConnectedStyleImportReadiness::Pending(urls) => {
-                        import_graph.extend(urls);
-                    }
+                    ConnectedStyleImportReadiness::Pending(urls) => import_graph.extend(urls),
                 }
             }
-            network_results.push(
-                crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
-                    url,
-                    start_unix_millis,
-                    terminal,
-                ),
-            );
+            network_results.push(result);
         }
     }
     crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(successful, network_results)

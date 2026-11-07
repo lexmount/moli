@@ -6746,3 +6746,6 @@ mod post_parse_async;
 
 #[path = "scripts/text_modules.rs"]
 mod text_modules;
+
+#[path = "scripts/child_stylesheet_imports.rs"]
+mod child_stylesheet_imports;
