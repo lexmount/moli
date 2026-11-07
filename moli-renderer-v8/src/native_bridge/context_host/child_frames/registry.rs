@@ -195,41 +195,56 @@ impl JsContextHost {
                     .unwrap_or_else(|| {
                         Self::child_browsing_context_initial_live_bootstrap(&attribute_bootstrap)
                     });
-                let navigation_entry_seed = if attribute_bootstrap_changed {
-                    let mut seed = existing
-                        .as_ref()
-                        .map(|entry| entry.navigation_entry_seed())
-                        .unwrap_or_else(|| {
-                            Self::child_browsing_context_single_entry_seed(&live_bootstrap)
-                        });
-                    if let Some(url) =
-                        Self::child_browsing_context_navigation_entry_url(&attribute_bootstrap)
-                    {
-                        let appends_committed_srcdoc_navigation = matches!(
-                            attribute_bootstrap,
-                            ChildBrowsingContextBootstrap::Srcdoc { .. }
-                        ) && existing
+                let javascript_attribute_target = matches!(
+                    &attribute_bootstrap,
+                    ChildBrowsingContextBootstrap::Url(url) if url.scheme() == "javascript"
+                );
+                let navigation_entry_seed =
+                    if javascript_attribute_target && (is_new || attribute_bootstrap_changed) {
+                        // Script evaluation does not navigate to the javascript:
+                        // URL. Only a string completion can replace the active
+                        // entry, retaining its URL and key.
+                        existing
                             .as_ref()
-                            .is_some_and(|entry| !entry.has_uncommitted_navigation_seed());
-                        if appends_committed_srcdoc_navigation {
-                            Self::apply_child_browsing_context_navigation_to_entry_seed(
-                                &mut seed, &url,
-                            );
-                        } else {
-                            Self::replace_child_browsing_context_navigation_in_entry_seed(
-                                &mut seed, &url,
-                            );
+                            .map(|entry| entry.committed_navigation_entry_seed())
+                            .unwrap_or_else(|| {
+                                Self::child_browsing_context_single_entry_seed(&live_bootstrap)
+                            })
+                    } else if attribute_bootstrap_changed {
+                        let mut seed = existing
+                            .as_ref()
+                            .map(|entry| entry.navigation_entry_seed())
+                            .unwrap_or_else(|| {
+                                Self::child_browsing_context_single_entry_seed(&live_bootstrap)
+                            });
+                        if let Some(url) =
+                            Self::child_browsing_context_navigation_entry_url(&attribute_bootstrap)
+                        {
+                            let appends_committed_srcdoc_navigation = matches!(
+                                attribute_bootstrap,
+                                ChildBrowsingContextBootstrap::Srcdoc { .. }
+                            ) && existing
+                                .as_ref()
+                                .is_some_and(|entry| !entry.has_uncommitted_navigation_seed());
+                            if appends_committed_srcdoc_navigation {
+                                Self::apply_child_browsing_context_navigation_to_entry_seed(
+                                    &mut seed, &url,
+                                );
+                            } else {
+                                Self::replace_child_browsing_context_navigation_in_entry_seed(
+                                    &mut seed, &url,
+                                );
+                            }
                         }
-                    }
-                    seed
-                } else {
-                    existing
-                        .as_ref()
-                        .map(|entry| entry.navigation_entry_seed())
-                        .unwrap_or_else(|| {
-                            Self::child_browsing_context_single_entry_seed(&attribute_bootstrap)
-                        })
-                };
+                        seed
+                    } else {
+                        existing
+                            .as_ref()
+                            .map(|entry| entry.navigation_entry_seed())
+                            .unwrap_or_else(|| {
+                                Self::child_browsing_context_single_entry_seed(&attribute_bootstrap)
+                            })
+                    };
                 let committed_navigation_entry_seed = if is_new {
                     // The target entry is planned when a frame owner with a
                     // non-blank navigation attribute is discovered, but its
