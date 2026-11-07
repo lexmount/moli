@@ -1,4 +1,5 @@
 use anyhow::Result;
+use moli_inspector_json::InspectorJson;
 use std::sync::Arc;
 
 use crate::automation::{
@@ -236,7 +237,7 @@ impl RuntimeInspectorResponseReady {
                 let message =
                     runtime_command_output_response_message(&completion.output, completion.call_id)
                         .cloned()
-                        .unwrap_or(Value::Null);
+                        .unwrap_or_else(|| Value::Null.into());
                 let payload = runtime_inspector_mismatched_completion_payload(
                     command_id,
                     completion.call_id,
@@ -287,7 +288,7 @@ impl RuntimeInspectorResponseReady {
                 let message =
                     runtime_command_output_response_message(&completion.output, completion.call_id)
                         .cloned()
-                        .unwrap_or(Value::Null);
+                        .unwrap_or_else(|| Value::Null.into());
                 runtime_inspector_mismatched_completion_payload(
                     self.frontend_command_id.get(),
                     completion.call_id,
@@ -315,7 +316,7 @@ fn rewrite_runtime_command_output_response_id(
             .renderer_call_id()
             .is_some_and(|call_id| call_id.get() == renderer_call_id)
         {
-            message.value_mut()["id"] = json!(frontend_command_id);
+            message.set_frontend_id(frontend_command_id);
             rewritten = true;
             break;
         }
@@ -331,8 +332,8 @@ fn rewrite_runtime_command_output_response_id(
 fn runtime_command_output_response_message(
     output: &RendererRuntimeCommandOutput,
     call_id: i32,
-) -> Option<&Value> {
-    output.protocol_response(call_id)
+) -> Option<&InspectorJson> {
+    output.protocol_response_payload(call_id)
 }
 
 fn runtime_command_output_from_response_payload(
@@ -488,7 +489,7 @@ define_background_protocol_event_payloads!(
 impl BackgroundProtocolEventPayload {
     fn protocol_session_id(&self) -> Option<&str> {
         match self {
-            Self::Protocol(event) => event.message.get("sessionId").and_then(Value::as_str),
+            Self::Protocol(event) => event.message.session_id(),
             Self::CommandResponse(event) => event.session_id.as_deref(),
             Self::NetworkRequestWillBeSentExtraInfo(event) => event.session_id.as_deref(),
             Self::NetworkResponseReceivedExtraInfo(event) => event.session_id.as_deref(),
@@ -573,7 +574,7 @@ pub(crate) enum BackgroundCommandResponsePayloadRef<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackgroundProtocolMessageEvent {
-    message: Value,
+    message: InspectorJson,
     automation_event: Option<Box<AutomationEvent>>,
 }
 
@@ -1073,14 +1074,19 @@ impl ProtocolDeliveryEnvelope {
         self
     }
 
-    pub fn immediate(message: Value) -> Self {
+    pub fn immediate(message: impl Into<InspectorJson>) -> Self {
+        let message = message.into();
         Self::wrap_protocol(BackgroundProtocolMessageEvent {
             message,
             automation_event: None,
         })
     }
 
-    pub fn immediate_automation_event(message: Value, automation_event: AutomationEvent) -> Self {
+    pub fn immediate_automation_event(
+        message: impl Into<InspectorJson>,
+        automation_event: AutomationEvent,
+    ) -> Self {
+        let message = message.into();
         Self::wrap_protocol(BackgroundProtocolMessageEvent {
             message,
             automation_event: Some(Box::new(automation_event)),
@@ -1124,7 +1130,8 @@ impl ProtocolDeliveryEnvelope {
                     "suggestedFilename": suggested_filename,
                 }),
                 session_id,
-            ),
+            )
+            .into(),
             automation_event: None,
         })
         .bind_to_page_subscription_route(session_id, subscription_generation)
@@ -1148,7 +1155,8 @@ impl ProtocolDeliveryEnvelope {
                     "totalBytes": total_bytes,
                 }),
                 session_id,
-            ),
+            )
+            .into(),
             automation_event: None,
         })
         .bind_to_page_subscription_route(session_id, subscription_generation)
@@ -1982,8 +1990,8 @@ impl ProtocolDeliveryEnvelope {
         };
         match &mut self.payload {
             BackgroundProtocolEventPayload::Protocol(event) => {
-                if event.message.get("sessionId").is_none() {
-                    event.message["sessionId"] = json!(session_id);
+                if event.message.session_id().is_none() {
+                    event.message.set_session_id(Some(session_id));
                 }
             }
             BackgroundProtocolEventPayload::CommandResponse(event) => {
@@ -2371,8 +2379,20 @@ impl ProtocolDeliveryEnvelope {
     }
 
     fn protocol_message_network_resource_type(&self) -> Option<DevToolsNetworkResourceType> {
+        let method = self.protocol_method()?;
+        if !matches!(
+            method,
+            "Network.requestWillBeSent"
+                | "Network.responseReceived"
+                | "Network.loadingFailed"
+                | "Network.webSocketFrameError"
+                | "Network.webSocketClosed"
+                | "Fetch.requestPaused"
+                | "Fetch.authRequired"
+        ) {
+            return None;
+        }
         let message = self.protocol_message()?;
-        let method = message.get("method")?.as_str()?;
         let params = message.get("params")?;
         match method {
             "Network.requestWillBeSent" | "Network.responseReceived" | "Network.loadingFailed" => {
@@ -2424,10 +2444,26 @@ impl ProtocolDeliveryEnvelope {
             .then(|| self.into_protocol_message())
     }
 
+    /// CDP transport keeps Inspector field bodies opaque through ID and session routing.
+    pub fn into_cdp_message(self) -> InspectorJson {
+        match self.payload {
+            BackgroundProtocolEventPayload::Protocol(event) => match event.message.into_parsed() {
+                Ok(value) => strip_moli_private_protocol_fields(value).into(),
+                Err(raw) => raw,
+            },
+            payload => Self {
+                payload,
+                route: self.route,
+            }
+            .into_protocol_message()
+            .into(),
+        }
+    }
+
     pub fn into_protocol_message(self) -> Value {
         match self.payload {
             BackgroundProtocolEventPayload::Protocol(event) => {
-                strip_moli_private_protocol_fields(event.message)
+                strip_moli_private_protocol_fields(event.message.into_value())
             }
             BackgroundProtocolEventPayload::CommandResponse(event) => {
                 (*event).into_protocol_message()
@@ -2579,7 +2615,7 @@ impl ProtocolDeliveryEnvelope {
     pub fn into_parts(self) -> (Value, Option<AutomationEvent>) {
         match self.payload {
             BackgroundProtocolEventPayload::Protocol(event) => (
-                event.message,
+                event.message.into_value(),
                 event
                     .automation_event
                     .map(|automation_event| *automation_event),
@@ -2719,9 +2755,16 @@ impl ProtocolDeliveryEnvelope {
         )
     }
 
-    pub fn protocol_message(&self) -> Option<&Value> {
+    pub fn protocol_json(&self) -> Option<&InspectorJson> {
         match &self.payload {
             BackgroundProtocolEventPayload::Protocol(event) => Some(&event.message),
+            _ => None,
+        }
+    }
+
+    pub fn protocol_message(&self) -> Option<&Value> {
+        match &self.payload {
+            BackgroundProtocolEventPayload::Protocol(event) => Some(event.message.value()),
             BackgroundProtocolEventPayload::CommandResponse(_) => None,
             BackgroundProtocolEventPayload::NetworkRequestWillBeSentExtraInfo(_) => None,
             BackgroundProtocolEventPayload::NetworkResponseReceivedExtraInfo(_) => None,
@@ -2773,9 +2816,7 @@ impl ProtocolDeliveryEnvelope {
 
     pub fn protocol_method(&self) -> Option<&str> {
         match &self.payload {
-            BackgroundProtocolEventPayload::Protocol(event) => {
-                event.message.get("method").and_then(Value::as_str)
-            }
+            BackgroundProtocolEventPayload::Protocol(event) => event.message.method(),
             BackgroundProtocolEventPayload::CommandResponse(_) => None,
             BackgroundProtocolEventPayload::NetworkRequestWillBeSentExtraInfo(_) => {
                 Some("Network.requestWillBeSentExtraInfo")
@@ -2926,9 +2967,7 @@ impl ProtocolDeliveryEnvelope {
 
     pub fn protocol_message_id(&self) -> Option<u64> {
         match &self.payload {
-            BackgroundProtocolEventPayload::Protocol(event) => {
-                event.message.get("id").and_then(Value::as_u64)
-            }
+            BackgroundProtocolEventPayload::Protocol(event) => event.message.id_u64(),
             BackgroundProtocolEventPayload::CommandResponse(event) => event.command_id,
             BackgroundProtocolEventPayload::NetworkRequestWillBeSentExtraInfo(_)
             | BackgroundProtocolEventPayload::NetworkResponseReceivedExtraInfo(_)
@@ -3051,7 +3090,9 @@ impl ProtocolDeliveryEnvelope {
 
     pub(crate) fn protocol_params_mut(&mut self) -> Option<&mut Value> {
         match &mut self.payload {
-            BackgroundProtocolEventPayload::Protocol(event) => event.message.get_mut("params"),
+            BackgroundProtocolEventPayload::Protocol(event) => {
+                event.message.value_mut().get_mut("params")
+            }
             BackgroundProtocolEventPayload::CommandResponse(_) => None,
             BackgroundProtocolEventPayload::NetworkRequestWillBeSentExtraInfo(_) => None,
             BackgroundProtocolEventPayload::NetworkResponseReceivedExtraInfo(_) => None,
@@ -4155,14 +4196,11 @@ impl BackgroundTargetCrashedEvent {
 
 impl BackgroundTargetReceivedMessageFromTargetEvent {
     fn into_protocol_message(self) -> Value {
-        let mut nested_message = self.nested_event.into_protocol_message();
+        let mut nested_message = self.nested_event.into_cdp_message();
         if self.strip_implicit_session
-            && nested_message["sessionId"].as_str() == Some(self.target_session_id.as_str())
+            && nested_message.session_id() == Some(self.target_session_id.as_str())
         {
-            nested_message
-                .as_object_mut()
-                .expect("a protocol message is an object")
-                .remove("sessionId");
+            nested_message.set_session_id(None);
         }
         build_event(
             "Target.receivedMessageFromTarget",

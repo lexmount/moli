@@ -503,3 +503,33 @@ fn dropping_overlapping_peer_binding_does_not_deactivate_current_agent() {
         "tearing down an overlapping peer agent must not mutate the current agent"
     );
 }
+
+#[test]
+fn inspector_outbound_raw_utf16_and_response_id_validation_keep_call_authority() {
+    let outbound = InspectorOutbound::default();
+    for (call_id, raw) in [
+        (7, r#"{"id":7,"result":{"value":"\ud800"}}"#),
+        (8, r#"{"id":9,"result":{"value":"\udfff"}}"#),
+    ] {
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        outbound
+            .register_response_callback(RendererRuntimeInspectorResponseSender::new(call_id, tx));
+        outbound.push_response_message(
+            call_id,
+            v8::inspector::StringBuffer::create(v8::inspector::StringView::from(raw.as_bytes())),
+        );
+        let completion = rx.try_recv().expect("every response must settle its call");
+        let response = completion
+            .output
+            .protocol_response_payload(call_id)
+            .unwrap();
+        if call_id == 7 {
+            assert!(!response.is_materialized());
+            assert!(response.to_string().contains(r"\ud800"));
+        } else {
+            assert_eq!(response.value()["error"]["code"], -32603);
+            assert_eq!(response.id_i64(), Some(8));
+        }
+        assert_eq!(outbound.response_callback_counts(), (0, 0));
+    }
+}

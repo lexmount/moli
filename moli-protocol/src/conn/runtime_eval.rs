@@ -1,4 +1,5 @@
 use anyhow::Result;
+use moli_inspector_json::InspectorJson;
 
 use std::{collections::hash_map::Entry, future::Future, pin::Pin};
 
@@ -255,7 +256,7 @@ pub(crate) struct OwnerRuntimeResponse {
     command_id: u64,
     owner: CommandOwnerScope,
     object_group: Option<String>,
-    message: Value,
+    message: InspectorJson,
     bidi_channel_listener: Option<BidiChannelListenerResidence>,
 }
 
@@ -305,13 +306,13 @@ impl OwnerRuntimeResponse {
         command_id: u64,
         entry: PendingInspectorAwait,
         owner: &CommandOwnerScope,
-        message: Value,
+        message: impl Into<InspectorJson>,
     ) -> Self {
         Self {
             command_id,
             owner: owner.clone(),
             object_group: entry.object_group().map(str::to_owned),
-            message,
+            message: message.into(),
             bidi_channel_listener: entry.bidi_channel_listener().cloned(),
         }
     }
@@ -332,7 +333,7 @@ impl OwnerRuntimeResponse {
         self.bidi_channel_listener.as_ref()
     }
 
-    fn into_protocol_message(self) -> Value {
+    fn into_protocol_message(self) -> InspectorJson {
         self.message
     }
 }
@@ -571,7 +572,7 @@ impl RuntimeEnableReplayEvent {
                 Self::Context(RuntimeContextProtocolEvent::from_restore_event(event))
             }
             RendererRuntimeInspectorMessage::Protocol(message) => {
-                Self::Background(protocol_message_background_event(message.into_value()))
+                Self::Background(protocol_message_background_event(message.into_payload()))
             }
         }
     }

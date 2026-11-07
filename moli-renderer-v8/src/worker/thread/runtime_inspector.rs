@@ -1,5 +1,6 @@
 use crate::runtime::WorkerInspectorError;
 use anyhow::Result;
+use moli_inspector_json::InspectorJson;
 use std::{
     cell::{Cell, OnceCell, RefCell, UnsafeCell},
     collections::{HashMap, HashSet, VecDeque},
@@ -121,7 +122,7 @@ impl WorkerInspectorOutbound {
         let view = message.string();
         let message_units = view.len();
         let message_width = if view.is_8bit() { 8 } else { 16 };
-        match moli_v8_util::decode_inspector_protocol_message(view) {
+        match moli_v8_util::inspector_protocol_json(view) {
             Ok(value) => self.push_value(session_key, value),
             Err(error) => {
                 let raw = moli_v8_util::inspector_protocol_message_text(view);
@@ -137,7 +138,7 @@ impl WorkerInspectorOutbound {
         }
     }
 
-    fn push_value(&self, session_key: &str, value: Value) {
+    fn push_value(&self, session_key: &str, value: impl Into<InspectorJson>) {
         let message = RendererRuntimeInspectorMessage::from_v8_inspector_message(value);
         let mut guard = self.0.borrow_mut();
         if let Some(scope) = guard
@@ -168,8 +169,9 @@ impl WorkerInspectorOutbound {
         let view = message.string();
         let message_units = view.len();
         let message_width = if view.is_8bit() { 8 } else { 16 };
-        match moli_v8_util::decode_inspector_protocol_message(view) {
-            Ok(value) => self.push_response_value(session_key, call_id, value),
+        match moli_v8_util::inspector_protocol_json(view) {
+            Ok(value) if value.id_i64() == Some(i64::from(call_id)) => self.push_response_value(session_key, call_id, value),
+            Ok(_) => self.push_response_value(session_key, call_id, json!({"id":call_id,"error":{"code":-32603,"message":"Worker Inspector response ID mismatch"}})),
             Err(error) => {
                 let raw = moli_v8_util::inspector_protocol_message_text(view);
                 tracing::warn!(
@@ -192,7 +194,13 @@ impl WorkerInspectorOutbound {
         }
     }
 
-    fn push_response_value(&self, session_key: &str, call_id: i32, value: Value) {
+    fn push_response_value(
+        &self,
+        session_key: &str,
+        call_id: i32,
+        value: impl Into<InspectorJson>,
+    ) {
+        let value = value.into();
         let mut guard = self.0.borrow_mut();
         if let Some(scope) = guard.active_dispatch_scopes.last_mut().filter(|scope| {
             scope.session_key == session_key && scope.internal_call_id == Some(call_id)
@@ -1465,6 +1473,49 @@ mod tests {
             second_completion.output.protocol_response(7),
             Some(&json!({"id": 7, "result": "second"}))
         );
+    }
+
+    #[test]
+    fn worker_inspector_outbound_raw_utf16_and_id_validation_preserve_session_authority() {
+        let outbound = WorkerInspectorOutbound::default();
+        let (peer_tx, mut peer_rx) = tokio::sync::oneshot::channel();
+        outbound.register_response_callback(
+            "peer",
+            RendererRuntimeInspectorResponseSender::new(7, peer_tx),
+        );
+        for (call_id, raw) in [
+            (7, r#"{"id":7,"result":{"value":"\ud800"}}"#),
+            (8, r#"{"id":9,"result":{"value":"\udfff"}}"#),
+        ] {
+            let (tx, mut rx) = tokio::sync::oneshot::channel();
+            outbound.register_response_callback(
+                "owner",
+                RendererRuntimeInspectorResponseSender::new(call_id, tx),
+            );
+            outbound.push_response_message(
+                "owner",
+                call_id,
+                v8::inspector::StringBuffer::create(v8::inspector::StringView::from(
+                    raw.as_bytes(),
+                )),
+            );
+            let completion = rx.try_recv().expect("the owning call completes");
+            let response = completion
+                .output
+                .protocol_response_payload(call_id)
+                .unwrap();
+            if call_id == 7 {
+                assert!(!response.is_materialized());
+                assert!(response.to_string().contains(r"\ud800"));
+            } else {
+                assert_eq!(response.value()["error"]["code"], -32603);
+                assert_eq!(response.id_i64(), Some(8));
+            }
+            assert!(matches!(
+                peer_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ));
+        }
     }
 
     #[test]

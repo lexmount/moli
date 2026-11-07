@@ -75,7 +75,7 @@ impl CdpFrontendRoutingState {
             && let CdpPreparedFrontendCommand::ImmediateResponse { message, .. } = &mut prepared
             && message.get("sessionId").is_some()
         {
-            *message = output.encode(std::mem::take(message));
+            *message = output.encode(std::mem::take(message)).into_value();
         }
         Some(prepared)
     }

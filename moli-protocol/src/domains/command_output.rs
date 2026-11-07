@@ -1,4 +1,5 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use moli_inspector_json::InspectorJson;
 use serde_json::{Value, json};
 
 use crate::automation::{
@@ -51,6 +52,7 @@ enum CommandOutput {
 
 #[derive(Debug)]
 enum CommandResponseOutput {
+    Inspector(InspectorJson),
     Success(CommandResponseResult),
     Error {
         code: i32,
@@ -346,7 +348,7 @@ impl CommandOutputPlan {
 
     pub(crate) fn push_runtime_inspector_protocol_response(
         &mut self,
-        message: Value,
+        message: impl Into<InspectorJson>,
         command_id: Option<u64>,
     ) -> bool {
         let Some(response) =
@@ -583,7 +585,9 @@ fn record_runtime_inspector_response(current: &mut Option<Value>, next: Value) {
     }
 }
 
-pub(crate) fn protocol_message_background_event(message: Value) -> BackgroundProtocolEvent {
+pub(crate) fn protocol_message_background_event(
+    message: impl Into<InspectorJson>,
+) -> BackgroundProtocolEvent {
     protocol_message_background_event_for_target(message, None)
 }
 
@@ -594,15 +598,19 @@ pub(crate) fn protocol_message_background_event(message: Value) -> BackgroundPro
 /// later, after an implicit owner route has been restored, so it must not leave
 /// its target empty and let BiDi infer it from the then-active tab.
 pub(crate) fn protocol_message_background_event_for_target(
-    message: Value,
+    message: impl Into<InspectorJson>,
     target_id: Option<&str>,
 ) -> BackgroundProtocolEvent {
+    let message = message.into();
     if let Some(mut event) = automation_event_from_protocol_message(&message) {
         if let Some(target_id) = target_id {
             qualify_automation_event_target(&mut event, DevToolsTargetId::from(target_id));
         }
-        let session_id = message.get("sessionId").and_then(Value::as_str);
-        let method = message.get("method").and_then(Value::as_str);
+        if matches!(message, InspectorJson::Raw(_)) {
+            return BackgroundProtocolEvent::immediate_automation_event(message, event);
+        }
+        let session_id = message.session_id();
+        let method = message.method();
         return match (method, event) {
             (Some("Runtime.consoleAPICalled"), AutomationEvent::RuntimeConsoleApiCalled(event)) => {
                 BackgroundProtocolEvent::runtime_console_api_called(session_id, event)
@@ -625,56 +633,62 @@ fn qualify_automation_event_target(event: &mut AutomationEvent, target_id: DevTo
     }
 }
 
-fn automation_event_from_protocol_message(message: &Value) -> Option<AutomationEvent> {
-    let method = message.get("method").and_then(Value::as_str)?;
-    let params = message.get("params")?;
+fn automation_event_from_protocol_message(message: &InspectorJson) -> Option<AutomationEvent> {
+    let method = message.method()?;
+    let params = || message.value().get("params");
     match method {
-        "Page.javascriptDialogOpening" => page_javascript_dialog_opening_event_from_params(params),
-        "Page.fileChooserOpened" => page_file_chooser_opened_event_from_params(params),
-        "Browser.downloadWillBegin" => browser_download_will_begin_event_from_params(params),
-        "Browser.downloadProgress" => browser_download_progress_event_from_params(params),
+        "Page.javascriptDialogOpening" => {
+            page_javascript_dialog_opening_event_from_params(params()?)
+        }
+        "Page.fileChooserOpened" => page_file_chooser_opened_event_from_params(params()?),
+        "Browser.downloadWillBegin" => browser_download_will_begin_event_from_params(params()?),
+        "Browser.downloadProgress" => browser_download_progress_event_from_params(params()?),
         "Page.frameScheduledNavigation" => {
-            navigation_frame_event_from_params(params, NavigationFrameEventKind::Scheduled)
+            navigation_frame_event_from_params(params()?, NavigationFrameEventKind::Scheduled)
         }
         "Page.frameRequestedNavigation" => {
-            navigation_frame_event_from_params(params, NavigationFrameEventKind::Requested)
+            navigation_frame_event_from_params(params()?, NavigationFrameEventKind::Requested)
         }
-        "Page.frameStartedNavigating" => {
-            navigation_frame_event_from_params(params, NavigationFrameEventKind::StartedNavigating)
-        }
+        "Page.frameStartedNavigating" => navigation_frame_event_from_params(
+            params()?,
+            NavigationFrameEventKind::StartedNavigating,
+        ),
         "Page.frameStartedLoading" => {
-            navigation_frame_event_from_params(params, NavigationFrameEventKind::StartedLoading)
+            navigation_frame_event_from_params(params()?, NavigationFrameEventKind::StartedLoading)
         }
-        "Page.frameClearedScheduledNavigation" => {
-            navigation_frame_event_from_params(params, NavigationFrameEventKind::ClearedScheduled)
-        }
-        "Page.frameNavigated" => frame_navigated_event_from_params(params),
+        "Page.frameClearedScheduledNavigation" => navigation_frame_event_from_params(
+            params()?,
+            NavigationFrameEventKind::ClearedScheduled,
+        ),
+        "Page.frameNavigated" => frame_navigated_event_from_params(params()?),
         "Page.frameStoppedLoading" => {
-            navigation_frame_event_from_params(params, NavigationFrameEventKind::StoppedLoading)
+            navigation_frame_event_from_params(params()?, NavigationFrameEventKind::StoppedLoading)
         }
-        "Page.navigatedWithinDocument" => same_document_navigation_event_from_params(params),
-        "Page.lifecycleEvent" => page_lifecycle_event_from_params(params),
-        "Console.messageAdded" => console_message_added_event_from_params(params),
-        "Log.entryAdded" => log_entry_added_event_from_params(params),
-        "Runtime.consoleAPICalled" => runtime_console_api_called_event_from_params(params),
-        "Runtime.exceptionThrown" => runtime_exception_thrown_event_from_params(params),
-        "Network.requestWillBeSent" => {
-            network_automation_event_from_params(params, AutomationEvent::NetworkBeforeRequestSent)
-        }
+        "Page.navigatedWithinDocument" => same_document_navigation_event_from_params(params()?),
+        "Page.lifecycleEvent" => page_lifecycle_event_from_params(params()?),
+        "Console.messageAdded" => console_message_added_event_from_params(params()?),
+        "Log.entryAdded" => log_entry_added_event_from_params(params()?),
+        "Runtime.consoleAPICalled" => runtime_console_api_called_event_from_params(params()?),
+        "Runtime.exceptionThrown" => runtime_exception_thrown_event_from_params(params()?),
+        "Network.requestWillBeSent" => network_automation_event_from_params(
+            params()?,
+            AutomationEvent::NetworkBeforeRequestSent,
+        ),
         "Network.responseReceived" => {
-            network_automation_event_from_params(params, AutomationEvent::NetworkResponseStarted)
+            network_automation_event_from_params(params()?, AutomationEvent::NetworkResponseStarted)
         }
-        "Network.loadingFinished" => {
-            network_automation_event_from_params(params, AutomationEvent::NetworkResponseCompleted)
-        }
+        "Network.loadingFinished" => network_automation_event_from_params(
+            params()?,
+            AutomationEvent::NetworkResponseCompleted,
+        ),
         "Network.loadingFailed" => {
-            network_automation_event_from_params(params, AutomationEvent::NetworkFetchError)
+            network_automation_event_from_params(params()?, AutomationEvent::NetworkFetchError)
         }
         "Fetch.requestPaused" => {
-            network_automation_event_from_params(params, AutomationEvent::RequestPaused)
+            network_automation_event_from_params(params()?, AutomationEvent::RequestPaused)
         }
         "Fetch.authRequired" => {
-            network_automation_event_from_params(params, AutomationEvent::NetworkAuthRequired)
+            network_automation_event_from_params(params()?, AutomationEvent::NetworkAuthRequired)
         }
         _ => None,
     }
@@ -2053,10 +2067,17 @@ pub(crate) fn devtools_error_from_cdp_error_parts(
 
 impl CommandResponseOutput {
     fn from_runtime_inspector_protocol_message(
-        mut message: Value,
+        message: impl Into<InspectorJson>,
         command_id: Option<u64>,
     ) -> Option<Self> {
+        let message = message.into();
         let command_id = command_id?;
+        if matches!(message, InspectorJson::Raw(_)) {
+            return (message.id_u64() == Some(command_id)
+                && (message.has_field("result") || message.has_field("error")))
+            .then_some(Self::Inspector(message));
+        }
+        let mut message = message.into_value();
         if message.get("id").and_then(Value::as_u64) != Some(command_id) {
             return None;
         }
@@ -2090,6 +2111,18 @@ impl CommandResponseOutput {
 
     fn status(&self) -> Result<(), DevToolsError> {
         match self {
+            Self::Inspector(message) => {
+                if !message.has_field("error") {
+                    return Ok(());
+                }
+                let error = &message.value()["error"];
+                Err(devtools_error_from_cdp_error_parts(
+                    error["code"].as_i64(),
+                    error["message"]
+                        .as_str()
+                        .unwrap_or("Runtime inspector command failed"),
+                ))
+            }
             Self::Success(_) => Ok(()),
             Self::Error { code, message, .. } => Err(devtools_error_from_cdp_error_parts(
                 Some(i64::from(*code)),
@@ -2101,6 +2134,13 @@ impl CommandResponseOutput {
     #[cfg(test)]
     fn into_protocol_message(self, command_id: Option<u64>, session_id: Option<&str>) -> Value {
         let mut message = match self {
+            Self::Inspector(mut message) => {
+                if let Some(id) = command_id {
+                    message.set_id(id);
+                }
+                message.set_session_id(session_id);
+                return message.into_value();
+            }
             Self::Success(result) => {
                 return build_command_success_response(
                     command_id,
@@ -2132,6 +2172,13 @@ impl CommandResponseOutput {
         session_id: Option<&str>,
     ) -> BackgroundProtocolEvent {
         match self {
+            Self::Inspector(mut message) => {
+                if let Some(id) = command_id {
+                    message.set_id(id);
+                }
+                message.set_session_id(session_id);
+                BackgroundProtocolEvent::immediate(message)
+            }
             Self::Success(result) => BackgroundProtocolEvent::command_success(
                 command_id,
                 session_id,
