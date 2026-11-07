@@ -521,17 +521,24 @@ async fn worker_sync_xhr_timeout_cancels_fetch_and_throws_without_progress_event
         .await
         .expect("bind slow sync worker xhr server");
     let addr = listener.local_addr().expect("slow sync worker xhr addr");
+    let (finish_server, mut finished) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .expect("accept slow sync worker xhr request");
-        read_http_request_head(&mut stream)
-            .await
-            .expect("read slow sync worker xhr request");
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\nslow";
-        let _ = stream.write_all(response.as_bytes()).await;
+        // Hold any connection without responding until the worker reports its
+        // timeout. Under load the 30ms deadline can also expire before connect,
+        // so fixture cleanup must not depend on an HTTP request arriving.
+        let connection = tokio::select! {
+            accepted = listener.accept() => {
+                Some(accepted.expect("accept slow sync worker xhr request"))
+            }
+            result = &mut finished => {
+                result.expect("release slow sync worker xhr server");
+                None
+            }
+        };
+        if let Some((stream, _)) = connection {
+            finished.await.expect("release slow sync worker xhr server");
+            drop(stream);
+        }
     });
     let base_url = format!("http://{addr}");
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("worker xhr loader");
@@ -608,6 +615,9 @@ async fn worker_sync_xhr_timeout_cancels_fetch_and_throws_without_progress_event
             r#"{{"error":{{"name":"TimeoutError","message":"Failed to execute 'send' on 'XMLHttpRequest': Failed to load '{base_url}/worker/slow.txt'.","isDomException":true}},"readyState":4,"status":0,"responseText":"","events":["readystatechange:1"]}}"#
         )
     );
+    finish_server
+        .send(())
+        .expect("slow sync worker xhr server should remain available until timeout");
     timeout(TIMEOUT, server)
         .await
         .expect("slow sync worker xhr server should finish within test timeout")
