@@ -297,3 +297,95 @@ fn cancelled_pointerdown_suppresses_compatibility_mouse_events_until_last_releas
         "mousemove:0"
     );
 }
+
+fn new_touch_primary_test_vm() -> StandaloneScriptVmHarness {
+    new_rendered_test_vm(
+        "https://touch-primary.test/",
+        r#"<html><body><div id="first" style="position:absolute;left:40px;top:40px;width:120px;height:120px">first</div><div id="second" style="position:absolute;left:220px;top:40px;width:120px;height:120px">second</div></body></html>"#,
+    )
+}
+
+#[test]
+fn touch_primary_identity_survives_moves_partial_ends_and_identifier_reuse() {
+    let mut vm = new_touch_primary_test_vm();
+    vm.eval(
+        r#"
+        globalThis.__primaryEvents = [];
+        for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) {
+            document.addEventListener(type, e => __primaryEvents.push([type, e.target.id, e.isPrimary]));
+        }
+        'ready'
+        "#,
+    ).unwrap();
+    let first = crate::runtime::RendererTouchPoint {
+        id: 11,
+        x: 80.0,
+        y: 80.0,
+    };
+    let second = crate::runtime::RendererTouchPoint {
+        id: 0,
+        x: 260.0,
+        y: 80.0,
+    };
+    vm.dispatch_touch_event_at_points(&[first], "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[second], "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[first], "touchend", false)
+        .unwrap();
+    let moved_second = crate::runtime::RendererTouchPoint { x: 264.0, ..second };
+    vm.dispatch_touch_event_at_points(&[moved_second], "touchmove", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[first], "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[], "touchend", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[first], "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[second], "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[], "touchcancel", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[second], "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[], "touchend", false)
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(__primaryEvents)").unwrap(),
+        r#"[["pointerdown","first",true],["pointerdown","second",false],["pointerup","first",true],["pointermove","second",false],["pointerdown","first",false],["pointerup","second",false],["pointerup","first",false],["pointerdown","first",true],["pointerdown","second",false],["pointercancel","second",false],["pointercancel","first",true],["pointerdown","second",true],["pointerup","second",true]]"#
+    );
+}
+
+#[test]
+fn changed_touch_batches_preserve_the_primary_flag_on_end() {
+    let mut vm = new_touch_primary_test_vm();
+    vm.eval(
+        r#"
+        globalThis.__primaryBatch = [];
+        for (const type of ['pointerdown', 'pointerup']) {
+            document.addEventListener(type, e => __primaryBatch.push([type, e.target.id, e.isPrimary]));
+        }
+        'ready'
+        "#,
+    ).unwrap();
+    let points = [
+        crate::runtime::RendererTouchPoint {
+            id: 11,
+            x: 80.0,
+            y: 80.0,
+        },
+        crate::runtime::RendererTouchPoint {
+            id: 0,
+            x: 260.0,
+            y: 80.0,
+        },
+    ];
+    vm.dispatch_touch_event_at_points(&points, "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[], "touchend", false)
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(__primaryBatch)").unwrap(),
+        r#"[["pointerdown","first",true],["pointerdown","second",false],["pointerup","second",false],["pointerup","first",true]]"#
+    );
+}
