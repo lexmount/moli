@@ -14,6 +14,7 @@ use crate::native_bridge::{
     PendingMediaLoadTerminalFollowup,
 };
 use crate::util::v8_string;
+use anyhow::Context;
 
 pub(in crate::native_bridge) fn media_autoplay_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -469,7 +470,7 @@ fn start_media_load(
         return;
     }
     let start = selected_source
-        .ok_or_else(|| "media resource selection found no supported URL".to_owned())
+        .context(crate::network_host::ResourceFetchError::NoMediaSource)
         .and_then(|selected_source| {
             let request_url = selected_source.request_url;
             if unsafe { &mut *runtime_ptr }

@@ -18,7 +18,7 @@ use crate::RendererSyntheticResponseBody;
 use crate::content_security_policy::ContentSecurityPolicyRedirectStatus;
 use crate::document_runtime::DocumentRuntime;
 use crate::frame_owner_model::FrameDocumentModuleTerminalQueueFollowup;
-use crate::native_bridge::{JsContextHost, OwnerDispatchScope};
+use crate::native_bridge::{JsContextHost, OwnerDispatchScope, PendingTextTrackLoadTerminal};
 use crate::network::ResourceRequestClient;
 use crate::runtime::{
     AuthorizedCurrentChildDocumentLoadCompletion, AuthorizedCurrentChildModuleFetchCompletion,
@@ -361,7 +361,7 @@ fn apply_text_track_subresource_terminal(
     track_handle: crate::document_runtime::DomHandle,
     sequence: crate::native_bridge::TextTrackLoadSequenceId,
     internal_id: u64,
-    result: Result<String, String>,
+    terminal: PendingTextTrackLoadTerminal,
 ) {
     let followup = context_host
         .borrow_mut()
@@ -369,7 +369,7 @@ fn apply_text_track_subresource_terminal(
             track_handle,
             sequence,
             internal_id,
-            result,
+            terminal,
         );
     let host_ptr: *mut JsContextHost = context_host.as_ref().as_ptr();
     crate::native_bridge::element::queue_text_track_terminal_followup(

@@ -756,7 +756,7 @@ impl ScriptVm {
                         *track_handle,
                         *sequence,
                         started.internal_id,
-                        Err(error_text.clone()),
+                        PendingTextTrackLoadTerminal::FetchFailed,
                     ),
                     PendingSubresourceContinuation::FontFace(face) => {
                         let face = v8::Local::new(scope, face);
@@ -999,7 +999,7 @@ impl ScriptVm {
                     *track_handle,
                     *sequence,
                     started.internal_id,
-                    Err("text-track response unexpectedly used streaming transport".to_owned()),
+                    PendingTextTrackLoadTerminal::FetchFailed,
                 ),
                 PendingSubresourceContinuation::FontFace(face) => {
                     let face = v8::Local::new(scope, face);

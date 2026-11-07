@@ -1211,10 +1211,10 @@ impl Request {
         }
         let origin = self
             .request_origin()
-            .context("same-origin request mode requires an initiating origin")?;
+            .context(crate::RequestModeError::MissingOrigin)?;
         self.url_list(request_url)
             .validate_request_mode(self.request_mode, origin)
-            .map_err(anyhow::Error::msg)
+            .map_err(Into::into)
     }
 
     /// Checks one network response against the request's state before that

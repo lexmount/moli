@@ -165,11 +165,11 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
 ) {
     tokio::task::spawn_local(async move {
         let loader = load.request_client();
-        let (result, network_request_headers) = if let Err(message) =
+        let (result, network_request_headers) = if let Err(error) =
             moli_fetch::FetchUrlList::new(&resolved_url, &[])
                 .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
         {
-            (Err(message), None)
+            (Err(error.to_string()), None)
         } else if let Some(result) = local_url_response_result(&resolved_url, &method) {
             (
                 result
@@ -2127,10 +2127,10 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         return;
     }
 
-    if let Err(message) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
+    if let Err(error) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
         .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
     {
-        rv.set(make_rejected_promise(scope, &message).into());
+        rv.set(make_rejected_promise(scope, &error.to_string()).into());
         return;
     }
 

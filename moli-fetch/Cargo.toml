@@ -32,6 +32,7 @@ parking_lot = "0.12"
 percent-encoding = "2"
 serde = { version = "1.0.228", features = ["derive"] }
 strum = { version = "0.28.0", features = ["derive"] }
+thiserror = "2.0.17"
 tokio = { version = "1.51.0", features = ["rt", "sync"] }
 tokio-util = { version = "0.7.18", features = ["rt"] }
 tracing = "0.1.41"
