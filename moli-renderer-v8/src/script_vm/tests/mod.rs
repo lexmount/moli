@@ -2169,6 +2169,7 @@ mod audio_node_interfaces;
 
 mod element_animation_native_receivers;
 
+mod audio_buffer_interfaces;
 mod audio_channel_node_interfaces;
 mod audio_param_node_interfaces;
 mod audio_source_interfaces;
