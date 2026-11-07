@@ -55,6 +55,9 @@ interfaces! {
     BeforeUnloadEvent: Event;
     BiquadFilterNode: AudioNode;
     ConstantSourceNode: AudioScheduledSourceNode;
+    DelayNode: AudioNode;
+    GainNode: AudioNode;
+    StereoPannerNode: AudioNode;
     Blob;
     BlobEvent: Event;
     MIDIConnectionEvent: Event;
@@ -193,7 +196,6 @@ interfaces! {
     FormData;
     FormDataIterator = "FormData Iterator";
     FormDataEvent: Event;
-    GainNode: AudioNode;
     Geolocation;
     GeolocationCoordinates;
     GeolocationPosition;
