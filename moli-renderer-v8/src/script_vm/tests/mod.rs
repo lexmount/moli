@@ -2169,6 +2169,7 @@ mod audio_node_interfaces;
 
 mod element_animation_native_receivers;
 
+mod audio_source_interfaces;
 mod bitmap_rendering_context_interface_interfaces;
 mod blob_response_headers;
 mod body_completion;
