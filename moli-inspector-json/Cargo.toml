@@ -1,0 +1,12 @@
+[package]
+license.workspace = true
+name = "moli-inspector-json"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = "1.0.228"
+serde_json = { version = "1.0.145", features = ["raw_value"] }
+
+[lints]
+workspace = true

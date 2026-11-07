@@ -17,6 +17,7 @@ test-support = []
 wpt-extensions = []
 
 [dependencies]
+moli-inspector-json = { path = "../moli-inspector-json" }
 anyhow = "1.0.100"
 thiserror = "2.0.17"
 app_units = "0.7.8"
