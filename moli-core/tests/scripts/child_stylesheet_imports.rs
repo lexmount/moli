@@ -121,7 +121,32 @@ impl ChildImportServer {
                                       document.addEventListener('DOMContentLoaded', () => globalThis.stylesheetDcl = true);
                                     </script><body>CSP imports"#))
                                 }
-                                "/child-import-csp-root.css" => ("text/css", format!("@import url('/child-import-csp-branch.css?token={token}'); @import url('data:text/css,:root{{--csp-data:applied}}'); :root {{ --csp-root: ready; }}")),
+                                "/child-import-csp-root.css" => {
+                                    if token.starts_with("late-") { asset.wait(true).await; }
+                                    ("text/css", format!("@import url('http://127.0.0.1:{}/child-import-csp-branch.css?token={token}'); @import url('data:text/css,:root{{--csp-data:applied}}'); :root {{ --csp-root: ready; }}", cross_origin.rsplit(':').next().unwrap()))
+                                }
+                                "/child-import-late-page" => {
+                                    let mode = query.get("mode").map(String::as_str).unwrap_or("dynamic");
+                                    let cross = query.get("cross").is_some_and(|value| value == "true");
+                                    let meta = "<meta id='late-policy' http-equiv='Content-Security-Policy' content=\"style-src 'self'\">";
+                                    let root = format!("{}/child-import-csp-root.css?token={token}", if cross { &cross_origin } else { "" });
+                                    let stylesheet = if query.get("kind").is_some_and(|kind| kind == "inline") {
+                                        format!("<style>@import url('{root}');</style>")
+                                    } else { format!("<link rel='stylesheet' href='{root}'>") };
+                                    ("text/html", format!(r#"<!doctype html><head><script>
+                                      globalThis.lateViolations = [];
+                                      document.addEventListener('securitypolicyviolation', event => lateViolations.push({{
+                                        target:event.target === document, directive:event.effectiveDirective, disposition:event.disposition
+                                      }}));
+                                    </script>{}{stylesheet}{}</head><body><script>globalThis.afterLateStylesheet = true;</script>Late CSP"#, if mode == "before" { meta } else { "" }, if mode == "parser" { meta } else { "" }))
+                                }
+                                "/child-import-nested-redirect.css" => ("text/css", format!("@import url('/child-import-alias.css?token={token}');")),
+                                "/child-import-alias.css" => {
+                                    status = "302 Found";
+                                    extra_headers = format!("Location: /child-import-real.css?token={token}\r\n");
+                                    ("text/css", String::new())
+                                }
+                                "/child-import-real.css" => ("text/css", format!("@import url('/child-import-real.css?token={token}#cycle'); :root {{ --nested-redirect: ready; }}")),
                                 "/child-import-csp-branch.css" => ("text/css", format!("@import url('{}{}?token={token}'); @import url('/child-import-csp-allowed.css?token={token}');", if token.contains("redirect") { "" } else { &cross_origin }, if token.contains("redirect") { "/child-import-csp-hop.css" } else { "/child-import-csp-blocked.css" })),
                                 "/child-import-csp-hop.css" => {
                                     status = "302 Found";
@@ -475,5 +500,123 @@ async fn child_srcdoc_imports_use_the_inherited_origin_for_csp_self() -> Result<
             .lock()
             .contains_key("srcdoc-csp:/child-import-csp-blocked.css")
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_imports_observe_late_meta_without_rechecking_admitted_roots() -> Result<()> {
+    let server = ChildImportServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser.fetch(&server.origin).await?;
+    let probe = include_str!("../fixtures/child-stylesheet-late-csp.js");
+    for (kind, mode, cross) in [
+        ("linked", "dynamic", false),
+        ("linked", "dynamic", true),
+        ("linked", "parser", false),
+        ("linked", "parser", true),
+        ("linked", "before", true),
+        ("linked", "before", false),
+        ("inline", "dynamic", true),
+        ("inline", "parser", true),
+    ] {
+        let token = format!("late-{kind}-{mode}-{cross}");
+        let expression =
+            format!("({probe})({mode:?}, {cross}, {token:?}, {kind:?}).then(JSON.stringify)");
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            page.evaluate_runtime_expression_with_await_async(&expression, true),
+        )
+        .await
+        .with_context(|| format!("{kind}, {mode}, cross={cross}: stylesheet did not settle"))??;
+        let result: serde_json::Value =
+            serde_json::from_str(result["value"].as_str().context("late CSP snapshot")?)?;
+        let root_allowed = mode != "before" || !cross;
+        assert_eq!(
+            result["root"],
+            if root_allowed { "ready" } else { "" },
+            "{mode}, cross={cross}: {result}"
+        );
+        assert_eq!(
+            result["allowed"],
+            if root_allowed { "ready" } else { "" },
+            "{mode}, cross={cross}: {result}"
+        );
+        for field in ["blocked", "data"] {
+            assert_eq!(result[field], "", "{mode}, cross={cross}: {result}");
+        }
+        assert_eq!(result["script"], true, "{mode}, cross={cross}: {result}");
+        assert_eq!(
+            result["ready"], "complete",
+            "{mode}, cross={cross}: {result}"
+        );
+        let violations = result["violations"]
+            .as_array()
+            .context("late CSP violations")?;
+        assert_eq!(
+            violations.len(),
+            if root_allowed { 2 } else { 1 },
+            "{mode}, cross={cross}: {result}"
+        );
+        assert!(
+            violations.iter().all(|event| event["target"] == true
+                && event["directive"] == "style-src-elem"
+                && event["disposition"] == "enforce"),
+            "{result}"
+        );
+        let requests = server.assets.lock();
+        for (name, expected) in [
+            ("root", usize::from(root_allowed)),
+            ("branch", usize::from(root_allowed)),
+            ("allowed", usize::from(root_allowed)),
+            ("blocked", 0),
+        ] {
+            let count = requests
+                .get(&format!("{token}:/child-import-csp-{name}.css"))
+                .map_or(0, |asset| asset.count.load(Ordering::Acquire));
+            assert_eq!(count, expected, "{name}: {mode}, cross={cross}: {result}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_imports_register_each_redirect_response_before_expanding_imports() -> Result<()> {
+    let server = ChildImportServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser.fetch(&server.origin).await?;
+    let result = tokio::time::timeout(Duration::from_secs(30), page.evaluate_runtime_expression_with_await_async(r#"
+      (async () => {
+        const frame = document.createElement('iframe');
+        const loaded = new Promise(resolve => frame.onload = resolve);
+        frame.srcdoc = '<!doctype html><link rel="stylesheet" href="/child-import-nested-redirect.css?token=nested-redirect"><script>globalThis.afterStylesheet=true;</script><body>Nested redirect';
+        document.body.append(frame);await loaded;
+        const child = frame.contentWindow;
+        const root = frame.contentDocument.styleSheets[0];
+        const imported = root.cssRules[0].styleSheet;
+        const cycle = imported.cssRules[0].styleSheet;
+        return JSON.stringify({style:child.getComputedStyle(frame.contentDocument.documentElement).getPropertyValue('--nested-redirect').trim(),
+          cycleRules:cycle ? cycle.cssRules.length : 0, script:child.afterStylesheet === true});
+      })()
+    "#, true)).await??;
+    let result: serde_json::Value = serde_json::from_str(
+        result["value"]
+            .as_str()
+            .context("nested redirect snapshot")?,
+    )?;
+    assert_eq!(
+        result,
+        serde_json::json!({"style":"ready", "cycleRules":0,"script":true})
+    );
+    for name in ["nested-redirect", "alias", "real"] {
+        let count = server
+            .assets
+            .lock()
+            .get(&format!("nested-redirect:/child-import-{name}.css"))
+            .map_or(0, |asset| asset.count.load(Ordering::Acquire));
+        assert_eq!(
+            count, 1,
+            "{name}: a redirected import must not fetch itself again"
+        );
+    }
     Ok(())
 }

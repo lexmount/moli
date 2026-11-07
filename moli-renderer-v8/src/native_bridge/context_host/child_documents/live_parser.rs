@@ -210,6 +210,32 @@ impl ParserMutationEffectConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
             let host_ptr = self.host as *mut JsContextHost;
             let runtime = unsafe { &mut *self.host.runtime };
             runtime.note_parser_meta_refresh_mutation(self.scope, host_ptr, &effects);
+            runtime
+                .process_connected_meta_content_security_policies(effects.tree().connected_roots());
+
+            // Admit the resource while this parser element is inserted/finished,
+            // before a later meta can become policy for an earlier request.
+            let stylesheet_inputs = effects
+                .stylesheet_owners()
+                .changes()
+                .iter()
+                .filter(|change| self.host.dom_host().is_connected(change.owner()))
+                .filter_map(|change| {
+                    crate::stylesheet_blocking::document_owned_stylesheet_discovery_input_for_node(
+                        self,
+                        crate::dom::NodeId::new(change.owner().index()),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if !stylesheet_inputs.is_empty()
+                && let Some(child) = self
+                    .host
+                    .child_browsing_context_host_for_document_handle(self.child_document_handle)
+                && let Some(owner) = self.host.current_child_document_task_owner(child)
+            {
+                self.host
+                    .accept_child_parser_stylesheet_inputs(child, owner, stylesheet_inputs);
+            }
         }
     }
 

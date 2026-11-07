@@ -21,7 +21,8 @@ pub(crate) use moli_stylesheet_blocking::{
     collect_document_owned_blocking_stylesheet_discovery_inputs_before_in_view,
     collect_document_owned_blocking_stylesheets,
     collect_document_owned_blocking_stylesheets_before_in_view, connected_preload_like_link_url,
-    document_owned_blocking_stylesheet_candidate_for_node, link_rel_includes_token,
+    document_owned_blocking_stylesheet_candidate_for_node,
+    document_owned_stylesheet_discovery_input_for_node, link_rel_includes_token,
     preload_like_link_loads_stylesheet, stylesheet_link_disposition,
     stylesheet_preload_link_request,
 };
@@ -126,7 +127,10 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
         let service_worker_context = self.service_worker_context.clone();
         let request_resource_type = self.request_resource_type;
         let link_preload = self.link_preload;
-        let csp_context = self.csp_context.clone();
+        let csp_check = self
+            .csp_context
+            .as_ref()
+            .map(|context| context.for_request(options.nonce()));
         Box::pin(async move {
             fetch_stylesheet_readiness_with_service_worker(
                 loader,
@@ -138,7 +142,7 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
                 service_worker_context,
                 request_resource_type,
                 link_preload,
-                csp_context,
+                csp_check,
             )
             .await
         })
@@ -175,7 +179,7 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
     service_worker_context: Option<ServiceWorkerStylesheetFetchContext>,
     request_resource_type: moli_fetch::RequestResourceType,
     link_preload: bool,
-    csp_context: Option<crate::content_security_policy::StylesheetFetchCspContext>,
+    csp_check: Option<crate::content_security_policy::StylesheetRequestCspCheck>,
 ) -> StylesheetFetchTerminal {
     let mut request = stylesheet_readiness_request(
         &document_url,
@@ -186,7 +190,6 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
         link_preload,
         None,
     );
-    let csp_check = csp_context.map(|context| context.for_request(options.nonce()));
     if let Some(check) = &csp_check {
         if let Err(error) = check(&url, 0) {
             return StylesheetFetchTerminal::network_error(error.to_string());

@@ -744,7 +744,7 @@ pub(super) struct DocumentRuntime {
     bypass_content_security_policy: bool,
     policy_container: DocumentPolicyContainer,
     delivered_meta_content_security_policies:
-        RefCell<HashMap<DomHandle, Vec<ContentSecurityPolicy>>>,
+        Arc<parking_lot::RwLock<HashMap<DomHandle, Vec<ContentSecurityPolicy>>>>,
     processed_meta_content_security_policy_handles: RefCell<HashSet<(DomHandle, DomHandle)>>,
     resource_loader_binding: Option<DocumentResourceLoaderBinding>,
     script_context_stack: Vec<CurrentScriptContext>,
