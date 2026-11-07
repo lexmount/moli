@@ -1082,7 +1082,7 @@ pub(super) fn prepare_style_observation_targets(
                         .insert_parents_recovering(element, depth);
                     context.thread_local.current_dom_depth = depth;
                     if needs_resolution {
-                        populate_inline_style_attributes_for_resolution(
+                        populate_inline_style_attribute_for_resolution(
                             engine,
                             host,
                             document_url,
@@ -1502,43 +1502,54 @@ fn populate_inline_style_attributes_for_resolution(
     handle: DomHandle,
     quirks_mode: QuirksMode,
 ) {
-    let shared_lock = engine.dom_adapter.shared_lock();
     let mut current = Some(handle);
     while let Some(node) = current {
-        let world = engine.owner_document_world(host, node);
-        let Some(world) = world else {
-            current = inherited_style_parent(host, node);
-            continue;
-        };
-        if world.inline_style_metadata.csp_state(node)
-            == super::InlineStyleCspState::BlockedAttribute
-        {
-            engine.dom_adapter.clear_inline_style_attribute(node);
-            current = inherited_style_parent(host, node);
-            continue;
-        }
-        if let Some(style_attribute) = world
-            .inline_style_metadata
-            .resolution_text(node)
-            .or_else(|| host.get_attribute(node, "style"))
-        {
-            let base_url = world
-                .inline_style_metadata
-                .base_url(node)
-                .unwrap_or_else(|| style_resolution_base_url(host, document_url, node));
-            let url_data = UrlExtraData::from(base_url);
-            let declarations = parse_style_attribute(
-                &style_attribute,
-                &url_data,
-                None,
-                quirks_mode,
-                CssRuleType::Style,
-            );
-            engine
-                .dom_adapter
-                .set_inline_style_attribute(node, ServoArc::new(shared_lock.wrap(declarations)));
-        }
+        populate_inline_style_attribute_for_resolution(
+            engine,
+            host,
+            document_url,
+            node,
+            quirks_mode,
+        );
         current = inherited_style_parent(host, node);
+    }
+}
+
+fn populate_inline_style_attribute_for_resolution(
+    engine: &MoliStyleEngine,
+    host: &DomHost,
+    document_url: &url::Url,
+    node: DomHandle,
+    quirks_mode: QuirksMode,
+) {
+    let Some(world) = engine.owner_document_world(host, node) else {
+        return;
+    };
+    if world.inline_style_metadata.csp_state(node) == super::InlineStyleCspState::BlockedAttribute {
+        engine.dom_adapter.clear_inline_style_attribute(node);
+        return;
+    }
+    if let Some(style_attribute) = world
+        .inline_style_metadata
+        .resolution_text(node)
+        .or_else(|| host.get_attribute(node, "style"))
+    {
+        let base_url = world
+            .inline_style_metadata
+            .base_url(node)
+            .unwrap_or_else(|| style_resolution_base_url(host, document_url, node));
+        let url_data = UrlExtraData::from(base_url);
+        let declarations = parse_style_attribute(
+            &style_attribute,
+            &url_data,
+            None,
+            quirks_mode,
+            CssRuleType::Style,
+        );
+        engine.dom_adapter.set_inline_style_attribute(
+            node,
+            ServoArc::new(engine.dom_adapter.shared_lock().wrap(declarations)),
+        );
     }
 }
 
