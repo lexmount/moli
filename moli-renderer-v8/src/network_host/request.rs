@@ -20,3 +20,5 @@ pub(crate) use self::input::{
     try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
     try_resolve_request_constructor_url_for_child, validate_request_method_body,
 };
+
+pub(crate) use self::input::request_input_snapshot;
