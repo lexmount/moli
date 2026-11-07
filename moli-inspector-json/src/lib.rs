@@ -296,20 +296,33 @@ impl fmt::Display for InspectorJson {
         f.write_str(&serde_json::to_string(self).map_err(|_| fmt::Error)?)
     }
 }
+// Equality compares the encoded wire representation, never the lossy business
+// view. In particular, different unpaired surrogates and depth-limit failures
+// must not collapse to the same value. Raw clones share their field storage.
 impl PartialEq for InspectorJson {
     fn eq(&self, other: &Self) -> bool {
-        self.value() == other.value()
+        match (self, other) {
+            (Self::Raw(left), Self::Raw(right)) => {
+                Arc::ptr_eq(left, right)
+                    || (left.id.as_ref().map(ToString::to_string)
+                        == right.id.as_ref().map(ToString::to_string)
+                        && left.session_id == right.session_id
+                        && (Arc::ptr_eq(&left.source, &right.source)
+                            || (left.source.fields.len() == right.source.fields.len()
+                                && left.source.fields.iter().zip(&right.source.fields).all(
+                                    |((left_key, left), (right_key, right))| {
+                                        left_key == right_key && left.get() == right.get()
+                                    },
+                                ))))
+            }
+            _ => same_json_encoding(self, other),
+        }
     }
 }
-impl PartialEq<Value> for InspectorJson {
-    fn eq(&self, other: &Value) -> bool {
-        self.value() == other
-    }
-}
-impl PartialEq<InspectorJson> for Value {
-    fn eq(&self, other: &InspectorJson) -> bool {
-        self == other.value()
-    }
+
+fn same_json_encoding(left: &impl Serialize, right: &impl Serialize) -> bool {
+    serde_json::to_string(left).expect("JSON serialization into a String")
+        == serde_json::to_string(right).expect("JSON serialization into a String")
 }
 
 pub fn decode_lossy_json(bytes: &[u8]) -> serde_json::Result<Value> {

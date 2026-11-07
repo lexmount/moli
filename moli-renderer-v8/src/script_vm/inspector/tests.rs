@@ -2,6 +2,13 @@ use super::*;
 use crate::inspector_session::InspectorSessionOutput;
 use crate::runtime::RendererRuntimeInspectorResponseSender;
 
+fn business_messages(messages: Vec<InspectorJson>) -> Vec<Value> {
+    messages
+        .into_iter()
+        .map(InspectorJson::into_value)
+        .collect()
+}
+
 #[test]
 fn inspector_outbound_queue_reports_its_exact_length_until_flushed() {
     let outbound = InspectorOutbound::default();
@@ -25,11 +32,11 @@ fn inspector_outbound_queues_are_agent_local_even_with_the_same_numeric_id() {
     current.push_value(json!({"id": 7, "result": "current"}));
 
     assert_eq!(
-        previous.take_pending_messages(),
+        business_messages(previous.take_pending_messages()),
         vec![json!({"id": 7, "result": "previous"})]
     );
     assert_eq!(
-        current.take_pending_messages(),
+        business_messages(current.take_pending_messages()),
         vec![json!({"id": 7, "result": "current"})]
     );
 }
@@ -69,11 +76,17 @@ fn inspector_outbound_snapshot_tail_keeps_preexisting_deferred_output() {
 
     let immediate = outbound.take_messages_after(snap);
 
-    assert_eq!(immediate, vec![json!({"id": 8, "result": "immediate"})]);
+    assert_eq!(
+        business_messages(immediate),
+        vec![json!({"id": 8, "result": "immediate"})]
+    );
     assert_eq!(outbound.len(), 1);
 
     let deferred = outbound.take_pending_messages();
-    assert_eq!(deferred, vec![json!({"id": 7, "result": "deferred"})]);
+    assert_eq!(
+        business_messages(deferred),
+        vec![json!({"id": 7, "result": "deferred"})]
+    );
     assert_eq!(outbound.len(), 0);
 }
 
@@ -88,7 +101,7 @@ fn inspector_outbound_discard_after_snapshot_drops_only_tail() {
 
     assert_eq!(outbound.len(), 1);
     assert_eq!(
-        outbound.take_pending_messages(),
+        business_messages(outbound.take_pending_messages()),
         vec![json!({"id": 7, "result": "deferred"})]
     );
     assert_eq!(outbound.len(), 0);
@@ -108,7 +121,7 @@ fn inspector_outbound_captures_current_dispatch_and_drops_stale_late_response() 
     outbound.push_value(json!({"method": "Runtime.executionContextDestroyed"}));
     let queued = outbound.take_pending_messages();
     assert_eq!(
-        queued,
+        business_messages(queued),
         vec![
             json!({"id": 1, "result": "command-tail"}),
             json!({"method": "Runtime.executionContextDestroyed"}),
@@ -319,7 +332,7 @@ fn internal_dispatch_response_does_not_consume_same_id_deferred_frontend_callbac
         Err(tokio::sync::oneshot::error::TryRecvError::Empty)
     ));
     assert_eq!(
-        outbound.take_messages_after(snapshot),
+        business_messages(outbound.take_messages_after(snapshot)),
         vec![json!({"id": 900_100_000, "result": {"internal": true}})],
         "an internal dispatch must capture its own response before consulting frontend callbacks"
     );
@@ -382,7 +395,10 @@ fn internal_response_capture_preserves_queued_responses_and_canceled_callbacks()
     assert_eq!(outbound.response_callback_counts(), (0, 1));
     outbound.push_response_value(-1, json!({"id": -1, "result": "canceled"}));
     assert_eq!(outbound.response_callback_counts(), (0, 0));
-    assert_eq!(outbound.take_pending_messages(), vec![queued, notification]);
+    assert_eq!(
+        business_messages(outbound.take_pending_messages()),
+        vec![queued, notification]
+    );
 }
 
 #[test]
@@ -472,7 +488,7 @@ fn replacement_document_binding_does_not_adopt_previous_agent_outbound() {
         "retiring the previous agent must invalidate its undelivered local output"
     );
     assert_eq!(
-        current.take_outbound_messages_for_session(None),
+        business_messages(current.take_outbound_messages_for_session(None)),
         vec![current_message],
         "the replacement agent must expose only its own local output"
     );
@@ -498,7 +514,7 @@ fn dropping_overlapping_peer_binding_does_not_deactivate_current_agent() {
     drop(stale);
 
     assert_eq!(
-        current.take_outbound_messages_for_session(None),
+        business_messages(current.take_outbound_messages_for_session(None)),
         vec![current_message],
         "tearing down an overlapping peer agent must not mutate the current agent"
     );

@@ -129,3 +129,54 @@ fn structured_depth_limit_returns_an_error_without_destroying_raw_json() {
     assert_eq!(message.value()["id"], 7);
     assert!(message.to_string().contains(&body));
 }
+
+#[test]
+fn equality_keeps_surrogates_and_wire_payloads_distinct_without_a_business_view() {
+    let raw = |value: &str| {
+        InspectorJson::from_slice(format!(r#"{{"id":7,"result":{value}}}"#).as_bytes()).unwrap()
+    };
+    let high = raw(r#""\ud800""#);
+    let low = raw(r#""\udfff""#);
+    let replacement = raw(r#""\ufffd""#);
+    let literal = raw(r#""\\ud800""#);
+    assert_ne!(high, low);
+    assert_ne!(high, replacement);
+    assert_ne!(high, literal);
+    assert_eq!(high, high.clone());
+    assert_eq!(high, raw(r#""\ud800""#));
+    let mut changed = high.clone();
+    changed.set_id(8);
+    assert_ne!(high, changed);
+    changed.set_id(7);
+    changed.set_session_id(Some("worker"));
+    assert_ne!(high, changed);
+    for message in [&high, &low, &replacement, &literal, &changed] {
+        assert!(!message.is_materialized());
+    }
+    let parsed = json!({"id":7,"result":"�"});
+    assert_ne!(high, InspectorJson::from(parsed));
+    assert!(!high.is_materialized());
+}
+
+#[test]
+fn equality_is_consistent_across_raw_parsed_and_depth_limited_views() {
+    let raw = InspectorJson::from_slice(br#"{"id":7,"result":{"value":"ok"}}"#).unwrap();
+    let parsed = json!({"id":7,"result":{"value":"ok"}});
+    assert_eq!(raw, InspectorJson::from(parsed.clone()));
+    assert_eq!(
+        InspectorJson::from(parsed.clone()),
+        InspectorJson::from(parsed)
+    );
+    assert!(!raw.is_materialized());
+    let spaced = InspectorJson::from_slice(br#"{"id":7,"result":{ "value": "ok" }}"#).unwrap();
+    assert_ne!(raw, spaced, "wire equality preserves payload spelling");
+    let mut messages = (0..2).map(|number| {
+        let body = format!("{}{number}{}", "[".repeat(150), "]".repeat(150));
+        InspectorJson::from_slice(format!(r#"{{"id":7,"result":{body}}}"#).as_bytes()).unwrap()
+    });
+    let left = messages.next().unwrap();
+    let right = messages.next().unwrap();
+    assert_ne!(left, right);
+    assert!(!left.is_materialized());
+    assert!(!right.is_materialized());
+}

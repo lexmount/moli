@@ -942,7 +942,11 @@ mod tests {
                 ))
         ));
         assert_eq!(
-            outbound.take_pending_messages(),
+            outbound
+                .take_pending_messages()
+                .into_iter()
+                .map(InspectorJson::into_value)
+                .collect::<Vec<_>>(),
             vec![serde_json::json!({
                 "id": 7,
                 "result": {"value": "response"}
