@@ -53,6 +53,7 @@ mod native_owner_xhr;
 mod navigation;
 mod navigation_event_init;
 mod notification_init;
+mod opaque_document_cookie;
 mod opaque_wasm_origins;
 mod payload_event_init;
 mod performance;
