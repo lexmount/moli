@@ -21,77 +21,41 @@ pub fn decode_inspector_protocol_message(
 ) -> serde_json::Result<JsonValue> {
     if let Some(bytes) = view.characters8() {
         if bytes.is_ascii() {
-            return decode_inspector_json(bytes);
+            return moli_inspector_json::decode_lossy_json(bytes);
         }
         let text = inspector_protocol_message_text(view);
-        return decode_inspector_json(text.as_bytes());
+        return moli_inspector_json::decode_lossy_json(text.as_bytes());
     }
 
     let text = inspector_protocol_message_text(view);
-    decode_inspector_json(text.as_bytes())
+    moli_inspector_json::decode_lossy_json(text.as_bytes())
 }
 
-fn decode_inspector_json(bytes: &[u8]) -> serde_json::Result<JsonValue> {
-    match serde_json::from_slice(bytes) {
-        Ok(value) => Ok(value),
-        Err(error) => {
-            // Keep ordinary Inspector messages on the allocation-free byte
-            // path. Only retry after repairing an unpaired surrogate escape;
-            // serde_json still validates the complete JSON syntax.
-            let Some(repaired) = replace_unpaired_surrogate_escapes(bytes) else {
-                return Err(error);
-            };
-            serde_json::from_slice(&repaired)
+/// Retains validated Inspector JSON fields without materializing a Value tree.
+pub fn inspector_protocol_json(
+    view: v8::inspector::StringView<'_>,
+) -> serde_json::Result<moli_inspector_json::InspectorJson> {
+    if let Some(bytes) = view.characters8()
+        && bytes.is_ascii()
+    {
+        return moli_inspector_json::InspectorJson::from_slice(bytes);
+    }
+    if view.is_8bit() {
+        return moli_inspector_json::InspectorJson::from_slice(
+            inspector_protocol_message_text(view).as_bytes(),
+        );
+    }
+    use std::fmt::Write as _;
+    let units = view.characters16().expect("16-bit Inspector view");
+    let mut text = String::with_capacity(units.len());
+    for scalar in char::decode_utf16(units.iter().copied()) {
+        match scalar {
+            Ok(scalar) => text.push(scalar),
+            Err(error) => write!(&mut text, "\\u{:04x}", error.unpaired_surrogate())
+                .expect("writing a String is infallible"),
         }
     }
-}
-
-fn replace_unpaired_surrogate_escapes(bytes: &[u8]) -> Option<Vec<u8>> {
-    let mut repaired = None;
-    let mut in_string = false;
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'"' => {
-                in_string = !in_string;
-                index += 1;
-            }
-            b'\\' if in_string => {
-                let Some(unit) = escaped_utf16_unit(&bytes[index..]) else {
-                    // Skip an escaped quote or backslash as a single token.
-                    // Invalid escapes remain unchanged for serde_json.
-                    index += 2;
-                    continue;
-                };
-                if (0xd800..=0xdbff).contains(&unit)
-                    && escaped_utf16_unit(&bytes[index + 6..])
-                        .is_some_and(|next| (0xdc00..=0xdfff).contains(&next))
-                {
-                    index += 12;
-                    continue;
-                }
-                if (0xd800..=0xdfff).contains(&unit) {
-                    let output = repaired.get_or_insert_with(|| bytes.to_vec());
-                    output[index..index + 6].copy_from_slice(br"\ufffd");
-                }
-                index += 6;
-            }
-            _ => index += 1,
-        }
-    }
-    repaired
-}
-
-fn escaped_utf16_unit(bytes: &[u8]) -> Option<u16> {
-    bytes
-        .strip_prefix(br"\u")?
-        .get(..4)?
-        .iter()
-        .try_fold(0_u16, |unit, digit| {
-            char::from(*digit)
-                .to_digit(16)
-                .map(|digit| (unit << 4) | digit as u16)
-        })
+    moli_inspector_json::InspectorJson::from_slice(text.as_bytes())
 }
 
 /// Materializes an Inspector string view for diagnostics and uncommon text
@@ -159,6 +123,27 @@ mod tests {
             decode_inspector_protocol_message(v8::inspector::StringView::from(&units[..]))
                 .expect("UTF-16 Inspector JSON must accept UTF-16 string contents");
         assert_eq!(decoded, expected, "16-bit input: {raw}");
+    }
+
+    #[test]
+    fn inspector_protocol_raw_json_preserves_escaped_and_actual_utf16_surrogates() {
+        let raw = br#"{"id":7,"result":{"value":"\ud800"}}"#;
+        let message =
+            super::inspector_protocol_json(v8::inspector::StringView::from(&raw[..])).unwrap();
+        assert!(message.to_string().contains(r"\ud800"));
+        assert!(!message.is_materialized());
+        let mut units = "{\"id\":7,\"result\":{\"value\":\"中文"
+            .encode_utf16()
+            .collect::<Vec<_>>();
+        units.push(0xd800);
+        units.extend("\"}}".encode_utf16());
+        let message =
+            super::inspector_protocol_json(v8::inspector::StringView::from(&units[..])).unwrap();
+        assert!(message.to_string().contains(r"\ud800"));
+        assert!(message.to_string().contains("中文"));
+        assert!(!message.is_materialized());
+        assert_eq!(message.value()["result"]["value"], "中文�");
+        assert!(message.to_string().contains(r"\ud800"));
     }
 
     #[test]
