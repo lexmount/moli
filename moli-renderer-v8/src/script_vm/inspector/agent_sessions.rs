@@ -453,7 +453,12 @@ mod tests {
         let _response_capture = session.outbound.capture_dispatch_responses();
         dispatch_with_runtime_defaults(&session.session, request, &session.outbound)
             .expect("Inspector session dispatch");
-        session.outbound.take_messages_after(snapshot)
+        session
+            .outbound
+            .take_messages_after(snapshot)
+            .into_iter()
+            .map(|message| message.into_value())
+            .collect()
     }
 
     fn assert_successful_response(messages: &[Value], call_id: u64) {

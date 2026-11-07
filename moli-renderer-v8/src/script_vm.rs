@@ -1,3 +1,4 @@
+use moli_inspector_json::InspectorJson;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -1836,7 +1837,7 @@ impl ScriptVm {
                 let messages = page_inspector.with_session_and_outbound(
                     inspector,
                     target,
-                    |session, outbound, runtime_bindings_to_replay| -> Result<Vec<Value>> {
+                    |session, outbound, runtime_bindings_to_replay| -> Result<Vec<InspectorJson>> {
                         let replay_global_snapshots =
                             capture_runtime_binding_replay_global_snapshots(
                                 scope,

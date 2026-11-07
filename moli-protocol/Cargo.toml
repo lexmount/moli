@@ -9,6 +9,7 @@ build = "build.rs"
 test-support = []
 
 [dependencies]
+moli-inspector-json = { path = "../moli-inspector-json" }
 anyhow = "1.0.100"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 base64 = "0.22"

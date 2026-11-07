@@ -9,6 +9,7 @@ use crate::protocol_types::{
 };
 use crate::types::{ScriptObservableOutput, ScriptObservableOutputItem};
 use anyhow::{Context as _, Result, bail};
+use moli_inspector_json::InspectorJson;
 pub use moli_page_types::{
     DevToolsSessionKey, DocumentNodeObjectSnapshot, DocumentNodeSnapshot,
     RendererAgentAttachmentId, RendererDevToolsAgentToken,
@@ -910,7 +911,7 @@ pub enum RendererRuntimeInspectorMessage {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RendererRuntimeInspectorProtocolMessage {
     renderer_call_id: Option<moli_page_types::RendererCallId>,
-    value: Value,
+    value: InspectorJson,
 }
 
 pub struct RendererRuntimeInspectorProtocolMessageValueMut<'a> {
@@ -1010,6 +1011,19 @@ impl RendererRuntimeCommandOutput {
         self.messages.is_empty()
     }
 
+    pub fn protocol_response_payload(&self, call_id: i32) -> Option<&InspectorJson> {
+        self.messages.iter().find_map(|message| match message {
+            RendererRuntimeInspectorMessage::Protocol(message)
+                if message
+                    .renderer_call_id()
+                    .is_some_and(|id| id.get() == call_id) =>
+            {
+                Some(message.payload())
+            }
+            _ => None,
+        })
+    }
+
     pub fn protocol_response(&self, call_id: i32) -> Option<&Value> {
         self.messages.iter().find_map(|message| match message {
             RendererRuntimeInspectorMessage::Protocol(message)
@@ -1043,7 +1057,7 @@ impl RendererRuntimeCommandOutput {
         self.messages.extend(messages);
     }
 
-    pub(crate) fn push_inspector_message(&mut self, message: Value) {
+    pub(crate) fn push_inspector_message(&mut self, message: impl Into<InspectorJson>) {
         self.messages
             .push(RendererRuntimeInspectorMessage::from_v8_inspector_message(
                 message,
@@ -1062,10 +1076,18 @@ impl RendererRuntimeCommandOutput {
 }
 
 impl RendererRuntimeInspectorMessage {
-    pub fn from_v8_inspector_message(message: Value) -> Self {
-        if let Some(event) =
+    pub fn from_v8_inspector_message(message: impl Into<InspectorJson>) -> Self {
+        let message = message.into();
+        if matches!(
+            message.method(),
+            Some(
+                "Runtime.executionContextCreated"
+                    | "Runtime.executionContextDestroyed"
+                    | "Runtime.executionContextsCleared"
+            )
+        ) && let Some(event) =
             crate::protocol_types::RuntimeContextRestoreEvent::from_v8_inspector_message(
-                message.clone(),
+                message.value().clone(),
             )
         {
             return Self::RuntimeContext(event);
@@ -1073,7 +1095,7 @@ impl RendererRuntimeInspectorMessage {
         Self::Protocol(RendererRuntimeInspectorProtocolMessage::new(message))
     }
 
-    pub fn protocol(message: Value) -> Self {
+    pub fn protocol(message: impl Into<InspectorJson>) -> Self {
         Self::Protocol(RendererRuntimeInspectorProtocolMessage::new(message))
     }
 
@@ -1083,7 +1105,7 @@ impl RendererRuntimeInspectorMessage {
         string_charge: impl Fn(&str) -> usize,
     ) -> usize {
         match self {
-            Self::Protocol(message) => json_charge(message.value()),
+            Self::Protocol(message) => message.payload().retained_bytes(json_charge),
             Self::RuntimeContext(event) => {
                 event.renderer_transport_charge_bytes_with(string_charge)
             }
@@ -1108,25 +1130,30 @@ impl RendererRuntimeInspectorMessage {
                 .is_some_and(|origin| !origin.is_empty())
     }
 
-    pub fn into_v8_inspector_message(self) -> Value {
+    pub fn into_v8_inspector_json(self) -> InspectorJson {
         match self {
-            Self::Protocol(message) => message.into_value(),
+            Self::Protocol(message) => message.into_payload(),
             Self::RuntimeContext(event) => {
-                runtime_context_restore_event_v8_inspector_message(event)
+                runtime_context_restore_event_v8_inspector_message(event).into()
             }
         }
     }
 
+    pub fn into_v8_inspector_message(self) -> Value {
+        self.into_v8_inspector_json().into_value()
+    }
+
     pub fn has_v8_inspector_method(&self) -> bool {
         match self {
-            Self::Protocol(message) => message.value().get("method").is_some(),
+            Self::Protocol(message) => message.payload().method().is_some(),
             Self::RuntimeContext(_) => true,
         }
     }
 }
 
 impl RendererRuntimeInspectorProtocolMessage {
-    pub fn new(value: Value) -> Self {
+    pub fn new(value: impl Into<InspectorJson>) -> Self {
+        let value = value.into();
         let renderer_call_id = renderer_call_id_from_protocol_message(&value);
         Self {
             renderer_call_id,
@@ -1139,7 +1166,20 @@ impl RendererRuntimeInspectorProtocolMessage {
     }
 
     pub fn value(&self) -> &Value {
+        self.value.value()
+    }
+
+    pub fn payload(&self) -> &InspectorJson {
         &self.value
+    }
+
+    pub fn into_payload(self) -> InspectorJson {
+        self.value
+    }
+
+    pub fn set_frontend_id(&mut self, id: u64) {
+        self.value.set_id(id);
+        self.renderer_call_id = renderer_call_id_from_protocol_message(&self.value);
     }
 
     pub fn value_mut(&mut self) -> RendererRuntimeInspectorProtocolMessageValueMut<'_> {
@@ -1147,7 +1187,7 @@ impl RendererRuntimeInspectorProtocolMessage {
     }
 
     pub fn into_value(self) -> Value {
-        self.value
+        self.value.into_value()
     }
 }
 
@@ -1155,13 +1195,13 @@ impl std::ops::Deref for RendererRuntimeInspectorProtocolMessageValueMut<'_> {
     type Target = Value;
 
     fn deref(&self) -> &Self::Target {
-        &self.message.value
+        self.message.value.value()
     }
 }
 
 impl std::ops::DerefMut for RendererRuntimeInspectorProtocolMessageValueMut<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.message.value
+        self.message.value.value_mut()
     }
 }
 
@@ -1180,11 +1220,10 @@ impl std::ops::Deref for RendererRuntimeInspectorProtocolMessage {
 }
 
 fn renderer_call_id_from_protocol_message(
-    value: &Value,
+    value: &InspectorJson,
 ) -> Option<moli_page_types::RendererCallId> {
     value
-        .get("id")
-        .and_then(Value::as_i64)
+        .id_i64()
         .and_then(|id| i32::try_from(id).ok())
         .map(moli_page_types::RendererCallId::new)
 }
@@ -1460,7 +1499,7 @@ impl RendererCommandTurnOutputRecorder {
         &self,
         agent_token: RendererDevToolsAgentToken,
         session: DevToolsSessionKey,
-        message: Value,
+        message: impl Into<InspectorJson>,
     ) {
         self.push_record(PendingRendererOutputRecord::observation(
             None,
@@ -3044,7 +3083,7 @@ pub(crate) struct RendererRuntimeCommandOutputRecorder(
 struct RendererRuntimeCommandOutputRecorderState {
     causal_identity: RendererRuntimeCommandCausalIdentity,
     output: RendererRuntimeCommandOutput,
-    response: Option<(RendererRuntimeInspectorResponseSender, Value)>,
+    response: Option<(RendererRuntimeInspectorResponseSender, InspectorJson)>,
 }
 
 impl std::fmt::Debug for RendererRuntimeCommandOutputRecorder {
@@ -3092,10 +3131,10 @@ impl RendererRuntimeCommandOutputRecorder {
             .borrow()
             .response
             .as_ref()
-            .is_some_and(|(_, message)| message.get("error").is_none())
+            .is_some_and(|(_, message)| !message.has_field("error"))
     }
 
-    pub(crate) fn push_inspector_message(&self, message: Value) {
+    pub(crate) fn push_inspector_message(&self, message: impl Into<InspectorJson>) {
         self.0.borrow_mut().output.push_inspector_message(message);
     }
 
@@ -3106,8 +3145,9 @@ impl RendererRuntimeCommandOutputRecorder {
     pub(crate) fn park_response(
         &self,
         sender: RendererRuntimeInspectorResponseSender,
-        message: Value,
+        message: impl Into<InspectorJson>,
     ) {
+        let message = message.into();
         let mut state = self.0.borrow_mut();
         debug_assert_eq!(state.causal_identity.call_id(), sender.call_id());
         assert!(
@@ -3152,6 +3192,7 @@ impl RendererRuntimeCommandOutputRecorder {
                     "message": message,
                 }
             })
+            .into()
         });
         output.push_inspector_message(message);
         sender.finalize_output(output)
@@ -3525,7 +3566,10 @@ impl RendererRuntimeInspectorResponseSender {
         ))
     }
 
-    pub fn send(self, message: Value) -> Result<(), RendererRuntimeInspectorAsyncCompletion> {
+    pub fn send(
+        self,
+        message: impl Into<InspectorJson>,
+    ) -> Result<(), RendererRuntimeInspectorAsyncCompletion> {
         self.send_output(RendererRuntimeCommandOutput::from_inspector_message(
             RendererRuntimeInspectorMessage::from_v8_inspector_message(message),
         ))

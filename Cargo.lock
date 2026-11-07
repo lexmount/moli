@@ -3071,6 +3071,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-inspector-json"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "moli-layout"
 version = "0.1.0"
 dependencies = [
@@ -3258,6 +3266,7 @@ dependencies = [
  "moli-header-field",
  "moli-image",
  "moli-indexeddb",
+ "moli-inspector-json",
  "moli-layout",
  "moli-page-types",
  "moli-paint",
@@ -3317,6 +3326,7 @@ dependencies = [
  "moli-core",
  "moli-fetch",
  "moli-html-input-type",
+ "moli-inspector-json",
  "moli-protocol",
  "moli-protocol-cdp",
  "moli-protocol-webdriver-bidi",
@@ -3411,6 +3421,7 @@ dependencies = [
  "moli-image",
  "moli-import-map",
  "moli-indexeddb",
+ "moli-inspector-json",
  "moli-layout",
  "moli-local-executor",
  "moli-message-port",
@@ -3692,6 +3703,7 @@ dependencies = [
 name = "moli-v8-util"
 version = "0.1.0"
 dependencies = [
+ "moli-inspector-json",
  "moli-v8-test-util",
  "moli-web-errors",
  "serde_json",

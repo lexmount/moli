@@ -1,3 +1,4 @@
+use moli_inspector_json::InspectorJson;
 use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket};
@@ -181,7 +182,7 @@ impl CdpSocketSink {
         receiver.await.unwrap_or(false)
     }
 
-    pub(crate) fn enqueue_owned_message(&self, message: Value) -> bool {
+    pub(crate) fn enqueue_owned_message(&self, message: impl Into<InspectorJson>) -> bool {
         let available_pending_bytes = self.pending_byte_budget.available();
         let serialization_limit = self.max_message_bytes.min(available_pending_bytes);
         let message = match serialize_owned_message_with_limit(message, serialization_limit) {
@@ -289,9 +290,13 @@ struct OwnedOuterHtmlResponse {
 }
 
 fn serialize_owned_message_with_limit(
-    message: Value,
+    message: impl Into<InspectorJson>,
     limit: usize,
 ) -> Result<String, BoundedJsonError> {
+    let message = match message.into().into_parsed() {
+        Ok(value) => value,
+        Err(raw) => return to_string_with_limit(&raw, limit),
+    };
     let response = match take_owned_outer_html_response(message) {
         Ok(response) => response,
         Err(message) => return to_string_with_limit(&message, limit),
@@ -374,6 +379,10 @@ impl StalledCdpSocketWriter {
     }
 
     pub(crate) fn take_message(&mut self) -> serde_json::Value {
+        serde_json::from_str(&self.take_text()).expect("queued CDP output JSON")
+    }
+
+    pub(crate) fn take_text(&mut self) -> String {
         let command = self
             .output_rx
             .try_recv()
@@ -381,7 +390,7 @@ impl StalledCdpSocketWriter {
         let SocketWriterCommand::Output(envelope) = command else {
             panic!("stalled CDP writer received close before output");
         };
-        serde_json::from_str(&envelope.message).expect("queued CDP output JSON")
+        envelope.message
     }
 
     pub(crate) fn is_open(&self) -> bool {

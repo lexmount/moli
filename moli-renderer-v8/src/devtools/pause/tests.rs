@@ -69,7 +69,7 @@ fn enqueue_command(
 }
 
 fn route_paused(bridge: &RendererInspectorPauseBridge) -> RendererInspectorPauseNotificationRoute {
-    outbound_route(bridge).route_notification(&json!({
+    outbound_route(bridge).route_notification(json!({
         "method": "Debugger.paused",
         "params": {"callFrames": []},
     }))
@@ -112,7 +112,7 @@ fn step_transition_keeps_the_exact_command_cause_through_repause() {
     configure_page(&bridge, PageId::new_for_testing(1));
     let outbound = outbound_route_with_io(&bridge, io_ingress.clone());
     assert!(
-        expect_immediate_preface(outbound.route_notification(&json!({
+        expect_immediate_preface(outbound.route_notification(json!({
             "method": "Debugger.paused",
             "params": {"callFrames": []},
         })))
@@ -151,7 +151,7 @@ fn step_transition_keeps_the_exact_command_cause_through_repause() {
     drop(first_dispatch);
     bridge.leave_pause();
     let resumed = expect_immediate_command_output(
-        outbound.route_notification(&json!({"method": "Debugger.resumed", "params": {}})),
+        outbound.route_notification(json!({"method": "Debugger.resumed", "params": {}})),
     )
     .expect("the resumed event must retain the stepOut cause");
     assert_eq!(
@@ -159,7 +159,7 @@ fn step_transition_keeps_the_exact_command_cause_through_repause() {
         RendererRuntimeCommandCausalIdentity::new(None, 41)
     );
 
-    let paused = expect_immediate_command_output(outbound.route_notification(&json!({
+    let paused = expect_immediate_command_output(outbound.route_notification(json!({
         "method": "Debugger.paused",
         "params": {"callFrames": []},
     })))
@@ -183,7 +183,7 @@ fn step_cause_ends_with_the_owner_turn_when_no_repause_occurs() {
     configure_page(&bridge, PageId::new_for_testing(1));
     let outbound = outbound_route_with_io(&bridge, io_ingress.clone());
     assert!(
-        expect_immediate_preface(outbound.route_notification(&json!({
+        expect_immediate_preface(outbound.route_notification(json!({
             "method": "Debugger.paused",
             "params": {"callFrames": []},
         })))
@@ -218,14 +218,14 @@ fn step_cause_ends_with_the_owner_turn_when_no_repause_occurs() {
     bridge.leave_pause();
     assert!(
         expect_immediate_command_output(
-            outbound.route_notification(&json!({"method": "Debugger.resumed", "params": {}})),
+            outbound.route_notification(json!({"method": "Debugger.resumed", "params": {}})),
         )
         .is_some()
     );
 
     bridge.finish_owner_turn();
     assert!(
-        expect_immediate_command_output(outbound.route_notification(&json!({
+        expect_immediate_command_output(outbound.route_notification(json!({
             "method": "Debugger.paused",
             "params": {"callFrames": []},
         })))
@@ -242,7 +242,7 @@ fn failed_step_command_does_not_own_a_later_resume_transition() {
     configure_page(&bridge, PageId::new_for_testing(1));
     let outbound = outbound_route_with_io(&bridge, io_ingress.clone());
     assert!(
-        expect_immediate_preface(outbound.route_notification(&json!({
+        expect_immediate_preface(outbound.route_notification(json!({
             "method": "Debugger.paused",
             "params": {"callFrames": []},
         })))
@@ -286,7 +286,7 @@ fn failed_step_command_does_not_own_a_later_resume_transition() {
     bridge.leave_pause();
     assert!(
         expect_immediate_command_output(
-            outbound.route_notification(&json!({"method": "Debugger.resumed", "params": {}})),
+            outbound.route_notification(json!({"method": "Debugger.resumed", "params": {}})),
         )
         .is_none(),
         "a failed step response must not own a later resumed event"
@@ -308,7 +308,7 @@ fn staged_pause_preface_is_claimed_at_paused_boundary() {
             preface.clone(),
         )])
         .expect("configured page should accept a pause preface");
-    let messages = expect_immediate_preface(route.route_notification(&json!({
+    let messages = expect_immediate_preface(route.route_notification(json!({
         "method": "Debugger.paused",
         "params": {"reason": "DOM", "callFrames": []},
     })));
@@ -345,7 +345,7 @@ fn resumed_after_pause_loop_exit_stays_on_pause_bridge() {
     let route = outbound_route(&bridge);
 
     assert!(
-        expect_immediate_preface(route.route_notification(&json!({
+        expect_immediate_preface(route.route_notification(json!({
             "method": "Debugger.paused",
             "params": {"callFrames": []},
         })))
@@ -364,7 +364,7 @@ fn resumed_after_pause_loop_exit_stays_on_pause_bridge() {
 
     assert!(
         expect_immediate_preface(
-            route.route_notification(&json!({"method": "Debugger.resumed", "params": {}}))
+            route.route_notification(json!({"method": "Debugger.resumed", "params": {}}))
         )
         .is_empty(),
         "the resumed notification paired with the reported pause must publish immediately"
@@ -392,7 +392,7 @@ fn instrumentation_pause_selects_io_only_nested_loop_policy() {
     let route = outbound_route(&bridge);
 
     assert!(
-        expect_immediate_preface(route.route_notification(&json!({
+        expect_immediate_preface(route.route_notification(json!({
             "method": "Debugger.paused",
             "params": {
                 "reason": "instrumentation",
@@ -409,7 +409,7 @@ fn instrumentation_pause_selects_io_only_nested_loop_policy() {
     bridge.leave_pause();
 
     assert!(
-        expect_immediate_preface(route.route_notification(&json!({
+        expect_immediate_preface(route.route_notification(json!({
             "method": "Debugger.paused",
             "params": {
                 "reason": "other",
