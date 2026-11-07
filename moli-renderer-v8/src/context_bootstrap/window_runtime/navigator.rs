@@ -1526,11 +1526,13 @@ fn storage_bucket_cache_storage_match_callback<'s>(
         return;
     };
     let matched = with_storage_bucket_store_entry(scope, |store| {
-        let cache_names = match options.cache_name.as_ref() {
-            Some(cache_name) => vec![cache_name.clone()],
-            None => store.cache_names_for_identity(&handle.identity)?,
-        };
+        let cache_names = store.cache_names_for_identity(&handle.identity)?;
         for cache_name in cache_names {
+            if let Some(expected) = options.cache_name.as_ref()
+                && expected != &cache_name
+            {
+                continue;
+            }
             if let Some(response) = store
                 .match_cache_entries_for_identity(&handle.identity, &cache_name, &query)?
                 .into_iter()
