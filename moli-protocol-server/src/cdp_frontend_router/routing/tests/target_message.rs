@@ -97,7 +97,7 @@ fn legacy_transport_admits_actual_command_and_routes_its_background_reply_once()
         .route_message(json!({"id":peer.request().id(),"result":{}}), None, None)
         .unwrap();
     assert_eq!(frontend.frontend_id(), 6);
-    assert_eq!(response, json!({"id":42,"result":{}}));
+    assert_eq!(response.value(), &json!({"id":42,"result":{}}));
 }
 
 #[test]
