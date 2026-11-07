@@ -7,7 +7,7 @@
 use super::*;
 use crate::live_stylesheet::import_url_identity;
 use crate::stylesheet_blocking::{StylesheetFetchOptions, StylesheetFetcher};
-use futures_util::future::join_all;
+use futures_util::future::{BoxFuture, join_all};
 use moli_encoding::decode_text_for_legacy_web;
 use moli_web_mime::{data_url_body_and_mime_type, mime_charset};
 
@@ -36,16 +36,10 @@ impl ConnectedNetworkStyleImportGraph {
     fn extend(&mut self, urls: impl IntoIterator<Item = Url>) {
         for url in urls {
             let identity = import_url_identity(&url);
-            if self.admitted_identities.contains(&identity) {
-                continue;
+            if self.admitted_identities.insert(identity) {
+                self.pending_urls.push_back(url);
             }
-            self.admitted_identities.insert(identity);
-            self.pending_urls.push_back(url);
         }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.pending_urls.is_empty()
     }
 
     fn take_pending(&mut self) -> Vec<Url> {
@@ -53,35 +47,36 @@ impl ConnectedNetworkStyleImportGraph {
     }
 }
 
-pub(crate) async fn fetch_complete_stylesheet_import_graph(
+pub(crate) fn fetch_complete_stylesheet_import_graph(
     stylesheet_fetcher: crate::stylesheet_blocking::RendererStylesheetFetcher,
     document_url: Url,
     urls: Vec<Url>,
-) -> crate::stylesheet_blocking::StylesheetImportGraphFetchResult {
-    fetch_stylesheet_import_graph(stylesheet_fetcher, document_url, urls, None).await
+) -> impl Future<Output = crate::stylesheet_blocking::StylesheetImportGraphFetchResult> + Send {
+    fetch_stylesheet_import_graph(stylesheet_fetcher, document_url, urls, None)
 }
 
 /// Continue from a root fetched with its link-specific request options. Seed
 /// both URL identities so an import cycle cannot fetch that root a second time.
-pub(crate) async fn fetch_complete_stylesheet_import_graph_from_root(
+pub(crate) fn fetch_complete_stylesheet_import_graph_from_root(
     stylesheet_fetcher: crate::stylesheet_blocking::RendererStylesheetFetcher,
     document_url: Url,
     root: crate::stylesheet_blocking::StylesheetImportNetworkResult,
-) -> crate::stylesheet_blocking::StylesheetImportGraphFetchResult {
-    fetch_stylesheet_import_graph(stylesheet_fetcher, document_url, Vec::new(), Some(root)).await
+) -> impl Future<Output = crate::stylesheet_blocking::StylesheetImportGraphFetchResult> + Send {
+    fetch_stylesheet_import_graph(stylesheet_fetcher, document_url, Vec::new(), Some(root))
 }
 
-async fn fetch_stylesheet_import_graph(
+fn fetch_stylesheet_import_graph(
     stylesheet_fetcher: crate::stylesheet_blocking::RendererStylesheetFetcher,
     document_url: Url,
     urls: Vec<Url>,
     root: Option<crate::stylesheet_blocking::StylesheetImportNetworkResult>,
-) -> crate::stylesheet_blocking::StylesheetImportGraphFetchResult {
+) -> impl Future<Output = crate::stylesheet_blocking::StylesheetImportGraphFetchResult> + Send {
     // A policy-bearing graph must admit data: imports before decoding them,
     // just like network imports. Keep them in the result so CSSOM cannot later
     // reconstruct the body of a refused local import.
-    let readiness = |urls: Vec<Url>| {
-        if stylesheet_fetcher.csp_context().is_some() && !urls.is_empty() {
+    let check_data_imports = stylesheet_fetcher.csp_context().is_some();
+    let readiness = move |urls: Vec<Url>| {
+        if check_data_imports && !urls.is_empty() {
             ConnectedStyleImportReadiness::Pending(urls)
         } else {
             connected_style_import_readiness(urls)
@@ -94,72 +89,98 @@ async fn fetch_stylesheet_import_graph(
     let mut network_results = Vec::new();
     let mut import_graph = ConnectedNetworkStyleImportGraph::default();
     let mut pending_results: Vec<_> = root.into_iter().collect();
-    for root in &pending_results {
-        import_graph
-            .admitted_identities
-            .insert(import_url_identity(root.request_url()));
-        if let Some(response) = root.terminal().ready_response() {
-            import_graph
-                .admitted_identities
-                .insert(import_url_identity(&response.final_url));
-        }
-    }
     import_graph.extend(urls);
     let mut data_expansions = 0;
-    while !import_graph.is_empty() || !pending_results.is_empty() {
-        if pending_results.is_empty() {
-            pending_results = join_all(import_graph.take_pending().into_iter().map(|url| {
-                let stylesheet_fetcher = stylesheet_fetcher.clone();
-                let fetch_document_url = document_url.clone();
-                let start_unix_millis = moli_time::unix_epoch_millis();
-                let data_expansion = if url.scheme() == "data" {
-                    data_expansions += 1;
-                    Some(data_expansions)
-                } else {
-                    None
-                };
-                async move {
-                    let terminal = if let Some(expansion) = data_expansion {
-                        fetch_data_stylesheet_import(&stylesheet_fetcher, &url, expansion)
-                    } else {
-                        stylesheet_fetcher
-                            .fetch_stylesheet_resource(
-                                fetch_document_url,
-                                url.clone(),
-                                StylesheetFetchOptions::default(),
-                            )
-                            .await
-                    };
-                    crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
-                        url,
-                        start_unix_millis,
-                        terminal,
-                    )
-                }
-            }))
-            .await;
-        }
-        for result in std::mem::take(&mut pending_results) {
-            let terminal = result.terminal();
-            successful &= terminal.is_ready();
-            if let Some(response) = terminal.ready_response() {
-                let nested_urls = crate::style_engine::stylesheet_top_level_import_urls(
-                    response.body_text(),
-                    &response.final_url,
-                    false,
-                )
-                .unwrap_or_default();
-                match readiness(nested_urls) {
-                    ConnectedStyleImportReadiness::Ready(nested_successful) => {
-                        successful &= nested_successful;
-                    }
-                    ConnectedStyleImportReadiness::Pending(urls) => import_graph.extend(urls),
+    // Prepare the initial requests before yielding to the parser. Descendants
+    // are prepared after their parent response, under the policy then in force.
+    let initial_requests = prepare_import_requests(
+        &stylesheet_fetcher,
+        &document_url,
+        import_graph.take_pending(),
+        &mut data_expansions,
+    );
+    async move {
+        pending_results.extend(join_all(initial_requests).await);
+        while !pending_results.is_empty() {
+            // Admit every completed response in this batch before discovering any
+            // descendants. Redirect aliases and their final URLs share an identity
+            // for both root and imported sheets.
+            for result in &pending_results {
+                import_graph
+                    .admitted_identities
+                    .insert(import_url_identity(result.request_url()));
+                if let Some(response) = result.terminal().ready_response() {
+                    import_graph
+                        .admitted_identities
+                        .insert(import_url_identity(&response.final_url));
                 }
             }
-            network_results.push(result);
+            for result in std::mem::take(&mut pending_results) {
+                let terminal = result.terminal();
+                successful &= terminal.is_ready();
+                if let Some(response) = terminal.ready_response() {
+                    let nested_urls = crate::style_engine::stylesheet_top_level_import_urls(
+                        response.body_text(),
+                        &response.final_url,
+                        false,
+                    )
+                    .unwrap_or_default();
+                    match readiness(nested_urls) {
+                        ConnectedStyleImportReadiness::Ready(nested_successful) => {
+                            successful &= nested_successful;
+                        }
+                        ConnectedStyleImportReadiness::Pending(urls) => import_graph.extend(urls),
+                    }
+                }
+                network_results.push(result);
+            }
+            pending_results = join_all(prepare_import_requests(
+                &stylesheet_fetcher,
+                &document_url,
+                import_graph.take_pending(),
+                &mut data_expansions,
+            ))
+            .await;
         }
+        crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(
+            successful,
+            network_results,
+        )
     }
-    crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(successful, network_results)
+}
+
+fn prepare_import_requests(
+    fetcher: &crate::stylesheet_blocking::RendererStylesheetFetcher,
+    document_url: &Url,
+    urls: Vec<Url>,
+    data_expansions: &mut usize,
+) -> Vec<BoxFuture<'static, crate::stylesheet_blocking::StylesheetImportNetworkResult>> {
+    urls.into_iter()
+        .map(|url| -> BoxFuture<'static, _> {
+            let started = moli_time::unix_epoch_millis();
+            let terminal: BoxFuture<'static, _> = if url.scheme() == "data" {
+                *data_expansions += 1;
+                Box::pin(std::future::ready(fetch_data_stylesheet_import(
+                    fetcher,
+                    &url,
+                    *data_expansions,
+                )))
+            } else {
+                fetcher.fetch_stylesheet_resource(
+                    document_url.clone(),
+                    url.clone(),
+                    StylesheetFetchOptions::default(),
+                )
+            };
+            Box::pin(async move {
+                crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
+                    url,
+                    started,
+                    terminal.await,
+                )
+            })
+        })
+        .collect()
 }
 
 fn fetch_data_stylesheet_import(
@@ -317,7 +338,7 @@ mod tests {
 
         graph.extend([first.clone(), duplicate, second.clone()]);
         assert_eq!(graph.take_pending(), vec![first, second]);
-        assert!(graph.is_empty());
+        assert!(graph.take_pending().is_empty());
     }
 
     #[test]
@@ -329,6 +350,6 @@ mod tests {
         graph.extend(urls);
 
         assert_eq!(graph.take_pending().len(), 1_100);
-        assert!(graph.is_empty());
+        assert!(graph.take_pending().is_empty());
     }
 }

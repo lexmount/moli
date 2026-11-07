@@ -103,7 +103,7 @@ impl DocumentRuntime {
             author_styles_disabled: false,
             bypass_content_security_policy: false,
             policy_container: DocumentPolicyContainer::default(),
-            delivered_meta_content_security_policies: RefCell::new(HashMap::new()),
+            delivered_meta_content_security_policies: Arc::default(),
             processed_meta_content_security_policy_handles: RefCell::new(HashSet::new()),
             resource_loader_binding: None,
             script_context_stack: Vec::new(),

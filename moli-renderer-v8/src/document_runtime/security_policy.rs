@@ -279,6 +279,7 @@ impl DocumentRuntime {
         connected_roots: &[DomHandle],
         stylesheet_owner_changes: &[crate::dom::native::DomStylesheetOwnerChange],
     ) {
+        self.process_connected_meta_content_security_policies(connected_roots);
         let mut checked_attributes = HashSet::new();
         for mutation in attribute_mutations {
             let target = mutation.target();
@@ -844,15 +845,19 @@ impl DocumentRuntime {
         origin_url: Option<Url>,
     ) -> crate::content_security_policy::StylesheetFetchCspContext {
         if self.bypass_content_security_policy() {
-            return crate::content_security_policy::StylesheetFetchCspContext::new(|_, _, _| {
-                (None, None)
+            return crate::content_security_policy::StylesheetFetchCspContext::new(|| {
+                |_, _, _| (None, None)
             });
         }
-        let enforce = self.document_content_security_policies_for_optional_document(
-            document_handle,
+        let enforce = document_response_content_security_policies(
             &container.response_content_security_policies,
             &container.content_security_reporting_endpoints,
         );
+        if let Some(document) = document_handle {
+            self.meta_content_security_policies_for_document(document);
+        }
+        let meta_policies = self.delivered_meta_content_security_policies.clone();
+        let reporting_endpoints = container.content_security_reporting_endpoints.clone();
         let report = document_response_content_security_policies(
             &container.response_content_security_report_only_policies,
             &container.content_security_reporting_endpoints,
@@ -863,8 +868,23 @@ impl DocumentRuntime {
             )
         });
         let policy_url = origin_url.unwrap_or_else(|| document_url.clone());
-        crate::content_security_policy::StylesheetFetchCspContext::new(
-            move |url, nonce, redirect_status| {
+        crate::content_security_policy::StylesheetFetchCspContext::new(move || {
+            let mut enforce = enforce.clone();
+            if let Some(document) = document_handle
+                && let Some(meta_policies) = meta_policies.read().get(&document)
+            {
+                enforce.extend(meta_policies.iter().cloned().map(|policy| {
+                    DocumentContentSecurityPolicy {
+                        policy,
+                        report_uri_enabled: false,
+                        reporting_endpoints: reporting_endpoints.clone(),
+                    }
+                }));
+            }
+            let report = report.clone();
+            let policy_url = policy_url.clone();
+            let document_uri = document_uri.clone();
+            move |url: &Url, nonce: Option<&str>, redirect_status| {
                 let check = |policies: &[DocumentContentSecurityPolicy], disposition| {
                     document_style_element_url_policy_violation_from_document_policies(
                         policies,
@@ -886,8 +906,8 @@ impl DocumentRuntime {
                     check(&report, ContentSecurityPolicyDisposition::Report),
                     check(&enforce, ContentSecurityPolicyDisposition::Enforce),
                 )
-            },
-        )
+            }
+        })
     }
 
     pub(crate) fn module_fetch_csp_context_for_document(
@@ -1873,10 +1893,24 @@ impl DocumentRuntime {
             self.process_meta_content_security_policy_handle(document_handle, handle);
         }
         self.delivered_meta_content_security_policies
-            .borrow()
+            .read()
             .get(&document_handle)
             .cloned()
             .unwrap_or_default()
+    }
+
+    pub(crate) fn process_connected_meta_content_security_policies(&self, roots: &[DomHandle]) {
+        for &root in roots {
+            let mut stack = vec![root];
+            while let Some(handle) = stack.pop() {
+                if self.dom_host.is_html_element_named(handle, "meta")
+                    && let Some(document) = self.dom_host.owner_document_handle(handle)
+                {
+                    self.process_meta_content_security_policy_handle(document, handle);
+                }
+                stack.extend(self.dom_host.child_handles(handle));
+            }
+        }
     }
 
     pub(crate) fn process_parser_meta_content_security_policy(&self, handle: DomHandle) {
@@ -1928,7 +1962,7 @@ impl DocumentRuntime {
         }
         if let Some(policy) = policy {
             self.delivered_meta_content_security_policies
-                .borrow_mut()
+                .write()
                 .entry(document_handle)
                 .or_default()
                 .push(ContentSecurityPolicy::from_meta(policy));

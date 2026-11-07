@@ -12,6 +12,7 @@ use crate::{
         SubresourceResourceType,
     },
 };
+use futures_util::future::Either;
 
 impl JsContextHost {
     pub(in crate::native_bridge::context_host) fn accept_child_parser_stylesheet_inputs(
@@ -129,39 +130,45 @@ impl JsContextHost {
         let resource_loader = self
             .document_resource_loader_for_owner(owner)
             .expect("accepted child stylesheet requires its Document authority");
-        resource_loader.spawn_resource_task(async move {
-            let csp_context = fetcher.csp_context().cloned();
-            let linked = matches!(&signature, DocumentBlockingStylesheetSignature::Link { .. });
-            let graph = match &signature {
-                DocumentBlockingStylesheetSignature::Link { url, options } => {
-                    let started = moli_time::unix_epoch_millis();
-                    let terminal = fetcher
-                        .fetch_stylesheet_resource(
-                            document_url.clone(),
-                            url.clone(),
-                            options.clone(),
-                        )
-                        .await;
+        // Prepare requests before yielding to the parser, so a later meta does
+        // not retroactively constrain an already admitted link or inline import.
+        let csp_context = fetcher.csp_context().cloned();
+        let linked = matches!(&signature, DocumentBlockingStylesheetSignature::Link { .. });
+        let fetch_document_url = document_url.clone();
+        let graph = match &signature {
+            DocumentBlockingStylesheetSignature::Link { url, options } => {
+                let started = moli_time::unix_epoch_millis();
+                let request_url = url.clone();
+                let root_fetch = fetcher.fetch_stylesheet_resource(
+                    document_url.clone(),
+                    url.clone(),
+                    options.clone(),
+                );
+                Either::Left(async move {
                     crate::document_runtime::fetch_complete_stylesheet_import_graph_from_root(
                         fetcher,
-                        document_url.clone(),
+                        fetch_document_url,
                         crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
-                            url.clone(),
+                            request_url,
                             started,
-                            terminal,
+                            root_fetch.await,
                         ),
                     )
                     .await
-                }
-                DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls } => {
+                })
+            }
+            DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls } => {
+                Either::Right(
                     crate::document_runtime::fetch_complete_stylesheet_import_graph(
                         fetcher,
-                        document_url.clone(),
+                        fetch_document_url,
                         urls.clone(),
-                    )
-                    .await
-                }
-            };
+                    ),
+                )
+            }
+        };
+        resource_loader.spawn_resource_task(async move {
+            let graph = graph.await;
             let network_results = graph
                 .network_results()
                 .iter()
@@ -427,6 +434,7 @@ impl JsContextHost {
                     ) else {
                         continue;
                     };
+                    let has_import_rules = prepared.has_import_rules();
                     self.install_linked_stylesheet(
                         crate::document_runtime::InstallLinkedStylesheet::from_prepared(
                             owner,
@@ -434,7 +442,7 @@ impl JsContextHost {
                             prepared,
                         ),
                     );
-                    if let Some(sheet) = self.linked_live_stylesheet(owner) {
+                    if has_import_rules && let Some(sheet) = self.linked_live_stylesheet(owner) {
                         import_roots.push(crate::document_runtime::ConnectedStyleImportRoot::new(
                             owner,
                             &sheet,
@@ -447,7 +455,9 @@ impl JsContextHost {
             } else {
                 false
             };
-        if let Some(graph) = &completion.import_graph {
+        if !import_roots.is_empty()
+            && let Some(graph) = &completion.import_graph
+        {
             let responses = crate::document_runtime::live_stylesheet_import_responses(graph);
             let refreshed = import_roots
                 .iter()
