@@ -65,7 +65,11 @@ impl TreeAdoptionPlan {
             .and_then(|root| TreeDocumentTransition::for_root(dom_host, *root, new_document));
         let targets = if transition.is_some_and(|transition| {
             transition.crosses_documents()
-                || unsafe { &*host_ptr }.has_explicit_custom_element_registry_associations()
+                || (unsafe { &*host_ptr }.has_explicit_custom_element_registry_associations()
+                    && custom_elements::removal_may_need_registry_association_retargets(
+                        unsafe { &*host_ptr },
+                        roots,
+                    ))
         }) {
             dom_host.adoption_targets_for_roots(roots, new_document)
         } else {
