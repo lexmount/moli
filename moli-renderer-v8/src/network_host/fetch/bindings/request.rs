@@ -90,7 +90,9 @@ pub(super) fn prepare_window_fetch_request<'s>(
     fetch_context: crate::native_bridge::WindowFetchContext,
     host: &JsContextHost,
 ) -> Result<PreparedWindowFetchRequest, FetchPrepareError> {
-    let request_headers = parsed.headers;
+    // Combine duplicate values before preflight and context overrides while
+    // preserving the first field spelling for native network serialization.
+    let request_headers = combined_headers_entries(&parsed.headers);
     // Receiver capture and WebIDL conversion are complete before this pure
     // preparation stage. Never inspect `args.this()` here: doing so could bind
     // the operation to a replacement LocalWindow after an author getter

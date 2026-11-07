@@ -1,7 +1,7 @@
 use super::super::store::{
     header_allowed_by_guard, header_append_allowed_by_guard, headers_are_immutable, headers_guard,
-    headers_list, normalized_header_name_or_throw, normalized_header_value_or_throw,
-    set_headers_entries,
+    headers_list, normalized_header_value_or_throw, set_headers_entries,
+    validated_header_name_or_throw,
 };
 use super::*;
 use crate::webidl;
@@ -49,23 +49,26 @@ pub(in crate::network_host::headers) fn headers_set_callback<'s>(
     };
     let name = parsed.name;
     let value = parsed.value;
-    let Some(lower) = normalized_header_name_or_throw(scope, &name) else {
+    let Some(name) = validated_header_name_or_throw(scope, &name) else {
         return;
     };
     let Some(value) = normalized_header_value_or_throw(scope, &value) else {
         return;
     };
     let guard = headers_guard(scope, this);
-    if !header_allowed_by_guard(guard, &lower, &value) {
+    if !header_allowed_by_guard(guard, name, &value) {
         return;
     }
     let mut entries = headers_list(scope, this);
     let insert_at = entries
         .iter()
-        .position(|(entry_name, _)| *entry_name == lower)
+        .position(|(entry_name, _)| entry_name.eq_ignore_ascii_case(name))
         .unwrap_or(entries.len());
-    entries.retain(|(entry_name, _)| *entry_name != lower);
-    entries.insert(insert_at.min(entries.len()), (lower, value));
+    let name = entries
+        .get(insert_at)
+        .map_or_else(|| name.to_owned(), |(entry_name, _)| entry_name.clone());
+    entries.retain(|(entry_name, _)| !entry_name.eq_ignore_ascii_case(&name));
+    entries.insert(insert_at.min(entries.len()), (name, value));
     set_headers_entries(scope, this, &entries);
 }
 
@@ -84,11 +87,11 @@ pub(in crate::network_host::headers) fn headers_delete_callback<'s>(
         return;
     };
     let name = parsed.name;
-    let Some(lower) = normalized_header_name_or_throw(scope, &name) else {
+    let Some(name) = validated_header_name_or_throw(scope, &name) else {
         return;
     };
     let mut entries = headers_list(scope, this);
-    entries.retain(|(entry_name, _)| *entry_name != lower);
+    entries.retain(|(entry_name, _)| !entry_name.eq_ignore_ascii_case(name));
     set_headers_entries(scope, this, &entries);
 }
 
@@ -108,7 +111,7 @@ pub(in crate::network_host::headers) fn headers_append_callback<'s>(
     };
     let name = parsed.name;
     let value = parsed.value;
-    let Some(name) = normalized_header_name_or_throw(scope, &name) else {
+    let Some(name) = validated_header_name_or_throw(scope, &name) else {
         return;
     };
     let Some(value) = normalized_header_value_or_throw(scope, &value) else {
@@ -116,9 +119,9 @@ pub(in crate::network_host::headers) fn headers_append_callback<'s>(
     };
     let guard = headers_guard(scope, this);
     let mut entries = headers_list(scope, this);
-    if !header_append_allowed_by_guard(guard, &name, &value, &entries) {
+    if !header_append_allowed_by_guard(guard, name, &value, &entries) {
         return;
     }
-    entries.push((name, value));
+    entries.push((name.to_owned(), value));
     set_headers_entries(scope, this, &entries);
 }

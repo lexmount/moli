@@ -60,7 +60,7 @@ pub(in crate::network_host::headers) fn headers_get_set_cookie_callback<'s>(
     };
     let values = headers_list(scope, this)
         .into_iter()
-        .filter_map(|(name, value)| (name == "set-cookie").then_some(value))
+        .filter_map(|(name, value)| name.eq_ignore_ascii_case("set-cookie").then_some(value))
         .filter_map(|value| v8_string(scope, &value).map(Into::into))
         .collect::<Vec<v8::Local<'_, v8::Value>>>();
     rv.set(v8::Array::new_with_elements(scope, &values).into());

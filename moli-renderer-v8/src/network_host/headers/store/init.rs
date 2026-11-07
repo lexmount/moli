@@ -1,4 +1,4 @@
-use super::entries::normalized_header_entry_or_throw;
+use super::entries::validated_header_entry_or_throw;
 use crate::webidl;
 
 pub(in crate::network_host) fn headers_entries_from_init<'s>(
@@ -34,7 +34,7 @@ pub(in crate::network_host) fn headers_entries_from_init<'s>(
                     "Headers sequence initializer pairs must have length 2",
                 )
             })?;
-            let entry = normalized_header_entry_or_throw(scope, key.into(), value.into())
+            let entry = validated_header_entry_or_throw(scope, key.into(), value.into())
                 .ok_or_else(|| {
                     webidl::WebIdlError::custom_message(
                         "Headers initializer contains an invalid header",
@@ -52,7 +52,7 @@ pub(in crate::network_host) fn headers_entries_from_init<'s>(
     )?;
     let mut entries = Vec::with_capacity(record.0.len());
     for (key, value) in record.0 {
-        let Some(entry) = normalized_header_entry_or_throw(scope, key.into(), value.into()) else {
+        let Some(entry) = validated_header_entry_or_throw(scope, key.into(), value.into()) else {
             return Err(webidl::WebIdlError::custom_message(
                 "Headers initializer contains an invalid header",
             ));
