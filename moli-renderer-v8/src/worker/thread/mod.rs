@@ -669,6 +669,7 @@ fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
         || !state.pending_service_worker_clients_open_windows.is_empty()
         || !state.pending_service_worker_show_notifications.is_empty()
         || !state.pending_service_worker_updates.is_empty()
+        || !state.pending_service_worker_unregistrations.is_empty()
         || !state.pending_service_worker_get_notifications.is_empty()
         || !state.pending_service_worker_sync_registrations.is_empty()
         || !state.pending_service_worker_sync_get_tags.is_empty()
@@ -1913,6 +1914,7 @@ async fn worker_main(
         service_worker_runtime,
         service_worker_registration,
         service_worker_objects: std::collections::HashMap::new(),
+        service_worker_registrations: std::collections::HashMap::new(),
         service_worker_client_id,
         message_port_registry,
         message_port_wrappers: std::collections::HashMap::new(),
@@ -1948,6 +1950,7 @@ async fn worker_main(
         pending_service_worker_clients_open_windows: std::collections::HashMap::new(),
         pending_service_worker_show_notifications: std::collections::HashMap::new(),
         pending_service_worker_updates: std::collections::HashMap::new(),
+        pending_service_worker_unregistrations: std::collections::HashMap::new(),
         service_worker_update_request_ids: Default::default(),
         pending_service_worker_get_notifications: std::collections::HashMap::new(),
         pending_service_worker_sync_registrations: std::collections::HashMap::new(),
@@ -2809,6 +2812,26 @@ async fn worker_main(
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 drain_service_worker_update_result(scope, &state, request_id, *result);
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
+            WorkerLoopWake::Message(Some(WorkerMessage::ServiceWorkerUnregisterResult {
+                request_id,
+                result,
+            })) => {
+                if pending_module_bootstrap.is_some() {
+                    pending_bootstrap_messages.push_back(
+                        WorkerMessage::ServiceWorkerUnregisterResult { request_id, result },
+                    );
+                    continue;
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                super::global_scope::drain_service_worker_unregister_result(
+                    scope, &state, request_id, result,
+                );
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }

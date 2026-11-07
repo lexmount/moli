@@ -12,6 +12,7 @@ mod event_target_prototype;
 mod module_csp;
 mod notification_init;
 mod request_init;
+mod service_worker_container;
 mod stream_clone_failures;
 mod text_codecs;
 mod websocket_stream;

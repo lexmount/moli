@@ -117,7 +117,11 @@ pub(crate) enum WorkerMessage {
     ServiceWorkerRegistrationTask(
         Box<crate::service_worker_runtime::ServiceWorkerRegistrationTask>,
     ),
-    /// Settle a registration.update() promise on the requesting worker loop.
+    ServiceWorkerUnregisterResult {
+        request_id: u64,
+        result: bool,
+    },
+    /// Settle a register/update promise on the requesting worker loop.
     ServiceWorkerUpdateResult {
         request_id: u64,
         result: Box<

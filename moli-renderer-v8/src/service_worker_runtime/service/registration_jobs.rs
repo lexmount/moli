@@ -271,31 +271,53 @@ impl ServiceWorkerRuntimeService {
         register_document_owner: crate::window_document_identity::WindowDocumentOwner,
         register_completion_tx: RendererPageServiceWorkerTaskSender,
     ) {
-        let queued_job = ServiceWorkerQueuedRegisterJob {
+        self.start_registration_job(
+            crate::service_worker_runtime::ServiceWorkerRegistrationRequest {
+                script_url,
+                scope_url,
+                document_url,
+                storage_key,
+                script_kind,
+                update_via_cache,
+                request_client,
+                network_policy,
+                worker_context_runtime: browser_context_runtime.worker_context_runtime(),
+                broadcast_channel_top_level_site,
+                indexed_db_manager,
+                storage_bucket_store,
+                completion: ServiceWorkerRegisterJob::Page {
+                    request_id: register_request_id,
+                    document_owner: register_document_owner,
+                    completion_tx: register_completion_tx,
+                },
+            },
+        );
+    }
+
+    pub(crate) fn start_registration_job(
+        &self,
+        request: crate::service_worker_runtime::ServiceWorkerRegistrationRequest,
+    ) {
+        self.start_queued_register_job(ServiceWorkerQueuedRegisterJob {
             update_registration_id: None,
-            script_url,
-            scope_url,
-            document_url,
-            storage_key,
-            script_kind,
-            update_via_cache,
+            script_url: request.script_url,
+            scope_url: request.scope_url,
+            document_url: request.document_url,
+            storage_key: request.storage_key,
+            script_kind: request.script_kind,
+            update_via_cache: request.update_via_cache,
             force_bypass_cache: false,
             skip_script_comparison: false,
             skip_waiting_after_install: false,
             force_update_page_load_waiter_ids: Vec::new(),
-            request_client,
-            network_policy,
-            worker_context_runtime: browser_context_runtime.worker_context_runtime(),
-            broadcast_channel_top_level_site,
-            indexed_db_manager,
-            storage_bucket_store,
-            callbacks: vec![ServiceWorkerRegisterJob::Page {
-                request_id: register_request_id,
-                document_owner: register_document_owner,
-                completion_tx: register_completion_tx,
-            }],
-        };
-        self.start_queued_register_job(queued_job);
+            request_client: request.request_client,
+            network_policy: request.network_policy,
+            worker_context_runtime: request.worker_context_runtime,
+            broadcast_channel_top_level_site: request.broadcast_channel_top_level_site,
+            indexed_db_manager: request.indexed_db_manager,
+            storage_bucket_store: request.storage_bucket_store,
+            callbacks: vec![request.completion],
+        });
     }
 
     pub(super) fn start_queued_register_job(&self, queued_job: ServiceWorkerQueuedRegisterJob) {
@@ -492,12 +514,29 @@ impl ServiceWorkerRuntimeService {
         self.start_unregistration_job(
             scope_url,
             storage_key,
-            Some(ServiceWorkerUnregisterJob {
+            Some(ServiceWorkerUnregisterJob::Page {
                 request_id,
                 document_owner,
                 completion_tx,
             }),
         )
+    }
+
+    pub(crate) fn start_unregistration_from_worker(
+        &self,
+        scope_url: &Url,
+        storage_key: String,
+        request_id: u64,
+        completion_tx: tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerMessage>,
+    ) {
+        self.start_unregistration_job(
+            scope_url,
+            storage_key,
+            Some(ServiceWorkerUnregisterJob::Worker {
+                request_id,
+                completion_tx,
+            }),
+        );
     }
 
     pub(super) fn start_unregistration_job(

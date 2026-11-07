@@ -9,6 +9,10 @@ use crate::context_bootstrap::service_worker_interfaces::{
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::OwnerDispatchScope;
 use crate::service_worker_runtime::{
+    ServiceWorkerClientUrlError, resolve_service_worker_script_url, service_worker_client_url,
+    service_worker_scope_url,
+};
+use crate::service_worker_runtime::{
     ServiceWorkerNavigationPreloadState, ServiceWorkerNavigationPreloadStateError,
     ServiceWorkerRegistrationError, ServiceWorkerUpdateViaCache,
 };
@@ -325,6 +329,16 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
     let Some(options) = service_worker_registration_options(scope, &args) else {
         return;
     };
+    if crate::worker::try_worker_service_worker_register(
+        scope,
+        script_argument,
+        options.requested_scope.as_deref(),
+        options.script_kind,
+        options.update_via_cache,
+        &mut rv,
+    ) {
+        return;
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         let Some(resolver) = v8::PromiseResolver::new(scope) else {
             return;
@@ -1058,6 +1072,14 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registration_ca
         return;
     };
     let promise = resolver.get_promise(scope);
+    if crate::worker::try_worker_service_worker_get_registration(
+        scope,
+        &parsed.client_url,
+        resolver,
+    ) {
+        rv.set(promise.into());
+        return;
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         let _ = resolver.resolve(scope, v8::undefined(scope).into());
         rv.set(promise.into());
@@ -1118,6 +1140,10 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registrations_c
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
+    if crate::worker::try_worker_service_worker_get_registrations(scope, resolver) {
+        rv.set(resolver.get_promise(scope).into());
+        return;
+    }
     let owner = service_worker_container_owner_scope(scope, args.this());
     let states = context_host_ptr_from_global_bridge(scope)
         .and_then(|host_ptr| {
@@ -2144,12 +2170,6 @@ fn reject_service_worker_navigation_preload_state_error(
     }
 }
 
-fn resolve_service_worker_script_url(document_url: &url::Url, script: &str) -> Option<url::Url> {
-    let mut script_url = document_url.join(script).ok()?;
-    script_url.set_fragment(None);
-    Some(script_url)
-}
-
 fn service_worker_registration_options<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
@@ -2173,49 +2193,6 @@ fn service_worker_registration_options<'s>(
             None
         }
     }
-}
-
-fn service_worker_scope_url(
-    document_url: &url::Url,
-    script_url: &url::Url,
-    requested_scope: Option<&str>,
-) -> Option<url::Url> {
-    let Some(requested_scope) = requested_scope else {
-        return Some(default_service_worker_scope_url(script_url));
-    };
-    let mut scope_url = document_url.join(requested_scope).ok()?;
-    scope_url.set_fragment(None);
-    Some(scope_url)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ServiceWorkerClientUrlError {
-    Invalid,
-    CrossOrigin,
-}
-
-fn service_worker_client_url(
-    document_url: &url::Url,
-    client: &str,
-) -> Result<url::Url, ServiceWorkerClientUrlError> {
-    let mut client_url = document_url
-        .join(client)
-        .map_err(|_| ServiceWorkerClientUrlError::Invalid)?;
-    if !moli_url::same_origin(document_url, &client_url) {
-        return Err(ServiceWorkerClientUrlError::CrossOrigin);
-    }
-    client_url.set_fragment(None);
-    Ok(client_url)
-}
-
-fn default_service_worker_scope_url(script_url: &url::Url) -> url::Url {
-    let mut scope_url = script_url.clone();
-    let path = script_url.path();
-    let scope_path = path.rfind('/').map(|index| &path[..=index]).unwrap_or("/");
-    scope_url.set_path(scope_path);
-    scope_url.set_query(None);
-    scope_url.set_fragment(None);
-    scope_url
 }
 
 fn service_worker_registration_snapshot_script_url(

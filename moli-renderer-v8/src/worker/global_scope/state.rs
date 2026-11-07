@@ -135,6 +135,8 @@ pub(crate) struct WorkerGlobalState {
     /// Registration state last applied by this worker's task queue.
     pub(in crate::worker) service_worker_registration:
         Option<crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot>,
+    pub(in crate::worker) service_worker_registrations:
+        HashMap<ServiceWorkerRegistrationId, WorkerServiceWorkerRegistration>,
     /// One wrapper per service worker version in this realm.
     pub(in crate::worker) service_worker_objects:
         HashMap<ServiceWorkerVersionId, v8::Global<v8::Object>>,
@@ -210,7 +212,9 @@ pub(crate) struct WorkerGlobalState {
     /// In-flight Service Worker `clients.openWindow()` requests keyed by request id.
     pub(in crate::worker) pending_service_worker_clients_open_windows:
         HashMap<u64, PendingServiceWorkerClientsOpenWindow>,
-    /// In-flight Service Worker `registration.update()` requests keyed by request id.
+    pub(in crate::worker) pending_service_worker_unregistrations:
+        HashMap<u64, v8::Global<v8::PromiseResolver>>,
+    /// In-flight Service Worker register/update requests keyed by request id.
     pub(in crate::worker) pending_service_worker_updates: HashMap<u64, PendingServiceWorkerUpdate>,
     pub(in crate::worker) service_worker_update_request_ids: WorkerServiceWorkerRequestIdAllocator,
     /// In-flight Service Worker `registration.showNotification()` requests keyed by request id.

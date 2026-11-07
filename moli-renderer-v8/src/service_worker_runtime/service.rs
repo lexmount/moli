@@ -669,6 +669,36 @@ fn registration_notifications_locked(
             })
         })
         .collect();
+    for watcher in &state.worker_client_lifecycle_watchers {
+        if watcher.scope_url != registration.scope_url
+            || watcher.storage_key != registration.storage_key
+        {
+            continue;
+        }
+        let Some(completion_tx) = watcher
+            .completion_tx
+            .upgrade()
+            .filter(|sender| !sender.is_closed())
+        else {
+            continue;
+        };
+        // The service worker's own registration already has an exact-run
+        // subscription. A container lookup must not duplicate its events.
+        if deliveries.iter().any(|delivery| {
+            matches!(delivery,
+            ServiceWorkerLifecycleNotificationDelivery::Worker { completion_tx: sender, .. }
+                if sender.same_channel(&completion_tx))
+        }) {
+            continue;
+        }
+        deliveries.push(ServiceWorkerLifecycleNotificationDelivery::Worker {
+            completion_tx,
+            task: super::snapshots::ServiceWorkerRegistrationTask {
+                registration: snapshot.clone(),
+                events: events.clone(),
+            },
+        });
+    }
     // An updatefound page listener can immediately message the active worker.
     // Queue the worker's registration task before exposing that event to pages.
     deliveries.extend(page_deliveries);

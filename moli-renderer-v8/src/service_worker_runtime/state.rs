@@ -185,6 +185,7 @@ pub(super) struct ServiceWorkerRuntimeState {
     pub(super) lifecycle_watchers: Vec<ServiceWorkerLifecycleWatcher>,
     pub(super) worker_lifecycle_watchers:
         HashMap<ServiceWorkerVersionId, ServiceWorkerWorkerLifecycleWatcher>,
+    pub(super) worker_client_lifecycle_watchers: Vec<ServiceWorkerWorkerClientLifecycleWatcher>,
     pub(super) live_clients: HashMap<ServiceWorkerClientId, ServiceWorkerClient>,
     pub(super) notification_records: Vec<ServiceWorkerNotificationRecord>,
     pub(super) sync_registrations:
@@ -292,6 +293,7 @@ impl ServiceWorkerRuntimeState {
             pending_fetch_body_uploads: HashMap::new(),
             lifecycle_watchers: Vec::new(),
             worker_lifecycle_watchers: HashMap::new(),
+            worker_client_lifecycle_watchers: Vec::new(),
             live_clients: HashMap::new(),
             notification_records: Vec::new(),
             sync_registrations: HashMap::new(),
@@ -870,6 +872,13 @@ pub(super) struct ServiceWorkerLifecycleWatcher {
 #[derive(Clone, Debug)]
 pub(super) struct ServiceWorkerWorkerLifecycleWatcher {
     pub(super) owner: ServiceWorkerRunOwner,
+    pub(super) completion_tx: tokio::sync::mpsc::WeakUnboundedSender<WorkerMessage>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ServiceWorkerWorkerClientLifecycleWatcher {
+    pub(super) scope_url: Url,
+    pub(super) storage_key: String,
     pub(super) completion_tx: tokio::sync::mpsc::WeakUnboundedSender<WorkerMessage>,
 }
 

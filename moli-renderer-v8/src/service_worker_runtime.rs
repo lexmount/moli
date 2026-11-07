@@ -69,7 +69,8 @@ pub(crate) use ids::{
     ServiceWorkerRegistrationId, ServiceWorkerVersionId,
 };
 pub(crate) use jobs::{
-    ServiceWorkerRegisterJob, ServiceWorkerRegistrationUpdate, ServiceWorkerUnregisterStart,
+    ServiceWorkerRegisterJob, ServiceWorkerRegistrationRequest, ServiceWorkerRegistrationUpdate,
+    ServiceWorkerUnregisterStart,
 };
 pub(crate) use owner_wake::{
     ServiceWorkerRuntimeOwnerWake, ServiceWorkerRuntimeOwnerWakeSender,
@@ -92,4 +93,10 @@ pub(crate) use service::{
 pub(crate) use snapshots::{
     ServiceWorkerControlState, ServiceWorkerRegistrationSnapshot, ServiceWorkerRegistrationTask,
     ServiceWorkerVersionSnapshot,
+};
+
+mod registration_urls;
+pub(crate) use registration_urls::{
+    ServiceWorkerClientUrlError, resolve_service_worker_script_url, service_worker_client_url,
+    service_worker_scope_url,
 };

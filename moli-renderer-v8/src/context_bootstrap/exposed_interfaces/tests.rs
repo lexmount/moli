@@ -588,7 +588,7 @@ fn failed_intrinsic_finalization_does_not_expose_registered_objects() {
 }
 
 #[test]
-fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
+fn worker_realm_lazy_properties_follow_realm_exposure_sets() {
     fn own_properties(realm: super::RealmKind, secure_context: bool) -> Vec<bool> {
         crate::ensure_v8_for_test();
         let mut isolate = v8::Isolate::new(Default::default());
@@ -692,19 +692,19 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
     assert_eq!(
         own_properties(super::RealmKind::DedicatedWorker, true),
         vec![
-            true, true, true, false, true, true, false, false, false, true, false, true, false
+            true, true, true, false, true, true, false, false, false, true, true, true, true
         ]
     );
     assert_eq!(
         own_properties(super::RealmKind::SharedWorker, true),
         vec![
-            true, true, true, false, false, true, false, false, false, true, false, true, false
+            true, true, true, false, false, true, false, false, false, true, true, true, true
         ]
     );
     assert_eq!(
         own_properties(super::RealmKind::ServiceWorker, true),
         vec![
-            false, false, false, false, false, true, false, false, false, true, false, true, true
+            false, false, false, false, false, true, false, false, false, true, true, true, true
         ]
     );
     for realm in [

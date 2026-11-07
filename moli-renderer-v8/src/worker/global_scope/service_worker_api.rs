@@ -7,8 +7,12 @@ pub(super) fn install_service_worker_global_runtime<'s>(
     version_id: crate::runtime::ServiceWorkerVersionId,
     scope_url: &Url,
 ) -> Result<()> {
-    let registration =
-        build_service_worker_global_registration(scope, registration_id, version_id, scope_url)?;
+    let registration = build_service_worker_global_registration(
+        scope,
+        registration_id,
+        Some(version_id),
+        scope_url,
+    )?;
     set_private_value(
         scope,
         global,
@@ -23,10 +27,10 @@ pub(super) fn install_service_worker_global_runtime<'s>(
         .map_err(|error| anyhow!("failed to initialize service worker global: {error}"))
 }
 
-fn build_service_worker_global_registration<'s>(
+pub(super) fn build_service_worker_global_registration<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     registration_id: crate::runtime::ServiceWorkerRegistrationId,
-    version_id: crate::runtime::ServiceWorkerVersionId,
+    version_id: Option<crate::runtime::ServiceWorkerVersionId>,
     scope_url: &Url,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let sync_manager = ServiceWorkerGlobalSyncManagerDeclaration {
@@ -86,13 +90,15 @@ fn build_service_worker_global_registration<'s>(
         SERVICE_WORKER_REGISTRATION_ID_SLOT,
         registration_id_value.into(),
     );
-    let version_id_value = v8::BigInt::new_from_u64(scope, version_id.as_u64());
-    set_private_value(
-        scope,
-        registration,
-        SERVICE_WORKER_VERSION_ID_SLOT,
-        version_id_value.into(),
-    );
+    if let Some(version_id) = version_id {
+        let version_id_value = v8::BigInt::new_from_u64(scope, version_id.as_u64());
+        set_private_value(
+            scope,
+            registration,
+            SERVICE_WORKER_VERSION_ID_SLOT,
+            version_id_value.into(),
+        );
+    }
     Ok(registration)
 }
 
@@ -105,29 +111,33 @@ pub(in crate::worker) fn apply_service_worker_registration_task<'s>(
     let Some(state) = get_worker_state(scope) else {
         return;
     };
+    if !state.borrow().callback_task_delivery_allowed() {
+        return;
+    }
+    let own_registration = matches!(state.borrow().global_kind, WorkerGlobalKind::Service { registration_id, .. } if registration_id == task.registration.registration_id());
+    if own_registration {
+        state.borrow_mut().service_worker_registration = Some(task.registration.clone());
+    }
+    let Ok(registration) = build_worker_service_worker_registration(scope, &task.registration)
+    else {
+        return;
+    };
     {
         let mut state = state.borrow_mut();
-        if !state.callback_task_delivery_allowed()
-            || !matches!(state.global_kind, WorkerGlobalKind::Service { registration_id, .. }
-                if registration_id == task.registration.registration_id())
+        if let Some(entry) = state
+            .service_worker_registrations
+            .get_mut(&task.registration.registration_id())
         {
-            return;
+            entry.snapshot = task.registration.clone();
         }
-        state.service_worker_registration = Some(task.registration.clone());
     }
-    let global = scope.get_current_context().global(scope);
-    if let Some(registration) =
-        get_private_value(scope, global, SERVICE_WORKER_GLOBAL_REGISTRATION_SLOT)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    {
-        let update_via_cache = v8str(scope, task.registration.update_via_cache().as_str());
-        set_private_value(
-            scope,
-            registration,
-            crate::context_bootstrap::service_worker_interfaces::REGISTRATION_UPDATE_VIA_CACHE,
-            update_via_cache.into(),
-        );
-    }
+    let update_via_cache = v8str(scope, task.registration.update_via_cache().as_str());
+    set_private_value(
+        scope,
+        registration,
+        crate::context_bootstrap::service_worker_interfaces::REGISTRATION_UPDATE_VIA_CACHE,
+        update_via_cache.into(),
+    );
     // Materialize the slot objects before dispatch, reusing this realm's
     // wrappers. Getters only observe this task's snapshot, never owner state.
     for version in [
@@ -145,7 +155,7 @@ pub(in crate::worker) fn apply_service_worker_registration_task<'s>(
     for event in task.events {
         match event {
             ServiceWorkerLifecycleClientEvent::UpdateFound => {
-                dispatch_service_worker_registration_update_found(scope);
+                dispatch_service_worker_object_event(scope, registration, "updatefound");
             }
             ServiceWorkerLifecycleClientEvent::WorkerStateChanged {
                 version_id,
@@ -178,17 +188,6 @@ fn set_service_worker_object_state<'s>(
         crate::context_bootstrap::service_worker_interfaces::WORKER_STATE,
         state.into(),
     );
-}
-
-fn dispatch_service_worker_registration_update_found<'s>(scope: &mut v8::PinScope<'s, '_>) {
-    let global = scope.get_current_context().global(scope);
-    let Some(registration) =
-        get_private_value(scope, global, SERVICE_WORKER_GLOBAL_REGISTRATION_SLOT)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    dispatch_service_worker_object_event(scope, registration, "updatefound");
 }
 
 fn dispatch_service_worker_object_event<'s>(
@@ -238,45 +237,68 @@ enum ServiceWorkerRegistrationWorkerPhase {
 
 pub(super) fn service_worker_registration_installing_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     rv.set(service_worker_registration_worker_value(
         scope,
+        args.this(),
         ServiceWorkerRegistrationWorkerPhase::Installing,
     ));
 }
 
 pub(super) fn service_worker_registration_waiting_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     rv.set(service_worker_registration_worker_value(
         scope,
+        args.this(),
         ServiceWorkerRegistrationWorkerPhase::Waiting,
     ));
 }
 
 pub(super) fn service_worker_registration_active_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     rv.set(service_worker_registration_worker_value(
         scope,
+        args.this(),
         ServiceWorkerRegistrationWorkerPhase::Active,
     ));
 }
 
 fn service_worker_registration_worker_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    registration: v8::Local<'s, v8::Object>,
     phase: ServiceWorkerRegistrationWorkerPhase,
 ) -> v8::Local<'s, v8::Value> {
     let Some(state) = get_worker_state(scope) else {
         return v8::null(scope).into();
     };
-    let Some(snapshot) = state.borrow().service_worker_registration.clone() else {
+    let registration_id =
+        get_private_value(scope, registration, SERVICE_WORKER_REGISTRATION_ID_SLOT)
+            .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
+            .map(|value| value.u64_value().0);
+    let snapshot = {
+        let state = state.borrow();
+        state
+            .service_worker_registrations
+            .values()
+            .find(|entry| Some(entry.snapshot.registration_id().as_u64()) == registration_id)
+            .map(|entry| entry.snapshot.clone())
+            .or_else(|| {
+                state
+                    .service_worker_registration
+                    .as_ref()
+                    .filter(|snapshot| Some(snapshot.registration_id().as_u64()) == registration_id)
+                    .cloned()
+            })
+    };
+    let Some(snapshot) = snapshot else {
         return v8::null(scope).into();
     };
     let version = match phase {
@@ -383,7 +405,7 @@ pub(super) fn service_worker_registration_update_callback<'s>(
         };
         let request_id = state.register_pending_service_worker_update(PendingServiceWorkerUpdate {
             resolver: v8::Global::new(scope, resolver),
-            registration: v8::Global::new(scope, args.this()),
+            registration: Some(v8::Global::new(scope, args.this())),
         });
         crate::service_worker_runtime::ServiceWorkerRegistrationUpdate {
             registration_id,
@@ -418,10 +440,14 @@ pub(super) fn service_worker_registration_update_callback<'s>(
 
 pub(super) fn service_worker_registration_unregister_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(resolved_worker_promise(scope, v8::Boolean::new(scope, true).into()).into());
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        return;
+    };
+    rv.set(resolver.get_promise(scope).into());
+    worker_service_worker_registration_unregister(scope, args.this(), resolver);
 }
 
 pub(super) fn service_worker_registration_show_notification_callback<'s>(
@@ -1644,15 +1670,6 @@ fn service_worker_client_query_options(
     }
 }
 
-fn resolved_worker_promise<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> v8::Local<'s, v8::Promise> {
-    let resolver = v8::PromiseResolver::new(scope).expect("promise resolver");
-    let _ = resolver.resolve(scope, value);
-    resolver.get_promise(scope)
-}
-
 pub(crate) fn service_worker_runtime_identity<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<(
@@ -2069,9 +2086,10 @@ fn service_worker_window_client_can_display_url(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https")
 }
 
-const SERVICE_WORKER_REGISTRATION_SCOPE_SLOT: &str = "__moliServiceWorkerRegistrationScope";
+pub(super) const SERVICE_WORKER_REGISTRATION_SCOPE_SLOT: &str =
+    "__moliServiceWorkerRegistrationScope";
 
-const SERVICE_WORKER_REGISTRATION_ID_SLOT: &str = "__moliServiceWorkerRegistrationId";
+pub(super) const SERVICE_WORKER_REGISTRATION_ID_SLOT: &str = "__moliServiceWorkerRegistrationId";
 
 pub(super) const SERVICE_WORKER_VERSION_ID_SLOT: &str = "__moliServiceWorkerVersionId";
 
@@ -2353,4 +2371,5 @@ struct BackgroundSyncOptions {
     min_interval: u64,
 }
 
-const SERVICE_WORKER_GLOBAL_REGISTRATION_SLOT: &str = "__moliServiceWorkerGlobalRegistration";
+pub(super) const SERVICE_WORKER_GLOBAL_REGISTRATION_SLOT: &str =
+    "__moliServiceWorkerGlobalRegistration";
