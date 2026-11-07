@@ -94,8 +94,7 @@ pub(crate) use script_lifecycle::{
 pub(crate) use security_policy::{
     DocumentConnectCspCheckOrder, DocumentConnectPolicySnapshot,
     DocumentContentSecurityPolicyCheck, DocumentContentSecurityPolicyViolation,
-    DocumentNavigationEmbeddingContext, DocumentSubresourceCspKind,
-    create_content_security_policy_violation_event,
+    DocumentCspViolationMetadata, DocumentNavigationEmbeddingContext, DocumentSubresourceCspKind,
     create_content_security_policy_violation_event_with_fields,
     document_content_security_policy_error_message,
 };

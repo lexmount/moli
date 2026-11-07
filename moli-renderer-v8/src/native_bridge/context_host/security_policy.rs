@@ -12,7 +12,6 @@ use crate::{
     document_runtime::{
         DocumentContentSecurityPolicyCheck, DocumentContentSecurityPolicyViolation,
         DocumentPolicyContainer, DocumentSubresourceCspKind, DomHandle,
-        create_content_security_policy_violation_event,
     },
     native_bridge::{
         active_child_window_handle, active_lightweight_popup_id,
@@ -75,10 +74,25 @@ impl DocumentCspOutcome {
 }
 
 impl JsContextHost {
-    pub(crate) fn content_security_policy_response_status(
+    pub(crate) fn document_csp_violation_metadata(
+        &self,
+        document: DomHandle,
+    ) -> crate::document_runtime::DocumentCspViolationMetadata {
+        crate::document_runtime::DocumentCspViolationMetadata {
+            response_status: self
+                .dom_host()
+                .document_source_response_status_for_handle(document)
+                .unwrap_or(0),
+            referrer: self
+                .document_referrer_for_document_handle(document)
+                .to_owned(),
+        }
+    }
+
+    pub(crate) fn document_csp_violation_metadata_for_owner(
         &self,
         owner: OwnerDispatchScope,
-    ) -> Option<u16> {
+    ) -> Option<crate::document_runtime::DocumentCspViolationMetadata> {
         let document = match owner {
             OwnerDispatchScope::Top => Some(self.document_handle()),
             OwnerDispatchScope::Child(handle) => {
@@ -88,8 +102,7 @@ impl JsContextHost {
                 self.lightweight_popup_document_handle(popup_id)
             }
         }?;
-        self.dom_host()
-            .document_source_response_status_for_handle(document)
+        Some(self.document_csp_violation_metadata(document))
     }
 
     fn owner_document_policy_snapshot(
@@ -1506,12 +1519,16 @@ impl JsContextHost {
         let window = self
             .child_browsing_context_window_wrapper(scope, handle)
             .ok_or_else(|| anyhow::anyhow!("child window wrapper is unavailable"))?;
-        let event = create_content_security_policy_violation_event(
-            scope,
-            window.into(),
-            window.into(),
-            violation,
-        )?;
+        let metadata = self
+            .document_csp_violation_metadata_for_owner(OwnerDispatchScope::Child(handle))
+            .unwrap_or_default();
+        let event =
+            crate::document_runtime::create_content_security_policy_violation_event_with_fields(
+                scope,
+                window.into(),
+                window.into(),
+                &metadata.event_fields(violation),
+            )?;
         if send_report {
             let fields = ContentSecurityPolicyViolationEventFields::from(violation);
             let document_owner =
