@@ -1,5 +1,6 @@
 use super::*;
 
+mod beforeunload_return;
 mod child_window;
 mod compilation;
 mod csp_admission;
