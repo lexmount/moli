@@ -4458,6 +4458,11 @@ async fn chrome_fontfaceset_ready_keeps_stable_promise_until_loading_starts_subs
         .fetch(&server.url("/compat/chrome-fontfaceset-ready-basic"))
         .await?;
 
+    // The fixture writes its result after FontFaceSet.ready, whose task may
+    // run after load. Await that completion before inspecting its attributes.
+    page.evaluate_runtime_expression_with_await_async("document.fonts.ready", true)
+        .await?;
+
     assert!(
         page.serialize_html_async()
             .await

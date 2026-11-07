@@ -130,6 +130,7 @@ mod interaction_batch;
 pub(crate) use interaction_batch::PendingScrollObservableEffects;
 mod canvas_blob_serialization_tasks;
 mod device_sensor_tasks;
+mod font_loading_tasks;
 mod internal_node_refs;
 mod layout;
 mod layout_snapshot;
@@ -1059,6 +1060,7 @@ pub(crate) struct PageScriptHost {
     pending_text_control_change_commit: Option<PendingTextControlChangeCommit>,
     file_reading_tasks: file_reading_tasks::FileReadingState,
     misc_platform_api_tasks: misc_platform_api_tasks::MiscPlatformApiTaskState,
+    font_loading_tasks: font_loading_tasks::FontLoadingTaskState,
     device_sensor_tasks: device_sensor_tasks::DeviceSensorTaskState,
     canvas_blob_serialization_tasks:
         canvas_blob_serialization_tasks::CanvasBlobSerializationTaskState,

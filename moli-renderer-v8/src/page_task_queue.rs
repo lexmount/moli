@@ -39,6 +39,7 @@ pub(crate) use webrtc::{
     RendererPageWebRtcTaskKind,
 };
 mod device_sensor;
+mod font_loading;
 mod message_port_delivery;
 mod misc_platform_api;
 mod module_reaction;
@@ -275,6 +276,11 @@ pub(crate) use self::file_reading::{
     PageFileReadingTargetEffect, PageFileReadingTurnAction, PageFileReadingTurnOutcome,
     RendererPageFileReaderPhase, RendererPageFileReadingOwner, RendererPageFileReadingSender,
     RendererPageFileReadingTask, RendererPageFileReadingTaskId, RendererPageFileReadingTaskKind,
+};
+pub(crate) use self::font_loading::{
+    PageFontLoadingTargetEffect, PageFontLoadingTurnAction, PageFontLoadingTurnOutcome,
+    RendererPageFontLoadingOwner, RendererPageFontLoadingSender, RendererPageFontLoadingTask,
+    RendererPageFontLoadingTaskId, RendererPageFontLoadingTaskKind,
 };
 pub(crate) use self::form_navigation::{
     PageFormNavigationTargetEffect, PageFormNavigationTurnAction, PageFormNavigationTurnOutcome,

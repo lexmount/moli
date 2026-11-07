@@ -393,7 +393,11 @@ pub(super) fn queue_requested_font_loads(
             .data(face.into())
             .build(scope)
             .expect("font resource task");
-        if unsafe { &mut *host_ptr }.queue_internal_task(scope, callback) {
+        if unsafe { &mut *host_ptr }.queue_font_loading_task(
+            scope,
+            callback,
+            crate::page_task_queue::RendererPageFontLoadingTaskKind::FontFaceLoad,
+        ) {
             let queued = v8::Boolean::new(scope, true);
             set_private_value(scope, face, REQUEST_QUEUED, queued.into());
         } else {
