@@ -351,6 +351,8 @@ impl JsContextHost {
                     );
                     continue;
                 };
+                let resource =
+                    resource.with_resource_timing_initiator(Some(response.final_url.to_string()));
                 stylesheet_subresources.push((binding, resource));
             }
         }

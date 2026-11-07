@@ -54,6 +54,13 @@ pub(super) struct PreloadServer {
     assets: Arc<Mutex<HashMap<String, Arc<Asset>>>>,
 }
 
+fn css_timing_styles(token: &str) -> String {
+    format!(
+        "@font-face {{ font-family: Timing-{token}; src: url('/probe-asset?token={token}-font&as=font&auto=1'); }} \
+         body {{ font-family: Timing-{token}; }}"
+    )
+}
+
 impl Drop for PreloadServer {
     fn drop(&mut self) {
         self.task.abort();
@@ -93,7 +100,28 @@ impl PreloadServer {
                             let (mime, body) = match url.path() {
                                 "/probe-worker.js" => ("text/javascript", include_str!("../fixtures/preload-consumption-worker.js").to_owned()),
                                 "/probe-timing.js" => ("text/javascript", include_str!("../fixtures/preload-resource-timing.js").to_owned()),
+                                "/font-timing-worker.js" => ("text/javascript", include_str!("../fixtures/stylesheet-font-timing-worker.js").to_owned()),
+                                "/timing-style" => ("text/css", css_timing_styles(&token)),
+                                "/timing-import" => ("text/css", format!("@import url('/timing-style?token={token}');")),
                                 "/timing-header" => ("text/html", "<!doctype html><body>Header preload timing".to_owned()),
+                                "/timing-page" => {
+                                    let kind = query.get("kind").map(String::as_str).unwrap_or("inline");
+                                    let style = match kind {
+                                        "linked" => format!("<link rel='stylesheet' href='/timing-style?token={token}'>"),
+                                        "imported" => format!("<link rel='stylesheet' href='/timing-import?token={token}'>"),
+                                        "cross-linked" => {
+                                            let port = stream.local_addr().unwrap().port();
+                                            format!("<link rel='stylesheet' href='http://localhost:{port}/timing-style?token={token}'>")
+                                        }
+                                        "inline-base" => format!("<base href='/other-base/'><style>{}</style>", css_timing_styles(&token)),
+                                        _ => format!("<style>{}</style>", css_timing_styles(&token)),
+                                    };
+                                    ("text/html", format!("<!doctype html>{style}<body>Resource timing font and image"))
+                                }
+                                "/timing-parent" => {
+                                    let kind = query.get("kind").map(String::as_str).unwrap_or("inline");
+                                    ("text/html", format!("<!doctype html><iframe src='/timing-page?kind={kind}&amp;token={token}'></iframe>"))
+                                }
                                 "/child-import-parent" => {
                                     let kind = query.get("kind").map(String::as_str).unwrap_or("linked");
                                     let scenario = query.get("scenario").map(String::as_str).unwrap_or("nested");
@@ -134,7 +162,7 @@ impl PreloadServer {
                                     ("text/css", body)
                                 }
 
-                                "/probe-asset" | "/probe-font-final" => {
+                                "/probe-asset" | "/probe-font-final" | "/font-worker-asset" => {
                                     asset.count.fetch_add(1, Ordering::AcqRel);
                                     asset.started.notify_waiters();
                                     if !query.contains_key("auto") { asset.wait(true).await; }
@@ -155,7 +183,7 @@ impl PreloadServer {
                                 }
                                 _ => ("text/html", "<!doctype html><body>preload consumption".to_owned()),
                             };
-                            let font = matches!(url.path(), "/probe-asset" | "/probe-font-final") && query.get("as").is_some_and(|kind| kind == "font");
+                            let font = matches!(url.path(), "/probe-asset" | "/probe-font-final" | "/font-worker-asset") && query.get("as").is_some_and(|kind| kind == "font");
                             let body = if font {
                                 if query.contains_key("invalid") { b"\0\x01\0\0".to_vec() }
                                 else { include_bytes!("../../../moli-layout/tests/fixtures/moli-ahem.ttf").to_vec() }
@@ -327,6 +355,202 @@ async fn response_header_preload_timings_retain_the_request_document() -> Result
                     .map(|asset| asset.count.load(Ordering::Acquire)),
                 Some(if source == "default" { 0 } else { 1 }),
                 "header preload must count actual network requests: {source}/{kind}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stylesheet_fonts_report_their_timing_in_the_request_document() -> Result<()> {
+    let server = PreloadServer::spawn().await?;
+    let mut config = AppConfig::default();
+    config.set_optional_resource_fetch_mask(moli_page_types::OptionalResourceFetchMask::ALL);
+    let browser = Browser::new(config)?;
+    let mut failures = Vec::new();
+    for realm in ["main", "child"] {
+        for kind in [
+            "inline",
+            "inline-base",
+            "linked",
+            "imported",
+            "cross-linked",
+        ] {
+            let token = format!("{realm}-{kind}");
+            let path = if realm == "child" {
+                "timing-parent"
+            } else {
+                "timing-page"
+            };
+            let mut page = browser
+                .fetch(&format!(
+                    "{}/{path}?kind={kind}&token={token}",
+                    server.origin
+                ))
+                .await?;
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                page.evaluate_runtime_expression_with_await_async(
+                    r#"(async () => {
+                        const frame = document.querySelector('iframe');
+                        if (frame && frame.contentDocument.readyState !== 'complete') {
+                            await new Promise(resolve => frame.addEventListener('load', resolve, {once: true}));
+                        }
+                        const target = frame ? frame.contentWindow : window;
+                        await target.document.fonts.ready;
+                        const rows = target.performance.getEntriesByType('resource').filter(entry =>
+                            entry.name.includes('/probe-asset?')).map(entry => ({
+                                name: entry.name, type: entry.initiatorType, source: entry.initiatorUrl,
+                                encoded: entry.encodedBodySize, end: entry.responseEnd
+                            }));
+                        return JSON.stringify({rows, outer: frame ? performance.getEntriesByType('resource').filter(
+                            entry => entry.name.includes('/probe-asset?')).length : 0,
+                            documentURL: target.document.URL, frameURL: frame ? frame.src : null,
+                            ready: target.document.readyState, fonts: Array.from(target.document.fonts).map(face => ({family: face.family, status: face.status})),
+                            sheets: Array.from(target.document.styleSheets).map(sheet => {try {return {href: sheet.href, rules: Array.from(sheet.cssRules).map(rule => ({text: rule.cssText, imported: rule.styleSheet ? {href: rule.styleSheet.href, rules: Array.from(rule.styleSheet.cssRules).map(child => child.cssText)} : null}))}} catch(error) {return {error: String(error)}}})});
+                    })()"#,
+                    true,
+                ),
+            ).await??;
+            let value: serde_json::Value = serde_json::from_str(
+                result["value"]
+                    .as_str()
+                    .context("completed stylesheet font timing")?,
+            )?;
+            let rows = value["rows"]
+                .as_array()
+                .context("stylesheet subresource timing rows")?;
+            let requests = ["font"].map(|resource| {
+                server
+                    .assets
+                    .lock()
+                    .get(&format!("{token}-{resource}"))
+                    .map(|asset| asset.count.load(Ordering::Acquire))
+                    .unwrap_or(0)
+            });
+            let source = match kind {
+                "linked" | "imported" => format!("{}/timing-style?token={token}", server.origin),
+                "cross-linked" => String::new(),
+                _ => format!("{}/timing-page?kind={kind}&token={token}", server.origin),
+            };
+            let invalid = requests != [1]
+                || rows.len() != 1
+                || value["outer"] != 0
+                || rows.iter().any(|row| {
+                    row["type"] != "css"
+                        || row["source"] != source
+                        || row["encoded"].as_u64().is_none_or(|bytes| bytes == 0)
+                        || !row["end"].as_f64().is_some_and(|end| end > 0.0)
+                });
+            if invalid {
+                failures.push(serde_json::json!({"realm":realm,"kind":kind,
+                    "requests":requests,"expectedSource":source,"result":value}));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "CSS fonts must report one real fetch in their requesting Document: {failures:#?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stylesheet_font_timings_hide_service_worker_sources_but_keep_network_fallback()
+-> Result<()> {
+    let server = PreloadServer::spawn().await?;
+    let mut config = AppConfig::default();
+    config.set_optional_resource_fetch_mask(moli_page_types::OptionalResourceFetchMask::ALL);
+    let browser = Browser::new(config)?;
+    for realm in ["main", "child"] {
+        let mut page = browser.fetch(&server.origin).await?;
+        let script = format!(
+            r#"(async () => {{
+            await navigator.serviceWorker.register('/font-timing-worker.js', {{scope: '/'}});
+            if (!navigator.serviceWorker.controller) {{
+                await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    'controllerchange', resolve, {{once: true}}));
+            }}
+            let target = window;
+            if ({realm:?} === 'child') {{
+                const frame = document.createElement('iframe');
+                frame.src = '/?font-timing-child';
+                const loaded = new Promise(resolve => frame.addEventListener('load', resolve, {{once: true}}));
+                document.body.append(frame);
+                await loaded;
+                target = frame.contentWindow;
+            }}
+            const rows = [];
+            for (const source of ['synthetic', 'basic', 'fallback']) {{
+                const token = {realm:?} + '-' + source;
+                const family = 'FontTiming-' + token;
+                const url = '/font-worker-asset?as=font&auto=1&source=' + source + '&token=' + token;
+                const timing = new Promise(resolve => {{
+                    const observer = new target.PerformanceObserver(list => {{
+                        const entry = list.getEntries().find(entry => entry.name.endsWith(url));
+                        if (entry) {{ observer.disconnect(); resolve(entry); }}
+                    }});
+                    observer.observe({{type: 'resource', buffered: true}});
+                }});
+                const style = target.document.createElement('style');
+                style.textContent = '@font-face {{font-family: ' + family + '; src: url("' + url + '");}} body {{font-family: ' + family + ';}}';
+                target.document.head.append(style);
+                const entry = await timing;
+                await target.document.fonts.ready;
+                const faces = Array.from(target.document.fonts).filter(face => face.family === family);
+                rows.push({{source, type: entry.initiatorType, initiator: entry.initiatorUrl,
+                    end: entry.responseEnd, count: target.performance.getEntriesByName(entry.name).length,
+                    loaded: faces.length === 1 && faces[0].status === 'loaded',
+                    outer: target === window ? 0 : performance.getEntriesByName(entry.name).length}});
+            }}
+            return JSON.stringify({{rows, documentURL: target.document.URL,
+                counts: await (await target.fetch('/font-worker-counts')).json()}});
+        }})()"#
+        );
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            page.evaluate_runtime_expression_with_await_async(&script, true),
+        )
+        .await??;
+        let value: serde_json::Value = serde_json::from_str(
+            result["value"]
+                .as_str()
+                .context("stylesheet font service worker timing")?,
+        )?;
+        let rows = value["rows"].as_array().context("font timing rows")?;
+        assert_eq!(rows.len(), 3, "{realm}: {value}");
+        for row in rows {
+            let source = row["source"].as_str().context("font response source")?;
+            assert!(
+                row["type"] == "css"
+                    && row["count"] == 1
+                    && row["outer"] == 0
+                    && row["loaded"] == true
+                    && row["end"].as_f64().is_some_and(|end| end > 0.0),
+                "one completed CSS font timing in its requesting Document: {realm}: {value}"
+            );
+            assert_eq!(
+                row["initiator"],
+                if source == "fallback" {
+                    value["documentURL"].clone()
+                } else {
+                    serde_json::Value::String(String::new())
+                },
+                "only network fallback exposes its inline stylesheet Document: {realm}: {value}"
+            );
+            let token = format!("{realm}-{source}");
+            assert_eq!(
+                value["counts"][&token], 1,
+                "one worker fetch event: {value}"
+            );
+            assert_eq!(
+                server
+                    .assets
+                    .lock()
+                    .get(&token)
+                    .map(|asset| asset.count.load(Ordering::Acquire)),
+                Some(1),
+                "one actual font request: {realm}/{source}"
             );
         }
     }

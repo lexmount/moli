@@ -120,9 +120,20 @@ pub(super) fn install_active_stylesheet(
                     &rule.rule_fingerprint,
                     rule.sources,
                 )?;
+            let source_url = rule.source_url.or_else(|| {
+                source.source_id().and_then(|id| {
+                    matches!(
+                        id.kind,
+                        super::source_id::StyleSourceKind::LinkedStyleSheet { .. }
+                    )
+                    .then(|| source.base_url().to_string())
+                })
+            });
             Some(ActiveWebFontResource::new(
                 rule.rule,
-                resource.with_registration_slot(slot),
+                resource
+                    .with_registration_slot(slot)
+                    .with_resource_timing_initiator(source_url),
             ))
         })
         .collect::<Vec<_>>();
@@ -184,6 +195,8 @@ pub(crate) struct StylesheetFontFaceProjection {
 
 #[derive(Clone, Debug)]
 pub(crate) struct NativeStylesheetFontFaceRuleProjection {
+    /// None denotes a rule in the root sheet; the owner supplies its source.
+    pub(crate) source_url: Option<String>,
     pub(crate) rule: ServoArc<Locked<FontFaceRule>>,
     pub(crate) rule_fingerprint: String,
     pub(crate) descriptor: moli_css_parse::CssFontFace,
@@ -210,7 +223,12 @@ pub(crate) fn native_font_face_projection_for_stylesheet(
 
     let mut projection = NativeStylesheetFontFaceProjection::default();
     let contents = stylesheet.contents(&guard);
-    collect_font_face_rule_projections(contents.rules(&guard), &guard, &mut projection.all_rules);
+    collect_font_face_rule_projections(
+        contents.rules(&guard),
+        &guard,
+        None,
+        &mut projection.all_rules,
+    );
 
     let document_stylesheet = DocumentStyleSheet::new(stylesheet.clone());
     projection.effective_rule_addresses = native_effective_font_face_rule_addresses_with_guard(
@@ -258,6 +276,7 @@ pub(crate) fn native_font_face_rules_for_stylesheet(
     collect_font_face_rule_projections(
         stylesheet.contents(&guard).rules(&guard),
         &guard,
+        None,
         &mut rules,
     );
     rules
@@ -266,6 +285,7 @@ pub(crate) fn native_font_face_rules_for_stylesheet(
 fn collect_font_face_rule_projections(
     rules: &[CssRule],
     guard: &style::shared_lock::SharedRwLockReadGuard<'_>,
+    source_url: Option<&str>,
     projections: &mut Vec<NativeStylesheetFontFaceRuleProjection>,
 ) {
     for rule in rules {
@@ -283,6 +303,7 @@ fn collect_font_face_rule_projections(
                 .is_ok()
             {
                 projections.push(NativeStylesheetFontFaceRuleProjection {
+                    source_url: source_url.map(str::to_owned),
                     rule: rule.clone(),
                     rule_fingerprint: locked_rule.to_css_string(guard),
                     descriptor: moli_css_parse::CssFontFace {
@@ -294,7 +315,21 @@ fn collect_font_face_rule_projections(
             }
             continue;
         }
-        collect_font_face_rule_projections(rule.children(guard), guard, projections);
+        let imported_source = if let CssRule::Import(import) = rule {
+            import
+                .read_with(guard)
+                .stylesheet
+                .as_sheet()
+                .map(|sheet| sheet.contents(guard).url_data.0.to_string())
+        } else {
+            None
+        };
+        collect_font_face_rule_projections(
+            rule.children(guard),
+            guard,
+            imported_source.as_deref().or(source_url),
+            projections,
+        );
     }
 }
 

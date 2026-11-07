@@ -40,7 +40,29 @@ pub(crate) fn start_stylesheet_subresource_fetch(
     let environment = host
         .subresource_request_environment(&resource_loader, owner)
         .context("stylesheet Document request environment is unavailable")?;
+    let source = request.resource_timing_initiator().map(str::to_owned);
     let (request_url, target) = request.into_parts();
+    let timing = matches!(&target, StylesheetSubresourceTarget::Font(_)).then(|| {
+        let mut timing = crate::context_bootstrap::FetchResourceTiming::for_initiator_type("css");
+        let initiator =
+            match source {
+                None => crate::context_bootstrap::ResourceTimingInitiator::from_document(
+                    &environment.document_url,
+                ),
+                Some(source) => {
+                    // A cross-origin sheet cannot reveal its private source URL.
+                    let visible = url::Url::parse(&source).is_ok_and(|url| {
+                        !moli_fetch::FetchUrlList::new(&url, &[])
+                            .has_cross_origin_url(&environment.request_origin)
+                    });
+                    crate::context_bootstrap::ResourceTimingInitiator::from_captured_url(
+                        if visible { source } else { String::new() },
+                    )
+                }
+            };
+        timing.set_initiator(initiator);
+        Box::new(timing)
+    });
     let options = match &target {
         StylesheetSubresourceTarget::Image(_) => SubresourceFetchOptions::CSS_IMAGE,
         StylesheetSubresourceTarget::Font(_) => SubresourceFetchOptions::FONT,
@@ -134,6 +156,7 @@ pub(crate) fn start_stylesheet_subresource_fetch(
             prepared.network_partition_key.clone(),
             prepared.network_context.policy_context,
             target,
+            timing,
             prepared.pending_info.clone(),
         )
         .context("stylesheet subresource owner changed before request binding")?;

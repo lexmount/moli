@@ -1821,10 +1821,12 @@ impl LiveStylesheet {
                         native_rule.sources.clone(),
                     )
                     .map(|resource| {
-                        resource.with_registration_slot(format!(
-                            "stylesheet-font-face:live:{}:{identity}",
-                            self.id.get()
-                        ))
+                        resource
+                            .with_registration_slot(format!(
+                                "stylesheet-font-face:live:{}:{identity}",
+                                self.id.get()
+                            ))
+                            .with_resource_timing_initiator(native_rule.source_url.clone())
                     }),
             });
             if native_projection

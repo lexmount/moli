@@ -934,7 +934,42 @@ impl ScriptVm {
                         PendingSubresourceContinuation::StylesheetSubresource {
                             binding,
                             target,
+                            timing,
                         } => {
+                            if !consumed_preload && let Some(mut timing) = timing {
+                                if skip_fetch_security_validation {
+                                    timing.clear_initiator();
+                                }
+                                if let Some(native) = pending.load.response_timing() {
+                                    timing.observe_native_timing(native);
+                                }
+                                let filter = response_filter.clone().unwrap_or_else(|| {
+                                    crate::network_host::FetchResponseRequest {
+                                        method: &response_request_method,
+                                        mode: pending.request_mode,
+                                        redirect_mode: moli_fetch::RequestRedirectMode::Follow,
+                                    }.network_response_filter(
+                                        &pending.request_origin,
+                                        &observable_response.head(),
+                                        pending.credentials_mode,
+                                    )
+                                });
+                                let entry = timing.response(
+                                    &pending.info.url,
+                                    &pending.request_origin,
+                                    &observable_response.head(),
+                                    &filter,
+                                    observable_response.body_bytes().len(),
+                                );
+                                let target = crate::native_bridge::WindowDocumentTaskTarget::new(
+                                    crate::native_bridge::WindowDocumentOwner::Frame(binding.owner()),
+                                    binding.child_handle().map_or(
+                                        crate::native_bridge::OwnerDispatchScope::Top,
+                                        crate::native_bridge::OwnerDispatchScope::Child,
+                                    ),
+                                );
+                                context_host.borrow_mut().record_document_resource_timing(scope, target, entry);
+                            }
                             completed_web_font = match target {
                                 StylesheetSubresourceTarget::Image(identity) => {
                                     if let Some(identity) = identity {
@@ -1100,7 +1135,25 @@ impl ScriptVm {
                         PendingSubresourceContinuation::StylesheetSubresource {
                             binding,
                             target,
+                            timing,
                         } => {
+                            if !consumed_preload && let Some(mut timing) = timing {
+                                if skip_fetch_security_validation {
+                                    timing.clear_initiator();
+                                }
+                                if let Some(native) = pending.load.response_timing() {
+                                    timing.observe_native_timing(native);
+                                }
+                                let entry = timing.failure(&pending.info.url);
+                                let document_target = crate::native_bridge::WindowDocumentTaskTarget::new(
+                                    crate::native_bridge::WindowDocumentOwner::Frame(binding.owner()),
+                                    binding.child_handle().map_or(
+                                        crate::native_bridge::OwnerDispatchScope::Top,
+                                        crate::native_bridge::OwnerDispatchScope::Child,
+                                    ),
+                                );
+                                context_host.borrow_mut().record_document_resource_timing(scope, document_target, entry);
+                            }
                             completed_web_font = match target {
                                 StylesheetSubresourceTarget::Image(identity) => {
                                     if let Some(identity) = identity {

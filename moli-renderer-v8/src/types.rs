@@ -126,6 +126,7 @@ pub(super) enum PendingSubresourceContinuation {
     StylesheetSubresource {
         binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
         target: crate::css_resource_urls::StylesheetSubresourceTarget,
+        timing: Option<Box<crate::context_bootstrap::FetchResourceTiming>>,
     },
     Xhr {
         xhr: v8::Global<v8::Object>,
@@ -2223,6 +2224,7 @@ mod tests {
             sequence: crate::native_bridge::TextTrackLoadSequenceId::new(3),
         };
         let stylesheet_subresource = PendingSubresourceContinuation::StylesheetSubresource {
+            timing: None,
             binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding::Main {
                 owner: crate::frame_owner_model::FrameDocumentTaskOwner::new(
                     crate::frame_owner_model::FrameSchedulerLaneId(4),
