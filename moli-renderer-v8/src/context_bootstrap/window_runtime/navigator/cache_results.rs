@@ -25,6 +25,15 @@ pub(super) fn owner_resolver<'s>(
     (owner, resolver)
 }
 
+pub(super) fn freeze_array<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    array: v8::Local<'s, v8::Array>,
+) -> Option<v8::Local<'s, v8::Array>> {
+    array
+        .set_integrity_level(scope, v8::IntegrityLevel::Frozen)?
+        .then_some(array)
+}
+
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
 struct CachedRequestInitDeclaration<'s> {

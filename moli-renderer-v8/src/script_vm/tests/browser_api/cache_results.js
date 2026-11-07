@@ -39,6 +39,11 @@
     for (const method of ['keys','matchAll']) {
       for (const request of [undefined,'/first','/missing']) {
         const label=method+'/'+String(request),a=await cache[method](request),b=await cache[method](request);
+        await check(label+'/frozen array', () => Array.isArray(a)&&Object.isFrozen(a));
+        await check(label+'/immutable length and entries', async () => {
+          const value=await cache[method](request),old=value.length;
+          return !Reflect.set(value,'length',old+1)&&!Reflect.set(value,'0',null)&&value.length===old;
+        });
         await check(label+'/fresh result and elements', () => a!==b&&(a.length===0||a[0]!==b[0]));
         await check(label+'/shallow freeze', () => {if(!a.length)return true;a[0].marker=42;return a[0].marker===42&&!Object.isFrozen(a[0]);});
         if (a.length) for (const mutation of ['append','set','delete']) {
@@ -76,6 +81,7 @@
               await check(label+'/promise',()=>Object.getPrototypeOf(promise)===owner.Promise.prototype);
               await check(label+'/array',()=>Object.getPrototypeOf(a)===owner.Array.prototype);
               await check(label+'/elements',()=>a.length===2&&a.every(value=>Object.getPrototypeOf(value)===C.prototype));
+              await check(label+'/frozen',()=>Object.isFrozen(a));
               await check(label+'/invalid URL callee rejection',async()=>{
                 const p=callee.Cache.prototype[method].call(receiver,'http://[');let error;
                 try{await p;}catch(e){error=e;}

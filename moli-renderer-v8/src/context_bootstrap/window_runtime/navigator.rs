@@ -2142,6 +2142,14 @@ fn storage_bucket_cache_match_all_callback<'s>(
                     return;
                 }
             }
+            let Some(responses) = cache_results::freeze_array(scope, responses) else {
+                reject_type_error(
+                    scope,
+                    resolver,
+                    "Cache.matchAll failed to freeze its result.",
+                );
+                return;
+            };
             let _ = resolver.resolve(scope, responses.into());
         }
         Some(None) => reject_storage_bucket_unknown_error(scope, resolver, "cache.matchAll"),
@@ -3023,7 +3031,7 @@ fn cache_entries_to_request_array<'s>(
             return None;
         }
     }
-    Some(requests)
+    cache_results::freeze_array(scope, requests)
 }
 
 fn cache_entry_usage_bytes(
