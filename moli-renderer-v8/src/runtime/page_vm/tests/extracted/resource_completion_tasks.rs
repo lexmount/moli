@@ -923,3 +923,101 @@ body { background-image: url('/css-image.png'); }
     })
     .await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn stale_child_import_graph_retains_network_facts_without_document_effect() {
+    run_page_vm_async_test(async move {
+        let mut page_vm = test_page_vm();
+        let root_document = page_vm.document_lifecycle.identity().document;
+        let child_handle = crate::dom::native::NativeNodeId::new(404);
+        let owner = FrameDocumentTaskOwner::new(
+            crate::frame_owner_model::FrameSchedulerLaneId(7),
+            crate::frame_owner_model::LocalWindowId(8),
+            DocumentId(9),
+        );
+        let document_url = Url::parse("https://retired-child.test/document").unwrap();
+        let make_terminal = |path: &str, body: &str| {
+            crate::stylesheet_blocking::StylesheetFetchTerminal::ready(
+                crate::protocol_types::NavigationResponse::from_text_body(
+                    document_url.join(path).unwrap(),
+                    200,
+                    vec![("Content-Type".to_owned(), b"text/css".to_vec())],
+                    body.to_owned(),
+                ),
+                true,
+            )
+        };
+        let root = make_terminal("root.css", "@import 'leaf.css';");
+        let leaf = make_terminal("leaf.css", ".leaf { color: red; }");
+        let graph = crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(
+            true,
+            vec![
+                crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
+                    document_url.join("root.css").unwrap(),
+                    moli_time::unix_epoch_millis(),
+                    root,
+                ),
+                crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
+                    document_url.join("leaf.css").unwrap(),
+                    moli_time::unix_epoch_millis(),
+                    leaf.clone(),
+                ),
+            ],
+        );
+        let stylesheet_count = page_vm
+            .vm_mut()
+            .eval("String(document.styleSheets.length)")
+            .unwrap();
+        let activity = page_vm.vm().subresource_activity_epoch();
+        let mut queue = RendererPageNetworkingSource::new_for_test();
+        queue.enqueue_local_for_test(RendererPageResourceCompletion::child_blocking_stylesheet(
+            root_document,
+            ChildBlockingStylesheetLoadCompletion {
+                child_handle,
+                owner,
+                signature: crate::DocumentBlockingStylesheetSignature::Link {
+                    url: document_url.join("root.css").unwrap(),
+                    options: crate::stylesheet_blocking::StylesheetFetchOptions::default(),
+                },
+                load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId(1),
+                frame_id: Some("retired-child".to_owned()),
+                document_url: document_url.clone(),
+                graph: std::sync::Arc::new(graph),
+                csp_violations: Vec::new(),
+            },
+        ));
+        let outcome = page_vm
+            .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            outcome.action.document_effect,
+            PageResourceCompletionDocumentEffect::DiscardedStaleOwner {
+                current_owner: None
+            }
+        ));
+        assert_eq!(page_vm.vm().subresource_activity_epoch(), activity);
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("String(document.styleSheets.length)")
+                .unwrap(),
+            stylesheet_count
+        );
+        let (records, sockets, lifecycle) =
+            split_network_output_items(page_vm.vm_mut().take_network_output());
+        assert!(sockets.is_empty() && lifecycle.is_empty());
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records
+                .iter()
+                .map(|r| (r.url().path(), r.request_initiator_type()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("/root.css", SubresourceRequestInitiatorType::Parser),
+                ("/leaf.css", SubresourceRequestInitiatorType::Css)
+            ]
+        );
+    })
+    .await;
+}
