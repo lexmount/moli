@@ -2550,6 +2550,7 @@ impl ScriptVm {
             let crate::document_runtime::ConnectedLoadNetworkResult {
                 network_observed,
                 resource_timing_initiator_type,
+                resource_timing,
                 import_options,
                 consumed_preload_error,
                 document_owner,
@@ -2588,14 +2589,29 @@ impl ScriptVm {
                         start_unix_millis,
                         &result,
                     );
-                if let (Some(fetch), Ok(response)) = (stylesheet_fetch.as_ref(), &result) {
-                    let source = fetch
-                        .resource_timing_initiator_url()
-                        .unwrap_or(document_url.as_str());
-                    crate::context_bootstrap::ResourceTimingInitiator::from_captured_url(
-                        source.to_owned(),
-                    )
-                    .apply(&mut entry, &response.head(), origin_clean);
+                if let Some(timing) = resource_timing {
+                    entry.set_response_end_unix_millis(timing.end_unix_millis);
+                    if let Ok(response) = &result {
+                        timing
+                            .initiator
+                            .apply(&mut entry, &response.head(), origin_clean);
+                    }
+                } else if let (Some(fetch), Ok(response)) = (stylesheet_fetch.as_ref(), &result) {
+                    if let Some(end) = fetch.end_unix_millis() {
+                        entry.set_response_end_unix_millis(end);
+                    }
+                    if !fetch
+                        .terminal()
+                        .is_some_and(|terminal| terminal.from_service_worker())
+                    {
+                        let source = fetch
+                            .resource_timing_initiator_url()
+                            .unwrap_or(document_url.as_str());
+                        crate::context_bootstrap::ResourceTimingInitiator::from_captured_url(
+                            source.to_owned(),
+                        )
+                        .apply(&mut entry, &response.head(), origin_clean);
+                    }
                 }
                 performance_entries.push((document_owner, entry));
             }

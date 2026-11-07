@@ -255,6 +255,23 @@ pub(crate) struct ResourcePerformanceEntry {
 }
 
 impl ResourcePerformanceEntry {
+    pub(crate) fn mark_aborted(&mut self, transfer_complete: bool) {
+        self.response_status = 0.0;
+        self.content_type.clear();
+        self.content_encoding.clear();
+        if !transfer_complete {
+            self.encoded_body_size = 0.0;
+            self.decoded_body_size = 0.0;
+            if self.transfer_size > 0.0 {
+                self.transfer_size = 300.0;
+            }
+        }
+    }
+
+    pub(crate) fn set_response_end_unix_millis(&mut self, end: f64) {
+        self.end_unix_millis = Some(end);
+    }
+
     pub(crate) fn clear_initiator(&mut self) {
         self.initiator_url.clear();
     }
