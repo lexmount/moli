@@ -107,19 +107,21 @@ pub fn scale_rgba8_nearest(
     let scale_y = blit.source_height / blit.dest_height;
     for target_y in 0..target_height {
         let dest_y = target_top + target_y as i32;
-        let local_y = dest_y as f64 - blit.dest_y;
-        let src_y = (blit.source_y + local_y * scale_y).floor() as i32;
-        if src_y < 0 || src_y >= source_height as i32 {
+        let local_y = dest_y as f64 + 0.5 - blit.dest_y;
+        let src_y = blit.source_y + local_y * scale_y;
+        if !(0.0..f64::from(source_height)).contains(&src_y) {
             continue;
         }
+        let src_y = nearest_texel(src_y, source_height);
         for target_x in 0..target_width {
             let dest_x = target_left + target_x as i32;
-            let local_x = dest_x as f64 - blit.dest_x;
-            let src_x = (blit.source_x + local_x * scale_x).floor() as i32;
-            if src_x < 0 || src_x >= source_width as i32 {
+            let local_x = dest_x as f64 + 0.5 - blit.dest_x;
+            let src_x = blit.source_x + local_x * scale_x;
+            if !(0.0..f64::from(source_width)).contains(&src_x) {
                 continue;
             }
-            let source_index = (((src_y as u32) * source_width + src_x as u32) * 4) as usize;
+            let src_x = nearest_texel(src_x, source_width);
+            let source_index = ((src_y * source_width + src_x) * 4) as usize;
             let target_index = ((target_y * target_width + target_x) * 4) as usize;
             scaled[target_index..target_index + 4]
                 .copy_from_slice(&source[source_index..source_index + 4]);
@@ -183,19 +185,27 @@ pub fn scale_rgba8_bilinear(
     let scale_y = blit.source_height / blit.dest_height;
     for target_y in 0..target_height {
         let dest_y = target_top + target_y as i32;
-        let local_y = dest_y as f64 - blit.dest_y;
+        let local_y = dest_y as f64 + 0.5 - blit.dest_y;
         let src_y = blit.source_y + local_y * scale_y;
-        if src_y < 0.0 || src_y >= source_height as f64 {
+        if !(0.0..f64::from(source_height)).contains(&src_y) {
             continue;
         }
         for target_x in 0..target_width {
             let dest_x = target_left + target_x as i32;
-            let local_x = dest_x as f64 - blit.dest_x;
+            let local_x = dest_x as f64 + 0.5 - blit.dest_x;
             let src_x = blit.source_x + local_x * scale_x;
-            if src_x < 0.0 || src_x >= source_width as f64 {
+            if !(0.0..f64::from(source_width)).contains(&src_x) {
                 continue;
             }
-            let rgba = sample_rgba8_bilinear(source, source_width, source_height, src_x, src_y);
+            // Texel centers are half-integers in the source image. Clamp
+            // the filter to image edges, after mapping the destination center.
+            let rgba = sample_rgba8_bilinear(
+                source,
+                source_width,
+                source_height,
+                (src_x - 0.5).clamp(0.0, f64::from(source_width - 1)),
+                (src_y - 0.5).clamp(0.0, f64::from(source_height - 1)),
+            );
             let target_index = ((target_y * target_width + target_x) * 4) as usize;
             scaled[target_index..target_index + 4].copy_from_slice(&rgba);
         }
@@ -245,4 +255,104 @@ fn rgba8_pixel(source: &[u8], source_width: u32, x: u32, y: u32) -> [u8; 4] {
 
 fn lerp(start: f64, end: f64, amount: f64) -> f64 {
     start + (end - start) * amount
+}
+
+fn nearest_texel(coordinate: f64, length: u32) -> u32 {
+    // At a tie between texel centers, Canvas selects the lower texel.
+    (coordinate.ceil() - 1.0).clamp(0.0, f64::from(length - 1)) as u32
+}
+
+#[cfg(test)]
+mod resampling_tests {
+    use super::*;
+
+    fn grey(values: &[u8]) -> Vec<u8> {
+        values
+            .iter()
+            .flat_map(|value| [*value, *value, *value, 255])
+            .collect()
+    }
+
+    #[test]
+    fn canvas_resampling_uses_destination_pixel_centers_on_both_axes() {
+        let source = grey(&[0, 80, 160]);
+        for (width, height) in [(3, 1), (1, 3)] {
+            let (target_width, target_height) = if width == 3 { (2, 1) } else { (1, 2) };
+            let blit = DrawImageBlit::new(
+                0.0,
+                0.0,
+                f64::from(width),
+                f64::from(height),
+                0.0,
+                0.0,
+                f64::from(target_width),
+                f64::from(target_height),
+            )
+            .unwrap();
+            for (filter, expected) in [
+                (ScaleFilter::Nearest, grey(&[0, 160])),
+                (ScaleFilter::Bilinear, grey(&[20, 140])),
+            ] {
+                assert_eq!(
+                    scale_rgba8(
+                        &source,
+                        width,
+                        height,
+                        blit,
+                        0,
+                        0,
+                        target_width,
+                        target_height,
+                        filter
+                    )
+                    .unwrap(),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn canvas_resampling_preserves_identity_and_clamps_upscaled_edges() {
+        let source = grey(&[0, 80]);
+        for filter in [ScaleFilter::Nearest, ScaleFilter::Bilinear] {
+            let identity = DrawImageBlit::new(0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 2.0, 1.0).unwrap();
+            assert_eq!(
+                scale_rgba8(&source, 2, 1, identity, 0, 0, 2, 1, filter).unwrap(),
+                source
+            );
+        }
+        let upscale = DrawImageBlit::new(0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 4.0, 1.0).unwrap();
+        assert_eq!(
+            scale_rgba8(&source, 2, 1, upscale, 0, 0, 4, 1, ScaleFilter::Bilinear).unwrap(),
+            grey(&[0, 20, 60, 80])
+        );
+    }
+
+    #[test]
+    fn canvas_resampling_accounts_for_crop_and_destination_offsets() {
+        let source = grey(&[0, 80, 160, 240]);
+        let blit = DrawImageBlit::new(1.0, 0.0, 3.0, 1.0, 4.0, 3.0, 2.0, 1.0).unwrap();
+        assert_eq!(
+            scale_rgba8(&source, 4, 1, blit, 4, 3, 2, 1, ScaleFilter::Nearest).unwrap(),
+            grey(&[80, 240])
+        );
+        assert_eq!(
+            scale_rgba8(&source, 4, 1, blit, 4, 3, 2, 1, ScaleFilter::Bilinear).unwrap(),
+            grey(&[100, 220])
+        );
+        // An exact source-image edge still samples its first texel. The
+        // nearest tie rule must not turn that inclusive edge transparent.
+        let offset = DrawImageBlit::new(0.0, 0.0, 1.0, 1.0, 0.5, 0.5, 1.0, 1.0).unwrap();
+        for filter in [ScaleFilter::Nearest, ScaleFilter::Bilinear] {
+            assert_eq!(
+                scale_rgba8(&grey(&[80]), 1, 1, offset, 0, 0, 1, 1, filter).unwrap(),
+                grey(&[80])
+            );
+        }
+        let invalid_source = &source[..source.len() - 1];
+        assert!(
+            scale_rgba8(invalid_source, 4, 1, blit, 4, 3, 2, 1, ScaleFilter::Nearest).is_none()
+        );
+    }
 }
