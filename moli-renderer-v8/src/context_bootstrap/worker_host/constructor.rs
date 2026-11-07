@@ -567,10 +567,15 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     }
                 });
         }
-        let handle_box = Box::new(worker_handle);
-        let handle_ptr = Box::into_raw(handle_box);
-        let external = v8::External::new(scope, handle_ptr as *mut std::ffi::c_void);
-        set_private_value(scope, worker, WORKER_HANDLE_SLOT, external.into());
+        let registered = crate::worker::register_nested_worker_handle(
+            scope,
+            nested_context.worker_id,
+            worker_handle,
+        );
+        debug_assert!(
+            registered,
+            "reserved nested Worker must own its native handle"
+        );
         set_private_value(
             scope,
             worker,
@@ -961,6 +966,7 @@ fn local_worker_main_script_network_response(
 }
 
 /// Get the WorkerHandle pointer from a Worker JS object.
+#[cfg(test)]
 pub(super) fn get_worker_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     worker: v8::Local<'s, v8::Object>,

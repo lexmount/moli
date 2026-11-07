@@ -198,10 +198,11 @@ pub(crate) use messaging::{
     worker_broadcast_channel_wrapper, worker_message_port_registry,
     worker_message_port_wake_sender, worker_message_port_wrapper,
 };
-pub(super) use nested_workers::dispatch_nested_worker_event;
 pub(crate) use nested_workers::{
-    NestedWorkerContext, forget_nested_worker_context, reserve_nested_worker_context,
+    NestedWorkerContext, post_nested_worker_message, register_nested_worker_handle,
+    reserve_nested_worker_context, terminate_nested_worker,
 };
+pub(super) use nested_workers::{dispatch_nested_worker_event, retire_nested_workers};
 pub(super) use network_state::{
     PausedWorkerSubresourceResponse, PendingWorkerCspReport, PendingWorkerFetch,
     PendingWorkerFetchNetworkRecord, PendingWorkerXhr, WorkerFetchCompletion, WorkerFetchEvent,
