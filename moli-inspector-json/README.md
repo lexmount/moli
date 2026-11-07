@@ -11,6 +11,23 @@ UTF-16 surrogates, retain their wire representation.
 Reading it does not change serialization. `value_mut()` explicitly switches the
 modified copy to `Parsed(Value)`. Other copies retain their original payloads.
 
+Equality compares the emitted wire representation, including payload whitespace
+and escape spelling. Raw/Raw comparison uses shared-storage and field-byte checks,
+without creating a business view. Heterogeneous equality with Value is omitted
+to keep its business semantics separate. Compare `message.value()` explicitly when lossy
+UTF-8 business equality is intended.
+
+Raw construction rejects the reserved top-level parameter names used for Moli
+host metadata, including Unicode-escaped spellings. Host-generated messages use
+`Parsed(Value)` and the existing output filter. Names inside user objects in a
+payload are unaffected. `Fetch.requestPaused` retains its existing Parsed-only
+interceptor projection policy.
+
+The structured view has the Value parser's depth limit. If a valid raw payload
+exceeds it, `value()` returns a synthetic `-32603` error view; CDP still serializes
+the original raw response. This compatibility API is not a fallible, lossless
+JSON accessor. The raw fields and cached Value coexist until their owners drop.
+
 This is validated raw-field transport, not zero-copy or zero-scan forwarding.
 Remote-object ownership, lifecycle handling, debugger state, and automation
 adapters may still need structured data. The CDP writer retains its existing
@@ -76,3 +93,46 @@ getProperties results do not show a stable performance improvement. In
 particular, remote-object ownership still consumes structured property data;
 the carrier microbenchmark overstates the benefit for that complete workflow.
 No release end-to-end speedup or RSS improvement is established by this run.
+
+## Retained-memory model
+
+The `retained` release example holds 16 independently parsed copies of a captured
+Inspector reply, with one or two queued clones per copy. It samples its own Linux `smaps_rollup` while
+the queue is live. All three modes use the system allocator. It does not run the
+other modes' validation pipelines first, which would contaminate allocation
+and peak-heap measurements.
+
+Five rotated rounds per configuration, using glibc `libmemusage.so` for allocation
+counts (no failed allocations), produced these median PSS values in MiB:
+
+| Reply | Clones per reply | Value | Raw | Raw + view |
+| --- | ---: | ---: | ---: | ---: |
+| 1 MiB string | 1 | 18.659 | 17.715 | 33.812 |
+| 1 MiB string | 2 | 34.699 | 17.716 | 33.809 |
+| 1,000 properties | 1 | 29.642 | 3.238 | 30.427 |
+| 1,000 properties | 2 | 56.789 | 3.238 | 30.422 |
+
+For one queued clone per reply, the corresponding complete-process counts of
+malloc/realloc/calloc calls were 422 / 214 / 422 for the string fixture, and
+416,902 / 214 / 208,726 for the property fixture (Value / Raw / Raw + view).
+
+The single-clone string case demonstrates the memory cost of retaining both raw
+bytes and a parsed copy. Sharing benefits depend on the number of live holders
+and how often they request a view. These measurements do not settle whole-browser
+PSS: they use a synthetic retained queue and the system allocator, rather than
+Moli's allocator and actual message lifetimes. These clones keep identical
+envelope metadata; copy-on-write routing changes can require independent views.
+They do not validate or dismiss a Spider memory-regression observation.
+
+The [raw CSV](benchmarks/retained-2026-11-08.csv) contains all 120 runs, including
+1 KiB and 100 KiB fixtures, live PSS/RSS, peak requested heap bytes, and allocation
+counts. Allocation hooks perturb timing; no timing results are derived from
+these runs. Example command on Linux/glibc:
+
+```sh
+cargo build --release -p moli-inspector-json --example retained
+LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libmemusage.so \
+  target/release/examples/retained \
+  --fixture target/inspector-json-capture/fixtures/evaluate-1m.json \
+  --mode raw-view --messages 16 --clones 1
+```
