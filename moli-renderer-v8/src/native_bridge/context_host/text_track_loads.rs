@@ -249,7 +249,7 @@ impl JsContextHost {
         &mut self,
         track_handle: DomHandle,
         sequence: TextTrackLoadSequenceId,
-        result: Result<String, String>,
+        terminal: PendingTextTrackLoadTerminal,
     ) -> Option<PendingTextTrackLoadTerminalFollowup> {
         let pending = self
             .pending_text_track_load_sequences
@@ -259,9 +259,13 @@ impl JsContextHost {
         {
             return None;
         }
-        pending.network_state = match result {
-            Ok(body) => PendingTextTrackLoadNetworkState::Ready(body),
-            Err(_) => PendingTextTrackLoadNetworkState::FetchFailed,
+        pending.network_state = match terminal {
+            PendingTextTrackLoadTerminal::Ready(body) => {
+                PendingTextTrackLoadNetworkState::Ready(body)
+            }
+            PendingTextTrackLoadTerminal::FetchFailed => {
+                PendingTextTrackLoadNetworkState::FetchFailed
+            }
         };
         pending_text_track_terminal_followup(pending)
     }
@@ -271,7 +275,7 @@ impl JsContextHost {
         track_handle: DomHandle,
         sequence: TextTrackLoadSequenceId,
         internal_id: u64,
-        result: Result<String, String>,
+        terminal: PendingTextTrackLoadTerminal,
     ) -> Option<PendingTextTrackLoadTerminalFollowup> {
         let pending = self
             .pending_text_track_load_sequences
@@ -287,9 +291,13 @@ impl JsContextHost {
             );
             return None;
         }
-        pending.network_state = match result {
-            Ok(body) => PendingTextTrackLoadNetworkState::Ready(body),
-            Err(_) => PendingTextTrackLoadNetworkState::FetchFailed,
+        pending.network_state = match terminal {
+            PendingTextTrackLoadTerminal::Ready(body) => {
+                PendingTextTrackLoadNetworkState::Ready(body)
+            }
+            PendingTextTrackLoadTerminal::FetchFailed => {
+                PendingTextTrackLoadNetworkState::FetchFailed
+            }
         };
         tracing::debug!(
             track = track_handle.index(),

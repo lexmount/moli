@@ -4,6 +4,14 @@ use url::Url;
 
 use crate::{RedirectInfo, RedirectSource, RequestMode};
 
+#[derive(Debug, thiserror::Error)]
+pub enum RequestModeError {
+    #[error("same-origin request mode requires an initiating origin")]
+    MissingOrigin,
+    #[error("same-origin request mode blocked a cross-origin URL in the fetch of {url}")]
+    CrossOrigin { url: Url },
+}
+
 /// A borrowed view of the URLs visited by a fetch. Requests and responses use
 /// the same rules for redirect taint, including synthetic redirects.
 #[derive(Clone, Copy, Debug)]
@@ -39,15 +47,14 @@ impl<'a> FetchUrlList<'a> {
         self,
         mode: RequestMode,
         origin: &WebOrigin,
-    ) -> Result<(), String> {
+    ) -> Result<(), RequestModeError> {
         if mode == RequestMode::SameOrigin
             && self.current_url.scheme() != "data"
             && self.has_cross_origin_url(origin)
         {
-            return Err(format!(
-                "same-origin request mode blocked a cross-origin URL in the fetch of {}",
-                self.current_url
-            ));
+            return Err(RequestModeError::CrossOrigin {
+                url: self.current_url.clone(),
+            });
         }
         Ok(())
     }

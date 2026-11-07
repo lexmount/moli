@@ -11,7 +11,6 @@ use crate::{
         PendingSubresourceFetchInfo, SubresourceFetchRegistration, SubresourceResourceType,
     },
 };
-use anyhow::{Context, Result};
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, RequestCredentialsMode, RequestMode,
     RequestRedirectMode, RequestResourceType,
@@ -103,7 +102,7 @@ impl PreparedSubresourceFetch {
         environment: SubresourceRequestEnvironment,
         request_url: url::Url,
         options: SubresourceFetchOptions,
-    ) -> Result<Self> {
+    ) -> Self {
         let SubresourceRequestEnvironment {
             document_url,
             request_origin,
@@ -120,18 +119,22 @@ impl PreparedSubresourceFetch {
             "GET",
             options.credentials_mode,
         );
-        let request = Request::new("GET", request_url.as_str(), None, Vec::new())
-            .context("failed to create subresource GET request")?
-            .with_initiator_url(&document_url)
-            .with_request_origin(request_origin.clone())
-            .with_resource_type(options.request_resource_type)
-            .with_page_network_policy()
-            .with_request_mode(options.request_mode)
-            .with_credentials_mode(options.credentials_mode)
-            .with_network_partition_key(network_partition_key.clone())
-            .with_redirect_mode(RequestRedirectMode::Follow)
-            .with_browser_request_metadata(options.metadata)
-            .with_subframe_context(frame_id.is_some());
+        let request = Request::new_browser(
+            "GET",
+            request_url.clone(),
+            None,
+            Vec::new(),
+            request_origin.clone(),
+        )
+        .with_initiator_url(&document_url)
+        .with_resource_type(options.request_resource_type)
+        .with_page_network_policy()
+        .with_request_mode(options.request_mode)
+        .with_credentials_mode(options.credentials_mode)
+        .with_network_partition_key(network_partition_key.clone())
+        .with_redirect_mode(RequestRedirectMode::Follow)
+        .with_browser_request_metadata(options.metadata)
+        .with_subframe_context(frame_id.is_some());
         let pending_info = PendingSubresourceFetchInfo {
             internal_id: 0,
             network_request_handle: None,
@@ -146,7 +149,7 @@ impl PreparedSubresourceFetch {
             resource_type: options.resource_type,
             request_cookie_report,
         };
-        Ok(Self {
+        Self {
             registration: if host.should_intercept_subresource(options.resource_type) {
                 SubresourceFetchRegistration::Intercepted
             } else {
@@ -167,7 +170,7 @@ impl PreparedSubresourceFetch {
                 destination: options.destination,
             },
             resource_loader: resource_loader.clone(),
-        })
+        }
     }
 
     pub(super) fn dispatch(self, host: &JsContextHost, internal_id: u64) {

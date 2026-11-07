@@ -1487,7 +1487,11 @@ fn apply_track_load_start(
         Ok(crate::network_host::TextTrackResourceFetchStart::Pending) => {}
         Ok(crate::network_host::TextTrackResourceFetchStart::PolicySkipped) => {
             let followup = unsafe { &mut *runtime_ptr }
-                .complete_pending_text_track_local_if_matches(handle, sequence, Ok(String::new()));
+                .complete_pending_text_track_local_if_matches(
+                    handle,
+                    sequence,
+                    PendingTextTrackLoadTerminal::Ready(String::new()),
+                );
             queue_text_track_terminal_followup(scope, runtime_ptr, handle, sequence, followup);
         }
         Ok(crate::network_host::TextTrackResourceFetchStart::Local(result)) => {
@@ -1496,8 +1500,18 @@ fn apply_track_load_start(
             queue_text_track_terminal_followup(scope, runtime_ptr, handle, sequence, followup);
         }
         Err(error) => {
+            tracing::debug!(
+                track = handle.index(),
+                sequence = sequence.get(),
+                %error,
+                "text-track resource selection failed"
+            );
             let followup = unsafe { &mut *runtime_ptr }
-                .complete_pending_text_track_local_if_matches(handle, sequence, Err(error));
+                .complete_pending_text_track_local_if_matches(
+                    handle,
+                    sequence,
+                    PendingTextTrackLoadTerminal::FetchFailed,
+                );
             queue_text_track_terminal_followup(scope, runtime_ptr, handle, sequence, followup);
         }
     }
