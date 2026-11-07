@@ -2268,6 +2268,7 @@ mod idb_rejected_request;
 mod idb_sqlite_factory;
 mod idb_sqlite_lifecycle;
 mod idb_write_preparation;
+mod iir_filter_interfaces;
 mod import_meta;
 mod indexed_db;
 mod indexed_db_gc;

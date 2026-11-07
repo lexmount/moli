@@ -1584,6 +1584,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::ConvolverNode,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::IIRFilterNode::DESCRIPTOR,
+        kind: ConstructorKind::IIRFilterNode,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::WaveShaperNode::DESCRIPTOR,
         kind: ConstructorKind::WaveShaperNode,
     },
