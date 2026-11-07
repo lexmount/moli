@@ -89,7 +89,6 @@ impl PageScriptHost {
             return false;
         }
         let download_policy = self.capture_child_navigation_download_policy(scope, handle);
-        self.register_reserved_service_worker_child_client_for_navigation(handle, &url);
         let queued = self.queue_child_browsing_context_navigation_commit(handle);
         self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
@@ -288,7 +287,6 @@ impl PageScriptHost {
         {
             return false;
         }
-        self.register_reserved_service_worker_child_client_for_navigation(handle, &url);
         let queued = self.queue_child_browsing_context_navigation_commit(handle);
         self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
