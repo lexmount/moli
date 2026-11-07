@@ -309,6 +309,7 @@ async fn detached_document_can_spawn_network_only_keepalive_from_captured_contex
     let load = loader
         .register_network_only_keepalive_load(
             ResourceLoadKind::CspReport,
+            0,
             request_client,
             Some(cancel.clone()),
         )
@@ -378,7 +379,7 @@ async fn worker_retirement_cancels_ordinary_and_transfers_keepalive_loads() {
     let keepalive = loader
         .register_load(
             ResourceLoadKind::Fetch,
-            ResourceLoadDisposition::Keepalive,
+            ResourceLoadDisposition::Keepalive { body_bytes: 0 },
             Some(keepalive_cancel.clone()),
         )
         .expect("active worker keepalive load");
