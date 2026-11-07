@@ -180,3 +180,27 @@ fn equality_is_consistent_across_raw_parsed_and_depth_limited_views() {
     assert!(!left.is_materialized());
     assert!(!right.is_materialized());
 }
+
+#[test]
+fn raw_construction_rejects_reserved_params_but_retains_user_payload_fields() {
+    for key in [
+        "__moliFetchRequestId",
+        "__moliBlockedInterceptors",
+        r"\u005f_moliFetchRequestId",
+        r"__moliBlockedInterceptor\u0073",
+    ] {
+        let raw = format!(
+            r#"{{"method":"Network.requestWillBeSent","params":{{"{key}":"private","value":"\ud800"}}}}"#
+        );
+        let error = InspectorJson::from_slice(raw.as_bytes()).unwrap_err();
+        assert!(error.to_string().contains("Parsed message"));
+    }
+    let raw = br#"{"method":"Runtime.consoleAPICalled","params":{"args":[{"type":"object","value":{"__moliFetchRequestId":"\ud800"}}],"text":"__moliBlockedInterceptors"}}"#;
+    let message = InspectorJson::from_slice(raw).unwrap();
+    assert!(
+        message
+            .to_string()
+            .contains(r#""__moliFetchRequestId":"\ud800""#)
+    );
+    assert!(!message.is_materialized());
+}
