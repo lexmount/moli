@@ -181,6 +181,29 @@ pub struct ElementControlState {
 }
 
 impl ElementControlState {
+    pub(super) fn native_node_references(&self) -> Vec<NativeNodeId> {
+        let mut references = Vec::new();
+        if let Some(explicit) = &self.explicit_element_references {
+            for elements in explicit.references_by_attribute.values() {
+                references.extend(elements);
+            }
+        }
+        references
+    }
+
+    pub(super) fn remap_native_node_references(
+        &mut self,
+        handles: &HashMap<NativeNodeId, NativeNodeId>,
+    ) {
+        if let Some(explicit) = self.explicit_element_references.as_mut() {
+            for elements in explicit.references_by_attribute.values_mut() {
+                for element in elements {
+                    *element = handles[element];
+                }
+            }
+        }
+    }
+
     pub fn web_mcp_form_active(&self) -> bool {
         self.web_mcp_form_active
     }

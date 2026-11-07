@@ -21,6 +21,7 @@ mod mutation;
 mod parser;
 mod query_index;
 mod stylesheet_candidates;
+mod transfer;
 mod types;
 
 pub use adoption::{DomAdoptionTarget, DomAssociatedTreeEdgeKind};
@@ -45,6 +46,7 @@ use self::types::{
 };
 pub use self::types::{ConnectedShadowRootSnapshot, DomHandle, DomHost};
 pub use self::types::{HostElementSnapshot, ShadowRootBindingSnapshot, ShadowRootInit};
+pub use transfer::{DomSubtreeTransfer, DomSubtreeTransferError};
 
 fn is_html_frame_owner_candidate(local_name: &str, namespace: &str) -> bool {
     (namespace.is_empty() || namespace == "http://www.w3.org/1999/xhtml")

@@ -56,7 +56,7 @@ pub(super) fn revealed_lazy_image_handles(
     document: DomHandle,
     output: &FrozenLayoutTree<DomHandle>,
 ) -> Vec<DomHandle> {
-    (0..runtime.dom_host().dom().nodes().len())
+    (0..runtime.dom_host().dom().len())
         .map(DomHandle::new)
         .filter(|handle| is_unadmitted_lazy_image(runtime, document, *handle))
         .filter(|handle| image_is_near_live_viewport(runtime, document, output, *handle))
