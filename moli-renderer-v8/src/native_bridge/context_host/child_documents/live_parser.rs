@@ -212,6 +212,16 @@ impl ParserMutationEffectConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
             runtime.note_parser_meta_refresh_mutation(self.scope, host_ptr, &effects);
             runtime
                 .process_connected_meta_content_security_policies(effects.tree().connected_roots());
+            let mut checked_inline_styles = Vec::new();
+            for change in effects.stylesheet_owners().changes() {
+                let owner = change.owner();
+                if runtime.dom_host().is_inline_style_sheet_owner(owner)
+                    && !checked_inline_styles.contains(&owner)
+                {
+                    checked_inline_styles.push(owner);
+                    runtime.apply_inline_style_element_csp_check(self.scope, host_ptr, owner);
+                }
+            }
 
             // Admit the resource while this parser element is inserted/finished,
             // before a later meta can become policy for an earlier request.

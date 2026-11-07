@@ -156,6 +156,31 @@ impl ChildImportServer {
                                 "/child-import-csp-blocked.css" => ("text/css", format!("@import url('/child-import-csp-descendant.css?token={token}'); :root {{ --csp-blocked: applied; }}")),
                                 "/child-import-csp-allowed.css" => ("text/css", ":root { --csp-allowed: ready; }".to_owned()),
                                 "/child-import-csp-descendant.css" => ("text/css", ":root { --csp-descendant: applied; }".to_owned()),
+                                "/child-import-inline-policy" => {
+                                    let mode = query.get("mode").map(String::as_str).unwrap_or("header");
+                                    let policy = "style-src 'self' 'nonce-allowed'";
+                                    let meta = if mode == "meta" { format!("<meta http-equiv='Content-Security-Policy' content=\"{policy}\">") } else {
+                                        extra_headers = format!("Content-Security-Policy{}: {policy}\r\n", if mode == "report" { "-Report-Only" } else { "" });
+                                        String::new()
+                                    };
+                                    let nonce = match query.get("nonce").map(String::as_str) {
+                                        Some("allowed") => " nonce='allowed'",
+                                        Some("wrong") => " nonce='wrong'",
+                                        _ => "",
+                                    };
+                                    let import = if query.get("imports").is_some_and(|value| value == "true") {
+                                        format!("@import url('/child-import-inline-allowed.css?token={token}');")
+                                    } else { String::new() };
+                                    ("text/html", format!(r#"<!doctype html><head>{meta}<script>
+                                      globalThis.inlineViolations = [];
+                                      document.addEventListener('securitypolicyviolation', event => inlineViolations.push({{
+                                        directive:event.effectiveDirective, disposition:event.disposition,
+                                        documentURI:event.documentURI, blockedURI:event.blockedURI
+                                      }}));
+                                    </script><style id='policy-style'{nonce}>{import}:root {{ --inline-policy: applied; }}</style>
+                                    <script>globalThis.afterInlineStylesheet = true;</script></head><body>Inline policy"#))
+                                }
+                                "/child-import-inline-allowed.css" => ("text/css", ":root { --inline-import: applied; }".to_owned()),
                                 "/child-import-parent" => {
                                     let kind = query.get("kind").map(String::as_str).unwrap_or("linked");
                                     let scenario = query.get("scenario").map(String::as_str).unwrap_or("nested");
@@ -500,6 +525,77 @@ async fn child_srcdoc_imports_use_the_inherited_origin_for_csp_self() -> Result<
             .lock()
             .contains_key("srcdoc-csp:/child-import-csp-blocked.css")
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_inline_style_csp_blocks_the_owner_before_import_admission() -> Result<()> {
+    let server = ChildImportServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser.fetch(&server.origin).await?;
+    let probe = include_str!("../fixtures/child-stylesheet-inline-csp.js");
+    let expression = format!("({probe})().then(JSON.stringify)");
+    let result = tokio::time::timeout(
+        Duration::from_secs(30),
+        page.evaluate_runtime_expression_with_await_async(&expression, true),
+    )
+    .await??;
+    let result: serde_json::Value =
+        serde_json::from_str(result["value"].as_str().context("inline CSP result")?)?;
+    assert_eq!(
+        result["parentViolations"],
+        serde_json::json!([]),
+        "{result}"
+    );
+    let rows = result["rows"].as_array().context("inline CSP cases")?;
+    assert_eq!(rows.len(), 8);
+    for row in rows {
+        let allowed = row["nonce"] == "allowed" || row["mode"] == "report";
+        let imports = row["imports"] == true;
+        assert_eq!(row["local"], if allowed { "applied" } else { "" }, "{row}");
+        assert_eq!(
+            row["imported"],
+            if allowed && imports { "applied" } else { "" },
+            "{row}"
+        );
+        assert_eq!(row["sheet"], allowed, "{row}");
+        assert_eq!(row["sheetCount"], usize::from(allowed), "{row}");
+        assert_eq!(row["script"], true, "{row}");
+        assert_eq!(row["ready"], "complete", "{row}");
+        let violations = row["violations"].as_array().context("inline violations")?;
+        assert_eq!(
+            violations.len(),
+            usize::from(row["nonce"] != "allowed"),
+            "{row}"
+        );
+        for violation in violations {
+            assert_eq!(violation["blockedURI"], "inline", "{row}");
+            assert_eq!(violation["directive"], "style-src-elem", "{row}");
+            assert_eq!(
+                violation["disposition"],
+                if row["mode"] == "report" {
+                    "report"
+                } else {
+                    "enforce"
+                },
+                "{row}"
+            );
+            assert!(
+                violation["documentURI"]
+                    .as_str()
+                    .unwrap()
+                    .contains("/child-import-inline-policy?"),
+                "{row}"
+            );
+        }
+        let token = row["token"].as_str().context("inline token")?;
+        let count = server
+            .assets
+            .lock()
+            .get(&format!("{token}:/child-import-inline-allowed.css"))
+            .map_or(0, |asset| asset.count.load(Ordering::Acquire));
+        assert_eq!(count, usize::from(allowed && imports), "{row}");
+    }
     Ok(())
 }
 

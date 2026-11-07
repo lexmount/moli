@@ -5,8 +5,8 @@ use crate::{
     content_security_policy::{
         ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
         ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyReportingEndpoints,
-        ContentSecurityPolicyScriptElementRequest, ContentSecurityPolicyViolationEventFields,
-        TrustedTypesForScriptRequirements,
+        ContentSecurityPolicyScriptElementRequest, ContentSecurityPolicyStyleElementRequest,
+        ContentSecurityPolicyViolationEventFields, TrustedTypesForScriptRequirements,
     },
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{
@@ -581,7 +581,7 @@ impl JsContextHost {
         )
     }
 
-    fn inline_script_element_csp_check_for_owner(
+    pub(crate) fn inline_script_element_csp_check_for_owner(
         &self,
         owner: OwnerDispatchScope,
         source: &str,
@@ -600,6 +600,24 @@ impl JsContextHost {
                 &snapshot
                     .policy_container
                     .content_security_reporting_endpoints,
+                source,
+                request,
+            ),
+        )
+    }
+
+    pub(crate) fn inline_style_element_csp_check_for_owner(
+        &self,
+        owner: OwnerDispatchScope,
+        source: &str,
+        request: ContentSecurityPolicyStyleElementRequest<'_>,
+    ) -> Option<DocumentContentSecurityPolicyCheck> {
+        let snapshot = self.owner_document_policy_snapshot(owner)?;
+        Some(
+            unsafe { &*self.runtime }.inline_style_element_csp_check_for_document(
+                snapshot.document_handle,
+                &snapshot.document_url,
+                &snapshot.policy_container,
                 source,
                 request,
             ),
