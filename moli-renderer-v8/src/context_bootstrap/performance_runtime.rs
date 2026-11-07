@@ -370,6 +370,10 @@ pub(crate) struct ResourcePerformanceEntry {
 }
 
 impl ResourcePerformanceEntry {
+    pub(crate) fn set_response_end_unix_millis(&mut self, end: f64) {
+        self.end_unix_millis = Some(end);
+    }
+
     pub(crate) fn clear_initiator(&mut self) {
         self.initiator_url.clear();
     }

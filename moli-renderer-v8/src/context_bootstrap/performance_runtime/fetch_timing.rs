@@ -64,6 +64,10 @@ impl FetchResourceTiming {
             .to_owned();
     }
 
+    pub(crate) fn set_initiator(&mut self, initiator: super::ResourceTimingInitiator) {
+        self.initiator_url = initiator.as_str().to_owned();
+    }
+
     pub(crate) fn capture_worker_initiator(&mut self, scope: &mut v8::PinScope<'_, '_>) {
         let Some(initiator) = crate::script_continuation::resource_initiator(scope) else {
             return;

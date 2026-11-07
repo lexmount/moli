@@ -127,7 +127,7 @@ fn start_resource_preload(
     url: &Url,
     options: ResponsePreloadOptions,
 ) -> Result<(), String> {
-    let timing = crate::context_bootstrap::FetchResourceTiming::for_initiator_type("link");
+    let mut timing = crate::context_bootstrap::FetchResourceTiming::for_initiator_type("link");
     let owner = target.dispatch_scope();
     let resource_loader = host
         .document_resource_loader_for_window_owner(target.owner())
@@ -141,6 +141,9 @@ fn start_resource_preload(
         frame_id,
         ..
     } = environment;
+    timing.set_initiator(
+        crate::context_bootstrap::ResourceTimingInitiator::from_document(&document_url),
+    );
     let policy = host
         .document_connect_policy_snapshot_for_owner(owner)
         .ok_or("preload policy owner is unavailable")?;

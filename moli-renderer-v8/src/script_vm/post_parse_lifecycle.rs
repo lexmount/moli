@@ -2555,6 +2555,7 @@ impl ScriptVm {
         let mut host = self._context_host.borrow_mut();
         for network_result in results {
             let crate::document_runtime::ConnectedLoadNetworkResult {
+                resource_timing,
                 import_options,
                 consumed_preload_error,
                 document_owner,
@@ -2587,18 +2588,37 @@ impl ScriptVm {
                 let mut entry =
                     crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
                         request_url.as_str(),
-                        preload_like_resource_initiator_type(resource_type),
+                        if resource_timing.is_some() {
+                            "link"
+                        } else {
+                            preload_like_resource_initiator_type(resource_type)
+                        },
                         start_unix_millis,
                         &result,
                     );
-                if let (Some(fetch), Ok(response)) = (stylesheet_fetch.as_ref(), &result) {
-                    let source = fetch
-                        .resource_timing_initiator_url()
-                        .unwrap_or(document_url.as_str());
-                    crate::context_bootstrap::ResourceTimingInitiator::from_captured_url(
-                        source.to_owned(),
-                    )
-                    .apply(&mut entry, &response.head(), origin_clean);
+                if let Some(timing) = resource_timing {
+                    entry.set_response_end_unix_millis(timing.end_unix_millis);
+                    if let Ok(response) = &result {
+                        timing
+                            .initiator
+                            .apply(&mut entry, &response.head(), origin_clean);
+                    }
+                } else if let (Some(fetch), Ok(response)) = (stylesheet_fetch.as_ref(), &result) {
+                    if let Some(end) = fetch.end_unix_millis() {
+                        entry.set_response_end_unix_millis(end);
+                    }
+                    if !fetch
+                        .terminal()
+                        .is_some_and(|terminal| terminal.from_service_worker())
+                    {
+                        let source = fetch
+                            .resource_timing_initiator_url()
+                            .unwrap_or(document_url.as_str());
+                        crate::context_bootstrap::ResourceTimingInitiator::from_captured_url(
+                            source.to_owned(),
+                        )
+                        .apply(&mut entry, &response.head(), origin_clean);
+                    }
                 }
                 performance_entries.push((document_owner, entry));
             }

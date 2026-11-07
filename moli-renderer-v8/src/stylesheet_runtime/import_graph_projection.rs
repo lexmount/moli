@@ -36,6 +36,7 @@ pub(in crate::document_runtime) async fn fetch_observed_stylesheet_import_graph(
             let import_options = result.import_options().cloned();
             let result = terminal.physical().as_result();
             ConnectedLoadNetworkResult {
+                resource_timing: None,
                 import_options,
                 consumed_preload_error: terminal.is_consumed_preload_error(),
                 document_owner: None,

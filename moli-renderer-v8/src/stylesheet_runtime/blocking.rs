@@ -447,6 +447,7 @@ impl DocumentRuntime {
                 let origin_clean = result.terminal.origin_clean().unwrap_or(false);
                 let physical_result = result.terminal.physical().as_result();
                 ConnectedLoadNetworkResult {
+                    resource_timing: None,
                     import_options: None,
                     consumed_preload_error: result.terminal.is_consumed_preload_error(),
                     document_owner,

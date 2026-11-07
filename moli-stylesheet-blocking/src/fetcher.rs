@@ -230,6 +230,7 @@ impl StylesheetUsability {
 
 #[derive(Debug, Clone)]
 pub struct StylesheetFetchTerminal {
+    completed_at: std::time::Instant,
     service_worker_response_url: Option<Url>,
     physical: StylesheetPhysicalOutcome,
     usability: StylesheetUsability,
@@ -247,6 +248,7 @@ impl StylesheetFetchTerminal {
     ) -> Self {
         Self {
             physical: StylesheetPhysicalOutcome::Response(Arc::new(response)),
+            completed_at: std::time::Instant::now(),
             usability,
             origin_clean: Some(origin_clean),
             from_service_worker: false,
@@ -278,6 +280,7 @@ impl StylesheetFetchTerminal {
         let reason = reason.into();
         Self {
             physical: StylesheetPhysicalOutcome::NetworkError(Arc::clone(&reason)),
+            completed_at: std::time::Instant::now(),
             usability: StylesheetUsability::Failed { reason },
             origin_clean: None,
             from_service_worker: false,
@@ -517,6 +520,7 @@ struct StylesheetFetchRequest {
     key: StylesheetResourceKey,
     options: StylesheetFetchOptions,
     start_unix_millis: f64,
+    started_at: std::time::Instant,
     terminal: OnceLock<Arc<StylesheetFetchTerminal>>,
     resource_timing_initiator_url: OnceLock<String>,
     physical_observation_emitted: AtomicBool,
@@ -535,6 +539,7 @@ impl StylesheetFetch {
             key,
             options,
             start_unix_millis,
+            started_at: std::time::Instant::now(),
             terminal: OnceLock::new(),
             resource_timing_initiator_url: OnceLock::new(),
             physical_observation_emitted: AtomicBool::new(false),
@@ -564,6 +569,17 @@ impl StylesheetFetch {
             .resource_timing_initiator_url
             .get()
             .map(String::as_str)
+    }
+
+    pub fn end_unix_millis(&self) -> Option<f64> {
+        self.0.terminal.get().map(|terminal| {
+            self.0.start_unix_millis
+                + terminal
+                    .completed_at
+                    .saturating_duration_since(self.0.started_at)
+                    .as_secs_f64()
+                    * 1000.0
+        })
     }
 
     pub(crate) fn request_url(&self) -> &Url {

@@ -1279,9 +1279,16 @@ impl DocumentRuntime {
                     .clone();
                 let fetch = self.stylesheet_lifecycle.fetches.preload_stylesheet(
                     &fetcher,
-                    document_url,
+                    document_url.clone(),
                     request.url().clone(),
                     request.options().clone(),
+                );
+                fetch.set_resource_timing_initiator_url(
+                    resource_timing_initiator
+                        .as_ref()
+                        .map(|source| source.as_str())
+                        .unwrap_or(document_url.as_str())
+                        .to_owned(),
                 );
                 let load = StylesheetLinkClient::new_preload_with_event_admission(
                     handle,
@@ -1405,6 +1412,10 @@ impl DocumentRuntime {
                 })
             };
             let document_url = resource_loader.fetch_context().document_url().clone();
+            let resource_initiator = resource_timing_initiator.unwrap_or_else(|| {
+                crate::context_bootstrap::ResourceTimingInitiator::from_document(&document_url)
+            });
+            let started = std::time::Instant::now();
             let start_unix_millis = moli_time::unix_epoch_millis();
             let resource_task_runner = resource_loader.task_runner();
             let request_origin = resource_loader.fetch_context().request_origin();
@@ -1432,6 +1443,17 @@ impl DocumentRuntime {
                     service_worker_context,
                 )
                 .await;
+                let resource_timing = crate::document_runtime::ConnectedResourceTiming {
+                    initiator: if result
+                        .as_ref()
+                        .is_ok_and(|response| response.from_service_worker)
+                    {
+                        crate::context_bootstrap::ResourceTimingInitiator::default()
+                    } else {
+                        resource_initiator
+                    },
+                    end_unix_millis: start_unix_millis + started.elapsed().as_secs_f64() * 1000.0,
+                };
                 let preload = preload.map(|producer| {
                     let response = result
                         .as_ref()
@@ -1445,6 +1467,7 @@ impl DocumentRuntime {
                         .as_ref()
                         .is_ok_and(|response| response.load_event_successful),
                     network_results: vec![ConnectedLoadNetworkResult {
+                        resource_timing: Some(resource_timing),
                         import_options: None,
                         consumed_preload_error: false,
                         document_owner,
