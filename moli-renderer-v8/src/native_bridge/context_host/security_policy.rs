@@ -476,7 +476,7 @@ impl JsContextHost {
             }
         }
         for violation in report_only_violations.iter().chain(&enforced_violations) {
-            self.queue_inline_csp_violation_task(scope, owner, element, violation);
+            self.queue_content_security_policy_violation_task(scope, owner, element, violation);
         }
         enforced_violations.is_none()
     }
@@ -667,13 +667,31 @@ impl JsContextHost {
         document_url: &url::Url,
         request_url: &url::Url,
     ) -> DocumentCspOutcome {
-        self.check_document_connect_csp_for_owner_with_redirect_status(
-            scope,
+        let Some(check) = self.document_connect_csp_check_for_owner_with_redirect_status(
             owner,
             document_url,
             request_url,
             ContentSecurityPolicyRedirectStatus::NoRedirect,
-        )
+        ) else {
+            return DocumentCspOutcome::Allowed;
+        };
+        let (mut report, mut enforced) = check.into_violations();
+        if !self.active_inspector_dispatch
+            && let Some((source, line, column)) = current_script_violation_location(scope)
+        {
+            for violation in enforced.iter_mut().chain(report.iter_mut()) {
+                violation.source_file.clone_from(&source);
+                violation.line_number = line;
+                violation.column_number = column;
+            }
+        }
+        for violation in enforced.iter().chain(report.iter()) {
+            self.queue_content_security_policy_violation_task(scope, owner, None, violation);
+        }
+        match enforced {
+            Some(violation) => DocumentCspOutcome::Blocked(violation),
+            None => DocumentCspOutcome::Allowed,
+        }
     }
 
     pub(crate) fn check_document_connect_csp_for_owner_with_redirect_status<'s>(

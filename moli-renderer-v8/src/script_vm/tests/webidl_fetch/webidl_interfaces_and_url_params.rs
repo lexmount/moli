@@ -1567,7 +1567,7 @@ fn window_fetch_missing_input_rejects_type_error() {
 
 #[test]
 fn window_fetch_document_csp_blocks_connect_src_and_dispatches_event() {
-    let mut vm = new_storage_test_vm("https://fetch-connect-csp.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://fetch-connect-csp.test/");
     vm.set_response_content_security_policies(&[String::from("connect-src 'none'")]);
 
     vm.eval(
@@ -1598,13 +1598,10 @@ fn window_fetch_document_csp_blocks_connect_src_and_dispatches_event() {
     )
     .expect("fetch CSP block setup should evaluate");
 
-    assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
-        1
-    );
+    assert_eq!(vm.eval("String(__fetchCspEvents.length)").unwrap(), "0");
 
     let result = vm
-        .eval(
+        .eval_after_selected_page_tasks(
             "JSON.stringify({ ...globalThis.__fetchCspResult, events: globalThis.__fetchCspEvents })",
         )
         .expect("fetch CSP rejection should settle");
@@ -1617,7 +1614,7 @@ fn window_fetch_document_csp_blocks_connect_src_and_dispatches_event() {
 
 #[test]
 fn window_fetch_document_csp_report_only_dispatches_without_blocking() {
-    let mut vm = new_storage_test_vm("https://fetch-connect-report-only.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://fetch-connect-report-only.test/");
     vm.set_response_content_security_report_only_policies(&[String::from("connect-src 'none'")]);
 
     vm.eval(
@@ -1646,12 +1643,12 @@ fn window_fetch_document_csp_report_only_dispatches_without_blocking() {
     .expect("fetch CSP report-only setup should evaluate");
 
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
-        1
+        vm.eval("String(__fetchReportOnlyEvents.length)").unwrap(),
+        "0"
     );
 
     let result = vm
-        .eval(
+        .eval_after_selected_page_tasks(
             "JSON.stringify({ ...globalThis.__fetchReportOnlyResult, events: globalThis.__fetchReportOnlyEvents })",
         )
         .expect("fetch CSP report-only request should settle");
