@@ -43,7 +43,7 @@ pub(super) fn computed_style_property_value_after_style_update(
     observation: Option<&dyn RetainedStyleObservation>,
     prepared_style: Option<&StyloComputedStyleSnapshot>,
 ) -> String {
-    if !computed_style_applies(runtime, handle) {
+    if !computed_style_applies_with_observation(runtime, handle, observation) {
         return String::new();
     }
     let inputs = prepared_inputs;
@@ -2332,7 +2332,13 @@ fn shadow_tree_inherited_value_for_initial_stylo_value(
         "font-size" => "16px",
         _ => return None,
     };
-    if runtime.dom_host().containing_shadow_root(handle).is_none()
+    if resolution
+        .observation
+        .map_or_else(
+            || runtime.dom_host().containing_shadow_root(handle),
+            |observation| observation.containing_shadow_root(handle),
+        )
+        .is_none()
         || value != initial
         || inline_style_entry_for_inline_style(runtime, handle, property).is_some()
     {

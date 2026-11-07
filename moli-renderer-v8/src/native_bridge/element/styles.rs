@@ -1,4 +1,5 @@
 use crate::util::{get_private_value, set_private_value, throw_type_error, v8_string, v8str};
+use std::ops::ControlFlow;
 
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::{
@@ -9,10 +10,13 @@ use crate::webidl;
 
 use super::super::node::{node_is_element, node_runtime_and_handle_from_object_or_detached};
 mod accessors;
+mod ancestry;
 mod computed_names;
 mod declaration;
 mod methods;
 mod named;
+#[cfg(test)]
+mod snapshot_tests;
 
 pub(crate) use accessors::{
     style_css_text_getter_callback, style_css_text_setter_callback, style_length_getter_callback,
@@ -565,32 +569,38 @@ pub(crate) fn computed_style_export_values_for_document_snapshot(
     properties: &[String],
 ) -> Vec<ComputedStyleExportValues> {
     let mut observation = StyleObservation::new(host);
-    handles
-        .into_iter()
-        .map(
-            |handle| match style_computation_context_for_document_snapshot(host, handle) {
-                None => ComputedStyleExportValues::default(),
-                Some(DocumentSnapshotStyleComputation::HiddenChildFrame) => {
-                    ComputedStyleExportValues {
-                        values: vec![String::new(); properties.len()],
-                        ..Default::default()
-                    }
-                }
-                Some(DocumentSnapshotStyleComputation::Available(_)) => {
-                    let style = observation.read(handle);
-                    ComputedStyleExportValues {
-                        values: properties
-                            .iter()
-                            .map(|property| style.property(property))
-                            .collect(),
-                        own_visibility: style.computed_style_has_own_visibility_value(),
-                        original_display: style.computed_style_original_display(),
-                        hides_contents: style.computed_style_hides_contents(),
-                    }
-                }
+    let mut values = Vec::new();
+    let mut available = Vec::new();
+    for handle in handles {
+        let context = document_snapshot_style_context(host, handle, |handle| {
+            observation.target_is_in_flat_tree(handle)
+        });
+        let value = match context {
+            None => ComputedStyleExportValues::default(),
+            Some(DocumentSnapshotStyleComputation::HiddenChildFrame) => ComputedStyleExportValues {
+                values: vec![String::new(); properties.len()],
+                ..Default::default()
             },
-        )
-        .collect()
+            Some(DocumentSnapshotStyleComputation::Available(_)) => {
+                available.push((values.len(), handle));
+                ComputedStyleExportValues::default()
+            }
+        };
+        values.push(value);
+    }
+    for (index, handle) in available {
+        let style = observation.read(handle);
+        values[index] = ComputedStyleExportValues {
+            values: properties
+                .iter()
+                .map(|property| style.property(property))
+                .collect(),
+            own_visibility: style.computed_style_has_own_visibility_value(),
+            original_display: style.computed_style_original_display(),
+            hides_contents: style.computed_style_hides_contents(),
+        };
+    }
+    values
 }
 
 pub(crate) fn computed_style_properties_for_inspector_handle(
@@ -699,13 +709,23 @@ fn style_computation_context_for_document_snapshot(
     host: &JsContextHost,
     handle: DomHandle,
 ) -> Option<DocumentSnapshotStyleComputation> {
+    document_snapshot_style_context(host, handle, |handle| {
+        computed_style_target_is_in_flat_tree(host, handle)
+    })
+}
+
+fn document_snapshot_style_context(
+    host: &JsContextHost,
+    handle: DomHandle,
+    target_is_in_flat_tree: impl FnOnce(DomHandle) -> bool,
+) -> Option<DocumentSnapshotStyleComputation> {
     let document = host
         .dom_host()
         .node(handle)
         .filter(|node| node.is_element())?
         .owner_document()?;
     if document == host.document_handle() {
-        if !computed_style_target_is_in_flat_tree(host, handle) {
+        if !target_is_in_flat_tree(handle) {
             return None;
         }
         Some(DocumentSnapshotStyleComputation::Available(
@@ -803,32 +823,45 @@ fn iframe_handle_viewport_with_depth(
 fn computed_style_target_is_in_flat_tree(host: &JsContextHost, handle: DomHandle) -> bool {
     let mut current = handle;
     loop {
-        let Some(parent) = host
-            .dom_host()
-            .node(current)
-            .and_then(crate::dom::native::Node::parent_node)
-        else {
-            return current == host.dom_host().document_handle()
+        match computed_style_flat_tree_step(host, current) {
+            ControlFlow::Break(connected) => return connected,
+            ControlFlow::Continue(parent) => current = parent,
+        }
+    }
+}
+
+fn computed_style_flat_tree_step(
+    host: &JsContextHost,
+    current: DomHandle,
+) -> ControlFlow<bool, DomHandle> {
+    #[cfg(test)]
+    snapshot_tests::note_flat_tree_step();
+    let Some(parent) = host
+        .dom_host()
+        .node(current)
+        .and_then(crate::dom::native::Node::parent_node)
+    else {
+        return ControlFlow::Break(
+            current == host.dom_host().document_handle()
                 && host
                     .dom_host()
                     .node(current)
-                    .is_some_and(crate::dom::native::Node::is_document);
+                    .is_some_and(crate::dom::native::Node::is_document),
+        );
+    };
+    if host.dom_host().is_shadow_root(parent) {
+        return match host.dom_host().shadow_root_host(parent) {
+            Some(shadow_host) => ControlFlow::Continue(shadow_host),
+            None => ControlFlow::Break(false),
         };
-        if host.dom_host().is_shadow_root(parent) {
-            let Some(shadow_host) = host.dom_host().shadow_root_host(parent) else {
-                return false;
-            };
-            current = shadow_host;
-            continue;
-        }
-        if host.dom_host().shadow_root_handle(parent).is_some()
-            && computed_style_node_is_slotable_for_flat_tree(host, current)
-            && host.dom_host().assigned_slot_for_node(current).is_none()
-        {
-            return false;
-        }
-        current = parent;
     }
+    if host.dom_host().shadow_root_handle(parent).is_some()
+        && computed_style_node_is_slotable_for_flat_tree(host, current)
+        && host.dom_host().assigned_slot_for_node(current).is_none()
+    {
+        return ControlFlow::Break(false);
+    }
+    ControlFlow::Continue(parent)
 }
 
 fn computed_style_node_is_slotable_for_flat_tree(host: &JsContextHost, handle: DomHandle) -> bool {

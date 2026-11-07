@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, ops::ControlFlow, rc::Rc};
 
 use crate::{
     document_runtime::DomHandle,
@@ -10,7 +10,9 @@ use crate::{
 };
 
 use super::super::super::super::JsContextHost;
-use super::super::style_viewport_for_document;
+use super::super::{
+    ancestry::AncestorQueries, computed_style_flat_tree_step, style_viewport_for_document,
+};
 use super::sizing::LayoutSizeReads;
 use super::style_world::{
     StyleObservationKey, prepare_style_world_update, stylesheet_query_fallback,
@@ -89,6 +91,7 @@ pub(crate) struct StyleObservation<'a> {
     additional_drained_documents: Vec<DomHandle>,
     primary_document: Option<Rc<StyleObservationInputs<'a>>>,
     additional_documents: Vec<Rc<StyleObservationInputs<'a>>>,
+    flat_tree_membership: AncestorQueries<bool>,
 }
 
 pub(super) struct StyleObservationInputs<'a> {
@@ -104,6 +107,7 @@ pub(super) struct StyleObservationInputs<'a> {
     prepared_update: RefCell<Option<Rc<PreparedStyleWorldUpdate>>>,
     stylesheet_query_snapshot: RefCell<Option<Rc<FullStyleWorldSnapshot>>>,
     layout_sizes: LayoutSizeReads,
+    shadow_roots: RefCell<AncestorQueries<Option<DomHandle>>>,
 }
 
 impl<'a> StyleObservationInputs<'a> {
@@ -126,6 +130,7 @@ impl<'a> StyleObservationInputs<'a> {
             prepared_update: RefCell::new(None),
             stylesheet_query_snapshot: RefCell::new(None),
             layout_sizes: LayoutSizeReads::new(sizing_target),
+            shadow_roots: RefCell::new(AncestorQueries::default()),
         }
     }
 
@@ -181,9 +186,28 @@ impl<'a> StyleObservationInputs<'a> {
 pub(super) trait RetainedStyleObservation {
     fn style_snapshot(&self, handle: DomHandle) -> Option<StyloComputedStyleSnapshot>;
     fn used_size(&self, handle: DomHandle) -> Option<moli_layout::LayoutUsedSize>;
+    fn containing_shadow_root(&self, handle: DomHandle) -> Option<DomHandle>;
 }
 
 impl RetainedStyleObservation for StyleObservationInputs<'_> {
+    fn containing_shadow_root(&self, handle: DomHandle) -> Option<DomHandle> {
+        let host = self.runtime.dom_host();
+        self.shadow_roots.borrow_mut().resolve(handle, |node| {
+            #[cfg(test)]
+            super::super::snapshot_tests::note_shadow_tree_step();
+            if host.is_shadow_root(node) {
+                return ControlFlow::Break(Some(node));
+            }
+            match host
+                .node(node)
+                .and_then(crate::dom::native::Node::parent_node)
+            {
+                Some(parent) => ControlFlow::Continue(parent),
+                None => ControlFlow::Break(None),
+            }
+        })
+    }
+
     fn used_size(&self, handle: DomHandle) -> Option<moli_layout::LayoutUsedSize> {
         self.layout_sizes
             .get(self.runtime, self.source_document(), handle)
@@ -289,11 +313,21 @@ impl<'a> StyleObservation<'a> {
             additional_drained_documents: Vec::new(),
             primary_document: None,
             additional_documents: Vec::new(),
+            flat_tree_membership: AncestorQueries::default(),
         }
     }
 
     pub(crate) const fn runtime(&self) -> &'a JsContextHost {
         self.runtime
+    }
+
+    pub(in crate::native_bridge::element::styles) fn target_is_in_flat_tree(
+        &mut self,
+        handle: DomHandle,
+    ) -> bool {
+        self.flat_tree_membership.resolve(handle, |node| {
+            computed_style_flat_tree_step(self.runtime, node)
+        })
     }
 
     #[cfg(test)]
