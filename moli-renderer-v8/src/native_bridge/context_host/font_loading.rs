@@ -181,6 +181,7 @@ impl PageScriptHost {
             .document_ready_state_for_handle(document)
             .unwrap_or_else(|| self.host_document().ready_state())
             == crate::dom::native::DocumentReadyState::Complete
+            && self.document_is_completely_loaded(document) != Some(false)
     }
 
     pub(super) fn did_publish_realtime_font_layout(&self) {
@@ -263,6 +264,9 @@ impl PageScriptHost {
                 .map(|entry| {
                     entry.target =
                         WindowDocumentTaskTarget::new(current, entry.target.dispatch_scope());
+                    // The same Document keeps its FontFaceSets across open(),
+                    // and the new parser generation must finish loading.
+                    entry.ready = false;
                     entry.document
                 })
         };

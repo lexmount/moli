@@ -211,8 +211,7 @@ async fn child_document_fonts_ready_waits_for_its_own_resource() {
         "<!doctype html><span id=parentTarget style='display:inline-block;font:20px ChildReady,serif'>iiii</span><iframe id=frame></iframe>",
         &loader,
     );
-    vm.set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
-        .unwrap();
+    finish_main_document_load_for_test(&mut vm);
     vm.set_layout_policy(LayoutPolicy::Realtime);
     vm.eval(&format!(r#"
         globalThis.child=frame.contentWindow;
@@ -308,8 +307,7 @@ async fn realtime_font_ready_rechecks_new_sources_before_resolving() {
         ),
         &loader,
     );
-    vm.set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
-        .unwrap();
+    finish_main_document_load_for_test(&mut vm);
     vm.set_layout_policy(LayoutPolicy::Realtime);
     vm.eval("globalThis.ready=false;globalThis.promise=document.fonts.ready;promise.then(()=>ready=true)").unwrap();
     assert!(
@@ -348,13 +346,21 @@ async fn realtime_font_ready_rechecks_new_sources_before_resolving() {
     )
     .await;
     assert_eq!(vm.eval("String(ready)").unwrap(), "false");
-    assert!(
-        vm.run_one_exact_selected_page_task_executor_turn(
+    let mut tasks = 0;
+    while vm
+        .run_one_exact_selected_page_task_executor_turn(
             crate::runtime::PageSelectedTaskTestSelector::FontLoading,
-            &loader
+            &loader,
         )
         .await
         .unwrap()
+    {
+        tasks += 1;
+        assert!(tasks <= 4, "font loading tasks must settle");
+    }
+    assert!(
+        tasks > 0,
+        "the completed resource must queue font readiness"
     );
     let builds = vm.layout_pass_observability_for_test().1;
     assert_eq!(

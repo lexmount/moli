@@ -26,7 +26,7 @@ fn worker_fonts_getter<'s>(
 ) {
     if let Some(fonts) = get_private_value(scope, args.this(), WORKER_FONTS_SLOT) {
         rv.set(fonts);
-    } else if let Some(fonts) = crate::context_bootstrap::new_font_face_set(scope) {
+    } else if let Some(fonts) = crate::context_bootstrap::new_font_face_set(scope, None) {
         set_private_value(scope, args.this(), WORKER_FONTS_SLOT, fonts.into());
         rv.set(fonts.into());
     }

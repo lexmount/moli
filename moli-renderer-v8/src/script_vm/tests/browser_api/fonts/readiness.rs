@@ -4,6 +4,50 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 type FontGates = HashMap<String, tokio::sync::oneshot::Sender<()>>;
 
+#[test]
+fn initial_font_set_ready_waits_for_document_loading_to_finish() {
+    let mut vm = crate::script_vm::tests::new_parsed_test_vm(
+        "https://font-environment.test/",
+        "<!doctype html><body>text</body>",
+    );
+    vm.set_document_ready_state(crate::dom::native::DocumentReadyState::Loading)
+        .unwrap();
+    vm.eval(
+        r#"
+globalThis.fontEnvironmentEvents = [];
+globalThis.fontEnvironmentStates = [];
+globalThis.initialFonts = document.fonts;
+globalThis.initialFontReady = initialFonts.ready;
+initialFontReady.then(value => fontEnvironmentEvents.push(value === initialFonts));
+document.addEventListener('readystatechange', () =>
+    fontEnvironmentStates.push(document.readyState + ':' + fontEnvironmentEvents.length));
+addEventListener('load', () => fontEnvironmentStates.push('load:' + fontEnvironmentEvents.length));
+"#,
+    )
+    .unwrap();
+    run_font_tasks(&mut vm);
+    assert_eq!(
+        vm.eval("JSON.stringify([initialFonts.status,fontEnvironmentEvents])")
+            .unwrap(),
+        r#"["loaded",[]]"#,
+        "an empty font set must keep its initial ready promise pending while the document loads"
+    );
+
+    finish_main_document_load_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("fontEnvironmentStates.join('|')").unwrap(),
+        "interactive:0|complete:0|load:0",
+        "readiness and load callbacks must precede the initial font-ready reaction"
+    );
+    run_font_tasks(&mut vm);
+    assert_eq!(
+        vm.eval("JSON.stringify([fontEnvironmentEvents,initialFontReady === initialFonts.ready])")
+            .unwrap(),
+        r#"[[true],true]"#,
+        "load delivery must settle the captured promise without another getter"
+    );
+}
+
 async fn gated_fonts(
     names: &[&str],
 ) -> (
@@ -698,6 +742,7 @@ async fn font_loading_tasks_preserve_order_and_reentrant_cycle_promises() {
         "https://font-event-tasks.test/",
         &loader,
     );
+    finish_main_document_load_for_test(&mut page);
     let source = fixture_font_url();
     page.eval(&format!(r#"
         globalThis.fontTrace=[];globalThis.secondCycle=false;
@@ -746,6 +791,7 @@ async fn font_loading_tasks_do_not_dispatch_after_their_window_retires() {
         "https://font-event-retirement.test/",
         &loader,
     );
+    finish_main_document_load_for_test(&mut page);
     let source = fixture_font_url();
     page.eval(&format!(
         r#"

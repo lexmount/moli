@@ -18,6 +18,54 @@ mod readiness;
 mod selection_order;
 mod unicode_ranges;
 
+fn new_parsed_test_vm(url: &str, markup: &str) -> StandaloneScriptVmHarness {
+    let mut vm = crate::script_vm::tests::new_parsed_test_vm(url, markup);
+    finish_main_document_load_for_test(&mut vm);
+    vm
+}
+
+fn new_parsed_test_vm_with_completion_sender(
+    url: &str,
+    markup: &str,
+    sender: RendererResourceCompletionSender,
+) -> StandaloneScriptVmHarness {
+    let mut vm =
+        crate::script_vm::tests::new_parsed_test_vm_with_completion_sender(url, markup, sender);
+    finish_main_document_load_for_test(&mut vm);
+    vm
+}
+
+fn new_parsed_test_vm_with_loader_and_resource_completion_queue(
+    url: &str,
+    markup: &str,
+    loader: &ResourceRequestClient,
+) -> (
+    StandaloneScriptVmHarness,
+    RendererResourceCompletionTestHarness,
+) {
+    let (mut vm, completions) =
+        crate::script_vm::tests::new_parsed_test_vm_with_loader_and_resource_completion_queue(
+            url, markup, loader,
+        );
+    finish_main_document_load_for_test(&mut vm);
+    (vm, completions)
+}
+
+fn new_storage_test_vm_with_loader_and_resource_completion_queue(
+    url: &str,
+    loader: &ResourceRequestClient,
+) -> (
+    StandaloneScriptVmHarness,
+    RendererResourceCompletionTestHarness,
+) {
+    let (mut vm, completions) =
+        crate::script_vm::tests::new_storage_test_vm_with_loader_and_resource_completion_queue(
+            url, loader,
+        );
+    finish_main_document_load_for_test(&mut vm);
+    (vm, completions)
+}
+
 pub(super) fn fixture_font_url() -> String {
     let bytes = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),

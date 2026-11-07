@@ -2,6 +2,30 @@ use super::realtime_opportunity::run_opportunity;
 use super::*;
 use moli_page_types::LayoutPolicy;
 
+async fn finish_document_load(page: &mut PageVm) {
+    let owner = page.vm().current_main_document_task_owner().unwrap();
+    if let Some(interactive) = page.vm_mut().finish_current_main_document_parsing(owner) {
+        execute_main_document_lifecycle_on_owner_local_task(
+            page,
+            MainDocumentLifecycleBody::Interactive(interactive),
+        )
+        .await
+        .unwrap();
+    }
+    execute_main_document_lifecycle_on_owner_local_task(
+        page,
+        MainDocumentLifecycleBody::DomContentLoaded { owner },
+    )
+    .await
+    .unwrap();
+    execute_main_document_lifecycle_on_owner_local_task(
+        page,
+        MainDocumentLifecycleBody::WindowLoad { owner },
+    )
+    .await
+    .unwrap();
+}
+
 async fn drain_font_tasks(
     page: &mut PageVm,
     loader: &crate::network::ResourceRequestClient,
@@ -26,9 +50,7 @@ fn realtime_font_task_can_prepare_initial_resize_before_frame_callbacks() {
             &loader,
             Url::parse("https://example.com/realtime-font-readiness").unwrap(),
         );
-        page.vm_mut()
-            .set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
-            .unwrap();
+        finish_document_load(&mut page).await;
         page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
         page.vm_mut().eval(r#"
             globalThis.events=[];
@@ -117,9 +139,7 @@ fn realtime_font_ready_waits_for_document_completion_and_refreshes_resolved_read
         assert_eq!(drain_font_tasks(&mut page, &loader).await, 1);
         assert_eq!(page.vm_mut().eval("String(ready)").unwrap(), "false");
         assert_eq!(page.vm().layout_pass_observability_for_test().1, 0);
-        page.vm_mut()
-            .set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
-            .unwrap();
+        finish_document_load(&mut page).await;
         assert_eq!(drain_font_tasks(&mut page, &loader).await, 1);
         assert_eq!(page.vm_mut().eval("String(ready)").unwrap(), "true");
         let builds = page.vm().layout_pass_observability_for_test().1;
@@ -192,16 +212,24 @@ fn realtime_font_task_resolves_saved_ready_promises_in_each_world() {
         "#,
             )
             .unwrap();
-        page.vm_mut()
-            .set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
-            .unwrap();
-        assert_eq!(drain_font_tasks(&mut page, &loader).await, 1);
+        finish_document_load(&mut page).await;
+        assert!(
+            page.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::FontLoading,
+                &loader,
+            )
+            .await
+            .unwrap()
+        );
         assert_eq!(
             page.vm_mut()
                 .eval("JSON.stringify([reopened,fontsSettled])")
                 .unwrap(),
             "[true,true]"
         );
+        assert!(!isolated_settled(&mut page));
+        finish_document_load(&mut page).await;
+        assert_eq!(drain_font_tasks(&mut page, &loader).await, 1);
         assert!(isolated_settled(&mut page));
     });
 }
@@ -214,9 +242,7 @@ fn realtime_initial_font_task_does_not_require_a_javascript_font_set() {
             &loader,
             Url::parse("https://example.com/font-native-initialization").unwrap(),
         );
-        page.vm_mut()
-            .set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
-            .unwrap();
+        finish_document_load(&mut page).await;
         page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
         drain_font_tasks(&mut page, &loader).await;
         run_opportunity(&mut page, &loader).await.unwrap();
@@ -258,9 +284,7 @@ fn realtime_font_task_preserves_open_promises_but_retires_detached_documents() {
                 "document.open();document.write('<!doctype html><div>new</div>');document.close()",
             )
             .unwrap();
-        page.vm_mut()
-            .set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
-            .unwrap();
+        finish_document_load(&mut page).await;
         page.run_claimed_selected_page_task_for_test(stale, &loader)
             .await
             .unwrap();
@@ -302,9 +326,7 @@ fn realtime_font_readiness_failure_stays_pending_without_automatic_retry() {
             &loader,
             Url::parse("https://example.com/font-failure").unwrap(),
         );
-        page.vm_mut()
-            .set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
-            .unwrap();
+        finish_document_load(&mut page).await;
         page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
         page.vm_mut()
             .eval("globalThis.ready=false;document.fonts.ready.then(()=>ready=true)")
@@ -344,9 +366,7 @@ fn realtime_font_resolution_allows_geometry_reads_from_a_then_getter() {
             &loader,
             Url::parse("https://example.com/font-resolution-reentry").unwrap(),
         );
-        page.vm_mut()
-            .set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)
-            .unwrap();
+        finish_document_load(&mut page).await;
         page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
         page.vm_mut()
             .eval(
@@ -388,6 +408,7 @@ fn legacy_font_readiness_keeps_its_existing_cost_and_delivery_path() {
                 Url::parse("https://example.com/legacy-font-readiness").unwrap(),
             );
             page.vm_mut().set_layout_policy(policy);
+            finish_document_load(&mut page).await;
             page.vm_mut()
                 .eval("globalThis.ready=false;document.fonts.ready.then(()=>ready=true)")
                 .unwrap();

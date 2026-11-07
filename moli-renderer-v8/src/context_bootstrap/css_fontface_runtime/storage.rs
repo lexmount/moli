@@ -130,13 +130,15 @@ fn font_face_set_document_context<'s>(
     Some((host_ptr, handle))
 }
 
-pub(super) fn document_font_face_set_has_pending_requests<'s>(
+pub(super) fn document_font_face_set_is_pending<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     fonts: v8::Local<'s, v8::Object>,
 ) -> bool {
     font_face_set_document_context(scope, fonts).is_some_and(|(host_ptr, document)| {
         let host = unsafe { &*host_ptr };
-        host.document_web_fonts_have_pending_requests(document)
+        host.document_ready_state_for_handle(document) != "complete"
+            || host.document_is_completely_loaded(document) == Some(false)
+            || host.document_web_fonts_have_pending_requests(document)
             || host.realtime_document_fonts_ready(document) == Some(false)
     })
 }
@@ -192,23 +194,25 @@ pub(crate) fn settle_document_font_face_set_ready(
         unsafe { &*host_ptr }.queue_realtime_font_readiness(document);
         return;
     }
-    if unsafe { &*host_ptr }.document_web_fonts_have_pending_requests(document) {
-        return;
-    }
-    let Some(document_wrapper) = crate::util::node_wrapper_from_handle(scope, document) else {
-        return;
-    };
-    if let Some(fonts) = cached_document_font_face_set(scope, document_wrapper) {
-        super::events::finish_font_set_if_idle(scope, fonts);
-    }
+    // A load notification must not materialize a lazy Document in the caller's
+    // realm. Only an existing FontFaceSet can have a promise to wake.
+    crate::util::with_cached_node_wrapper_realm(
+        scope,
+        unsafe { &*host_ptr },
+        document,
+        |scope, document| {
+            if let Some(fonts) = cached_document_font_face_set(scope, document) {
+                super::events::finish_font_set_if_idle(scope, fonts);
+            }
+        },
+    );
 }
 
 fn cached_document_font_face_set<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document_wrapper: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    document_wrapper
-        .get(scope, crate::util::v8str(scope, "__moliFonts").into())
+    crate::util::get_own_static_property(scope, document_wrapper, "__moliFonts")
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
@@ -253,16 +257,16 @@ pub(crate) fn sync_realtime_document_font_face_set(
     if host.realtime_document_fonts_ready(document) != Some(false) {
         return;
     }
-    let Some(wrapper) = crate::util::node_wrapper_from_handle(scope, document) else {
-        return;
-    };
-    let Some(fonts) = cached_document_font_face_set(scope, wrapper) else {
-        return;
-    };
-    if host.document_web_fonts_have_pending_requests(document) {
-        super::events::font_face_set_loading_started(scope, fonts);
-    }
-    super::events::ensure_pending_font_face_set_ready(scope, fonts);
+    // Readiness can advance before script exposes the Document in its own realm.
+    crate::util::with_cached_node_wrapper_realm(scope, host, document, |scope, wrapper| {
+        let Some(fonts) = cached_document_font_face_set(scope, wrapper) else {
+            return;
+        };
+        if host.document_web_fonts_have_pending_requests(document) {
+            super::events::font_face_set_loading_started(scope, fonts);
+        }
+        super::events::ensure_font_face_set_ready_is_pending(scope, fonts);
+    });
 }
 
 /// The font task may discover new loads while updating style and layout.
@@ -304,10 +308,17 @@ pub(crate) fn check_realtime_document_font_readiness(
 
 pub(crate) fn new_font_face_set<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    document: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let object = FontFaceSetObjectDeclaration::default().bind(scope).ok()?;
     initialize_font_face_set_event_target(scope, object);
     replace_font_face_set_ready_promise(scope, object);
+    if let Some(document) = document {
+        set_private_value(scope, object, DOCUMENT_FONT_FACE_SET_OWNER, document.into());
+        if document_font_face_set_is_pending(scope, object) {
+            super::events::ensure_font_face_set_ready_is_pending(scope, object);
+        }
+    }
     Some(object)
 }
 

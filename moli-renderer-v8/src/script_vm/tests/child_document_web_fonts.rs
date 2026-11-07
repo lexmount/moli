@@ -145,6 +145,7 @@ async fn child_document_fonts_ready_waits_for_its_own_resource() {
         "<!doctype html><span id=parentTarget style='display:inline-block;font:20px ChildReady,serif'>iiii</span><iframe id=frame></iframe>",
         &loader,
     );
+    finish_main_document_load_for_test(&mut vm);
     vm.set_layout_policy(LayoutPolicy::OnDemand);
     vm.eval(&format!(r#"
         globalThis.child=frame.contentWindow;
@@ -187,6 +188,7 @@ async fn child_document_fonts_ready_waits_for_its_own_resource() {
     vm.perform_owner_lane_task_microtask_checkpoints().unwrap();
     refresh_child_geometry_without_paint(&vm);
     assert_eq!(vm.eval("childReady").unwrap(), "false");
+    run_child_document_lifecycle_and_host_load_for_test(&mut vm, "font readiness child load").await;
     run_font_tasks(&mut vm);
     assert_eq!(vm.eval("JSON.stringify([rootReady,childReady,child.document.fonts.status,childTarget.offsetWidth,childFace.status,childFaceLoaded])").unwrap(), r#"[true,true,"loaded",48,"loaded",true]"#);
     assert_eq!(vm.eval("String(parentTarget.offsetWidth)").unwrap(), parent);
