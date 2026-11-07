@@ -94,6 +94,7 @@ fn assert_node_private_state_is_backing_only(vm: &mut StandaloneScriptVmHarness)
                         "__moliNamedNodeMapCache",
                         "__moliAttrObjectCache",
                         "__moliAriaElementReference:aria-controls",
+                        "__moliAriaElementReferenceArrayCache:aria-controls",
                         "__moliDetachedDOMImplementation",
                         "__moliDocumentAssociatedWindow",
                     ] {
