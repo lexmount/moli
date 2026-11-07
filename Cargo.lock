@@ -4039,6 +4039,7 @@ dependencies = [
  "tokio-util",
  "url",
  "web-transport-quinn",
+ "web-transport-trait",
 ]
 
 [[package]]
