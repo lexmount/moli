@@ -92,7 +92,7 @@ fn matching_controller_uses_longest_scope() {
     );
 }
 #[test]
-fn matching_controller_respects_scope_path_boundary() {
+fn matching_controller_matches_literal_scope_prefix() {
     let service = new_service_worker_runtime_service();
     let app = insert_registered_version(
         &service,
@@ -100,34 +100,72 @@ fn matching_controller_respects_scope_path_boundary() {
         ServiceWorkerVersionId(1),
         url("https://example.test/app-worker.js"),
         url("https://example.test/app"),
-        [
-            url("https://example.test/app"),
-            url("https://example.test/app/page.html"),
-            url("https://example.test/app?query"),
-            url("https://example.test/app#fragment"),
-        ],
+        [],
     );
 
-    assert_eq!(
-        service.matching_controller_for_document(&url("https://example.test/app")),
-        Some(app.clone())
+    for candidate in [
+        "https://example.test/app",
+        "https://example.test/app/page.html",
+        "https://example.test/app?query",
+        "https://example.test/app#fragment",
+        "https://example.test/app2/page.html",
+        "https://example.test/app-page.html",
+    ] {
+        let client_id = register_client_for_test(&service, url(candidate));
+        assert_eq!(
+            service.matching_controller_for_client(client_id),
+            Some(app.clone()),
+            "{candidate}"
+        );
+    }
+    for candidate in [
+        "https://example.test/ap",
+        "https://example.test/APP/page.html",
+        "https://other.test/app",
+        "http://example.test/app",
+        "https://example.test:444/app",
+    ] {
+        let client_id = register_client_for_test(&service, url(candidate));
+        assert_eq!(
+            service.matching_controller_for_client(client_id),
+            None,
+            "{candidate}"
+        );
+    }
+}
+
+#[test]
+fn matching_controller_chooses_longest_prefix_within_query_strings() {
+    let service = new_service_worker_runtime_service();
+    let app = insert_registered_version(
+        &service,
+        ServiceWorkerRegistrationId(1),
+        ServiceWorkerVersionId(1),
+        url("https://example.test/app-worker.js"),
+        url("https://example.test/app"),
+        [],
     );
-    assert_eq!(
-        service.matching_controller_for_document(&url("https://example.test/app/page.html")),
-        Some(app.clone())
+    let query = insert_registered_version(
+        &service,
+        ServiceWorkerRegistrationId(2),
+        ServiceWorkerVersionId(2),
+        url("https://example.test/query-worker.js"),
+        url("https://example.test/app?version="),
+        [],
     );
-    assert_eq!(
-        service.matching_controller_for_document(&url("https://example.test/app?query")),
-        Some(app.clone())
-    );
-    assert_eq!(
-        service.matching_controller_for_document(&url("https://example.test/app#fragment")),
-        Some(app)
-    );
-    assert_eq!(
-        service.matching_controller_for_document(&url("https://example.test/app2/page.html")),
-        None
-    );
+    for candidate in [
+        "https://example.test/app?version=2",
+        "https://example.test/app?version=20#fragment",
+    ] {
+        let client_id = register_client_for_test(&service, url(candidate));
+        assert_eq!(
+            service.matching_controller_for_client(client_id),
+            Some(query.clone()),
+            "{candidate}"
+        );
+    }
+    let client_id = register_client_for_test(&service, url("https://example.test/app?version"));
+    assert_eq!(service.matching_controller_for_client(client_id), Some(app));
 }
 #[test]
 fn matching_controller_ignores_inactive_registration() {
