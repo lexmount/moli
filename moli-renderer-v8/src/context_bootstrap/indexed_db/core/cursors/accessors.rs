@@ -108,7 +108,7 @@ fn cached_attribute_getter<'s>(
                 }
             }
         };
-        cursor.set_private(scope, slot, value)?;
+        cursor.set_private(scope, slot, value)?.then_some(())?;
         rv.set(value);
         Some(())
     })();

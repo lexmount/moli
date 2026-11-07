@@ -13,14 +13,16 @@ fn install_template<'s, D: WebApiFunctionTemplateDeclaration>(
     let constructor = D::build(scope)
         .get_function(scope)
         .expect("build constructor");
-    global
-        .define_own_property(
+    assert_eq!(
+        global.define_own_property(
             scope,
             v8::String::new(scope, D::NAME).unwrap().into(),
             constructor.into(),
             v8::PropertyAttribute::DONT_ENUM,
-        )
-        .expect("publish constructor");
+        ),
+        Some(true),
+        "publish constructor"
+    );
     constructor
 }
 
@@ -1935,14 +1937,16 @@ fn indexed_property_handler_flags_are_forwarded_to_v8() {
                 .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         })
         .expect("Object.prototype");
-    object_prototype
-        .define_own_property(
+    assert_eq!(
+        object_prototype.define_own_property(
             scope,
             v8::String::new(scope, "0").unwrap().into(),
             v8::Integer::new(scope, 5).into(),
             v8::PropertyAttribute::NONE,
-        )
-        .expect("define Object.prototype[0]");
+        ),
+        Some(true),
+        "define Object.prototype[0]"
+    );
 
     let masking_template = v8::ObjectTemplate::new(scope);
     masking_template.set_indexed_property_handler(
@@ -2293,14 +2297,16 @@ fn declared_enumerable_properties_bypass_prototype_assignment_semantics() {
         .expect("prototype");
     let client_x_name = v8::String::new(scope, "clientX").unwrap();
     let prototype_value = v8::String::new(scope, "prototype-blocked").unwrap();
-    prototype
-        .define_own_property(
+    assert_eq!(
+        prototype.define_own_property(
             scope,
             client_x_name.into(),
             prototype_value.into(),
             v8::PropertyAttribute::READ_ONLY,
-        )
-        .expect("readonly prototype property should define");
+        ),
+        Some(true),
+        "readonly prototype property should define"
+    );
 
     let object = PrototypeBackedEnumerablePropertiesObject { client_x: 42.0 }
         .bind(scope)

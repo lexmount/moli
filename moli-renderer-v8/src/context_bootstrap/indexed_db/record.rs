@@ -93,7 +93,7 @@ fn convert_key_attribute<'s>(
     let key = require_idb_key(scope, snapshot)?;
     let record_context = record.get_creation_context(scope)?;
     let value = materialize_record_key(scope, &key, record_context)?;
-    record.set_private(scope, cache, value)?;
+    record.set_private(scope, cache, value)?.then_some(())?;
     rv.set(value);
     Some(())
 }

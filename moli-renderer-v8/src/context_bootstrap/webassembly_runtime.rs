@@ -472,8 +472,12 @@ fn install_constructor_wrapper<'s>(
         .ok_or_else(|| anyhow!("failed to build WebAssembly.{name} wrapper"))?;
     wrapper.set_name(v8str(scope, name));
 
-    if let Some(function_prototype) = native_constructor.get_prototype(scope) {
-        let _ = wrapper.set_prototype(scope, function_prototype);
+    if let Some(function_prototype) = native_constructor.get_prototype(scope)
+        && wrapper.set_prototype(scope, function_prototype) != Some(true)
+    {
+        return Err(anyhow!(
+            "failed to set WebAssembly.{name} wrapper prototype"
+        ));
     }
 
     let Some(native_prototype) = native_constructor

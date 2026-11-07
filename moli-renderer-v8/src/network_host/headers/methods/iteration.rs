@@ -165,7 +165,9 @@ fn live_headers_iterator<'s>(
         .ok()?;
 
     let prototype = headers_iterator_prototype(scope)?;
-    iterator.set_prototype(scope, prototype.into())?;
+    iterator
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     Some(iterator.into())
 }
 
