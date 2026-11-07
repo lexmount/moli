@@ -22,13 +22,14 @@ The runner:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from .case_set import (
     ANY_JS_GLOBAL_CHOICES,
@@ -616,11 +617,9 @@ def _cdp_case_run(
         references=tuple(
             ReftestReferenceRun(
                 reference_path=reference.reference_path,
-                url=_url_for_case_origin(
-                    server,
-                    reference.reference_path,
-                    external=external,
-                ),
+                # A relative match/mismatch resource inherits the test's
+                # transport and port, including for .https reftests.
+                url=urljoin(url, "/" + reference.reference_path.lstrip("/")),
                 relation=reference.relation,
                 fuzzy=reference.fuzzy,
             )
@@ -726,6 +725,11 @@ def main(argv: list[str] | None = None) -> int:
                     "wpt_root": str(server.wpt_root),
                     "loopback_base_url": server.base_url,
                     "loopback_alternate_base_url": server.alternate_base_url,
+                    "loopback_https_base_url": getattr(server, "https_base_url", None),
+                    "loopback_alternate_https_base_url": getattr(server, "alternate_https_base_url", None),
+                    "external_https_base_url": getattr(server, "external_https_base_url", None),
+                    "fixture_ca_sha256": hashlib.sha256(server.tls.ca_certificate.read_bytes()).hexdigest() if getattr(server, "tls", None) is not None else None,
+                    "fixture_server_spki_sha256": server.tls.server_spki_sha256 if getattr(server, "tls", None) is not None else None,
                     "external_base_url": server.external_base_url,
                     "external_alternate_base_url": server.external_alternate_base_url,
                     "external_remote_base_url": server.external_remote_base_url,
@@ -739,6 +743,12 @@ def main(argv: list[str] | None = None) -> int:
 
         for engine in args.engine:
             driver = build_driver(engine)
+            if getattr(server, "tls", None) is not None:
+                try:
+                    driver = driver.with_fixture_tls(server.tls)
+                except RuntimeError as error:
+                    print(f"error: {error}", file=sys.stderr)
+                    return 3
             external = engine == "obscura"
             mode_for_check = "cdp" if requires_cdp else args.mode
             if mode_for_check == "auto":

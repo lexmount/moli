@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -99,6 +99,32 @@ class EngineDriver:
     # entirely. Engines whose CLI does not execute JavaScript (e.g. obscura)
     # leave this as None and fall back to CDP.
     cli_fetch_command: Callable[[Path, str, float], list[str]] | None = None
+
+    def with_fixture_tls(self, authority: Any) -> "EngineDriver":
+        """Trust only this run's local fixture authority/public key.
+
+        Moli keeps ordinary CA and hostname verification. Chrome uses the
+        dedicated test-server SPKI mechanism used by upstream wptrunner.
+        Never fall back to ignoring all certificate errors or to plain HTTP.
+        """
+        original_command = self.build_command
+        original_fetch = self.cli_fetch_command
+        if self.name == "moli":
+            certificate = str(authority.ca_certificate)
+            def command(binary: Path, port: int, profile: Path | None) -> list[str]:
+                return [*original_command(binary, port, profile), "--ca-cert", certificate]
+            def fetch(binary: Path, url: str, timeout: float) -> list[str]:
+                assert original_fetch is not None
+                return [*original_fetch(binary, url, timeout), "--ca-cert", certificate]
+            return replace(self, build_command=command, cli_fetch_command=fetch if original_fetch is not None else None)
+        if self.name == "chrome":
+            fingerprint = authority.server_spki_sha256
+            def command(binary: Path, port: int, profile: Path | None) -> list[str]:
+                argv = original_command(binary, port, profile)
+                argv.insert(1, "--ignore-certificate-errors-spki-list=" + fingerprint)
+                return argv
+            return replace(self, build_command=command)
+        raise RuntimeError(f"engine {self.name} has no local WPT certificate trust configuration")
 
     def resolve_binary(self, override: str | None = None) -> Path:
         raw = override or os.environ.get(self.binary_env_var)
