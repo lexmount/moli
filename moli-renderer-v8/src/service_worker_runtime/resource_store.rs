@@ -411,8 +411,11 @@ impl JsonStoredRegistration {
             main_script_resource: self.main_script_resource.into_script_resource()?,
             imported_script_resources: self
                 .imported_script_resources
-                .into_iter()
-                .map(|(key, resource)| Ok((key, resource.into_script_resource()?)))
+                .into_values()
+                .map(|resource| {
+                    let resource = resource.into_script_resource()?;
+                    Ok((resource.request_url.to_string(), resource))
+                })
                 .collect::<Result<BTreeMap<_, _>>>()?,
         })
     }
@@ -681,6 +684,33 @@ mod tests {
             .expect("json service worker resource store should reopen");
         assert_eq!(
             reopened.lock().registration_for_key(&registration_key),
+            Some(registration)
+        );
+    }
+
+    #[test]
+    fn json_service_worker_resource_store_reindexes_legacy_redirect_resources() {
+        let temp = TempStorePath::new("legacy-redirect-map");
+        let mut registration = stored_registration();
+        let mut resource = script_resource(
+            "https://service-worker-resources.test/app/alias.js",
+            WorkerScriptResourceKind::JavaScript,
+        );
+        resource.final_url = "https://cdn.test/target.js".parse().unwrap();
+        registration.imported_script_resources =
+            [(resource.final_url.to_string(), resource.clone())].into();
+        let key = registration_key_for(&registration);
+        let store = new_shared_json_service_worker_resource_store(&temp.path).unwrap();
+        store
+            .lock()
+            .store_registration(registration.clone())
+            .unwrap();
+        drop(store);
+        registration.imported_script_resources =
+            [(resource.request_url.to_string(), resource)].into();
+        let reopened = new_shared_json_service_worker_resource_store(&temp.path).unwrap();
+        assert_eq!(
+            reopened.lock().registration_for_key(&key),
             Some(registration)
         );
     }
