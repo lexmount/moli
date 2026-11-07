@@ -681,6 +681,7 @@ impl ScriptVm {
             intercept_response,
             initial_network_request_headers,
             response,
+            ..
         } = pending;
         if matches!(
             &pending_fetch.continuation,
@@ -957,6 +958,10 @@ impl ScriptVm {
             intercept_response,
             initial_network_request_headers,
             response,
+            encoded,
+            response_status_text,
+            skip_fetch_security_validation,
+            response_filter,
         } = pending;
         let response = match initial_network_request_headers {
             Some(headers) => response.with_network_request_headers(Some(headers)),
@@ -976,7 +981,10 @@ impl ScriptVm {
                 .map(|headers| headers.to_vec()),
             response_status: response.status,
             response_headers: response.headers.clone(),
-            response_body: SubresourceResponseBody::from_navigation_response(&response),
+            response_body: encoded.as_ref().map_or_else(
+                || SubresourceResponseBody::from_navigation_response(&response),
+                |image| SubresourceResponseBody::from_parkable_image(image.clone()),
+            ),
             from_cache: response.from_cache,
             cache_state: response.cache_state,
         };
@@ -989,6 +997,10 @@ impl ScriptVm {
                 request_headers,
                 request_body,
                 response,
+                encoded,
+                response_status_text,
+                skip_fetch_security_validation,
+                response_filter,
             });
         if intercept_response {
             self._context_host
@@ -1828,17 +1840,22 @@ impl ScriptVm {
             response_code.unwrap_or(pending.response.status),
             response_headers.unwrap_or_else(|| pending.response.headers.clone()),
         );
-        let activity = self.resolve_pending_subresource_fetch_body(
+        let response_status_text = if response_code.is_none() {
+            pending.response_status_text
+        } else {
+            None
+        };
+        let activity = self.resolve_pending_subresource_fetch_completion(
             pending.pending,
             pending.request_url,
             pending.request_method,
             pending.request_headers,
             pending.request_body,
+            response_status_text,
+            pending.skip_fetch_security_validation,
+            pending.response_filter,
             None,
-            false,
-            None,
-            None,
-            Ok(response),
+            AsyncSubresourceFetchResult::from_image_parts(Ok(response), pending.encoded),
         )?;
         Ok(AsyncSubresourceCommandExecution::after_body((), activity))
     }

@@ -167,6 +167,9 @@ self.onconnect = event => {
 TRANSPARENT_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
 )
+FETCH_DISPATCH_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg=="
+)
 RESOURCE_MEDIA_BYTES = b"\x00\xffmoli-media"
 
 
@@ -577,6 +580,16 @@ class FixtureServer:
             def do_HEAD(self) -> None:
                 self._dispatch()
 
+            def do_OPTIONS(self) -> None:
+                if urllib.parse.urlparse(self.path).path.startswith("/fetch-dispatch/network/"):
+                    self._send_common(HTTPStatus.NO_CONTENT, "text/plain", b"", {
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Methods": "GET, POST",
+                        "Access-Control-Allow-Headers": "*",
+                    })
+                else:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+
             def _dispatch(self) -> None:
                 parsed = urllib.parse.urlparse(self.path)
                 route = parsed.path
@@ -693,7 +706,7 @@ class FixtureServer:
                 elif route == "/fetch-dispatch/sw.js":
                     resources = {
                         "font.woff2": ("font/woff2", (REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes()),
-                        "image.png": ("image/png", TRANSPARENT_PNG),
+                        "image.png": ("image/png", FETCH_DISPATCH_PNG),
                         "tone.wav": ("audio/wav", FETCH_MEDIA_WAV),
                         "captions.vtt": ("text/vtt", FETCH_MEDIA_CAPTIONS),
                     }
@@ -744,14 +757,14 @@ class FixtureServer:
                         return
                     mime, body = {
                         "font.woff2": ("font/woff2", (REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes()),
-                        "image.png": ("image/png", TRANSPARENT_PNG),
+                        "image.png": ("image/png", FETCH_DISPATCH_PNG),
                         "tone.wav": ("audio/wav", FETCH_MEDIA_WAV),
                         "captions.vtt": ("text/vtt", FETCH_MEDIA_CAPTIONS),
                     }[name]
                     if route.startswith("/fetch-dispatch/cache/"):
                         self._send_cacheable(mime, body)
                     else:
-                        self._send_common(HTTPStatus.OK, mime, body)
+                        self._send_common(HTTPStatus.OK, mime, body, {"Access-Control-Allow-Origin": "*"})
                 elif route == "/fetch-font.woff2":
                     outer._record_resource_request(self.path, self.headers)
                     self._send_common(

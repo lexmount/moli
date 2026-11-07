@@ -3047,6 +3047,10 @@ impl JsContextHost {
                 request_method: in_flight.request_method,
                 request_headers: in_flight.request_headers,
                 request_body: in_flight.request_body,
+                encoded: None,
+                response_status_text: None,
+                skip_fetch_security_validation: false,
+                response_filter: None,
                 response: navigation_response_from_subresource_body(
                     &info.response_body,
                     moli_fetch::ResponseHead {
@@ -3093,6 +3097,10 @@ impl JsContextHost {
                 request_body: info.request_body.clone(),
                 intercept_response: info.intercept_response,
                 initial_network_request_headers: info.network_request_headers.clone(),
+                encoded: None,
+                response_status_text: None,
+                skip_fetch_security_validation: false,
+                response_filter: None,
                 response: navigation_response_from_subresource_body(
                     &info.response_body,
                     moli_fetch::ResponseHead {
