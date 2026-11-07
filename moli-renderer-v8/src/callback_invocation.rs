@@ -219,6 +219,7 @@ impl CallbackInvoker {
             log_level,
             callback_name,
             invocation,
+            |_scope, value| CallbackInvocationOutcome::Returned(value),
             |_scope, outcome| outcome,
         )
     }
@@ -239,6 +240,35 @@ impl CallbackInvoker {
             log_level,
             callback_name,
             invocation,
+            |_scope, value| CallbackInvocationOutcome::Returned(value),
+            complete,
+        )
+    }
+
+    /// Converts the Web IDL return value before leaving the callback's
+    /// relevant/incumbent contexts and before its cleanup checkpoint.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn invoke_event_and_convert<'s, R>(
+        scope: &mut v8::PinScope<'s, '_>,
+        callback_kind: &str,
+        log_label: &str,
+        log_level: CallbackExceptionLogLevel,
+        callback_name: &str,
+        invocation: CallbackInvocation<'s, '_>,
+        convert_return: impl FnOnce(
+            &mut v8::PinScope<'s, '_>,
+            v8::Global<v8::Value>,
+        ) -> CallbackInvocationOutcome,
+        complete: impl FnOnce(&mut v8::PinScope<'s, '_>, CallbackInvocationOutcome) -> R,
+    ) -> R {
+        Self::invoke_with_completion(
+            scope,
+            callback_kind,
+            log_label,
+            log_level,
+            callback_name,
+            invocation,
+            convert_return,
             complete,
         )
     }
@@ -251,6 +281,10 @@ impl CallbackInvoker {
         log_level: CallbackExceptionLogLevel,
         callback_name: &str,
         invocation: CallbackInvocation<'s, '_>,
+        convert_return: impl FnOnce(
+            &mut v8::PinScope<'s, '_>,
+            v8::Global<v8::Value>,
+        ) -> CallbackInvocationOutcome,
         complete: impl FnOnce(&mut v8::PinScope<'s, '_>, CallbackInvocationOutcome) -> R,
     ) -> R {
         if let Some(host_ptr) = invocation.host_ptr {
@@ -340,6 +374,7 @@ impl CallbackInvoker {
                                         receiver,
                                         arguments,
                                     )
+                                    .map(|value| convert_return(scope, value))
                                 },
                                 |scope, failure| {
                                     capture_callback_resolution_failure(
@@ -363,7 +398,7 @@ impl CallbackInvoker {
             crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
 
             let outcome = match result {
-                Ok(value) => CallbackInvocationOutcome::Returned(value),
+                Ok(outcome) => outcome,
                 Err(report) => CallbackInvocationOutcome::Threw(report),
             };
             let completed = complete(scope, outcome);

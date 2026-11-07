@@ -522,55 +522,23 @@ pub(crate) fn invoke_prepared_before_unload_event_handler<'s>(
             (!invocation_target_in_shadow_tree).then_some(view.event),
         )
         .with_execution_context_currentness(callback_host, relevant_identity);
-    CallbackInvoker::invoke_event_and_then(
+    CallbackInvoker::invoke_event_and_convert(
         scope,
         "event listener",
         "host event listener threw",
         crate::exception_reporting::CallbackExceptionLogLevel::Debug,
         callback_name,
         invocation,
+        convert_before_unload_event_handler_result,
         |scope, outcome| match outcome {
             CallbackInvocationOutcome::Returned(value) => {
                 let value = v8::Local::new(scope, value);
                 if value.is_null_or_undefined() {
                     return;
                 }
-                let conversion_report = {
-                    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-                    let mut conversion_scope = try_catch.init();
-                    match value.to_string(&conversion_scope) {
-                        Some(value) => {
-                            apply_before_unload_event_handler_return_value(
-                                &mut conversion_scope,
-                                event,
-                                value,
-                            );
-                            None
-                        }
-                        None if conversion_scope.has_caught() => {
-                            let exception = conversion_scope.exception();
-                            let message = conversion_scope.message();
-                            let stack_trace = conversion_scope.stack_trace();
-                            Some(build_event_handler_exception_report(
-                                &mut conversion_scope,
-                                exception,
-                                message,
-                                stack_trace,
-                            ))
-                        }
-                        None => None,
-                    }
-                };
-                if let Some(report) = conversion_report {
-                    report_event_callback_exception(
-                        scope,
-                        callback_host,
-                        event_type,
-                        relevant_identity,
-                        None,
-                        &report,
-                    );
-                }
+                let value = v8::Local::<v8::String>::try_from(value)
+                    .expect("the beforeunload callback result was converted to DOMString");
+                apply_before_unload_event_handler_return_value(scope, event, value);
             }
             CallbackInvocationOutcome::Threw(report) => {
                 report_event_callback_exception(
@@ -585,6 +553,41 @@ pub(crate) fn invoke_prepared_before_unload_event_handler<'s>(
             CallbackInvocationOutcome::Retired => {}
         },
     );
+}
+
+fn convert_before_unload_event_handler_result<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Global<v8::Value>,
+) -> CallbackInvocationOutcome {
+    let local = v8::Local::new(scope, &value);
+    if local.is_null_or_undefined() {
+        return CallbackInvocationOutcome::Returned(value);
+    }
+    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+    let mut scope = try_catch.init();
+    match local.to_string(&scope) {
+        Some(value) => {
+            let value: v8::Local<v8::Value> = value.into();
+            CallbackInvocationOutcome::Returned(v8::Global::new(&scope, value))
+        }
+        None if scope.has_caught() => {
+            let exception = scope.exception();
+            let message = scope.message();
+            let stack_trace = scope.stack_trace();
+            CallbackInvocationOutcome::Threw(Box::new(build_event_handler_exception_report(
+                &mut scope,
+                exception,
+                message,
+                stack_trace,
+            )))
+        }
+        None => {
+            // A terminated conversion has no nullable DOMString to apply.
+            // Leave termination reporting to the execution owner.
+            let value: v8::Local<v8::Value> = v8::undefined(&scope).into();
+            CallbackInvocationOutcome::Returned(v8::Global::new(&scope, value))
+        }
+    }
 }
 
 fn invoke_event_handler_property<'s>(
