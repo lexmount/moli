@@ -452,6 +452,7 @@ impl ConnectedStyleImportRoot {
 pub(crate) struct ConnectedLoadNetworkResult {
     /// Request provenance survives clearing the stylesheet installation owner.
     pub(crate) resource_timing_initiator_type: &'static str,
+    pub(crate) resource_timing: Option<ConnectedResourceTiming>,
     pub(crate) import_options: Option<crate::stylesheet_blocking::StylesheetFetchOptions>,
     pub(crate) consumed_preload_error: bool,
     /// Exact request Document, independent of an element's current location.
@@ -469,6 +470,14 @@ pub(crate) struct ConnectedLoadNetworkResult {
     pub(crate) origin_clean: bool,
     pub(crate) network_observed: bool,
     pub(crate) result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
+}
+
+/// Attribution and terminal observation of the physical connected-link request.
+/// Neither depends on a link's later location or on callback execution.
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectedResourceTiming {
+    pub(crate) initiator: crate::context_bootstrap::ResourceTimingInitiator,
+    pub(crate) end_unix_millis: f64,
 }
 
 #[derive(Debug)]
@@ -2782,6 +2791,7 @@ mod tests {
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "link",
+                resource_timing: None,
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -2835,6 +2845,7 @@ mod tests {
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "link",
+                resource_timing: None,
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -2893,6 +2904,7 @@ mod tests {
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "link",
+                resource_timing: None,
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -2951,6 +2963,7 @@ mod tests {
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "link",
+                resource_timing: None,
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -3563,6 +3576,7 @@ mod tests {
             network_results: vec![ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "link",
+                resource_timing: None,
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -3663,6 +3677,7 @@ mod tests {
                 network_results: vec![ConnectedLoadNetworkResult {
                     network_observed: false,
                     resource_timing_initiator_type: "css",
+                    resource_timing: None,
                     import_options: None,
                     consumed_preload_error: false,
                     document_owner: None,
@@ -3741,6 +3756,7 @@ mod tests {
             network_results: vec![ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "css",
+                resource_timing: None,
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -3807,6 +3823,7 @@ mod tests {
             network_results: vec![ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "css",
+                resource_timing: None,
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -3952,6 +3969,7 @@ mod tests {
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
                 resource_timing_initiator_type: "link",
+                resource_timing: None,
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
