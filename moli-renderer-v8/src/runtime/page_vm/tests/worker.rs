@@ -1,3 +1,4 @@
+mod blob_storage_key;
 use super::*;
 use crate::{RendererOutputItem, RendererOwnerAction};
 
