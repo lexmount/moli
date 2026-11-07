@@ -86,7 +86,6 @@ impl JsContextHost {
         {
             return false;
         }
-        self.register_reserved_service_worker_child_client_for_navigation(handle, &url);
         self.queue_child_browsing_context_navigation_commit(handle)
     }
 
@@ -274,7 +273,6 @@ impl JsContextHost {
         {
             return false;
         }
-        self.register_reserved_service_worker_child_client_for_navigation(handle, &url);
         self.queue_child_browsing_context_navigation_commit(handle)
     }
 
