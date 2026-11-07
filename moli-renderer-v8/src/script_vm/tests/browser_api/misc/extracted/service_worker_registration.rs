@@ -1212,3 +1212,25 @@ async fn navigator_service_worker_periodic_sync_register_respects_permission() {
         .await
         .expect("service worker periodic sync permission script server should finish");
 }
+
+#[test]
+fn service_worker_registration_url_errors_reject_before_network_admission() {
+    let mut vm = new_storage_html_test_vm("https://sw-url-validation.test/app/page.html");
+    vm.eval(r#"globalThis.__registrationUrlResult = 'pending';
+        Promise.all([
+            ['worker%2f.js', './scope/'],
+            ['worker%5C.js', './scope/'],
+            ['data:text/javascript,', './scope/'],
+            ['ftp://sw-url-validation.test/sw.js', './scope/'],
+            ['worker.js', 'data:text/html,'],
+            ['worker.js', './scope%2F/'],
+            ['worker.js', './scope%5c/']
+        ].map(async ([url, scope]) => {
+            try { await navigator.serviceWorker.register(url, {scope}); return 'resolved'; }
+            catch(error) { return [error.name,error instanceof TypeError,error instanceof DOMException].join('|'); }
+        })).then(results => {__registrationUrlResult=JSON.stringify(results);});"#).unwrap();
+    assert_eq!(
+        vm.eval("__registrationUrlResult").unwrap(),
+        r#"["TypeError|true|false","TypeError|true|false","TypeError|true|false","TypeError|true|false","TypeError|true|false","TypeError|true|false","TypeError|true|false"]"#
+    );
+}
