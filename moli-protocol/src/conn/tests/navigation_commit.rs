@@ -1045,6 +1045,9 @@ async fn cancelled_replacement_observer_keeps_adopted_page_runnable() {
                     .unwrap()
                     .renderer_devtools_agent_token()
             });
+            // Hold the renderer until the commit and its following barrier are
+            // queued; a free renderer can finish during the very first poll.
+            let gate = ctx.hold_fixture_renderer(Some("SID-1")).await;
             let commit = crate::conn::PreparedDocumentCommitState::new();
             let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
             let mut pending_commit =
@@ -1059,6 +1062,7 @@ async fn cancelled_replacement_observer_keeps_adopted_page_runnable() {
                     .start_runtime_realm_inventory()
                     .unwrap()
             });
+            drop(gate);
             let native_barrier =
                 tokio::time::timeout(std::time::Duration::from_secs(10), native_barrier.wait())
                     .await
