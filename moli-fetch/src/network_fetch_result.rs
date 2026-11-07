@@ -209,6 +209,14 @@ impl fmt::Debug for NetworkObservationRecorder {
 }
 
 impl NetworkObservationRecorder {
+    pub(crate) fn set_current_request_referrer(&self, referrer: String) {
+        self.state.lock().request_referrer = Some(referrer);
+    }
+
+    pub(crate) fn request_referrer(&self) -> Option<String> {
+        self.state.lock().request_referrer.clone()
+    }
+
     pub(crate) fn set_current_request_cookie_report(
         &self,
         cookie_report: Option<StoredCookieQueryReport>,
@@ -296,6 +304,7 @@ impl NetworkObservationRecorder {
 
 #[derive(Default)]
 struct NetworkObservationRecorderState {
+    request_referrer: Option<String>,
     journal: NetworkObservationJournal,
     current_request_cookie_report: Option<StoredCookieQueryReport>,
     pending_response: Option<PendingResponseObservation>,
@@ -520,6 +529,7 @@ impl fmt::Debug for NetworkFetchFailureContext {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NetworkFetchResult<R> {
     response: R,
+    request_referrer: Option<String>,
     observation_journal: NetworkObservationJournal,
 }
 
@@ -537,12 +547,25 @@ impl<R> NetworkFetchResult<R> {
     ) -> Self {
         Self {
             response,
+            request_referrer: None,
             observation_journal,
         }
     }
 
     pub fn without_request_observation(response: R) -> Self {
         Self::with_observation_journal(response, NetworkObservationJournal::default())
+    }
+
+    /// Fetch's selected referrer for the terminal hop, independently of wire
+    /// observations. An empty string records an omitted referrer; `None` means
+    /// that the caller did not retain a Fetch selection.
+    pub fn request_referrer(&self) -> Option<&str> {
+        self.request_referrer.as_deref()
+    }
+
+    pub fn with_request_referrer(mut self, referrer: Option<String>) -> Self {
+        self.request_referrer = referrer;
+        self
     }
 
     pub fn response(&self) -> &R {
@@ -578,8 +601,11 @@ impl<R> NetworkFetchResult<R> {
     }
 
     pub fn map_response<T>(self, map: impl FnOnce(R) -> T) -> NetworkFetchResult<T> {
-        let (response, observation_journal) = self.into_parts_with_observation_journal();
-        NetworkFetchResult::with_observation_journal(map(response), observation_journal)
+        NetworkFetchResult {
+            response: map(self.response),
+            request_referrer: self.request_referrer,
+            observation_journal: self.observation_journal,
+        }
     }
 }
 

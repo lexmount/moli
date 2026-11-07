@@ -871,6 +871,14 @@ impl RuntimeOwner {
         mut job: RuntimeJob,
     ) -> std::result::Result<JobOutcome, (RuntimeResponseTx, anyhow::Error)> {
         job.request.prepare_accept_header(&self.config);
+        if let Some(recorder) = job.request.network_observation_recorder() {
+            // Record before cache lookup too: a cache hit has no wire headers.
+            recorder.set_current_request_referrer(
+                job.request
+                    .referrer_header_value(&job.current_url)
+                    .unwrap_or_default(),
+            );
+        }
         job.response_progress = job.cancel_handle.begin_response_progress();
         if job.cancel_handle.is_cancelled() {
             return Err((
@@ -1050,6 +1058,14 @@ impl RuntimeOwner {
         ),
     > {
         job.request.prepare_accept_header(&self.config);
+        if let Some(recorder) = job.request.network_observation_recorder() {
+            // Record before cache lookup too: a cache hit has no wire headers.
+            recorder.set_current_request_referrer(
+                job.request
+                    .referrer_header_value(&job.current_url)
+                    .unwrap_or_default(),
+            );
+        }
         job.response_progress = job.cancel_handle.begin_response_progress();
         if job.cancel_handle.is_cancelled() {
             return Err((
@@ -1273,6 +1289,14 @@ impl RuntimeOwner {
         ),
     > {
         job.request.prepare_accept_header(&self.config);
+        if let Some(recorder) = job.request.network_observation_recorder() {
+            // Record before cache lookup too: a cache hit has no wire headers.
+            recorder.set_current_request_referrer(
+                job.request
+                    .referrer_header_value(&job.current_url)
+                    .unwrap_or_default(),
+            );
+        }
         job.response_progress = job.cancel_handle.begin_response_progress();
         if job.cancel_handle.is_cancelled() {
             return Err((

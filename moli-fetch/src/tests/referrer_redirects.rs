@@ -8,8 +8,14 @@ enum Transport {
 }
 
 impl Transport {
-    async fn fetch(self, client: &FetchClientHandle, request: Request) -> Result<Response> {
-        match self {
+    async fn fetch(
+        self,
+        client: &FetchClientHandle,
+        request: Request,
+    ) -> Result<(Response, Option<String>)> {
+        let recorder = crate::network_fetch_result::NetworkObservationRecorder::default();
+        let request = request.with_network_observation_recorder(recorder.clone());
+        let response = match self {
             Self::Buffered => {
                 let (tx, rx) = oneshot::channel();
                 client.fetch_with_cancel_callback(
@@ -35,7 +41,8 @@ impl Transport {
                     .into_lossy_materialized_text_response()
                     .await
             }
-        }
+        }?;
+        Ok((response, recorder.request_referrer()))
     }
 }
 
@@ -143,7 +150,12 @@ async fn check_redirect_referrers(
         expected[0],
         "{case}: first hop"
     );
-    for (run, response) in responses.iter().enumerate() {
+    for (run, (response, request_referrer)) in responses.iter().enumerate() {
+        assert_eq!(
+            request_referrer.as_deref(),
+            Some(expected[2].unwrap_or_default()),
+            "{case}: terminal Fetch metadata"
+        );
         assert_eq!(response.status, 200, "{case}");
         assert_eq!(response.body_text(), "final", "{case}");
         assert_eq!(response.final_url.path(), "/final", "{case}");
@@ -263,7 +275,12 @@ async fn manual_redirects_keep_the_current_response_and_referrer() -> Result<()>
     // Manual responses use the buffered or raw API. Raw streaming intentionally
     // returns only the redirect head so its owner need not wait for the body.
     for (transport, body) in [(Transport::Buffered, "redirect"), (Transport::Raw, "")] {
-        let response = transport.fetch(&client, request.clone()).await?;
+        let (response, request_referrer) = transport.fetch(&client, request.clone()).await?;
+        assert_eq!(
+            request_referrer.as_deref(),
+            Some("http://document.test/private?query=1"),
+            "{transport:?}: the current hop selection precedes redirect policy application"
+        );
         assert_eq!(response.status, 302, "{transport:?}");
         assert_eq!(response.body_text(), body, "{transport:?}");
         assert_eq!(response.final_url, request.url, "{transport:?}");
@@ -333,6 +350,62 @@ fn redirect_referrer_updates_preserve_request_identity_and_metadata() -> Result<
             metadata.document_referrer_policy.as_deref(),
             Some("strict-origin")
         );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_metadata_retains_terminal_referrer_without_wire_observations() -> Result<()> {
+    for policy in ["no-referrer", "origin"] {
+        let server = ScriptedHttpServer::spawn(vec![
+            ScriptedResponse::status(302, "Found")
+                .with_header("Location", "/final")
+                .with_header("Referrer-Policy", policy)
+                .with_header("Cache-Control", "max-age=600"),
+            ScriptedResponse::ok("final").with_header("Cache-Control", "max-age=600"),
+        ]);
+        let cache_dir = unique_test_cache_dir();
+        let mut config = FetchConfig::default();
+        config.set_http_cache_dir(Some(cache_dir.display().to_string()));
+        let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+        let document = Url::parse(&server.url_path("/private/path?source=1"))?;
+        let request = Request::get(&server.url_path("/redirect"))?.with_initiator_url(&document);
+        let expected = if policy == "no-referrer" {
+            String::new()
+        } else {
+            server.url_path("/")
+        };
+        for cached in [false, true] {
+            let result = client
+                .fetch_raw_with_network_metadata(request.clone())
+                .await?;
+            assert_eq!(
+                result.request_referrer(),
+                Some(expected.as_str()),
+                "{policy}, cached={cached}"
+            );
+            assert_eq!(result.response().from_cache, cached);
+            if cached {
+                assert!(
+                    result.request_observation().is_none(),
+                    "a fully cached fetch has no outgoing header observation"
+                );
+            }
+            let mapped = result.map_response(|response| response.head());
+            assert_eq!(
+                mapped.request_referrer(),
+                Some(expected.as_str()),
+                "response mapping must preserve the selected referrer"
+            );
+        }
+        assert_eq!(
+            server.requests().len(),
+            2,
+            "both redirect and final response must be cached"
+        );
+        server.shutdown();
+        drop(client);
+        fs::remove_dir_all(cache_dir)?;
     }
     Ok(())
 }

@@ -305,11 +305,13 @@ fn network_fetch_result_from_result<R>(
     recorder: NetworkObservationRecorder,
 ) -> Result<NetworkFetchResult<R>> {
     let observation_journal = recorder.snapshot();
+    let request_referrer = recorder.request_referrer();
     match result {
         Ok(response) => Ok(NetworkFetchResult::with_observation_journal(
             response,
             observation_journal,
-        )),
+        )
+        .with_request_referrer(request_referrer)),
         Err(source) if source.is::<NetworkFetchFailureContext>() => Err(source),
         Err(source) => Err(NetworkFetchFailureContext::attach(
             source,

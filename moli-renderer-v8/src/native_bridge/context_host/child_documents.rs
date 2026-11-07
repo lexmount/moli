@@ -100,3 +100,36 @@ impl ChildDocumentCommitResult {
         }
     }
 }
+
+impl super::JsContextHost {
+    fn child_document_navigation_referrer_policy(
+        &self,
+        handle: crate::document_runtime::DomHandle,
+        initiator: ChildDocumentNavigationInitiator,
+    ) -> String {
+        let owner = self.owner_dispatch_scope_for_node(handle);
+        if owner
+            .and_then(|owner| self.window_access_origin_for_dispatch_scope(owner))
+            .is_some_and(|origin| origin.serialized_origin() == "null")
+        {
+            return "no-referrer".to_owned();
+        }
+        let source_policy = self
+            .dom_host()
+            .owner_document_handle(handle)
+            .and_then(|document| {
+                crate::context_bootstrap::document_referrer_policy_for_native_document(
+                    self, document,
+                )
+            });
+        let owner_policy = (initiator == ChildDocumentNavigationInitiator::FrameOwnerElement
+            && self.dom_host().is_html_element_named(handle, "iframe"))
+        .then(|| self.dom_host().get_attribute(handle, "referrerpolicy"))
+        .flatten();
+        let owner_policy = owner_policy
+            .as_deref()
+            .map(crate::native_bridge::element::canonical_referrer_policy_value)
+            .filter(|policy| !policy.is_empty());
+        moli_fetch::effective_referrer_policy(owner_policy, source_policy.as_deref()).to_owned()
+    }
+}
