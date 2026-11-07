@@ -1,7 +1,6 @@
 use moli_webidl_callback::WebIdlCallbackFunction;
 
 use crate::{
-    content_security_policy::ContentSecurityPolicyViolationEventFields,
     context_bootstrap::{
         LegacyStorageQuotaCallbackOutcome, LegacyStorageQuotaCallbackTask,
         LegacyStorageQuotaCallbackTaskEffect,
@@ -48,13 +47,10 @@ impl JsContextHost {
         else {
             return false;
         };
-        let fields = ContentSecurityPolicyViolationEventFields {
-            status_code: i32::from(
-                self.content_security_policy_response_status(owner)
-                    .unwrap_or(0),
-            ),
-            ..ContentSecurityPolicyViolationEventFields::from(violation)
-        };
+        let metadata = self
+            .document_csp_violation_metadata_for_owner(owner)
+            .unwrap_or_default();
+        let fields = metadata.event_fields(violation);
         match target.owner() {
             WindowDocumentOwner::Frame(document_owner) => {
                 // SAFETY: the Host and its DocumentRuntime share one ScriptVm.
@@ -223,16 +219,9 @@ impl JsContextHost {
                             scope,
                             value,
                             value,
-                            &ContentSecurityPolicyViolationEventFields {
-                                status_code: i32::from(
-                                    self.dom_host()
-                                        .document_source_response_status_for_handle(
-                                            resolved.document_handle,
-                                        )
-                                        .unwrap_or(0),
-                                ),
-                                ..ContentSecurityPolicyViolationEventFields::from(&*violation)
-                            },
+                            &self
+                                .document_csp_violation_metadata(resolved.document_handle)
+                                .event_fields(&violation),
                         )
                         .ok()
                     })
