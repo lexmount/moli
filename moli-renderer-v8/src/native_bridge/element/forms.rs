@@ -175,9 +175,10 @@ pub(in crate::native_bridge) use self::input::{
 };
 pub(crate) use self::labels::control_label_handles;
 pub(in crate::native_bridge) use self::labels::{
-    control_labels_getter_function, label_activation_control_handle, label_control_getter_function,
-    label_control_handle, label_form_getter_function, label_html_for_getter_function,
-    label_html_for_setter_function, label_receives_programmatic_focus,
+    control_labels_getter_function, label_activation_control_handle, label_activation_label_handle,
+    label_control_getter_function, label_control_handle, label_form_getter_function,
+    label_html_for_getter_function, label_html_for_setter_function,
+    label_receives_programmatic_focus,
 };
 pub(in crate::native_bridge) use self::owner::form_associated_form_getter_function;
 pub(crate) use self::owner::{
@@ -238,8 +239,9 @@ pub(in crate::native_bridge) use self::submission::{
 pub(crate) use self::text_control::replace_text_control_selection_after_beforeinput;
 pub(crate) use self::text_control::{
     dispatch_text_control_event, is_text_control,
-    queue_text_control_document_selection_change_event, queue_text_control_selection_change_event, replace_text_control_selection,
-    replace_text_control_selection_for_insert_html, restore_focused_text_control_selection, text_control_value, text_control_value_dom_string,
+    queue_text_control_document_selection_change_event, queue_text_control_selection_change_event,
+    replace_text_control_selection, replace_text_control_selection_for_insert_html,
+    restore_focused_text_control_selection, text_control_value, text_control_value_dom_string,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use self::text_control::{
