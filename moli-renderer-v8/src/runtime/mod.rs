@@ -123,6 +123,7 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageDedicatedWorkerClientEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageElementToggleEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageFileEntryFileCallback;
 pub(crate) use self::page_vm::AuthorizedCurrentPageFileReadingTask;
+pub(crate) use self::page_vm::AuthorizedCurrentPageFontLoadingTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageHashChangeDelivery;
 pub(crate) use self::page_vm::AuthorizedCurrentPageHistoryTraversal;
 pub(crate) use self::page_vm::AuthorizedCurrentPageImageLoadEvent;
@@ -153,7 +154,9 @@ pub(crate) use self::page_vm::backend_node_registry::new_shared_renderer_backend
 #[cfg(test)]
 pub(crate) use self::page_vm::test_support::PageVmTaskExecutorTestHarness;
 #[cfg(test)]
-pub(crate) use self::page_vm::{IntoPageTaskCompletion, PageTaskCompletion};
+pub(crate) use self::page_vm::{
+    IntoPageTaskCompletion, PageSelectedTaskTestSelector, PageTaskCompletion,
+};
 pub(super) const MAX_PENDING_LOCATION_NAVIGATION_TURNS: usize = 32;
 
 /// Opaque identity of the exact frontend Runtime command that produced one
