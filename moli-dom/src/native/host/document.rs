@@ -2430,6 +2430,11 @@ impl DomHost {
     }
 
     pub fn containing_shadow_root(&self, handle: DomHandle) -> Option<DomHandle> {
+        // `is_shadow_root` uses this same registry. Without any registered
+        // root, no ancestor walk can find one, even for detached subtrees.
+        if self.shadow_hosts_by_root.borrow().is_empty() {
+            return None;
+        }
         let mut current = Some(handle);
         while let Some(candidate) = current {
             if self.is_shadow_root(candidate) {
