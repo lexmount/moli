@@ -269,10 +269,33 @@ impl CdpConnection {
                     );
                     return false;
                 }
-                self.register_runtime_remote_object_ids_from_value_for_owner(owner, &message);
-                if let Some(mut event) = RuntimeContextProtocolEvent::from_context_protocol_message(
-                    message.value().clone(),
+                // These notifications have no RemoteObject fields. Unknown
+                // methods still take the conservative ownership scan.
+                if !matches!(
+                    message.method(),
+                    Some(
+                        "Debugger.scriptParsed"
+                            | "Debugger.scriptFailedToParse"
+                            | "HeapProfiler.addHeapSnapshotChunk"
+                            | "Runtime.executionContextCreated"
+                            | "Runtime.executionContextDestroyed"
+                            | "Runtime.executionContextsCleared"
+                    )
                 ) {
+                    self.register_runtime_remote_object_ids_from_value_for_owner(owner, &message);
+                }
+                if matches!(
+                    message.method(),
+                    Some(
+                        "Runtime.executionContextCreated"
+                            | "Runtime.executionContextDestroyed"
+                            | "Runtime.executionContextsCleared"
+                    )
+                ) && let Some(mut event) =
+                    RuntimeContextProtocolEvent::from_context_protocol_message(
+                        message.value().clone(),
+                    )
+                {
                     qualify_runtime_context_protocol_event_for_owner_typed(self, &mut event, owner);
                     apply_runtime_context_protocol_event_side_effects_for_owner_typed(
                         self, &event, owner,
