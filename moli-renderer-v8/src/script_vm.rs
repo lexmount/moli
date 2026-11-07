@@ -2091,10 +2091,6 @@ impl ScriptVmPageRealmBootstrap {
         {
             dom_host.set_document_fallback_base_url_for_handle(document_handle, Some(base));
         }
-        let top_level_storage_key = initial_environment
-            .as_ref()
-            .and_then(|environment| environment.storage_key.clone())
-            .or(top_level_storage_key);
         let document_url = dom_host
             .dom()
             .final_url()
@@ -2103,14 +2099,55 @@ impl ScriptVmPageRealmBootstrap {
         let document_base_url = dom_host
             .document_base_url_for_handle(document_handle)
             .unwrap_or_else(|| document_url.clone());
-        let initial_origin = initial_environment
-            .as_ref()
-            .map(|environment| environment.origin.clone())
-            .unwrap_or_else(|| moli_url::origin_ascii_serialization(&document_url));
-        let initial_policy = initial_environment
+        let creation_sandbox = initial_policy.sandbox;
+        let mut initial_policy = initial_environment
             .as_ref()
             .map(|environment| environment.policy_container.clone())
             .unwrap_or(initial_policy);
+        initial_policy.sandbox = initial_policy
+            .sandbox
+            .with_response_content_security_policy(creation_sandbox);
+        let sandbox_forces_opaque_origin = initial_policy.sandbox.forces_opaque_origin;
+        let initial_origin = if sandbox_forces_opaque_origin {
+            "null".to_owned()
+        } else {
+            initial_environment
+                .as_ref()
+                .map(|environment| environment.origin.clone())
+                .unwrap_or_else(|| moli_url::origin_ascii_serialization(&document_url))
+        };
+        let top_level_storage_key = initial_environment
+            .as_ref()
+            .and_then(|environment| environment.storage_key.clone())
+            .or(top_level_storage_key);
+        let top_level_storage_key = if sandbox_forces_opaque_origin {
+            // Sandboxing creates a fresh opaque Document origin even for an
+            // HTTP URL. Use it before creating storage and service worker
+            // clients, preserving only the supplied partition metadata.
+            let top_level_site = top_level_storage_key
+                .as_ref()
+                .map(|key| key.top_level_site().to_owned())
+                .unwrap_or_else(|| moli_storage_key::site_for_url(&document_url));
+            let relation = moli_storage_key::StoragePartitionRelation::from_sites(
+                &moli_storage_key::site_for_url(&document_url),
+                &top_level_site,
+            );
+            let mut key = moli_storage_key::MoliStorageKey::new(
+                initial_origin.clone(),
+                top_level_site,
+                Some(browser_context_runtime.next_web_storage_opaque_context_nonce()),
+                relation,
+            );
+            if top_level_storage_key
+                .as_ref()
+                .is_some_and(|key| key.has_cross_site_ancestor())
+            {
+                key = key.with_cross_site_ancestor();
+            }
+            Some(key)
+        } else {
+            top_level_storage_key
+        };
         let mut frame_owner_store = FrameOwnerStore::default();
         frame_owner_store.ensure_main_frame(
             document_handle,
@@ -2130,6 +2167,7 @@ impl ScriptVmPageRealmBootstrap {
             .expect("main Document must own a LocalWindow")
             .inherited_opaque_origin = initial_environment
             .as_ref()
+            .filter(|_| !sandbox_forces_opaque_origin)
             .and_then(|environment| environment.opaque_origin.clone());
         let post_domcontentloaded_page_task_tx = page_task_tx.page_task_sender();
         let page_runtime_wake_tx = page_task_tx.page_runtime_wake_sender();
@@ -2158,9 +2196,11 @@ impl ScriptVmPageRealmBootstrap {
 
         let inherited_document_domain = initial_environment
             .as_ref()
+            .filter(|_| !sandbox_forces_opaque_origin)
             .map(|environment| environment.document_domain_override.clone());
-        let inherited_security_token =
-            initial_environment.and_then(|environment| environment.security_token);
+        let inherited_security_token = initial_environment
+            .filter(|_| !sandbox_forces_opaque_origin)
+            .and_then(|environment| environment.security_token);
         let RendererDocumentIsolateBootstrap {
             initial_document_environment: _,
             renderer_document_isolate,

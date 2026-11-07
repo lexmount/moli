@@ -1123,8 +1123,10 @@ impl DocumentRuntime {
         &mut self,
         mut policy: DocumentPolicyContainer,
     ) {
-        policy.sandbox = DocumentSandboxPolicy::from_response_content_security_policies(
-            &policy.response_content_security_policies,
+        policy.sandbox = policy.sandbox.with_response_content_security_policy(
+            DocumentSandboxPolicy::from_response_content_security_policies(
+                &policy.response_content_security_policies,
+            ),
         );
         self.policy_container = policy;
         self.sync_document_resource_client_policy();

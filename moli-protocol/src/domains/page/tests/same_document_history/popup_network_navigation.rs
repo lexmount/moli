@@ -9,6 +9,7 @@ mod document_open;
 mod history_traversal;
 mod lifecycle;
 mod policy_inheritance;
+mod sandbox;
 
 async fn gated_page() -> (SameDocumentPage, Arc<ResponseGate>) {
     let gate = Arc::new(ResponseGate {

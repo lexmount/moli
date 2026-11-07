@@ -1102,7 +1102,9 @@ impl JsContextHost {
         };
         browsing_context_name
             .set(trackable_lightweight_popup_window_name(target_name).unwrap_or_default());
-        let auxiliary_window = self.browser_context_runtime.new_auxiliary_window();
+        let auxiliary_window = self
+            .browser_context_runtime
+            .new_auxiliary_window_with_sandbox(initial_policy_container.sandbox);
         let popup_id = auxiliary_window.id();
         let (window, facade_context) = self.bridge.bindings.instantiate_window_proxy_shell(scope);
         let initial_document_owner = self.allocate_lightweight_popup_document_owner(popup_id);
