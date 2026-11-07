@@ -1,6 +1,7 @@
 use crate::{
     document_runtime::DomHandle, script_vm::inspector::DocumentInspectorContextRegistrationId,
 };
+use moli_inspector_json::InspectorJson;
 use moli_page_types::DevToolsSessionKey;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -176,13 +177,14 @@ impl PageIsolatedWorldRegistry {
         })
     }
 
-    pub(super) fn record_inspector_context_state(
+    pub(super) fn record_inspector_context_state<T: Clone + Into<InspectorJson>>(
         &mut self,
-        messages: &[Value],
+        messages: &[T],
         root_frame_id: Option<&str>,
     ) {
         for message in messages {
-            match message["method"].as_str() {
+            let message: InspectorJson = message.clone().into();
+            match message.method() {
                 Some("Runtime.executionContextsCleared") => self.clear_inspector_context_state(),
                 Some("Runtime.executionContextDestroyed") => {
                     let destroyed_id = message["params"]["executionContextId"].as_i64();
@@ -190,7 +192,7 @@ impl PageIsolatedWorldRegistry {
                     self.clear_destroyed_inspector_context_state(destroyed_id, destroyed_realm_id);
                 }
                 Some("Runtime.executionContextCreated") => {
-                    let Some(created) = InspectorIsolatedContextCreated::from_message(message)
+                    let Some(created) = InspectorIsolatedContextCreated::from_message(&message)
                     else {
                         continue;
                     };

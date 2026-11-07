@@ -1,4 +1,5 @@
 use super::*;
+use moli_inspector_json::InspectorJson;
 
 impl CdpConnection {
     /// Routes a batch of inspector messages into `out`, demultiplexing by id.
@@ -90,7 +91,7 @@ impl CdpConnection {
                 RendererRuntimeInspectorMessage::Protocol(message) => {
                     current_seen |= self
                         .route_runtime_inspector_protocol_message_for_owner_with_background_events_into(
-                            message.into_value(),
+                            message.into_payload(),
                             current_cmd_id,
                             owner,
                             response_events,
@@ -177,15 +178,15 @@ impl CdpConnection {
 
     pub(super) fn route_runtime_inspector_protocol_message_for_owner_with_background_events_into(
         &mut self,
-        message: Value,
+        message: impl Into<InspectorJson>,
         current_cmd_id: Option<u64>,
         owner: &CommandOwnerScope,
         response_events: &mut Vec<BackgroundProtocolEvent>,
         background_events: &mut Vec<BackgroundProtocolEvent>,
     ) -> bool {
         let current_session_id = owner.session_id();
-        let mut message = message;
-        let id = message.get("id").and_then(Value::as_u64);
+        let mut message = message.into();
+        let id = message.id_u64();
         match id {
             Some(id) => {
                 let entry = self.remove_pending_inspector_await_for_owner(id, owner);
@@ -202,15 +203,20 @@ impl CdpConnection {
                 }
                 if Some(id) == current_cmd_id {
                     self.register_runtime_remote_object_ids_from_value_for_owner(owner, &message);
-                    let response =
-                        BackgroundCommandResponsePayload::from_owned_runtime_inspector_message(
-                            message,
-                        );
-                    response_events.push(BackgroundProtocolEvent::command_response(
-                        Some(id),
-                        current_session_id,
-                        response,
-                    ));
+                    if matches!(message, InspectorJson::Raw(_)) {
+                        message.set_session_id(current_session_id);
+                        response_events.push(BackgroundProtocolEvent::immediate(message));
+                    } else {
+                        let response =
+                            BackgroundCommandResponsePayload::from_owned_runtime_inspector_message(
+                                message.into_value(),
+                            );
+                        response_events.push(BackgroundProtocolEvent::command_response(
+                            Some(id),
+                            current_session_id,
+                            response,
+                        ));
+                    }
                     return true;
                 }
                 tracing::warn!(
@@ -219,7 +225,7 @@ impl CdpConnection {
                 );
             }
             None => {
-                if message.get("method").and_then(Value::as_str) == Some("Page.windowOpen") {
+                if message.method() == Some("Page.windowOpen") {
                     let params = message.get("params").unwrap_or(&Value::Null);
                     let Some(url) = params.get("url").and_then(Value::as_str) else {
                         tracing::warn!("dropping Page.windowOpen without a string url");
@@ -264,9 +270,9 @@ impl CdpConnection {
                     return false;
                 }
                 self.register_runtime_remote_object_ids_from_value_for_owner(owner, &message);
-                if let Some(mut event) =
-                    RuntimeContextProtocolEvent::from_context_protocol_message(message.clone())
-                {
+                if let Some(mut event) = RuntimeContextProtocolEvent::from_context_protocol_message(
+                    message.value().clone(),
+                ) {
                     qualify_runtime_context_protocol_event_for_owner_typed(self, &mut event, owner);
                     apply_runtime_context_protocol_event_side_effects_for_owner_typed(
                         self, &event, owner,
@@ -284,11 +290,7 @@ impl CdpConnection {
                     }
                     return false;
                 }
-                if let Some(session_id) = current_session_id {
-                    message["sessionId"] = json!(session_id);
-                } else if let Some(map) = message.as_object_mut() {
-                    map.remove("sessionId");
-                }
+                message.set_session_id(current_session_id);
                 background_events.push(protocol_message_background_event(message));
             }
         }
@@ -454,7 +456,7 @@ impl CdpConnection {
                 correlation.dispatched_attachment_id(),
                 dispatched_attachment_id
             );
-            message.value_mut()["id"] = json!(correlation.frontend_command_id().get());
+            message.set_frontend_id(correlation.frontend_command_id().get());
         }
     }
 
@@ -489,7 +491,7 @@ impl CdpConnection {
                 correlation.dispatched_attachment_id(),
                 dispatched_attachment_id
             );
-            message.value_mut()["id"] = json!(correlation.frontend_command_id().get());
+            message.set_frontend_id(correlation.frontend_command_id().get());
         }
     }
 
@@ -544,8 +546,8 @@ impl CdpConnection {
                 return false;
             };
             let frontend_command_id = correlation.frontend_command_id().get();
-            message.value_mut()["id"] = json!(frontend_command_id);
-            if project_runtime_object_ownership && message.value().get("result").is_some() {
+            message.set_frontend_id(frontend_command_id);
+            if project_runtime_object_ownership && message.payload().has_field("result") {
                 if let Some(object_group) = result_object_group.as_deref() {
                     self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
                         owner,
@@ -697,11 +699,7 @@ impl CdpConnection {
             );
         }
         let mut message = response.into_protocol_message();
-        if let Some(session_id) = routed_session_id.as_deref() {
-            message["sessionId"] = json!(session_id);
-        } else if let Some(map) = message.as_object_mut() {
-            map.remove("sessionId");
-        }
+        message.set_session_id(routed_session_id.as_deref());
         response_events.push(protocol_message_background_event(message));
         current_seen
     }

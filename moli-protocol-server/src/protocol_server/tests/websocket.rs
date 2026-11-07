@@ -4,6 +4,7 @@ mod browser_close;
 mod captured_document_navigation;
 mod child_navigation_wait;
 mod dialog_sessions;
+mod inspector_json;
 mod navigation_debugger;
 mod prepared_document_actions;
 mod target_message;

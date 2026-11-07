@@ -11,6 +11,7 @@ use crate::runtime::{
     RendererTurnOutputJournal,
 };
 use anyhow::Result;
+use moli_inspector_json::InspectorJson;
 use moli_page_types::{
     DevToolsSessionKey, RendererDevToolsAgentToken, RendererInspectorResponseDelivery,
 };
@@ -41,7 +42,7 @@ struct InspectorOutboundMessageState {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct InspectorOutboundMessage {
     pub(super) agent_token: RendererDevToolsAgentToken,
-    pub(super) value: Value,
+    pub(super) value: InspectorJson,
 }
 
 #[derive(Default)]
@@ -181,7 +182,7 @@ impl InspectorOutbound {
         let view = message.string();
         let message_units = view.len();
         let message_width = if view.is_8bit() { 8 } else { 16 };
-        match moli_v8_util::decode_inspector_protocol_message(view) {
+        match moli_v8_util::inspector_protocol_json(view) {
             Ok(value) => self.push_value(value),
             Err(error) => {
                 let raw = moli_v8_util::inspector_protocol_message_text(view);
@@ -203,8 +204,9 @@ impl InspectorOutbound {
         let view = message.string();
         let message_units = view.len();
         let message_width = if view.is_8bit() { 8 } else { 16 };
-        match moli_v8_util::decode_inspector_protocol_message(view) {
-            Ok(value) => self.push_response_value(call_id, value),
+        match moli_v8_util::inspector_protocol_json(view) {
+            Ok(value) if value.id_i64() == Some(i64::from(call_id)) => self.push_response_value(call_id, value),
+            Ok(_) => self.push_response_value(call_id, serde_json::json!({"id":call_id,"error":{"code":-32603,"message":"Inspector response ID mismatch"}})),
             Err(error) => {
                 let raw = moli_v8_util::inspector_protocol_message_text(view);
                 tracing::warn!(target: "moli::cdp::inspector",
@@ -224,7 +226,8 @@ impl InspectorOutbound {
         }
     }
 
-    pub(super) fn push_value(&self, value: Value) {
+    pub(super) fn push_value(&self, value: impl Into<InspectorJson>) {
+        let value = value.into();
         if let Some(session_route) = self.session_route.borrow().clone() {
             match session_route.route_notification(&value) {
                 RendererInspectorPauseNotificationRoute::OrdinaryTurn => {
@@ -251,7 +254,7 @@ impl InspectorOutbound {
         &self,
         mut preface: Vec<RendererRuntimeInspectorMessage>,
         command_output: Option<crate::devtools::pause::RendererInspectorPauseCommandOutputRoute>,
-        value: Value,
+        value: InspectorJson,
     ) {
         let session = self
             .session
@@ -314,7 +317,7 @@ impl InspectorOutbound {
             .and_then(|route| route.stage_pause_preface(messages))
     }
 
-    fn push_local_value(&self, value: Value) {
+    fn push_local_value(&self, value: InspectorJson) {
         let (runtime_command_output, command_turn_output, dispatch_is_active) = {
             let routing = self.response_routing.borrow();
             if routing.runtime_command_output_suppression_depth == 0 {
@@ -360,7 +363,7 @@ impl InspectorOutbound {
         self.queue_local_value(value);
     }
 
-    fn queue_local_value(&self, value: Value) {
+    fn queue_local_value(&self, value: InspectorJson) {
         self.state()
             .borrow_mut()
             .messages
@@ -370,7 +373,8 @@ impl InspectorOutbound {
             });
     }
 
-    pub(super) fn push_response_value(&self, call_id: i32, value: Value) {
+    pub(super) fn push_response_value(&self, call_id: i32, value: impl Into<InspectorJson>) {
+        let value = value.into();
         let mut guard = self.response_routing.borrow_mut();
         if guard
             .internal_dispatch_response_call_ids
@@ -382,7 +386,7 @@ impl InspectorOutbound {
             return;
         }
         if let Some(session_route) = self.session_route.borrow().as_ref() {
-            session_route.mark_command_response(call_id, value.get("error").is_none());
+            session_route.mark_command_response(call_id, !value.has_field("error"));
         }
         let callback = guard.pending_response_callbacks.remove(&call_id);
         if let Some(callback) = callback {
@@ -491,7 +495,10 @@ impl InspectorOutbound {
         self.state().borrow().messages.len()
     }
 
-    pub(in crate::script_vm) fn take_messages_after(&self, snapshot_len: usize) -> Vec<Value> {
+    pub(in crate::script_vm) fn take_messages_after(
+        &self,
+        snapshot_len: usize,
+    ) -> Vec<InspectorJson> {
         let state = self.state();
         let mut guard = state.borrow_mut();
         if snapshot_len >= guard.messages.len() {
@@ -564,11 +571,11 @@ impl InspectorOutbound {
             .enumerate()
             .skip(snapshot_len)
             .find_map(|(index, message)| {
-                (message.value.get("id").and_then(Value::as_i64) == Some(call_id)).then_some(index)
+                (message.value.id_i64() == Some(call_id)).then_some(index)
             });
         position
             .and_then(|position| guard.messages.remove(position))
-            .map(|message| message.value)
+            .map(|message| message.value.into_value())
     }
 
     // DOMDebugger's internal Runtime.callFunctionOn can execute JS, unlike the
@@ -586,12 +593,15 @@ impl InspectorOutbound {
                     .contains(&call_id)
         };
         routing_available
-            && !self.state().borrow().messages.iter().any(|message| {
-                message.value.get("id").and_then(Value::as_i64) == Some(i64::from(call_id))
-            })
+            && !self
+                .state()
+                .borrow()
+                .messages
+                .iter()
+                .any(|message| message.value.id_i64() == Some(i64::from(call_id)))
     }
 
-    pub(super) fn values_after(&self, snapshot_len: usize) -> Vec<Value> {
+    pub(super) fn values_after(&self, snapshot_len: usize) -> Vec<InspectorJson> {
         let state = self.state();
         let guard = state.borrow();
         if snapshot_len >= guard.messages.len() {
@@ -605,7 +615,7 @@ impl InspectorOutbound {
             .collect()
     }
 
-    pub(in crate::script_vm) fn take_pending_messages(&self) -> Vec<Value> {
+    pub(in crate::script_vm) fn take_pending_messages(&self) -> Vec<InspectorJson> {
         let state = self.state();
         let mut guard = state.borrow_mut();
         guard
@@ -824,7 +834,7 @@ mod tests {
             .borrow()
             .clone()
             .expect("frontend route");
-        route.route_notification(&serde_json::json!({
+        route.route_notification(serde_json::json!({
             "method": "Debugger.paused", "params": {"callFrames": []}
         }));
         assert!(bridge.enter_pause().is_some());
@@ -853,7 +863,7 @@ mod tests {
         assert!(
             matches!(
                 route.route_notification(
-                    &serde_json::json!({"method": "Debugger.resumed", "params": {}})
+                    serde_json::json!({"method": "Debugger.resumed", "params": {}})
                 ),
                 RendererInspectorPauseNotificationRoute::PublishImmediately {
                     command_output: None,

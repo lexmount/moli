@@ -1,4 +1,5 @@
 use super::*;
+use moli_inspector_json::InspectorJson;
 
 impl ScriptVm {
     pub(super) fn child_frame_realm_context_ptr(
@@ -227,9 +228,9 @@ impl ScriptVm {
         realms
     }
 
-    pub(super) fn runtime_inspector_messages_from_v8_messages(
+    pub(super) fn runtime_inspector_messages_from_v8_messages<T: Into<InspectorJson>>(
         &self,
-        messages: impl IntoIterator<Item = Value>,
+        messages: impl IntoIterator<Item = T>,
     ) -> Vec<RendererRuntimeInspectorMessage> {
         messages
             .into_iter()
