@@ -69,6 +69,7 @@ impl ClientSecurityPolicy {
 #[derive(Clone, Default)]
 struct DocumentRequestContext {
     navigation_timing_seed: Option<super::navigation::NavigationTiming>,
+    previous_document_unload_seed: Option<super::context::DocumentUnloadTiming>,
     preloads: super::preloads::DocumentPreloads,
     response_links: Option<super::context::DocumentResponseLinkObserver>,
     client_security_policy: ClientSecurityPolicy,
@@ -155,6 +156,22 @@ impl ResourceRequestClient {
         self.document_requests
             .as_mut()
             .and_then(|context| Arc::make_mut(context).navigation_timing_seed.take())
+    }
+
+    pub(crate) fn set_previous_document_unload_seed(
+        &mut self,
+        timing: Option<super::context::DocumentUnloadTiming>,
+    ) {
+        self.document_request_context_mut()
+            .previous_document_unload_seed = timing;
+    }
+
+    pub(crate) fn take_previous_document_unload_seed(
+        &mut self,
+    ) -> Option<super::context::DocumentUnloadTiming> {
+        self.document_requests
+            .as_mut()
+            .and_then(|context| Arc::make_mut(context).previous_document_unload_seed.take())
     }
 
     // Standalone clients must return their thread-affine lifetime owner; the
@@ -511,6 +528,12 @@ impl ResourceRequestClient {
         {
             client.document_request_context_mut().navigation_timing_seed = Some(timing);
         }
+        client
+            .document_request_context_mut()
+            .previous_document_unload_seed = self
+            .document_requests
+            .as_ref()
+            .and_then(|context| context.previous_document_unload_seed.clone());
         client
     }
 

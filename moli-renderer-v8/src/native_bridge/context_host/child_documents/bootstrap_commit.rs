@@ -246,6 +246,7 @@ impl PageScriptHost {
                     document_credentialless,
                     credentialless_storage_nonce,
                 );
+                entry.set_performance_navigation_start(navigation_start);
             }
             let snapshot =
                 self.cache_child_snapshot_with_current_document_policy(handle, snapshot)?;
@@ -299,6 +300,7 @@ impl PageScriptHost {
                 document_credentialless,
                 credentialless_storage_nonce,
             );
+            entry.set_performance_navigation_start(navigation_start);
         }
 
         let result = if let Some(snapshot) = cached_snapshot {

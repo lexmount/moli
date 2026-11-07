@@ -110,6 +110,21 @@ impl NavigationTimingServer {
                         "/queued-service-worker" => ("text/html", queued_navigation_source(true)),
                         "/beforeunload" => ("text/html", beforeunload_navigation_source()),
                         "/with-nested" => ("text/html", "<!doctype html><body><iframe src='/empty'></iframe>".to_owned()),
+                        "/unload-cases" => ("text/html", unload_navigation_cases_source()),
+                        "/unload-opaque-host" => ("text/html", opaque_unload_navigation_source().to_owned()),
+                        path if path.starts_with("/unload-previous?") => ("text/html", r#"<!doctype html><body><iframe src='/unload-child'></iframe><script>
+                            function busy(ms) {const end=performance.now()+ms;while(performance.now()<end){}}
+                            addEventListener('pagehide',()=>busy(250));
+                            addEventListener('unload',()=>busy(105));
+                            addEventListener('load',()=> (opener||parent).postMessage({phase:'ready',token:new URL(location.href).searchParams.get('token')},'*'));
+                        </script>"#.to_owned()),
+                        "/unload-child" => ("text/html", r#"<!doctype html><script>
+                            addEventListener('unload',()=>{const end=performance.now()+405;while(performance.now()<end){}});
+                        </script>"#.to_owned()),
+                        path if path.starts_with("/unload-report?") => ("text/html", format!(r#"<!doctype html><script>
+                            {STATE_WAITER}
+                            addEventListener('load',()=> (opener||parent).postMessage({{phase:'report',token:new URL(location.href).searchParams.get('token'),...snapshot(window),legacy:performance.timing.toJSON()}},'*'));
+                        </script>"#)),
                         "/prefetch" => ("text/html", format!(r#"<!doctype html><body><script>
                             {STATE_WAITER}
                             (async () => {{
@@ -400,6 +415,219 @@ async fn frame_navigation_time_origin_follows_beforeunload_handlers() -> Result<
         assert!(
             origin <= row["responseSent"].as_f64().unwrap() + 1.0,
             "navigation time origin must precede the response: {row}"
+        );
+    }
+    Ok(())
+}
+
+fn unload_navigation_cases_source() -> String {
+    r#"<!doctype html><body><script>
+    globalThis.runUnloadCases = async privacy => {
+        const messages = new Map(), waiters = new Map();
+        addEventListener('message', event => {
+            const data=event.data;
+            if (!data || !data.token || !data.phase) return;
+            const key=data.token+':'+data.phase;
+            messages.set(key,data);
+            if(waiters.has(key)) waiters.get(key)(data);
+        });
+        const waitFor=(token,phase)=>new Promise(resolve=> {
+            const key=token+':'+phase;
+            if(messages.has(key)) resolve(messages.get(key));
+            else waiters.set(key,resolve);
+        });
+        const remote=new URL(location.href);
+        remote.hostname=location.hostname==='127.0.0.1'?'localhost':'127.0.0.1';
+        const observations=[];
+        for (const kind of ['iframe','popup']) {
+            for (const mode of (privacy?['cross','redirect','opaque']:['same'])) {
+                if(mode==='opaque' && kind==='popup') continue;
+                const token=kind+'-'+mode;
+                globalThis.unloadStage=token+':ready';
+                const ready=waitFor(token,'ready'), report=waitFor(token,'report');
+                const old=(mode==='cross'?remote.origin:location.origin)+'/unload-previous?token='+token;
+                let win,frame;
+                if(kind==='iframe') {
+                    frame=document.createElement('iframe');
+                    if(mode==='opaque') frame.sandbox='allow-scripts';
+                    frame.src=old;
+                    document.body.appendChild(frame);win=frame.contentWindow;
+                } else win=window.open(old);
+                await ready;
+                globalThis.unloadStage=token+':navigate';
+                const destination=location.origin+'/unload-report?token='+token;
+                const target=mode==='redirect'?location.origin+'/redirect?to='+remote.origin+'/redirect?to='+destination:destination;
+                win.location=target;
+                const row={kind,mode,...await report};
+                observations.push(row);globalThis.unloadRows=observations;
+                if(frame) frame.remove();else win.close();
+            }
+        }
+        globalThis.observations=observations;
+    };
+    globalThis.runOpaqueUnloadCases = async () => {
+        globalThis.unloadStage='opaque-inherited:load';
+        const done=new Promise(resolve => addEventListener('message',event => {
+            if(event.data && event.data.phase==='report') resolve(event.data);
+        }));
+        const source=await (await fetch('/unload-opaque-host')).text();
+        const frame=document.createElement('iframe');
+        frame.src='data:text/html;charset=utf-8,'+encodeURIComponent(source);document.body.appendChild(frame);
+        globalThis.observations=[await done];frame.remove();
+    };
+    </script>"#
+        .to_owned()
+}
+
+fn opaque_unload_navigation_source() -> &'static str {
+    r#"<!doctype html><body><script>
+    function documentFor(fn) {return '<!doctype html><body><script>('+fn.toString()+')();<'+'/script>';}
+    addEventListener('load',async()=>{
+        const frame=document.createElement('iframe');
+        let oldAccess;
+        const ready=new Promise(resolve=>addEventListener('message',event=>{
+            if(event.source!==frame.contentWindow) return;
+            if(event.data.phase==='ready') {oldAccess=event.data.parentAccess;resolve();}
+            if(event.data.phase==='report') parent.postMessage({kind:'iframe',mode:'opaque-inherited',oldAccess,...event.data},'*');
+        }));
+        frame.srcdoc=documentFor(function(){
+            addEventListener('unload',()=>{const end=performance.now()+105;while(performance.now()<end){}});
+            addEventListener('load',()=>{
+                let parentAccess=false;try{parentAccess=Boolean(parent.document);}catch{}
+                parent.postMessage({phase:'ready',parentAccess},'*');
+            });
+        });
+        document.body.appendChild(frame);await ready;
+        frame.srcdoc=documentFor(function(){
+            addEventListener('load',()=>{
+                let parentAccess=false;try{parentAccess=Boolean(parent.document);}catch{}
+                parent.postMessage({phase:'report',parentAccess,timeOrigin:performance.timeOrigin,nav:performance.getEntriesByType('navigation')[0].toJSON(),legacy:performance.timing.toJSON()},'*');
+            });
+        });
+    });
+    </script>"#
+}
+
+async fn read_previous_document_unload_cases(script: &str) -> Result<serde_json::Value> {
+    let server = NavigationTimingServer::spawn().await;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = tokio::time::timeout(
+        Duration::from_secs(30),
+        browser.fetch(&format!("{}/unload-cases", server.origin)),
+    )
+    .await??;
+    page.evaluate_runtime_expression_by_value_async(&format!(
+        "void ({script}).catch(error => globalThis.caseError=String(error))"
+    ))
+    .await?;
+    let waited = tokio::time::timeout(
+        Duration::from_secs(35),
+        browser.wait_for_script_truthy(
+            &mut page,
+            "Boolean(globalThis.observations || globalThis.caseError)",
+            Duration::from_secs(30),
+        ),
+    )
+    .await;
+    let result = read_json(
+        &mut page,
+        "JSON.stringify({observations:globalThis.observations,error:globalThis.caseError,stage:globalThis.unloadStage,rows:globalThis.unloadRows})",
+    )
+    .await?;
+    assert!(matches!(waited, Ok(Ok(()))), "{waited:?}: {result}");
+    assert!(result.get("error").is_none(), "{result}");
+    Ok(result)
+}
+
+async fn check_previous_document_unload_timing(privacy: bool) -> Result<()> {
+    let result = read_previous_document_unload_cases(&format!("runUnloadCases({privacy})")).await?;
+    let rows = result["observations"].as_array().unwrap();
+    assert_eq!(rows.len(), if privacy { 5 } else { 2 }, "{result}");
+    for row in rows {
+        let nav = &row["nav"];
+        let legacy = &row["legacy"];
+        if privacy {
+            for field in ["unloadEventStart", "unloadEventEnd"] {
+                assert_eq!(
+                    nav[field], 0,
+                    "cross-origin unload timing must be hidden: {row}"
+                );
+                assert_eq!(legacy[field], 0, "{row}");
+            }
+        } else {
+            let start = nav["unloadEventStart"].as_f64().unwrap();
+            let end = nav["unloadEventEnd"].as_f64().unwrap();
+            assert!(
+                start > 0.0,
+                "previous document unload timing must be observed: {row}"
+            );
+            assert!(
+                end - start >= 100.0,
+                "the root unload handler must be measured: {row}"
+            );
+            assert!(
+                end - start < 250.0,
+                "pagehide and descendant unload must be excluded: {row}"
+            );
+            for (field, relative) in [("unloadEventStart", start), ("unloadEventEnd", end)] {
+                let absolute = legacy[field].as_f64().unwrap();
+                assert!(
+                    absolute >= legacy["navigationStart"].as_f64().unwrap(),
+                    "{row}"
+                );
+                assert!(
+                    (absolute - row["timeOrigin"].as_f64().unwrap() - relative).abs() < 1.1,
+                    "modern and legacy unload timing must describe the same event: {row}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn previous_document_unload_timing_measures_only_the_root_event() -> Result<()> {
+    check_previous_document_unload_timing(false).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn previous_document_unload_timing_hides_cross_origin_and_redirects() -> Result<()> {
+    check_previous_document_unload_timing(true).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn previous_document_unload_timing_preserves_inherited_opaque_origins() -> Result<()> {
+    let result = read_previous_document_unload_cases("runOpaqueUnloadCases()").await?;
+    let rows = result["observations"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{result}");
+    let row = &rows[0];
+    assert_eq!(
+        row["oldAccess"], true,
+        "old srcdoc must inherit its parent's opaque origin: {row}"
+    );
+    assert_eq!(
+        row["parentAccess"], true,
+        "new srcdoc must inherit the same opaque origin: {row}"
+    );
+    let start = row["nav"]["unloadEventStart"].as_f64().unwrap();
+    let end = row["nav"]["unloadEventEnd"].as_f64().unwrap();
+    assert!(
+        start > 0.0 && end - start >= 100.0,
+        "inherited opaque origin must retain its real previous unload timing: {row}"
+    );
+    assert!(
+        row["legacy"]["unloadEventStart"].as_f64().unwrap() > 0.0,
+        "{row}"
+    );
+    for (field, relative) in [("unloadEventStart", start), ("unloadEventEnd", end)] {
+        let absolute = row["legacy"][field].as_f64().unwrap();
+        assert!(
+            absolute >= row["legacy"]["navigationStart"].as_f64().unwrap(),
+            "{row}"
+        );
+        assert!(
+            (absolute - row["timeOrigin"].as_f64().unwrap() - relative).abs() < 1.1,
+            "{row}"
         );
     }
     Ok(())

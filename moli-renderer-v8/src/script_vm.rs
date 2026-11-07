@@ -71,32 +71,36 @@ pub(crate) struct MainWindowProxyNavigationCommit {
 }
 
 impl MainWindowProxyNavigationCommit {
-    pub(crate) fn unload_and_detach(self) {
-        let Some(context) = self.context else {
-            return;
-        };
-        self.renderer_document_isolate
+    pub(crate) fn unload_and_detach(self) -> Option<crate::network::context::DocumentUnloadTiming> {
+        let context = self.context?;
+        let _unload_callbacks = self.devtools_target.pause_ref().begin_unload_callbacks();
+        let previous_unload = self
+            .renderer_document_isolate
             .with_renderer_document_isolate_mut(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
                 let context = v8::Local::new(scope, &context);
-                {
+                let previous_unload = {
                     let scope = &mut v8::ContextScope::new(scope, context);
                     // Unload sees the attached WindowProxy, and its outgoing
                     // Document remains associated after execution retirement.
                     let host_ptr = (*self.context_host).as_ptr();
+                    let loader = unsafe { &*host_ptr }.current_main_document_resource_loader();
                     PageScriptHost::dispatch_main_document_unload_for_navigation_commit(
                         scope, host_ptr,
                     );
                     crate::context_bootstrap::retain_window_document_in_retired_realm(scope);
-                }
+                    loader.and_then(|loader| loader.document_unload_timing())
+                };
                 context.detach_global();
+                previous_unload
             });
         tracing::debug!(
             page_id = self.page_id,
             isolate_identity_key = self.renderer_document_isolate.identity_key(),
             "detached committed main WindowProxy for replacement context"
         );
+        previous_unload
     }
 }
 
@@ -2887,6 +2891,7 @@ impl ScriptVm {
         let Some(runtime) = self.current_main_world() else {
             return Ok(MainWindowProxyNavigationCommit {
                 context: None,
+                devtools_target: self.devtools_target(),
                 context_host: self._context_host.clone(),
                 renderer_document_isolate: self.renderer_document_isolate.clone(),
                 page_id,

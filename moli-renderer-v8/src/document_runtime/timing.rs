@@ -58,6 +58,26 @@ impl DocumentRuntime {
 }
 
 impl DocumentTiming {
+    pub(crate) fn from_navigation(
+        navigation: &crate::network::navigation::NavigationTiming,
+    ) -> Self {
+        Self {
+            time_origin: navigation.time_origin(),
+            started: navigation.started_at(),
+            lifecycle: [None; 4],
+        }
+    }
+    pub(crate) fn from_navigation_start(started: Instant, start: std::time::SystemTime) -> Self {
+        Self {
+            time_origin: start
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64()
+                * 1000.0,
+            started,
+            lifecycle: [None; 4],
+        }
+    }
     pub(crate) fn snapshot(&self) -> DocumentTimingSnapshot {
         DocumentTimingSnapshot {
             time_origin: self.time_origin,
