@@ -487,3 +487,109 @@ fn dispatched_bubbling_child_click_uses_ancestor_button_activation_behavior() {
         r#"{"allowed":true,"nonBubblingAllowed":true,"submits":[true]}"#
     );
 }
+
+#[test]
+fn click_activation_target_survives_listener_tree_mutations() {
+    for dispatch in [false, true] {
+        for (mutation, expected) in [
+            ("branch.remove()", vec!["owner:first"]),
+            ("second.appendChild(branch)", vec!["owner:first"]),
+            ("first.replaceChildren()", vec!["owner:first"]),
+            ("first.type = 'button'", vec![]),
+            ("first.disabled = true", vec![]),
+            ("event.preventDefault(); branch.remove()", vec![]),
+            ("first.remove()", vec![]),
+            ("first.setAttribute('form', 'other')", vec!["other:first"]),
+        ] {
+            let mut vm = new_parsed_test_vm(
+                "https://click-activation-target.test/",
+                r#"<!doctype html><form id="owner"><button id="first"><span id="branch"><span id="child">click</span></span></button></form>
+<form id="other"><button id="second">other</button></form>"#,
+            );
+            let result = vm
+                .eval(&format!(
+                    r#"(() => {{
+const first = document.getElementById('first');
+const second = document.getElementById('second');
+const branch = document.getElementById('branch');
+const child = document.getElementById('child');
+const submits = [];
+for (const form of document.forms) form.addEventListener('submit', event => {{
+  event.preventDefault(); submits.push(form.id + ':' + event.submitter.id);
+}});
+first.addEventListener('click', event => {{ {mutation}; }});
+if ({dispatch}) child.dispatchEvent(new MouseEvent('click', {{bubbles:true,cancelable:true}}));
+else child.click();
+return JSON.stringify(submits);
+}})()"#
+                ))
+                .expect("activation must retain the original button and read its live form state");
+            assert_eq!(
+                serde_json::from_str::<Vec<String>>(&result).unwrap(),
+                expected,
+                "dispatch={dispatch}, mutation={mutation}"
+            );
+        }
+    }
+}
+
+#[test]
+fn click_activation_label_retains_identity_and_resolves_control_after_listeners() {
+    for dispatch in [false, true] {
+        for initial_for in ["first", "missing"] {
+            let mut vm = new_parsed_test_vm(
+                "https://click-activation-label.test/",
+                &format!(
+                    r#"<!doctype html><label id="label" for="{initial_for}"><span id="child">click</span></label>
+<input id="first" type="checkbox"><input id="second" type="checkbox">"#
+                ),
+            );
+            let result = vm
+                .eval(&format!(
+                    r#"(() => {{
+const label = document.getElementById('label');
+const child = document.getElementById('child');
+const first = document.getElementById('first');
+const second = document.getElementById('second');
+const clicks = [];
+first.addEventListener('click', () => clicks.push('first'));
+second.addEventListener('click', () => clicks.push('second'));
+label.addEventListener('click', () => {{ child.remove(); label.htmlFor = 'second'; }});
+if ({dispatch}) child.dispatchEvent(new MouseEvent('click', {{bubbles:true,cancelable:true}}));
+else child.click();
+return JSON.stringify({{first:first.checked,second:second.checked,clicks}});
+}})()"#
+                ))
+                .expect("label activation must use the original label's new associated control");
+            assert_eq!(
+                result, r#"{"first":false,"second":true,"clicks":["second"]}"#,
+                "dispatch={dispatch}, initial_for={initial_for}"
+            );
+        }
+    }
+}
+
+#[test]
+fn click_activation_does_not_acquire_an_ancestor_inserted_by_a_listener() {
+    for dispatch in [false, true] {
+        let mut vm = new_parsed_test_vm(
+            "https://click-activation-inserted-ancestor.test/",
+            r#"<!doctype html><form><span id="child">click</span><button id="button">submit</button></form>"#,
+        );
+        let result = vm
+            .eval(&format!(
+                r#"(() => {{
+const child = document.getElementById('child');
+const button = document.getElementById('button');
+let submits = 0;
+document.forms[0].addEventListener('submit', event => {{ event.preventDefault(); submits++; }});
+child.addEventListener('click', () => button.appendChild(child));
+if ({dispatch}) child.dispatchEvent(new MouseEvent('click', {{bubbles:true,cancelable:true}}));
+else child.click();
+return String(submits);
+}})()"#
+            ))
+            .expect("a listener cannot add an activation target to the original event path");
+        assert_eq!(result, "0", "dispatch={dispatch}");
+    }
+}

@@ -301,14 +301,21 @@ pub(in crate::native_bridge) fn label_activation_control_handle(
     runtime: &JsContextHost,
     target_handle: DomHandle,
 ) -> Option<DomHandle> {
+    let label = label_activation_label_handle(runtime, target_handle)?;
+    let control = label_control_handle(runtime, label)?;
+    (control != target_handle).then_some(control)
+}
+
+pub(in crate::native_bridge) fn label_activation_label_handle(
+    runtime: &JsContextHost,
+    target_handle: DomHandle,
+) -> Option<DomHandle> {
     let mut current = Some(target_handle);
     let mut blocked_by_interactive_content = false;
     while let Some(handle) = current {
         let element = runtime.dom_host().node(handle).and_then(Node::as_element);
         if element.is_some_and(Element::is_html_label) {
-            let control = label_control_handle(runtime, handle)?;
-            return (control != target_handle && !blocked_by_interactive_content)
-                .then_some(control);
+            return (!blocked_by_interactive_content).then_some(handle);
         }
         if element.is_some_and(is_label_interactive_content) {
             blocked_by_interactive_content = true;
