@@ -636,6 +636,7 @@ async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_s
         body_source_id,
         network_request_headers: None,
         head: moli_fetch::ResponseHead {
+            request_include_credentials: false,
             status_text: None,
             final_url: request_url,
             status: 204,

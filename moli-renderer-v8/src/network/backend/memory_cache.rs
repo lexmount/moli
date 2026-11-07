@@ -841,6 +841,7 @@ mod tests {
     fn response(url: &str, body: &str) -> Response {
         Response::from_head_and_text_body(
             ResponseHead {
+                request_include_credentials: false,
                 status_text: None,
                 final_url: Url::parse(url).expect("response URL"),
                 status: 200,
@@ -860,6 +861,7 @@ mod tests {
     fn raw_response(url: &str, body: &[u8]) -> RawResponse {
         RawResponse::from_head_and_body(
             ResponseHead {
+                request_include_credentials: false,
                 status_text: None,
                 final_url: Url::parse(url).expect("response URL"),
                 status: 200,
@@ -1024,6 +1026,7 @@ mod tests {
         };
         let response = Response::from_head_and_body(
             ResponseHead {
+                request_include_credentials: false,
                 status_text: None,
                 final_url: request.url.clone(),
                 status: 200,

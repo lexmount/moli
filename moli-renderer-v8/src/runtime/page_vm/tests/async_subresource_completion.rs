@@ -236,6 +236,7 @@ fetch({:?})
                         body_source_id,
                         network_request_headers: None,
                         head: moli_fetch::ResponseHead {
+                            request_include_credentials: false,
                             status_text: None,
                             final_url: request_url,
                             status: 200,
@@ -452,6 +453,7 @@ async fn streaming_finish_requires_matching_request_and_body_source_identity() {
                 body_source_id,
                 network_request_headers: None,
                 head: moli_fetch::ResponseHead {
+                    request_include_credentials: false,
                     status_text: None,
                     final_url: request_url,
                     status: 200,
