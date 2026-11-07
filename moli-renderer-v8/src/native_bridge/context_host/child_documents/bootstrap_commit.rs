@@ -246,6 +246,7 @@ impl JsContextHost {
                     document_credentialless,
                     credentialless_storage_nonce,
                 );
+                entry.set_performance_navigation_start(navigation_start.1);
             }
             let snapshot =
                 self.cache_child_snapshot_with_current_document_policy(handle, snapshot)?;
@@ -299,6 +300,7 @@ impl JsContextHost {
                 document_credentialless,
                 credentialless_storage_nonce,
             );
+            entry.set_performance_navigation_start(navigation_start.1);
         }
 
         let result = if let Some(snapshot) = cached_snapshot {

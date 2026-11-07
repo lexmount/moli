@@ -728,6 +728,21 @@ fn dispatch_unload_lifecycle_event_for_runtime_owner<'s>(
             .map(|document| host.enter_document_unload(document))
     });
     let previous_unload = replace_navigation_unload_event_active(scope, owner, true);
+    let unload_observation = (event_type == "unload")
+        .then(|| {
+            let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+            let host = unsafe { &*host_ptr };
+            let dispatch = runtime_window_dispatch_scope(scope, owner)?;
+            let loader = host.document_resource_loader_for_dispatch_scope(dispatch)?;
+            let origin = host.window_message_source_security(dispatch)?;
+            Some((
+                loader,
+                origin,
+                std::time::Instant::now(),
+                moli_time::unix_epoch_millis(),
+            ))
+        })
+        .flatten();
     if runtime_window_is_global(scope, owner) {
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             let host = unsafe { &mut *host_ptr };
@@ -755,6 +770,11 @@ fn dispatch_unload_lifecycle_event_for_runtime_owner<'s>(
     {
         unsafe { &mut *host_ptr }
             .dispatch_lightweight_popup_window_event(scope, popup_id, event_type, event);
+    }
+    if let Some((loader, origin, started, start)) = unload_observation {
+        loader.record_document_unload_timing(
+            crate::network::context::DocumentUnloadTiming::finish(origin, started, start),
+        );
     }
     replace_navigation_unload_event_active(scope, owner, previous_unload);
 }

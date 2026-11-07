@@ -1104,6 +1104,15 @@ impl ChildBrowsingContextEntry {
         self.performance_time_origin = ChildPerformanceTimeOrigin::now();
     }
 
+    pub(super) fn set_performance_navigation_start(&mut self, start: std::time::SystemTime) {
+        let millis = start
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64()
+            * 1000.0;
+        self.performance_time_origin = ChildPerformanceTimeOrigin(millis.to_bits());
+    }
+
     pub(super) fn clear_script_execution_state(&mut self) {
         self.clear_child_classic_script_document_state();
     }

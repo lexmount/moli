@@ -318,6 +318,12 @@ impl JsContextHost {
             );
             return None;
         }
+        let previous_unload = expected_current_owner
+            .filter(|_| {
+                local_window_transition == FrameDocumentLocalWindowTransition::ReplaceLocalWindow
+            })
+            .and_then(|owner| self.document_resource_loader_for_owner(owner))
+            .and_then(|loader| loader.document_unload_timing());
         // Synthetic child Documents inherit the exact parent authority that
         // existed at the commit boundary. Capture it before retiring the old
         // child generation; never fall back to the ambient main Document.
@@ -452,7 +458,8 @@ impl JsContextHost {
             ),
             resource_authority,
             client_policy,
-        );
+        )
+        .set_previous_document_unload_timing(previous_unload);
         if matches!(
             owner_transition.local_window_owner_transition(),
             FrameLocalWindowOwnerTransition::Preserved { .. }

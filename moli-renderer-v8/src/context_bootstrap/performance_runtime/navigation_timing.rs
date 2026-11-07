@@ -1,6 +1,58 @@
 use super::*;
 use crate::util::context_host_ptr_from_global_bridge;
 
+pub(super) fn previous_document_unload_times<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<(f64, f64)> {
+    let context = object.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let host = unsafe { &*host_ptr };
+    let dispatch = host.window_dispatch_scope_for_context(scope, context)?;
+    host.current_runtime_window_execution_context_identity_for_dispatch_scope(scope, dispatch)?;
+    let loader = host.document_resource_loader_for_dispatch_scope(dispatch)?;
+    if let Some(timing) = loader.navigation_timing() {
+        let snapshot = timing.snapshot()?;
+        let origin = moli_url::WebOrigin::from_url(&snapshot.head.final_url);
+        if snapshot.head.url_list().has_cross_origin_url(&origin) {
+            return None;
+        }
+    }
+    let origin = host.window_message_source_security(dispatch)?;
+    loader
+        .previous_document_unload_timing()?
+        .for_origin(&origin)
+}
+
+pub(super) fn refresh_navigation_unload_timing<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+) {
+    let Some((start, end)) = previous_document_unload_times(scope, entry) else {
+        return;
+    };
+    let Some(context) = entry.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(time_origin) = super::window_state::current_window_performance_time_origin_seed(scope)
+    else {
+        return;
+    };
+    for (slot, absolute) in [
+        (install::NAV_UNLOAD_EVENT_START_SLOT, start),
+        (install::NAV_UNLOAD_EVENT_END_SLOT, end),
+    ] {
+        set_performance_entry_slot_number(
+            scope,
+            entry,
+            slot,
+            moli_time::coarsened_dom_time_millis((absolute - time_origin).max(0.0)),
+        );
+    }
+}
+
 /// Refresh the entry in its own Window realm. Borrowed prototype getters must
 /// not pick up the caller's navigation or a replacement Window's Document.
 pub(super) fn refresh_navigation_timing<'s>(
@@ -12,6 +64,7 @@ pub(super) fn refresh_navigation_timing<'s>(
     {
         return;
     }
+    refresh_navigation_unload_timing(scope, entry);
     let Some(context) = entry.get_creation_context(scope) else {
         return;
     };

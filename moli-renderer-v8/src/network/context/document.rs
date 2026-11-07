@@ -172,6 +172,7 @@ pub struct DocumentResourceLoader {
     authority: Arc<DocumentResourceLoaderAuthority>,
     csp_reports: Arc<crate::content_security_policy::ContentSecurityPolicyReports>,
     navigation_timing: Option<crate::network::navigation::NavigationTiming>,
+    unload_timings: super::unload_timing::DocumentUnloadTimings,
 }
 
 /// Inputs that exist before the initial committed Document owner is known.
@@ -185,6 +186,7 @@ pub(crate) struct DocumentResourceLoaderBootstrap {
     request_client: ResourceRequestClient,
     task_runner: RendererResourceTaskRunner,
     navigation_timing: Option<crate::network::navigation::NavigationTiming>,
+    previous_document_unload: Option<super::DocumentUnloadTiming>,
 }
 
 impl DocumentResourceLoaderBootstrap {
@@ -194,6 +196,7 @@ impl DocumentResourceLoaderBootstrap {
     ) -> Self {
         Self {
             navigation_timing: request_client.take_navigation_timing_seed(),
+            previous_document_unload: request_client.take_previous_document_unload_seed(),
             request_client,
             task_runner,
         }
@@ -203,6 +206,7 @@ impl DocumentResourceLoaderBootstrap {
         let mut loader =
             DocumentResourceLoader::new(self.request_client, self.task_runner, context);
         loader.navigation_timing = self.navigation_timing;
+        loader.set_previous_document_unload_timing(self.previous_document_unload);
         loader
     }
 
@@ -280,6 +284,7 @@ impl DocumentResourceLoader {
             creation_url,
             csp_reports: Default::default(),
             navigation_timing: None,
+            unload_timings: Default::default(),
             authority,
         }
     }
@@ -346,6 +351,25 @@ impl DocumentResourceLoader {
 
     pub(crate) fn navigation_timing(&self) -> Option<crate::network::navigation::NavigationTiming> {
         self.navigation_timing.clone()
+    }
+
+    pub(crate) fn record_document_unload_timing(&self, timing: super::DocumentUnloadTiming) {
+        self.unload_timings.record(timing);
+    }
+
+    pub(crate) fn document_unload_timing(&self) -> Option<super::DocumentUnloadTiming> {
+        self.unload_timings.own()
+    }
+
+    pub(crate) fn set_previous_document_unload_timing(
+        &self,
+        timing: Option<super::DocumentUnloadTiming>,
+    ) {
+        self.unload_timings.set_previous(timing);
+    }
+
+    pub(crate) fn previous_document_unload_timing(&self) -> Option<super::DocumentUnloadTiming> {
+        self.unload_timings.previous()
     }
 
     pub(crate) fn navigation_time_origin(&self) -> Option<f64> {
@@ -438,6 +462,7 @@ impl DocumentResourceLoader {
             creation_url: self.creation_url.clone(),
             csp_reports: self.csp_reports.clone(),
             navigation_timing: self.navigation_timing.clone(),
+            unload_timings: self.unload_timings.clone(),
         }
     }
 

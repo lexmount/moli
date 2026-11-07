@@ -615,6 +615,29 @@ pub(in crate::runtime) struct PageVmCommittedNavigationBootstrap {
 }
 
 impl PageVmCommittedNavigationBootstrap {
+    pub(in crate::runtime) fn set_previous_document_unload(
+        &mut self,
+        timing: Option<crate::network::context::DocumentUnloadTiming>,
+    ) {
+        match self
+            .payload
+            .as_mut()
+            .expect("committed bootstrap retains its payload")
+        {
+            PageVmCommittedNavigationBootstrapPayload::Followed(payload) => {
+                payload
+                    .request_client
+                    .set_previous_document_unload_seed(timing);
+            }
+            PageVmCommittedNavigationBootstrapPayload::PreparedResponse(payload) => {
+                payload
+                    .request
+                    .loader
+                    .set_previous_document_unload_seed(timing);
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(in crate::runtime) fn inject_commit_panic_for_test(&self, injection_header: &str) {
         if self.payload.as_ref().is_some_and(|payload| match payload {
@@ -1565,9 +1588,12 @@ impl PageVm {
         env.history_policy_container = history_policy_container;
         let mut runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
         runtime_hooks.web_mcp_navigation = web_mcp_invocation;
+        let mut request_client = self.request_client.clone();
         if runtime_hooks.has_renderer_page_script_environment() {
-            self.prepare_main_window_proxy_navigation(self.page_id)?
+            let previous_unload = self
+                .prepare_main_window_proxy_navigation(self.page_id)?
                 .unload_and_detach();
+            request_client.set_previous_document_unload_seed(previous_unload);
             self.record_main_navigation_commit();
             self.retire_committed_main_script_vm();
         } else {
@@ -1582,7 +1608,7 @@ impl PageVm {
         bootstrap_committed_followed_location_navigation(
             self.page_id,
             self.local_executor.clone(),
-            self.request_client.clone(),
+            request_client,
             env,
             runtime_hooks,
             navigation_bootstrap_entry,

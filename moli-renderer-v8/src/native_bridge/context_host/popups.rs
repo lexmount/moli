@@ -2408,6 +2408,14 @@ impl JsContextHost {
         };
         let changed_document = current_document.owner != commit.owner;
         let was_initial_empty = current_document.is_initial_empty_document;
+        let previous_unload = (changed_document && !was_initial_empty)
+            .then(|| {
+                self.document_resource_loader_for_window_owner(
+                    super::WindowDocumentOwner::LightweightPopup(current_document.owner),
+                )
+            })
+            .flatten()
+            .and_then(|loader| loader.document_unload_timing());
         let previous_local_window_id = current_document.local_window_id;
         let document_domain_was_set = current_document
             .access_origin
@@ -2581,7 +2589,8 @@ impl JsContextHost {
                 ),
                 resource_authority,
                 client_policy,
-            );
+            )
+            .set_previous_document_unload_timing(previous_unload);
         }
         if let Some(retired_local_window_id) = transition.retired_local_window_id {
             self.retire_lightweight_popup_local_window(scope, popup_id, retired_local_window_id);

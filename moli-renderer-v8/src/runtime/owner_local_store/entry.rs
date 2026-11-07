@@ -115,7 +115,9 @@ impl CommittedNavigationEntry {
     pub(super) fn commit_source(&mut self, commit: PageVmSourceDocumentCommit) {
         let reused_initial_window = match commit {
             PageVmSourceDocumentCommit::ReplaceWindow(commit) => {
-                commit.unload_and_detach();
+                let previous_unload = commit.unload_and_detach();
+                self.navigation
+                    .set_previous_document_unload(previous_unload);
                 None
             }
             PageVmSourceDocumentCommit::ReuseInitialWindow(window) => Some(window),

@@ -440,8 +440,10 @@ fn performance_navigation_legacy_type(navigation_type: &str) -> f64 {
     }
 }
 
-const NAV_UNLOAD_EVENT_START_SLOT: &str = "__moliPerformanceNavigationTimingUnloadEventStart";
-const NAV_UNLOAD_EVENT_END_SLOT: &str = "__moliPerformanceNavigationTimingUnloadEventEnd";
+pub(super) const NAV_UNLOAD_EVENT_START_SLOT: &str =
+    "__moliPerformanceNavigationTimingUnloadEventStart";
+pub(super) const NAV_UNLOAD_EVENT_END_SLOT: &str =
+    "__moliPerformanceNavigationTimingUnloadEventEnd";
 const NAV_DOM_INTERACTIVE_SLOT: &str = "__moliPerformanceNavigationTimingDomInteractive";
 const NAV_DOM_CONTENT_LOADED_EVENT_START_SLOT: &str =
     "__moliPerformanceNavigationTimingDomContentLoadedEventStart";
@@ -981,6 +983,12 @@ fn performance_timing_snapshot<'s>(
     let time_origin =
         performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
     let mut snapshot = PerformanceTimingSnapshot::new(time_origin);
+    if let Some((start, end)) =
+        super::navigation_timing::previous_document_unload_times(scope, performance)
+    {
+        snapshot.unload_event_start = legacy_timing_epoch_millis(start);
+        snapshot.unload_event_end = legacy_timing_epoch_millis(end);
+    }
     if let Some(timestamp) =
         performance_lifecycle_timestamp(scope, performance, DOM_CONTENT_LOADED_START_INDEX)
     {
@@ -1052,6 +1060,7 @@ fn performance_navigation_timing_attribute_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
+    super::navigation_timing::refresh_navigation_unload_timing(scope, args.this());
     rv.set(
         performance_entry_slot_value(scope, args.this(), slot)
             .unwrap_or_else(|| v8::undefined(scope).into()),
@@ -1372,6 +1381,7 @@ fn performance_navigation_timing_to_json_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    super::navigation_timing::refresh_navigation_unload_timing(scope, args.this());
     let Some(output) = super::entries::resource_timing_json_snapshot(scope, args.this()) else {
         throw_type_error(scope, "Illegal invocation");
         return;
