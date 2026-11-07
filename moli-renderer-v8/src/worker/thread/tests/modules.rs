@@ -1146,86 +1146,45 @@ async fn worker_module_static_imports_resolve_http_dependencies_against_module_u
 #[tokio::test]
 async fn worker_module_static_sibling_dependencies_fetch_in_parallel() {
     ensure_v8();
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind worker module sibling server");
-    let addr = listener.local_addr().expect("worker module sibling addr");
-    let base_url = format!("http://{addr}");
-    let server = tokio::spawn(async move {
-        let mut first_stream = None;
-        let mut first_path = String::new();
-        let mut second_stream = None;
-        let mut second_path = String::new();
-        for _ in 0..2 {
-            let (mut stream, _) = listener
-                .accept()
-                .await
-                .expect("accept worker module sibling request");
-            let request = read_http_request_head(&mut stream)
-                .await
-                .expect("read worker module sibling request");
-            let path = request
-                .lines()
-                .next()
-                .and_then(|line| line.split_whitespace().nth(1))
-                .expect("worker module sibling request path")
-                .to_owned();
-            if first_stream.is_none() {
-                first_path = path;
-                first_stream = Some(stream);
-            } else {
-                second_path = path;
-                second_stream = Some(stream);
-            }
-        }
-        let mut paths = vec![first_path.clone(), second_path.clone()];
-        paths.sort();
-        assert_eq!(paths, vec!["/worker/a.js", "/worker/b.js"]);
-        for (path, stream) in [
-            (first_path, first_stream.expect("first sibling stream")),
-            (second_path, second_stream.expect("second sibling stream")),
-        ] {
-            let body = match path.as_str() {
-                "/worker/a.js" => "export const a = 'a';",
-                "/worker/b.js" => "export const b = 'b';",
-                other => panic!("unexpected worker module sibling path: {other}"),
-            };
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
+    for imports in [
+        r#"import { a } from "./a.js"; import { b } from "./b.js";"#,
+        r#"import { b } from "./b.js"; import { a } from "./a.js";"#,
+    ] {
+        for reverse_responses in [false, true] {
+            let mut server = source_phase::ModuleSourceServer::start().await;
+            let mut handle = server.worker(
+                format!("{imports}\npostMessage({{ a, b }}); close();"),
+                WorkerScriptKind::Module,
             );
-            let mut stream = stream;
-            stream
-                .write_all(response.as_bytes())
+            // Withhold both responses until both requests arrive. Serial
+            // dependency loading cannot satisfy this rendezvous.
+            let (a, b) = server.request_pair("/worker/a.js", "/worker/b.js").await;
+            let mut responses = [(a, "export const a = 'a';"), (b, "export const b = 'b';")];
+            if reverse_responses {
+                responses.reverse();
+            }
+            for (stream, body) in responses {
+                source_phase::ModuleSourceServer::write(
+                    stream,
+                    "200 OK",
+                    "application/javascript",
+                    body,
+                )
+                .await;
+            }
+            let msg = timeout(TIMEOUT, handle.recv())
                 .await
-                .expect("write worker module sibling response");
+                .expect("timed out")
+                .expect("channel closed");
+            assert_eq!(
+                expect_post_json(msg),
+                r#"{"a":"a","b":"b"}"#,
+                "imports={imports}; reverse_responses={reverse_responses}",
+            );
+            handle.terminate_and_join();
+            server.assert_no_more_requests();
         }
-    });
-
-    let loader =
-        ResourceRequestClient::new(&FetchConfig::default()).expect("worker module sibling loader");
-    let mut handle = spawn_worker_with_request_client_and_kind(
-        r#"
-        import { a } from "./a.js";
-        import { b } from "./b.js";
-        postMessage({ a, b });
-        close();
-        "#
-        .into(),
-        format!("{base_url}/worker/main.js"),
-        loader,
-        WorkerScriptKind::Module,
-    );
-
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    assert_eq!(expect_post_json(msg), r#"{"a":"a","b":"b"}"#);
-    server
-        .await
-        .expect("worker module sibling server should finish");
+    }
 }
 
 #[tokio::test]
