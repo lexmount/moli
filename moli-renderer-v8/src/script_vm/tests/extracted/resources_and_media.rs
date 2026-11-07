@@ -11,6 +11,7 @@ async fn document_fonts_ready_waits_for_shadow_font_and_refreshes_cached_geometr
         "<!doctype html><html><head></head><body></body></html>",
         &loader,
     );
+    finish_main_document_load_for_test(&mut vm);
     vm.eval(&format!(r#"
         const host=document.createElement('span');host.id='font-host';document.body.append(host);
         const shadow=host.attachShadow({{mode:'open'}});

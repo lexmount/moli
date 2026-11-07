@@ -197,9 +197,18 @@ impl ScriptVm {
                 ))
             }
             PopupDocumentLifecycleContinuation::FinishLoad => {
-                self._context_host
-                    .borrow_mut()
-                    .note_lightweight_popup_load_event_finished(window.document_owner);
+                let document = {
+                    let mut host = self._context_host.borrow_mut();
+                    host.note_lightweight_popup_load_event_finished(window.document_owner);
+                    host.lightweight_popup_document_owner_is_current(window.document_owner)
+                        .then(|| {
+                            host.lightweight_popup_document_handle(window.document_owner.popup_id())
+                        })
+                        .flatten()
+                };
+                if let Some(document) = document {
+                    self.settle_loaded_document_font_set(document);
+                }
                 Ok(PopupDocumentLifecycleStep::Completed)
             }
         }
