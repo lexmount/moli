@@ -12,7 +12,10 @@ mod audio_param;
 mod biquad;
 mod buffer;
 mod channel_nodes;
+mod convolver;
 mod gain;
+
+pub(in crate::context_bootstrap) use convolver::constructor as convolver_constructor;
 mod graph;
 mod listener;
 mod media_element_source;
@@ -397,6 +400,8 @@ struct BaseAudioContextPrototypeDeclaration {
     create_buffer: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = wave_shaper::create)]
     create_wave_shaper: (),
+    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = convolver::create)]
+    create_convolver: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = channel_nodes::create_channel_merger)]
     create_channel_merger: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = channel_nodes::create_channel_splitter)]
@@ -483,6 +488,7 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
     match interface_name {
         "AudioBuffer" => buffer::install(scope, template),
         "WaveShaperNode" => wave_shaper::install(scope, template),
+        "ConvolverNode" => convolver::install(scope, template),
         "Worklet" => WorkletPrototypeDeclaration::initialize_prototype_template(
             scope,
             template.prototype_template(scope),
