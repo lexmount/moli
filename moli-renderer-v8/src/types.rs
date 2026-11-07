@@ -636,6 +636,7 @@ pub(super) struct AsyncSubresourceFetchCompletion {
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) response_status_text: Option<String>,
+    /// Successful SW responses are already validated; network fallback keeps this false.
     pub(super) skip_fetch_security_validation: bool,
     pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
     pub(super) network_error_text: Option<String>,

@@ -717,6 +717,14 @@ class FixtureServer:
                       self.addEventListener('activate', event => event.waitUntil(clients.claim()));
                       self.addEventListener('fetch', event => {
                         const url = new URL(event.request.url);
+                        if (url.pathname.startsWith('/fetch-dispatch/sw-auth/')) {
+                          const status = Number(url.searchParams.get('status') || 401);
+                          const header = status === 407 ? 'Proxy-Authenticate' : 'WWW-Authenticate';
+                          event.respondWith(new Response(`synthetic SW ${status}`, {
+                            status, headers: {[header]:'Basic realm="sw-only"'}
+                          }));
+                          return;
+                        }
                         if (!url.pathname.startsWith('/fetch-dispatch/sw/')) return;
                         let name = url.pathname.split('/').pop();
                         if (name === 'continued.woff2') {
@@ -744,7 +752,7 @@ class FixtureServer:
                 elif route.startswith("/fetch-dispatch/sw/"):
                     outer._record_resource_request(self.path, self.headers)
                     self._send_text("resource is only available from the service worker", status=HTTPStatus.NOT_FOUND)
-                elif route.startswith(("/fetch-dispatch/network/", "/fetch-dispatch/cache/", "/fetch-dispatch/auth/")):
+                elif route.startswith(("/fetch-dispatch/network/", "/fetch-dispatch/cache/", "/fetch-dispatch/auth/", "/fetch-dispatch/sw-auth/")):
                     outer._record_resource_request(self.path, self.headers)
                     if route.startswith("/fetch-dispatch/auth/") and self.headers.get("Authorization") != "Basic Zm9udDpzZWNyZXQ=":
                         self._send_common(HTTPStatus.UNAUTHORIZED, "text/plain", b"font authentication required",

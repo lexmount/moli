@@ -47,6 +47,9 @@ background pixels after completion. Cross-origin SW fonts without CORS response
 headers must keep loading after response-stage continuation. Explicit header
 replacement, including an empty list, must omit page defaults on the current
 request and restore them only on a subsequent redirect.
+SW-supplied 401/407 responses must produce neither authentication challenges nor
+origin requests, even with authentication handling enabled. The same tests keep
+real network authentication working after SW fallback.
 Chromium serves SW-produced responses before its network-service Fetch hook;
 Moli additionally supports pausing before SW dispatch. Matching SW cases require
 pauses on Moli, while Chromium calibrates the SW result and origin count. Network

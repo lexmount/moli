@@ -39,6 +39,14 @@ async def run_fetch_resource_dispatch_group(
     for admission in ("unmatched", "request"):
         await _resource_case(browser, fixture, results, "font", admission, policy="cache")
     await _resource_case(browser, fixture, results, "font", "request", policy="auth")
+    for policy in ("sw-auth", "sw-proxy-auth"):
+        for admission in ("direct", "request"):
+            await _resource_case(browser, fixture, results, "font", admission, policy=policy, worker=True)
+        for admission in ("unmatched", "request", "response"):
+            for action in ("CancelAuth", "ProvideCredentials"):
+                await _resource_case(browser, fixture, results, "font", admission, policy=policy,
+                                     worker=True, auth_response=action)
+    await _resource_case(browser, fixture, results, "font", "request", policy="auth", worker=True)
     for admission in ("unmatched", "request"):
         for worker in (False, True):
             await _resource_case(browser, fixture, results, "font", admission, policy="offline", worker=worker)
@@ -50,17 +58,25 @@ async def _resource_case(
     browser: Any, fixture: str, results: list[dict[str, Any]], kind: str,
     admission: str, *, worker: bool = False, policy: str | None = None,
     cross_origin: bool = False,
+    auth_response: str | None = None,
 ) -> None:
-    case = f"{kind}-{admission}-{policy or ('worker' if worker else 'network')}" + ("-controlled" if worker and policy == "offline" else "-fallback" if worker and policy else "")
+    case = f"{kind}-{admission}-{policy or ('worker' if worker else 'network')}" + ("-controlled" if worker and policy == "offline" else "-fallback" if worker and policy and policy not in ("sw-auth", "sw-proxy-auth") else "")
     if cross_origin:
         case += "-cross-origin"
-    served_by_worker = worker and policy in (None, "offline")
+    if auth_response is not None:
+        case += "-" + auth_response.lower()
+    synthetic_auth = policy in ("sw-auth", "sw-proxy-auth")
+    auth_status = 407 if policy == "sw-proxy-auth" else 401
+    handle_auth = policy == "auth" or (synthetic_auth and auth_response is not None)
+    served_by_worker = worker and (policy in (None, "offline") or synthetic_auth)
     name = ("font.woff2" if kind in ("font", "css-font") else "image.png"
             if kind == "css-image" else "captions.vtt" if kind == "track" else "tone.wav")
-    route = "sw" if served_by_worker else "cache" if policy == "cache" else "auth" if policy == "auth" else "network"
+    route = "sw-auth" if synthetic_auth else "sw" if served_by_worker else "cache" if policy == "cache" else "auth" if policy == "auth" else "network"
     if policy == "redirect":
         name = "redirect-font.woff2"
     url = f"{fixture}/fetch-dispatch/{route}/{name}?case={case}"
+    if synthetic_auth:
+        url += f"&status={auth_status}"
     if cross_origin:
         url = url.replace("127.0.0.1", "localhost")
     continued_url = url.replace("font.woff2", "continued.woff2") if admission == "override" else url
@@ -72,6 +88,8 @@ async def _resource_case(
     expected_body = ((REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes()
                      if fetch_type == "Font" else FETCH_DISPATCH_PNG if fetch_type == "Image"
                      else FETCH_MEDIA_CAPTIONS if kind == "track" else FETCH_MEDIA_WAV)
+    if synthetic_auth:
+        expected_body = f"synthetic SW {auth_status}".encode()
     context = await browser.new_context()
     screenshot: asyncio.Task[Any] | None = None
     try:
@@ -101,7 +119,7 @@ async def _resource_case(
             pattern = "*never-match-resource*" if admission == "unmatched" else "*fetch-dispatch/*"
             await cdp.send("Fetch.enable", {"patterns": [{"resourceType": fetch_type,
                             "urlPattern": pattern, "requestStage": "Response" if admission == "response" else "Request"}],
-                                            "handleAuthRequests": policy == "auth"})
+                                            "handleAuthRequests": handle_auth})
         with attach_cdp_event_collector(cdp, [
             "Fetch.requestPaused", "Fetch.authRequired", "Network.requestWillBeSent", "Network.responseReceived",
             "Network.loadingFinished", "Network.loadingFailed",
@@ -166,10 +184,13 @@ async def _resource_case(
                     if event["method"] == "Fetch.authRequired":
                         auth = event["params"]
                         if auth["requestId"] not in auth_requests:
-                            assert_equal(policy, "auth", f"{case} expected authentication")
+                            assert_equal(handle_auth, True, f"{case} expected authentication handling")
+                            action = auth_response or "ProvideCredentials"
+                            auth_params = {"response": action}
+                            if action == "ProvideCredentials":
+                                auth_params.update({"username":"font", "password":"secret"})
                             await cdp.send("Fetch.continueWithAuth", {"requestId":auth["requestId"],
-                                           "authChallengeResponse":{"response":"ProvideCredentials",
-                                                                    "username":"font", "password":"secret"}})
+                                           "authChallengeResponse": auth_params})
                             auth_requests.add(auth["requestId"])
                         continue
                     if event["method"] != "Fetch.requestPaused":
@@ -184,7 +205,7 @@ async def _resource_case(
                         raise SmokeError(f"{case} unexpected pause URL: {pause!r}")
                     params: dict[str, Any] = {"requestId": pause["requestId"]}
                     if admission == "response":
-                        if pause.get("responseStatusCode") == 200:
+                        if pause.get("responseStatusCode") == (auth_status if synthetic_auth else 200):
                             body = await cdp.send("Fetch.getResponseBody", params)
                             data = base64.b64decode(body["body"]) if body.get("base64Encoded") else body["body"].encode()
                             assert_equal(data, expected_body, f"{case} SW response body")
@@ -219,10 +240,16 @@ async def _resource_case(
             failed = policy == "blocked" or (policy == "offline" and not served_by_worker)
             expected_terminal = "Network.loadingFailed" if failed else "Network.loadingFinished"
             failures = [event["params"] for event in events if event["method"] == "Network.loadingFailed"]
-            assert_equal(terminals(), [expected_terminal], f"{case} single network terminal ({failures!r})")
+            if synthetic_auth:
+                # A font loader may cancel a non-2xx response or report its
+                # delivery before rejecting the font. Neither permits HTTP auth.
+                assert_equal(len(terminals()), 1, f"{case} single font network terminal ({failures!r})")
+                assert_equal(len(auth_requests), 0, f"{case} synthetic SW response cannot request network authentication")
+            else:
+                assert_equal(terminals(), [expected_terminal], f"{case} single network terminal ({failures!r})")
             if not kind.startswith("css-"):
                 assert_equal(await page.evaluate("__dispatchResource.result"),
-                             "error" if failed else "loaded", f"{case} resource result")
+                             "error" if failed or synthetic_auth else "loaded", f"{case} resource result")
             elif kind == "css-font":
                 assert_equal(await page.evaluate("[...document.fonts].find(f => f.family === 'DispatchPaint').status"),
                              "loaded", f"{case} CSS font decoded")
@@ -281,6 +308,9 @@ async def _resource_case(
                              f"{case} explicit header list reaches origin")
             if policy == "auth":
                 assert_equal(len(auth_requests), 1, f"{case} one authentication challenge")
+            if synthetic_auth:
+                assert_equal(observed["headers"].get("authorization"), None, f"{case} no origin credentials")
+                assert_equal(observed["headers"].get("proxy-authorization"), None, f"{case} no proxy credentials")
             if policy == "cache":
                 assert_equal(observed["headers"].get("cache-control"), "no-cache", f"{case} cache disable policy retained")
             record_contract(results, f"fetch_dispatch_{case.replace('-', '_')}",
@@ -291,9 +321,10 @@ async def _resource_case(
                                         else ["Fetch.continueRequest"] if handled else [])
                                      + ([{"headers": "Network.setExtraHTTPHeaders", "blocked": "Network.setBlockedURLs",
                                           "headers-replaced": "Network.setExtraHTTPHeaders", "headers-empty": "Network.setExtraHTTPHeaders",
-                                          "cache": "Network.setCacheDisabled", "auth": "Fetch.continueWithAuth", "redirect": "Network.setExtraHTTPHeaders", "offline": "Network.emulateNetworkConditions"}[policy]] if policy else []),
+                                          "cache": "Network.setCacheDisabled", "auth": "Fetch.continueWithAuth", "redirect": "Network.setExtraHTTPHeaders", "offline": "Network.emulateNetworkConditions"}[policy]] if policy and not synthetic_auth else []),
                             observed={"originRequests":observed["requests"], "pauses":len(handled),
                                       "responseBodies": response_bodies, "crossOrigin": cross_origin,
+                                      "authRequired": len(auth_requests), "handleAuthRequests": handle_auth,
                                       "imageBodyBytes": len(data) if kind == "css-image" else None,
                                       "backgroundPixel": background_pixel if kind == "css-image" else None,
                                       "terminals":terminals(), "headers":observed["headers"]})
