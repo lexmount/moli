@@ -1215,3 +1215,61 @@ mod text_modules;
 
 #[path = "module_cache.rs"]
 mod module_cache;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_csp_task_does_not_retire_opener_continuation() -> Result<()> {
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch("data:text/html,<html><head></head><body></body></html>")
+        .await?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        page.evaluate_runtime_expression_with_await_async(
+            r#"(async () => {
+            const rootPolicy = document.createElement('meta');
+            rootPolicy.httpEquiv = 'Content-Security-Policy';
+            rootPolicy.content = "connect-src 'none'";
+            document.head.appendChild(rootPolicy);
+            const popup = open();
+            let closed = false;
+            try {
+                const doc = popup.document;
+                const policy = doc.createElement('meta');
+                policy.httpEquiv = 'Content-Security-Policy';
+                policy.content = "script-src-attr 'none'";
+                doc.head.appendChild(policy);
+                const reported = new Promise(resolve => doc.addEventListener(
+                    'securitypolicyviolation', resolve, {once:true}));
+                const button = doc.body.appendChild(doc.createElement('button'));
+                button.setAttribute('onclick', 'void 0');
+                if (button.onclick !== null) throw new Error('inline handler must be blocked');
+                await reported;
+                popup.close();
+                closed = true;
+                try {
+                    await window.fetch('data:text/plain,blocked');
+                    return {unexpectedFulfillment:true};
+                } catch (error) {
+                    return {native:error instanceof TypeError,
+                        blockedByPolicy:String(error.message).includes('Content Security Policy'),
+                        scopeClosed:String(error.message).includes('global scope is shutting down'),
+                        message:String(error.message)};
+                }
+            } finally {
+                if (!closed) popup.close();
+            }
+        })().then(JSON.stringify)"#,
+            true,
+        ),
+    )
+    .await??;
+    let observed: serde_json::Value = serde_json::from_str(
+        result["value"]
+            .as_str()
+            .unwrap_or_else(|| panic!("CSP scope evaluation failed: {result}")),
+    )?;
+    assert_eq!(observed["native"], true, "{observed}");
+    assert_eq!(observed["blockedByPolicy"], true, "{observed}");
+    assert_eq!(observed["scopeClosed"], false, "{observed}");
+    Ok(())
+}

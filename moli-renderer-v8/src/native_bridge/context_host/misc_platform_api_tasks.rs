@@ -254,13 +254,7 @@ impl JsContextHost {
         } else {
             PageMiscPlatformApiTargetEffect::CurrentOwnerCallbackRetired
         };
-        if invoked {
-            // The task's checkpoint runs queued author microtasks before
-            // restoring a shared popup Context's logical Window owner.
-            dispatch_scope.defer_restore(scope, previous_scope);
-        } else {
-            dispatch_scope.restore(scope, previous_scope);
-        }
+        dispatch_scope.restore(scope, previous_scope);
         effect
     }
 }
