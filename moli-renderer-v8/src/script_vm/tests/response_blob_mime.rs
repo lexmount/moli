@@ -194,3 +194,43 @@ async fn body_blob_type_normalizes_pending_response_streams() {
     .await;
     assert_eq!(vm.eval("pendingBlobMimeResult").unwrap(), "passed");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_body_blob_completion_uses_its_intrinsic_constructor() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://pending-blob-intrinsic.test/", &loader);
+    vm.eval(r#"
+      globalThis.lateBlobResult = null;
+      (async () => {
+        const OriginalBlob = Blob;
+        const type = 'Text/Plain ; Charset="UTF-8"; X-Label="Aa B"';
+        let controller;
+        const response = new Response(new ReadableStream({ start(value) { controller = value; } }), {
+          headers: { 'Content-Type': type }
+        });
+        const pending = response.blob();
+        globalThis.Blob = function() { throw new Error('late author constructor'); };
+        try {
+          controller.enqueue(new Uint8Array([0, 65, 255]));
+          controller.close();
+          const blob = await pending;
+          if (!(blob instanceof OriginalBlob) || blob.type !== type.toLowerCase())
+            throw new Error('Blob identity or MIME normalization');
+          if (Array.from(new Uint8Array(await blob.arrayBuffer())).join(',') !== '0,65,255')
+            throw new Error('body bytes changed');
+          if (!response.bodyUsed) throw new Error('body was not consumed');
+          return 'passed';
+        } finally { globalThis.Blob = OriginalBlob; }
+      })().then(value => lateBlobResult = value, error => lateBlobResult = String(error));
+    "#).unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(lateBlobResult !== null)",
+        "true",
+        "pending Blob intrinsic constructor",
+    )
+    .await;
+    assert_eq!(vm.eval("lateBlobResult").unwrap(), "passed");
+}
