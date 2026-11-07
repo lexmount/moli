@@ -123,7 +123,7 @@ impl CdpFrontendRouter {
             }
             let attachment_flattened_protocol = delivery.target_attachment_uses_flat_protocol();
             let wire_session = delivery.protocol_session_id().map(str::to_owned);
-            let message = delivery.into_protocol_message();
+            let message = delivery.into_cdp_message();
             let routed = self.routing.lock().route_message(
                 message,
                 wire_session.as_deref(),

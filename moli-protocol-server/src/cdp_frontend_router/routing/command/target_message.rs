@@ -62,17 +62,21 @@ impl CdpFrontendRoutingState {
                 break;
             };
             let ack = json!({"id": request.id(), "result": {}});
-            acknowledgements.push(route.encode(ack));
+            acknowledgements.push(route.encode(ack).into_value());
             route.nest(&target_session_id);
             nested = true;
             let parsed = match ParsedCdpCommand::parse_str(raw) {
                 Ok(parsed) => parsed,
                 Err(error) => {
-                    acknowledgements.push(route.encode(cdp_error_response(
-                        error.command_id(),
-                        error.response_code(),
-                        error.response_message(),
-                    )));
+                    acknowledgements.push(
+                        route
+                            .encode(cdp_error_response(
+                                error.command_id(),
+                                error.response_code(),
+                                error.response_message(),
+                            ))
+                            .into_value(),
+                    );
                     return Some(CdpPreparedFrontendCommand::TargetMessage {
                         frontend_id,
                         acknowledgements,
@@ -93,11 +97,11 @@ impl CdpFrontendRoutingState {
                         ?error,
                         "legacy Target message could not preserve its validated routing envelope"
                     );
-                    acknowledgements.push(route.encode(cdp_error_response(
-                        Some(id),
-                        -32603,
-                        "Internal error",
-                    )));
+                    acknowledgements.push(
+                        route
+                            .encode(cdp_error_response(Some(id), -32603, "Internal error"))
+                            .into_value(),
+                    );
                     return Some(CdpPreparedFrontendCommand::TargetMessage {
                         frontend_id,
                         acknowledgements,
@@ -125,7 +129,7 @@ impl CdpFrontendRoutingState {
                     // Unknown payload sessions have no valid reply session.
                     route.set_payload_session_id(None);
                 }
-                acknowledgements.push(route.encode(message));
+                acknowledgements.push(route.encode(message).into_value());
                 Some(CdpPreparedFrontendCommand::TargetMessage {
                     frontend_id,
                     acknowledgements,

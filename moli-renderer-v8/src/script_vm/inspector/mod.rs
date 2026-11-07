@@ -43,6 +43,7 @@ use crate::{
     {document_runtime::DomHandle, runtime::RendererCommandTurnOutputRecorder},
 };
 use anyhow::Result;
+use moli_inspector_json::InspectorJson;
 use moli_page_types::{
     DevToolsSessionKey, RendererDevToolsAgentToken, RendererInspectorSessionRestoreSnapshot,
     V8InspectorSessionState,
@@ -295,7 +296,7 @@ impl DocumentInspectorBinding {
     pub(super) fn take_outbound_messages_for_session(
         &self,
         inspector_session_id: Option<&str>,
-    ) -> Vec<Value> {
+    ) -> Vec<InspectorJson> {
         let session_key = inspector_session_key(inspector_session_id);
         self.observable_outbound_routes()
             .into_iter()
@@ -504,15 +505,30 @@ impl DocumentInspectorBinding {
         Ok((reported_context, registration_id))
     }
 
-    pub(super) fn record_execution_context_state(
+    pub(super) fn record_execution_context_state<T: Clone + Into<InspectorJson>>(
         &mut self,
-        messages: &[Value],
+        messages: &[T],
         root_frame_id: Option<&str>,
     ) {
+        let contexts = messages
+            .iter()
+            .map(|message| Into::<InspectorJson>::into(message.clone()))
+            .filter(|message| {
+                matches!(
+                    message.method(),
+                    Some(
+                        "Runtime.executionContextCreated"
+                            | "Runtime.executionContextDestroyed"
+                            | "Runtime.executionContextsCleared"
+                    )
+                )
+            })
+            .map(|message| message.value().clone())
+            .collect::<Vec<_>>();
         self.backend
             .borrow_mut()
             .runtime_realms
-            .record_execution_context_state(messages, root_frame_id);
+            .record_execution_context_state(&contexts, root_frame_id);
     }
 
     fn outbound_snapshots(&self) -> HashMap<DevToolsSessionKey, usize> {
@@ -525,7 +541,7 @@ impl DocumentInspectorBinding {
     fn outbound_after_snapshots(
         &self,
         snapshots: &HashMap<DevToolsSessionKey, usize>,
-    ) -> Vec<Value> {
+    ) -> Vec<InspectorJson> {
         let mut messages = Vec::new();
         for (key, outbound) in self.observable_outbound_routes() {
             let snapshot_len = snapshots.get(&key).copied().unwrap_or_default();
@@ -552,10 +568,12 @@ fn inspector_execution_context_origin(url: &Url) -> String {
     }
 }
 
-fn reported_execution_context_created(messages: &[Value]) -> Option<ReportedExecutionContext> {
+fn reported_execution_context_created(
+    messages: &[InspectorJson],
+) -> Option<ReportedExecutionContext> {
     let context = messages
         .iter()
-        .find(|message| message["method"] == json!("Runtime.executionContextCreated"))
+        .find(|message| message.method() == Some("Runtime.executionContextCreated"))
         .map(|message| &message["params"]["context"])?;
     Some(ReportedExecutionContext {
         id: context["id"].as_i64()?,

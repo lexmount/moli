@@ -119,7 +119,7 @@ impl RuntimeInspectorMessage {
                 Self::Context(RuntimeContextProtocolEvent::from_restore_event(event))
             }
             RendererRuntimeInspectorMessage::Protocol(message) => Self::Background(
-                protocol_message_background_event_for_target(message.into_value(), target_id),
+                protocol_message_background_event_for_target(message.into_payload(), target_id),
             ),
         }
     }

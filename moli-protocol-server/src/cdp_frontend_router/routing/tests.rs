@@ -1222,3 +1222,46 @@ fn orphaned_responses_and_unknown_session_events_do_not_fall_back_to_browser() {
             .is_none()
     );
 }
+
+#[test]
+fn raw_inspector_response_rewrites_frontend_ids_without_decoding_the_body() {
+    let mut routing = CdpFrontendRoutingState::default();
+    routing
+        .register_browser_frontend(5, "SID-browser".into(), test_sink())
+        .unwrap();
+    routing
+        .register_target_frontend(10, "TID-1".into(), "SID-page".into(), test_sink())
+        .unwrap();
+    for frontend in [5, 10] {
+        let command = expect_prepared_command(
+            routing.prepare_command(
+                frontend,
+                parsed_command(
+                    json!({"id":7,"method":"Runtime.evaluate","params":{"expression":"'x'"}})
+                        .to_string(),
+                ),
+            ),
+            "evaluate",
+        );
+        let message = InspectorJson::from_slice(
+            format!(
+                r#"{{"id":{},"result":{{"result":{{"type":"string","value":"\ud800"}}}}}}"#,
+                command.request().id()
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let source = message.clone();
+        let (destination, wire) = routing.route_message(message, None, None).unwrap();
+        assert_eq!(destination.frontend_id(), frontend);
+        assert_eq!(wire.id_u64(), Some(7));
+        assert_eq!(wire.session_id(), None);
+        assert!(wire.to_string().contains(r#""value":"\ud800""#));
+        assert!(!wire.is_materialized());
+        assert!(!source.is_materialized());
+        assert!(
+            routing.route_message(source, None, None).is_none(),
+            "response authority is consumed once"
+        );
+    }
+}

@@ -247,3 +247,31 @@ fn owned_non_outer_html_message_uses_the_generic_serializer() {
     assert_eq!(envelope.message, expected);
     assert_eq!(*close_rx.borrow(), SocketCloseSignal::Open);
 }
+
+#[test]
+fn raw_inspector_output_preserves_utf16_and_enforces_exact_wire_byte_limits() {
+    let body = format!(r#"{{"value":"{}\ud800"}}"#, "a".repeat(8192));
+    let mut message =
+        InspectorJson::from_slice(format!(r#"{{"id":7,"result":{body}}}"#).as_bytes()).unwrap();
+    message.set_id(u64::MAX);
+    message.set_session_id(Some("SID-\""));
+    let expected = message.to_string();
+    let (sink, mut output, close) = test_sink_with_limits(2, expected.len(), expected.len());
+    assert!(sink.enqueue_owned_message(message.clone()));
+    assert!(!message.is_materialized());
+    let SocketWriterCommand::Output(envelope) = output.try_recv().unwrap() else {
+        panic!("expected output")
+    };
+    assert_eq!(envelope.message, expected);
+    assert!(envelope.message.contains(&body));
+    assert_eq!(*close.borrow(), SocketCloseSignal::Open);
+    assert!(
+        !sink.enqueue_owned_message(message.clone()),
+        "the first output still reserves the exact byte budget"
+    );
+    drop(envelope);
+    let (sink, _output, close) = test_sink_with_limits(2, expected.len(), expected.len() - 1);
+    assert!(!sink.enqueue_owned_message(message.clone()));
+    assert_eq!(*close.borrow(), SocketCloseSignal::ImmediateClose);
+    assert!(!message.is_materialized());
+}
