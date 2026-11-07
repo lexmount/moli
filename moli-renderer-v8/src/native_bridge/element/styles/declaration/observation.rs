@@ -321,6 +321,37 @@ impl<'a> StyleObservation<'a> {
         self.runtime
     }
 
+    pub(in crate::native_bridge::element::styles) fn prepare_targets(
+        &mut self,
+        handles: impl IntoIterator<Item = DomHandle>,
+    ) {
+        let mut documents = indexmap::IndexMap::<DomHandle, Vec<DomHandle>>::new();
+        for handle in handles {
+            if let Some(document) = self.runtime.dom_host().owner_document_handle(handle) {
+                documents.entry(document).or_default().push(handle);
+            }
+        }
+        for (document, handles) in documents {
+            // Materialize the style world from its shallow root, not an
+            // arbitrarily deep first target. The batch prepares the remaining
+            // requested paths in one borrowed Stylo context.
+            let root = self
+                .runtime
+                .dom_host()
+                .child_handles(document)
+                .find(|&node| {
+                    self.runtime
+                        .dom_host()
+                        .node(node)
+                        .is_some_and(crate::dom::native::Node::is_element)
+                })
+                .unwrap_or(handles[0]);
+            self.read(root);
+            self.runtime
+                .prepare_style_observation_targets(document, &handles);
+        }
+    }
+
     pub(in crate::native_bridge::element::styles) fn target_is_in_flat_tree(
         &mut self,
         handle: DomHandle,

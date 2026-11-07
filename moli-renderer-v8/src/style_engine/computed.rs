@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use dom::ElementState as StyloElementState;
 use style::{
@@ -23,6 +23,7 @@ use style::{
     selector_parser::{PseudoElement, SnapshotMap},
     servo_arc::Arc as ServoArc,
     shared_lock::StylesheetGuards,
+    style_resolver::{PseudoElementResolution, StyleResolverForElement},
     stylesheets::{CssRuleType, UrlExtraData},
     stylist::RuleInclusion,
     thread_state::{self, ThreadState},
@@ -57,6 +58,16 @@ use super::{
         retained_style_world_update_plan,
     },
 };
+
+#[cfg(test)]
+thread_local! {
+    static STYLE_RESOLUTION_CONTEXTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_style_resolution_context_count_for_test() -> usize {
+    STYLE_RESOLUTION_CONTEXTS.replace(0)
+}
 
 #[derive(Clone)]
 pub(crate) struct StyloComputedStyleSnapshot {
@@ -928,20 +939,20 @@ fn install_shadow_cascade_data_for_resolution(
         });
 }
 
-fn resolve_element_styles(
+fn with_style_resolution_context<'dom, R>(
     world: &DocumentStyleWorld,
-    dom_adapter: &moli_selector::StyloDomHostBinding<'_>,
-    element: StyloElement<'_>,
-    pseudo_element: Option<&PseudoElement>,
-    validation_path: Option<&[StyleValidationPathEntry]>,
-) -> ElementStyles {
+    dom_adapter: &'dom moli_selector::StyloDomHostBinding<'dom>,
+    resolve: impl FnOnce(&mut StyleContext<'_, StyloElement<'dom>>) -> R,
+) -> R {
+    #[cfg(test)]
+    STYLE_RESOLUTION_CONTEXTS.with(|count| count.set(count.get() + 1));
     let shared_lock = dom_adapter.shared_lock().clone();
     let guard = shared_lock.read();
     let guards = StylesheetGuards::same(&guard);
     let snapshot_map = SnapshotMap::new();
     let empty_painters = EmptyRegisteredSpeculativePainters;
     let mut retained_selector_caches = world.document_state.take_selector_caches();
-    let styles = world.document_state.with_retained_style_system(|retained| {
+    let result = world.document_state.with_retained_style_system(|retained| {
         let shared = SharedStyleContext {
             stylist: &retained.stylist,
             visited_styles_enabled: false,
@@ -963,12 +974,29 @@ fn resolve_element_styles(
             shared: &shared,
             thread_local: &mut thread_local,
         };
-        let ancestor_resolution_count = materialize_ancestor_styles_for_resolution(
-            &mut context,
-            element,
-            world,
-            validation_path,
+        let result = resolve(&mut context);
+        std::mem::swap(
+            &mut context.thread_local.selector_caches,
+            &mut retained_selector_caches,
         );
+        result
+    });
+    world
+        .document_state
+        .replace_selector_caches(retained_selector_caches);
+    result
+}
+
+fn resolve_element_styles<'dom>(
+    world: &DocumentStyleWorld,
+    dom_adapter: &'dom moli_selector::StyloDomHostBinding<'dom>,
+    element: StyloElement<'dom>,
+    pseudo_element: Option<&PseudoElement>,
+    validation_path: Option<&[StyleValidationPathEntry]>,
+) -> ElementStyles {
+    with_style_resolution_context(world, dom_adapter, |context| {
+        let ancestor_resolution_count =
+            materialize_ancestor_styles_for_resolution(context, element, world, validation_path);
         let target = DomHandle::new(element.as_node().debug_id());
         world.pseudo_style_cache.invalidate_handles([target]);
         // `resolve_style` is the single-node initial-style API. Keep dirty
@@ -977,13 +1005,7 @@ fn resolve_element_styles(
         unsafe {
             element.ensure_data().styles = ElementStyles::default();
         }
-        let styles = resolve_style(
-            &mut context,
-            element,
-            RuleInclusion::All,
-            pseudo_element,
-            None,
-        );
+        let styles = resolve_style(context, element, RuleInclusion::All, pseudo_element, None);
         unsafe {
             let mut data = element.ensure_data();
             data.styles = styles.clone();
@@ -998,19 +1020,119 @@ fn resolve_element_styles(
             .document_state
             .lazy_invalidation_roots
             .mark_element_current(target, required_generation);
-        std::mem::swap(
-            &mut context.thread_local.selector_caches,
-            &mut retained_selector_caches,
-        );
         world
             .document_state
             .note_element_style_resolutions(ancestor_resolution_count.saturating_add(1));
         styles
+    })
+}
+
+/// Resolve an explicit observation's targets and their necessary ancestors in
+/// one bound DOM/style context. The caller has already updated this Document's
+/// style world. Only node identities and traversal depth are indexed here.
+pub(super) fn prepare_style_observation_targets(
+    engine: &MoliStyleEngine,
+    host: &DomHost,
+    document_url: &url::Url,
+    document: DomHandle,
+    handles: &[DomHandle],
+) {
+    let world = engine.world_for_document(document);
+    let quirks_mode = host
+        .node(document)
+        .and_then(Node::as_document)
+        .map(|document| document.quirks_mode())
+        .unwrap_or(QuirksMode::NoQuirks);
+    engine.dom_adapter.with_bound_host(host, |dom_adapter| {
+        install_shadow_cascade_data_for_resolution(&world, dom_adapter);
+        with_style_resolution_context(&world, dom_adapter, |context| {
+            let mut prepared: HashMap<DomHandle, (usize, bool)> = HashMap::new();
+            let mut pending = Vec::new();
+            let mut resolutions = 0_u64;
+            for &handle in handles {
+                if host.owner_document_handle(handle) != Some(document) {
+                    continue;
+                }
+                let Some(element) = dom_adapter.element(host, handle) else {
+                    continue;
+                };
+                let mut current = Some(element);
+                while let Some(element) = current {
+                    let handle = DomHandle::new(element.as_node().debug_id());
+                    if prepared.contains_key(&handle) {
+                        break;
+                    }
+                    pending.push(element);
+                    current = element.traversal_parent();
+                }
+                let (mut depth, mut inherited_change) = current
+                    .and_then(|parent| prepared.get(&DomHandle::new(parent.as_node().debug_id())))
+                    .map_or((0, false), |&(depth, changed)| (depth + 1, changed));
+                for element in pending.drain(..).rev() {
+                    let handle = DomHandle::new(element.as_node().debug_id());
+                    let path = world
+                        .document_state
+                        .lazy_invalidation_roots
+                        .validation_path(host, document, handle);
+                    let needs_resolution = inherited_change
+                        || style_validation_path_needs_resolution(&world, dom_adapter, host, &path);
+                    context
+                        .thread_local
+                        .bloom_filter
+                        .insert_parents_recovering(element, depth);
+                    context.thread_local.current_dom_depth = depth;
+                    if needs_resolution {
+                        populate_inline_style_attributes_for_resolution(
+                            engine,
+                            host,
+                            document_url,
+                            handle,
+                            quirks_mode,
+                        );
+                        world.pseudo_style_cache.invalidate_handles([handle]);
+                        unsafe {
+                            element.ensure_data().styles = ElementStyles::default();
+                        }
+                        // Unlike the one-off `resolve_style` API, this entry
+                        // keeps the observation's recovered ancestor filter.
+                        let styles = StyleResolverForElement::new(
+                            element,
+                            context,
+                            RuleInclusion::All,
+                            PseudoElementResolution::IfApplicable,
+                        )
+                        .resolve_style_with_default_parents()
+                        .into();
+                        unsafe {
+                            let mut data = element.ensure_data();
+                            data.styles = styles;
+                            data.clear_restyle_state();
+                        }
+                        let generation = world
+                            .document_state
+                            .lazy_invalidation_roots
+                            .required_generation_for_checked_element(handle)
+                            .unwrap_or_default();
+                        world
+                            .document_state
+                            .lazy_invalidation_roots
+                            .mark_element_current(handle, generation);
+                        inherited_change = true;
+                        resolutions += 1;
+                    }
+                    context.thread_local.bloom_filter.push(element);
+                    prepared.insert(handle, (depth, inherited_change));
+                    depth += 1;
+                }
+            }
+            world
+                .document_state
+                .note_ancestor_style_validation_visits(prepared.len() as u64);
+            world
+                .document_state
+                .note_element_style_resolutions(resolutions);
+        });
     });
-    world
-        .document_state
-        .replace_selector_caches(retained_selector_caches);
-    styles
 }
 
 fn materialize_ancestor_styles_for_resolution<E>(

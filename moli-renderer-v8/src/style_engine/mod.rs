@@ -31,6 +31,8 @@ mod cache;
 mod cause;
 mod cleanup;
 mod computed;
+#[cfg(test)]
+pub(crate) use computed::take_style_resolution_context_count_for_test;
 mod document_world;
 mod drain;
 mod eligibility;
@@ -1048,6 +1050,16 @@ impl MoliStyleEngine {
             read_document,
             viewport,
         )
+    }
+
+    pub(crate) fn prepare_style_observation_targets(
+        &self,
+        host: &DomHost,
+        document_url: &url::Url,
+        document: DomHandle,
+        handles: &[DomHandle],
+    ) {
+        computed::prepare_style_observation_targets(self, host, document_url, document, handles);
     }
 
     pub(crate) fn computed_style_snapshot_from_current_observation(

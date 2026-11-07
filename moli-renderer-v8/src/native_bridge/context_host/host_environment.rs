@@ -1801,6 +1801,19 @@ impl JsContextHost {
             )
     }
 
+    pub(crate) fn prepare_style_observation_targets(
+        &self,
+        document: DomHandle,
+        handles: &[DomHandle],
+    ) {
+        self.style_engine.prepare_style_observation_targets(
+            self.dom_host(),
+            self.document_url(),
+            document,
+            handles,
+        );
+    }
+
     pub(crate) fn computed_style_snapshot_from_current_observation(
         &self,
         handle: DomHandle,

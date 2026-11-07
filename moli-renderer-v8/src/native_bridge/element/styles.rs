@@ -588,6 +588,7 @@ pub(crate) fn computed_style_export_values_for_document_snapshot(
         };
         values.push(value);
     }
+    observation.prepare_targets(available.iter().map(|&(_, handle)| handle));
     for (index, handle) in available {
         let style = observation.read(handle);
         values[index] = ComputedStyleExportValues {
