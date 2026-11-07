@@ -100,8 +100,15 @@ impl ScriptVm {
         skip_fetch_security_validation: bool,
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         network_error_text: Option<String>,
-        result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
+        completion_result: AsyncSubresourceFetchResult,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        let (encoded, result) = match completion_result {
+            AsyncSubresourceFetchResult::Response(response) => (None, Ok(response)),
+            AsyncSubresourceFetchResult::Image { response, encoded } => {
+                (Some(encoded), Ok(response))
+            }
+            AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
+        };
         let RunningSubresourceFetchState {
             pending,
             request_url,
@@ -137,12 +144,13 @@ impl ScriptVm {
                 {
                     // Keep the original request for Network event replay; only the
                     // challenged hop is used by Fetch.authRequired and auth retries.
-                    let mut challenged_request = moli_fetch::Request::new(
+                    let mut challenged_request = moli_fetch::Request::new_browser(
                         &request_method,
-                        request_url.as_str(),
-                        request_body.clone(),
+                        request_url.clone(),
+                        pending.info.request_body_bytes.clone(),
                         request_headers.clone(),
-                    )?
+                        pending.request_origin.clone(),
+                    )
                     .with_redirect_headers(pending.redirect_headers.clone());
                     for redirect in &response.redirect_chain {
                         challenged_request.apply_redirect_status(redirect.status);
@@ -165,7 +173,10 @@ impl ScriptVm {
                         response_final_url: response.final_url.clone(),
                         response_status: response.status,
                         response_headers: response.headers.clone(),
-                        response_body: SubresourceResponseBody::from_navigation_response(&response),
+                        response_body: encoded.as_ref().map_or_else(
+                            || SubresourceResponseBody::from_navigation_response(&response),
+                            |image| SubresourceResponseBody::from_parkable_image(image.clone()),
+                        ),
                         response_from_cache: response.from_cache,
                         response_cache_state: response.cache_state,
                     };
@@ -190,6 +201,10 @@ impl ScriptVm {
                                         .map(|headers| headers.to_vec())
                                 }),
                             response,
+                            encoded,
+                            response_status_text,
+                            skip_fetch_security_validation,
+                            response_filter,
                         });
                     self._context_host
                         .borrow_mut()
@@ -219,7 +234,10 @@ impl ScriptVm {
                             .map(|headers| headers.to_vec()),
                         response_status: response.status,
                         response_headers: response.headers.clone(),
-                        response_body: SubresourceResponseBody::from_navigation_response(&response),
+                        response_body: encoded.as_ref().map_or_else(
+                            || SubresourceResponseBody::from_navigation_response(&response),
+                            |image| SubresourceResponseBody::from_parkable_image(image.clone()),
+                        ),
                         from_cache: response.from_cache,
                         cache_state: response.cache_state,
                     };
@@ -232,6 +250,10 @@ impl ScriptVm {
                             request_headers,
                             request_body,
                             response,
+                            encoded,
+                            response_status_text,
+                            skip_fetch_security_validation,
+                            response_filter,
                         });
                     self._context_host
                         .borrow_mut()
@@ -241,7 +263,7 @@ impl ScriptVm {
                     return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
                 }
 
-                let activity = self.resolve_pending_subresource_fetch_body(
+                let activity = self.resolve_pending_subresource_fetch_completion(
                     pending,
                     request_url,
                     request_method,
@@ -251,7 +273,7 @@ impl ScriptVm {
                     skip_fetch_security_validation,
                     response_filter,
                     network_error_text.clone(),
-                    Ok(response),
+                    AsyncSubresourceFetchResult::from_image_parts(Ok(response), encoded),
                 );
                 trace_async_subresource_stage(
                     "async_subresource_complete_running_done",
@@ -338,7 +360,7 @@ impl ScriptVm {
                 completion.skip_fetch_security_validation,
                 completion.response_filter,
                 completion.network_error_text,
-                completion.result.into_result(),
+                completion.result,
             );
             trace_async_subresource_stage(
                 "async_subresource_complete_done",

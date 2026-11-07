@@ -601,7 +601,10 @@ mod tests {
                 .with_redirect_headers(Some(Vec::new().into())),
             )
             .unwrap();
-        assert_eq!(request.request_headers.to_byte_strings().len(), 2);
+        assert_eq!(
+            request.request_headers.to_byte_strings(),
+            vec![("x-hop".to_owned(), "initial-only".to_owned())],
+        );
         request.apply_redirect_status(302);
         assert_eq!(
             request.request_headers.to_byte_strings(),

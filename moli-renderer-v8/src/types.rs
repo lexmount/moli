@@ -588,6 +588,10 @@ pub(super) struct PendingSubresourceResponseState {
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) response: NavigationResponse,
+    pub(super) encoded: Option<moli_parkable_image::ParkableImage>,
+    pub(super) response_status_text: Option<String>,
+    pub(super) skip_fetch_security_validation: bool,
+    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
 }
 
 pub(super) struct PendingSubresourceAuthState {
@@ -599,6 +603,10 @@ pub(super) struct PendingSubresourceAuthState {
     pub(super) intercept_response: bool,
     pub(super) initial_network_request_headers: Option<Vec<(String, String)>>,
     pub(super) response: NavigationResponse,
+    pub(super) encoded: Option<moli_parkable_image::ParkableImage>,
+    pub(super) response_status_text: Option<String>,
+    pub(super) skip_fetch_security_validation: bool,
+    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
 }
 
 pub(super) struct RunningSubresourceFetchState {
@@ -668,6 +676,7 @@ impl AsyncSubresourceFetchResult {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn into_result(self) -> std::result::Result<NavigationResponse, String> {
         match self {
             Self::Response(response) | Self::Image { response, .. } => Ok(response),

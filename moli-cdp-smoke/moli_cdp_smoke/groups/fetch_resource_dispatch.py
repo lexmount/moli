@@ -8,8 +8,9 @@ from typing import Any
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
 from ..config import REPO_ROOT, is_moli_browser
 from ..diagnostics import new_cdp_session
-from ..fixture import FETCH_MEDIA_CAPTIONS, FETCH_MEDIA_WAV, TRANSPARENT_PNG
+from ..fixture import FETCH_DISPATCH_PNG, FETCH_MEDIA_CAPTIONS, FETCH_MEDIA_WAV
 from ..helpers import attach_cdp_event_collector
+from ..png_image import decode_png
 
 
 async def run_fetch_resource_dispatch_group(
@@ -22,6 +23,12 @@ async def run_fetch_resource_dispatch_group(
             await _resource_case(browser, fixture, results, kind, admission, worker=True)
     for kind in ("font", "track"):
         await _resource_case(browser, fixture, results, kind, "response", worker=True)
+    for admission in ("direct", "unmatched", "request", "response"):
+        await _resource_case(browser, fixture, results, "css-image", admission)
+        await _resource_case(browser, fixture, results, "font", admission, worker=True, cross_origin=True)
+    for cross_origin in (False, True):
+        for policy in ("headers-replaced", "headers-empty"):
+            await _resource_case(browser, fixture, results, "font", "request", policy=policy, cross_origin=cross_origin)
     if is_moli_browser():
         await _resource_case(browser, fixture, results, "font", "override", worker=True)
     for kind in ("font", "css-image", "audio", "track"):
@@ -42,8 +49,11 @@ async def run_fetch_resource_dispatch_group(
 async def _resource_case(
     browser: Any, fixture: str, results: list[dict[str, Any]], kind: str,
     admission: str, *, worker: bool = False, policy: str | None = None,
+    cross_origin: bool = False,
 ) -> None:
-    case = f"{kind}-{admission}-{policy or 'worker'}" + ("-controlled" if worker and policy == "offline" else "-fallback" if worker and policy else "")
+    case = f"{kind}-{admission}-{policy or ('worker' if worker else 'network')}" + ("-controlled" if worker and policy == "offline" else "-fallback" if worker and policy else "")
+    if cross_origin:
+        case += "-cross-origin"
     served_by_worker = worker and policy in (None, "offline")
     name = ("font.woff2" if kind in ("font", "css-font") else "image.png"
             if kind == "css-image" else "captions.vtt" if kind == "track" else "tone.wav")
@@ -51,6 +61,8 @@ async def _resource_case(
     if policy == "redirect":
         name = "redirect-font.woff2"
     url = f"{fixture}/fetch-dispatch/{route}/{name}?case={case}"
+    if cross_origin:
+        url = url.replace("127.0.0.1", "localhost")
     continued_url = url.replace("font.woff2", "continued.woff2") if admission == "override" else url
     if policy == "redirect":
         continued_url = url.replace("redirect-font.woff2", "font.woff2")
@@ -58,7 +70,7 @@ async def _resource_case(
         url = url.replace("font.woff2", "missing.woff2")
     fetch_type = "Font" if kind in ("font", "css-font") else "Image" if kind == "css-image" else "Media"
     expected_body = ((REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes()
-                     if fetch_type == "Font" else TRANSPARENT_PNG if fetch_type == "Image"
+                     if fetch_type == "Font" else FETCH_DISPATCH_PNG if fetch_type == "Image"
                      else FETCH_MEDIA_CAPTIONS if kind == "track" else FETCH_MEDIA_WAV)
     context = await browser.new_context()
     screenshot: asyncio.Task[Any] | None = None
@@ -76,7 +88,7 @@ async def _resource_case(
             await wait_until(lambda: page.evaluate("__workerReady && !!navigator.serviceWorker.controller"),
                              f"{case} controlling service worker")
         await cdp.send("Network.enable")
-        if policy in ("headers", "auth", "redirect"):
+        if policy in ("headers", "headers-replaced", "headers-empty", "auth", "redirect"):
             await cdp.send("Network.setExtraHTTPHeaders", {"headers": {"X-Fetch-Policy": case}})
         elif policy == "blocked":
             await cdp.send("Network.setBlockedURLs", {"urls": ["*" + url.split(fixture, 1)[1]]})
@@ -139,6 +151,7 @@ async def _resource_case(
             def resource_requests() -> list[dict[str, Any]]:
                 return [event["params"] for event in events
                         if event["method"] == "Network.requestWillBeSent"
+                        and event["params"].get("type") == ("TextTrack" if kind == "track" else fetch_type)
                         and event["params"]["request"]["url"] in (url, continued_url)]
 
             def terminals() -> list[str]:
@@ -184,6 +197,9 @@ async def _resource_case(
                                            "headers":[{"name":"X-Fetch-Override", "value":"kept"}]})
                         if policy == "redirect" and pause["request"]["url"] == url:
                             params["headers"] = [{"name":"X-Fetch-Hop", "value":"initial-only"}]
+                        if policy in ("headers-replaced", "headers-empty"):
+                            params["headers"] = ([] if policy == "headers-empty" else
+                                                 [{"name":"X-Fetch-Hop", "value":"only-header"}])
                         await cdp.send("Fetch.continueRequest", params)
                     handled.add(pause["requestId"])
                 if screenshot is not None:
@@ -202,13 +218,23 @@ async def _resource_case(
             await wait_until(settle, f"{case} resource completion")
             failed = policy == "blocked" or (policy == "offline" and not served_by_worker)
             expected_terminal = "Network.loadingFailed" if failed else "Network.loadingFinished"
-            assert_equal(terminals(), [expected_terminal], f"{case} single network terminal")
+            failures = [event["params"] for event in events if event["method"] == "Network.loadingFailed"]
+            assert_equal(terminals(), [expected_terminal], f"{case} single network terminal ({failures!r})")
             if not kind.startswith("css-"):
                 assert_equal(await page.evaluate("__dispatchResource.result"),
                              "error" if failed else "loaded", f"{case} resource result")
             elif kind == "css-font":
                 assert_equal(await page.evaluate("[...document.fonts].find(f => f.family === 'DispatchPaint').status"),
                              "loaded", f"{case} CSS font decoded")
+            elif kind == "css-image":
+                request_id = resource_requests()[-1]["requestId"]
+                body = await cdp.send("Network.getResponseBody", {"requestId": request_id})
+                data = base64.b64decode(body["body"]) if body.get("base64Encoded") else body["body"].encode()
+                assert_equal(data, expected_body, f"{case} complete image response body")
+                painted = await cdp.send("Page.captureScreenshot", {"format": "png"})
+                background_pixel = decode_png(base64.b64decode(painted["data"])).pixel(5, 5)
+                assert_equal(background_pixel,
+                             (255, 0, 0, 255), f"{case} decoded background image pixels")
             # Chromium serves controlled resources before its network-service
             # Fetch hook. Moli also supports pausing before SW dispatch, and
             # must preserve that dispatch when the client resumes the request.
@@ -217,7 +243,8 @@ async def _resource_case(
                 raise SmokeError(f"{case} did not exercise interception")
             if admission == "response" and needs_pause:
                 assert_equal(response_bodies, 1, f"{case} SW body exposed once")
-            status_url = f"{fixture}/fetch-dispatch/status?path=" + urllib.parse.quote(continued_url.split(fixture, 1)[1], safe='')
+            resource_path = urllib.parse.urlsplit(continued_url)
+            status_url = f"{fixture}/fetch-dispatch/status?path=" + urllib.parse.quote(resource_path.path + "?" + resource_path.query, safe='')
             async def status() -> dict[str, Any]:
                 return await page.evaluate("url => fetch(url).then(r => r.json())", status_url)
             if policy == "cache":
@@ -244,6 +271,14 @@ async def _resource_case(
                                              f"{fixture}/fetch-dispatch/status?path=" + urllib.parse.quote(url.split(fixture, 1)[1], safe=''))
                 assert_equal(initial["requests"], 1, f"{case} initial redirect dispatch count")
                 assert_equal(initial["headers"].get("x-fetch-hop"), "initial-only", f"{case} initial header override")
+                assert_equal(initial["headers"].get("x-fetch-policy"), None,
+                             f"{case} omitted page header stays absent on initial hop")
+            if policy in ("headers-replaced", "headers-empty"):
+                assert_equal(observed["headers"].get("x-fetch-policy"), None,
+                             f"{case} explicit header list replaces page defaults")
+                assert_equal(observed["headers"].get("x-fetch-hop"),
+                             None if policy == "headers-empty" else "only-header",
+                             f"{case} explicit header list reaches origin")
             if policy == "auth":
                 assert_equal(len(auth_requests), 1, f"{case} one authentication challenge")
             if policy == "cache":
@@ -255,8 +290,12 @@ async def _resource_case(
                                      + (["Fetch.continueResponse", "Fetch.getResponseBody"] if admission == "response" and handled
                                         else ["Fetch.continueRequest"] if handled else [])
                                      + ([{"headers": "Network.setExtraHTTPHeaders", "blocked": "Network.setBlockedURLs",
+                                          "headers-replaced": "Network.setExtraHTTPHeaders", "headers-empty": "Network.setExtraHTTPHeaders",
                                           "cache": "Network.setCacheDisabled", "auth": "Fetch.continueWithAuth", "redirect": "Network.setExtraHTTPHeaders", "offline": "Network.emulateNetworkConditions"}[policy]] if policy else []),
                             observed={"originRequests":observed["requests"], "pauses":len(handled),
+                                      "responseBodies": response_bodies, "crossOrigin": cross_origin,
+                                      "imageBodyBytes": len(data) if kind == "css-image" else None,
+                                      "backgroundPixel": background_pixel if kind == "css-image" else None,
                                       "terminals":terminals(), "headers":observed["headers"]})
     finally:
         if screenshot is not None:

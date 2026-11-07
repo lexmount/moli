@@ -411,6 +411,10 @@ fn register_pending_window_fetch_for_test(
                     request_body: None,
                     intercept_response: false,
                     initial_network_request_headers: None,
+                    encoded: None,
+                    response_status_text: None,
+                    skip_fetch_security_validation: false,
+                    response_filter: None,
                     response: crate::types::NavigationResponse::from_text_body(
                         url.clone(),
                         401,
@@ -427,6 +431,10 @@ fn register_pending_window_fetch_for_test(
                         request_method: "GET".to_owned(),
                         request_headers: Vec::new().into(),
                         request_body: None,
+                        encoded: None,
+                        response_status_text: None,
+                        skip_fetch_security_validation: false,
+                        response_filter: None,
                         response: crate::types::NavigationResponse::from_text_body(
                             url.clone(),
                             200,
