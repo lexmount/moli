@@ -1055,6 +1055,22 @@ impl ChildBrowsingContextEntry {
         self.performance_time_origin = ChildPerformanceTimeOrigin::now();
     }
 
+    pub(super) fn set_performance_navigation_start(
+        &mut self,
+        start: (std::time::Instant, std::time::SystemTime),
+    ) {
+        self.performance_time_origin =
+            ChildPerformanceTimeOrigin(DocumentTiming::from_navigation_start(start.0, start.1));
+    }
+
+    pub(super) fn set_performance_navigation_timing(
+        &mut self,
+        navigation: &crate::network::navigation::NavigationTiming,
+    ) {
+        self.performance_time_origin =
+            ChildPerformanceTimeOrigin(DocumentTiming::from_navigation(navigation));
+    }
+
     pub(super) fn clear_script_execution_state(&mut self) {
         self.clear_child_classic_script_document_state();
     }

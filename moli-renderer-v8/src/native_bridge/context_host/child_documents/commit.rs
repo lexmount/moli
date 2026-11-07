@@ -335,6 +335,12 @@ impl PageScriptHost {
             );
             return None;
         }
+        let previous_unload = expected_current_owner
+            .filter(|_| {
+                local_window_transition == FrameDocumentLocalWindowTransition::ReplaceLocalWindow
+            })
+            .and_then(|owner| self.document_resource_loader_for_owner(owner))
+            .and_then(|loader| loader.document_unload_timing());
         // Synthetic child Documents inherit the exact parent authority that
         // existed at the commit boundary. Capture it before retiring the old
         // child generation; never fall back to the ambient main Document.
@@ -466,6 +472,13 @@ impl PageScriptHost {
             resource_authority,
             client_policy,
         );
+        document_loader.set_previous_document_unload_timing(previous_unload);
+        if let Some(navigation) = document_loader.navigation_timing() {
+            self.child_browsing_contexts
+                .get_mut(&handle)
+                .expect("committed child Document retains its browsing context")
+                .set_performance_navigation_timing(&navigation);
+        }
         if matches!(
             owner_transition.local_window_owner_transition(),
             FrameLocalWindowOwnerTransition::Preserved { .. }

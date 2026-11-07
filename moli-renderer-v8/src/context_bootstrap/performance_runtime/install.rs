@@ -653,6 +653,12 @@ fn performance_timing_snapshot<'s>(
     let time_origin =
         performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
     let mut snapshot = PerformanceTimingSnapshot::new(time_origin);
+    if let Some((start, end)) =
+        super::navigation_timing::previous_document_unload_times(scope, performance)
+    {
+        snapshot.unload_event_start = legacy_timing_epoch_millis(start);
+        snapshot.unload_event_end = legacy_timing_epoch_millis(end);
+    }
     if let Some(timestamp) =
         performance_lifecycle_timestamp(scope, performance, DOM_CONTENT_LOADED_START_INDEX)
     {

@@ -296,6 +296,7 @@ pub fn performance_navigation_timing_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    crate::embedding::refresh_performance_entry(scope, args.this());
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -421,6 +422,7 @@ pub fn performance_navigation_timing_to_json_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    crate::embedding::refresh_performance_entry(scope, args.this());
     let Some(output) = super::entries::resource_timing_json_snapshot(scope, args.this()) else {
         throw_type_error(scope, "Illegal invocation");
         return;
