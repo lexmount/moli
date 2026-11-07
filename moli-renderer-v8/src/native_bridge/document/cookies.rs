@@ -15,6 +15,9 @@ pub(crate) fn document_cookie_for_receiver<'s>(
     let Some(url) = document_cookie_url_for_handle(runtime, handle) else {
         return Some(String::new());
     };
+    if !document_cookie_origin_allows_access(scope, runtime, handle) {
+        return None;
+    }
     match runtime.host_document().cookie_for_url(&url) {
         Ok(cookie) => Some(cookie),
         Err(error) => {
@@ -43,6 +46,9 @@ pub(crate) fn set_document_cookie_for_receiver<'s>(
     let Some(url) = document_cookie_url_for_handle(runtime, handle) else {
         return true;
     };
+    if !document_cookie_origin_allows_access(scope, runtime, handle) {
+        return false;
+    }
     match runtime.host_document_mut().set_cookie_for_url(&url, cookie) {
         Ok(()) => true,
         Err(error) => {
@@ -56,12 +62,34 @@ pub(crate) fn set_document_cookie_for_receiver<'s>(
 }
 
 fn document_cookie_url_for_handle(runtime: &JsContextHost, handle: DomHandle) -> Option<Url> {
-    if handle == runtime.document_handle() {
-        return Some(runtime.document_url().clone());
+    let url = if handle == runtime.document_handle() {
+        runtime.document_url().clone()
+    } else {
+        let child_handle = runtime.child_browsing_context_host_for_document_handle(handle)?;
+        if runtime.child_browsing_context_inherits_parent_origin(child_handle) {
+            runtime.document_url().clone()
+        } else {
+            runtime.child_browsing_context_current_url(child_handle)?
+        }
+    };
+    matches!(url.scheme(), "http" | "https").then_some(url)
+}
+
+fn document_cookie_origin_allows_access(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime: &JsContextHost,
+    handle: DomHandle,
+) -> bool {
+    let opaque = matches!(
+        runtime.document_security_origin(handle),
+        url::Origin::Opaque(_)
+    );
+    if opaque {
+        moli_webidl::throw_dom_exception(
+            scope,
+            "SecurityError",
+            "Access to cookies is denied for this document's opaque origin",
+        );
     }
-    let child_handle = runtime.child_browsing_context_host_for_document_handle(handle)?;
-    if runtime.child_browsing_context_inherits_parent_origin(child_handle) {
-        return Some(runtime.document_url().clone());
-    }
-    runtime.child_browsing_context_current_url(child_handle)
+    !opaque
 }
