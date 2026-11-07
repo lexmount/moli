@@ -38,6 +38,7 @@ pub(crate) struct RendererStylesheetFetcher {
     service_worker_context: Option<ServiceWorkerStylesheetFetchContext>,
     request_resource_type: moli_fetch::RequestResourceType,
     link_preload: bool,
+    csp_context: Option<crate::content_security_policy::StylesheetFetchCspContext>,
 }
 
 impl RendererStylesheetFetcher {
@@ -64,6 +65,7 @@ impl RendererStylesheetFetcher {
             service_worker_context,
             request_resource_type: moli_fetch::RequestResourceType::CssStyleSheet,
             link_preload: false,
+            csp_context: None,
         }
     }
 
@@ -78,7 +80,22 @@ impl RendererStylesheetFetcher {
             service_worker_context,
             request_resource_type,
             link_preload,
+            csp_context: None,
         }
+    }
+
+    pub(crate) fn with_csp_context(
+        mut self,
+        context: crate::content_security_policy::StylesheetFetchCspContext,
+    ) -> Self {
+        self.csp_context = Some(context);
+        self
+    }
+
+    pub(crate) fn csp_context(
+        &self,
+    ) -> Option<&crate::content_security_policy::StylesheetFetchCspContext> {
+        self.csp_context.as_ref()
     }
 }
 
@@ -109,6 +126,7 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
         let service_worker_context = self.service_worker_context.clone();
         let request_resource_type = self.request_resource_type;
         let link_preload = self.link_preload;
+        let csp_context = self.csp_context.clone();
         Box::pin(async move {
             fetch_stylesheet_readiness_with_service_worker(
                 loader,
@@ -120,6 +138,7 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
                 service_worker_context,
                 request_resource_type,
                 link_preload,
+                csp_context,
             )
             .await
         })
@@ -156,8 +175,9 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
     service_worker_context: Option<ServiceWorkerStylesheetFetchContext>,
     request_resource_type: moli_fetch::RequestResourceType,
     link_preload: bool,
+    csp_context: Option<crate::content_security_policy::StylesheetFetchCspContext>,
 ) -> StylesheetFetchTerminal {
-    let request = stylesheet_readiness_request(
+    let mut request = stylesheet_readiness_request(
         &document_url,
         &request_origin,
         &url,
@@ -166,6 +186,34 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
         link_preload,
         None,
     );
+    let csp_check = csp_context.map(|context| context.for_request(options.nonce()));
+    if let Some(check) = &csp_check {
+        if let Err(error) = check(&url, 0) {
+            return StylesheetFetchTerminal::network_error(error.to_string());
+        }
+        let check = check.clone();
+        request = request.with_redirect_policy(moli_fetch::RequestRedirectPolicy::new(
+            move |url, ordinal| check(url, ordinal),
+        ));
+    }
+    let terminal_from_response = |response: crate::protocol_types::NavigationResponse,
+                                  provenance| {
+        // A cache or Service Worker response still belongs to this consumer's
+        // policy, even when its transport was performed by another request.
+        if let Some(check) = &csp_check {
+            for (index, redirect) in response.redirect_chain.iter().enumerate() {
+                if let Err(error) = check(&redirect.to_url, index + 1) {
+                    return StylesheetFetchTerminal::network_error(error.to_string());
+                }
+            }
+            if response.redirected
+                && let Err(error) = check(&response.final_url, response.redirect_chain.len().max(1))
+            {
+                return StylesheetFetchTerminal::network_error(error.to_string());
+            }
+        }
+        stylesheet_terminal_from_response(&request_origin, &url, &options, response, provenance)
+    };
     if let Some(context) = service_worker_context {
         match context
             .browser_context_runtime
@@ -184,13 +232,7 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
                 let response_provenance = StylesheetResponseProvenance::ServiceWorker {
                     filter: response.response_filter,
                 };
-                return stylesheet_terminal_from_response(
-                    &request_origin,
-                    &url,
-                    &options,
-                    *response.response,
-                    response_provenance,
-                );
+                return terminal_from_response(*response.response, response_provenance);
             }
             Ok(None) => {}
             Err(error) => {
@@ -200,7 +242,14 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
             }
         }
     }
-    fetch_stylesheet_readiness_with_request(loader, request_origin, url, options, request).await
+    match loader.fetch_text_stream(request).await {
+        Ok(response) => {
+            terminal_from_response(response.into(), StylesheetResponseProvenance::Network)
+        }
+        Err(error) => StylesheetFetchTerminal::network_error(format!(
+            "failed to fetch stylesheet `{url}`: {error}"
+        )),
+    }
 }
 
 pub(crate) fn stylesheet_request_mode_and_credentials(
@@ -250,27 +299,6 @@ fn stylesheet_readiness_request(
         request = request.with_fetch_priority_hint(fetch_priority_hint.or(captured_fetch_priority));
     }
     request
-}
-
-async fn fetch_stylesheet_readiness_with_request(
-    loader: ResourceRequestClient,
-    request_origin: moli_url::WebOrigin,
-    url: Url,
-    options: StylesheetFetchOptions,
-    request: moli_fetch::Request,
-) -> StylesheetFetchTerminal {
-    match loader.fetch_text_stream(request).await {
-        Ok(response) => stylesheet_terminal_from_response(
-            &request_origin,
-            &url,
-            &options,
-            crate::protocol_types::NavigationResponse::from(response),
-            StylesheetResponseProvenance::Network,
-        ),
-        Err(error) => StylesheetFetchTerminal::network_error(format!(
-            "failed to fetch stylesheet `{url}`: {error}"
-        )),
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -77,7 +77,17 @@ async fn fetch_stylesheet_import_graph(
     urls: Vec<Url>,
     root: Option<crate::stylesheet_blocking::StylesheetImportNetworkResult>,
 ) -> crate::stylesheet_blocking::StylesheetImportGraphFetchResult {
-    let (mut successful, urls) = match connected_style_import_readiness(urls) {
+    // A policy-bearing graph must admit data: imports before decoding them,
+    // just like network imports. Keep them in the result so CSSOM cannot later
+    // reconstruct the body of a refused local import.
+    let readiness = |urls: Vec<Url>| {
+        if stylesheet_fetcher.csp_context().is_some() && !urls.is_empty() {
+            ConnectedStyleImportReadiness::Pending(urls)
+        } else {
+            connected_style_import_readiness(urls)
+        }
+    };
+    let (mut successful, urls) = match readiness(urls) {
         ConnectedStyleImportReadiness::Ready(successful) => (successful, Vec::new()),
         ConnectedStyleImportReadiness::Pending(urls) => (true, urls),
     };
@@ -95,20 +105,31 @@ async fn fetch_stylesheet_import_graph(
         }
     }
     import_graph.extend(urls);
+    let mut data_expansions = 0;
     while !import_graph.is_empty() || !pending_results.is_empty() {
         if pending_results.is_empty() {
             pending_results = join_all(import_graph.take_pending().into_iter().map(|url| {
                 let stylesheet_fetcher = stylesheet_fetcher.clone();
                 let fetch_document_url = document_url.clone();
                 let start_unix_millis = moli_time::unix_epoch_millis();
+                let data_expansion = if url.scheme() == "data" {
+                    data_expansions += 1;
+                    Some(data_expansions)
+                } else {
+                    None
+                };
                 async move {
-                    let terminal = stylesheet_fetcher
-                        .fetch_stylesheet_resource(
-                            fetch_document_url,
-                            url.clone(),
-                            StylesheetFetchOptions::default(),
-                        )
-                        .await;
+                    let terminal = if let Some(expansion) = data_expansion {
+                        fetch_data_stylesheet_import(&stylesheet_fetcher, &url, expansion)
+                    } else {
+                        stylesheet_fetcher
+                            .fetch_stylesheet_resource(
+                                fetch_document_url,
+                                url.clone(),
+                                StylesheetFetchOptions::default(),
+                            )
+                            .await
+                    };
                     crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
                         url,
                         start_unix_millis,
@@ -128,7 +149,7 @@ async fn fetch_stylesheet_import_graph(
                     false,
                 )
                 .unwrap_or_default();
-                match connected_style_import_readiness(nested_urls) {
+                match readiness(nested_urls) {
                     ConnectedStyleImportReadiness::Ready(nested_successful) => {
                         successful &= nested_successful;
                     }
@@ -139,6 +160,37 @@ async fn fetch_stylesheet_import_graph(
         }
     }
     crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(successful, network_results)
+}
+
+fn fetch_data_stylesheet_import(
+    fetcher: &crate::stylesheet_blocking::RendererStylesheetFetcher,
+    url: &Url,
+    expansion: usize,
+) -> crate::stylesheet_blocking::StylesheetFetchTerminal {
+    use crate::stylesheet_blocking::StylesheetFetchTerminal;
+    if let Some(context) = fetcher.csp_context()
+        && let Err(error) = context.for_request(None)(url, 0)
+    {
+        return StylesheetFetchTerminal::network_error(error.to_string());
+    }
+    if expansion > MAX_DATA_STYLESHEET_IMPORT_EXPANSIONS
+        || url.as_str().len() > MAX_DATA_STYLESHEET_IMPORT_URL_BYTES
+    {
+        return StylesheetFetchTerminal::network_error("data stylesheet import expansion limit");
+    }
+    let Some((body, mime_type)) = data_url_body_and_mime_type(url.as_str()) else {
+        return StylesheetFetchTerminal::network_error("invalid data stylesheet import");
+    };
+    let css_text = decode_text_for_legacy_web(&body, mime_charset(&mime_type).as_deref());
+    StylesheetFetchTerminal::ready(
+        crate::protocol_types::NavigationResponse::from_text_body(
+            url.clone(),
+            200,
+            vec![("Content-Type".to_owned(), b"text/css".to_vec())],
+            css_text,
+        ),
+        true,
+    )
 }
 
 pub(in crate::document_runtime) fn data_stylesheet_import_readiness(

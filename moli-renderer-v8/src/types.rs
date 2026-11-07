@@ -1232,6 +1232,7 @@ pub(super) struct ChildBlockingStylesheetLoadCompletion {
     pub(super) network_results: Vec<ChildBlockingStylesheetNetworkResult>,
     pub(super) import_graph:
         Option<std::sync::Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>>,
+    pub(super) csp_violations: Vec<crate::document_runtime::DocumentContentSecurityPolicyViolation>,
 }
 
 impl ChildBlockingStylesheetLoadCompletion {

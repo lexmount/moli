@@ -131,6 +131,34 @@ impl JsContextHost {
         )
     }
 
+    pub(crate) fn stylesheet_fetch_csp_context_for_owner(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<crate::content_security_policy::StylesheetFetchCspContext> {
+        let snapshot = self.owner_document_policy_snapshot(owner)?;
+        // about:blank/srcdoc (and blob Documents) can have a tuple origin
+        // despite their URL. A live <base> must never redefine CSP's 'self'.
+        let origin_url = (!matches!(snapshot.document_url.scheme(), "http" | "https" | "file"))
+            .then_some(snapshot.document_handle)
+            .flatten()
+            .and_then(|document| {
+                url::Url::parse(
+                    &self
+                        .document_security_origin(document)
+                        .ascii_serialization(),
+                )
+                .ok()
+            });
+        Some(
+            unsafe { &*self.runtime }.stylesheet_fetch_csp_context_for_document(
+                snapshot.document_handle,
+                &snapshot.document_url,
+                &snapshot.policy_container,
+                origin_url,
+            ),
+        )
+    }
+
     pub(crate) fn module_fetch_csp_context_for_owner(
         &self,
         owner: OwnerDispatchScope,
@@ -1394,13 +1422,16 @@ impl JsContextHost {
         violation: &DocumentContentSecurityPolicyViolation,
         send_report: bool,
     ) -> anyhow::Result<()> {
-        let window = self
-            .child_browsing_context_window_wrapper(scope, handle)
-            .ok_or_else(|| anyhow::anyhow!("child window wrapper is unavailable"))?;
+        let document_handle = self
+            .child_browsing_context_document_handle(handle)
+            .ok_or_else(|| anyhow::anyhow!("child document is unavailable"))?;
+        let document = self
+            .child_browsing_context_document_wrapper(scope, handle)
+            .ok_or_else(|| anyhow::anyhow!("child document wrapper is unavailable"))?;
         let event = create_content_security_policy_violation_event(
             scope,
-            window.into(),
-            window.into(),
+            document.into(),
+            document.into(),
             violation,
         )?;
         if send_report {
@@ -1420,7 +1451,14 @@ impl JsContextHost {
                 &violation.report_to_endpoints,
             );
         }
-        self.dispatch_child_window_event(scope, handle, "securitypolicyviolation", event);
-        Ok(())
+        let host_ptr = self as *mut Self;
+        self.dispatch_public_event(
+            scope,
+            host_ptr,
+            crate::document_runtime::EventTargetHandle::Node(document_handle),
+            event,
+        )
+        .map(|_| ())
+        .map_err(anyhow::Error::msg)
     }
 }

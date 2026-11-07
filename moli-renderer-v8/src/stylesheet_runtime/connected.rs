@@ -1317,7 +1317,7 @@ impl DocumentRuntime {
         let owner = source.owner();
         unsafe { &*host_ptr }
             .owner_live_stylesheet(owner)
-            .map(|stylesheet| ConnectedStyleImportRoot::new(owner, &stylesheet, false))
+            .map(|stylesheet| ConnectedStyleImportRoot::new(owner, &stylesheet, None))
             .into_iter()
             .collect()
     }
@@ -1337,7 +1337,15 @@ impl DocumentRuntime {
         if urls.is_empty() {
             return;
         }
-        let root = ConnectedStyleImportRoot::new(owner, &stylesheet, root_is_external_resource);
+        let root_resource_url = root_is_external_resource.then(|| {
+            unsafe { &*host_ptr }
+                .linked_stylesheet_source_for_owner(owner)
+                .map_or_else(
+                    || stylesheet.base_url().clone(),
+                    |source| source.sheet_url().clone(),
+                )
+        });
+        let root = ConnectedStyleImportRoot::new(owner, &stylesheet, root_resource_url);
         let urls = match connected_style_import_readiness(urls) {
             ConnectedStyleImportReadiness::Ready(_) => {
                 if unsafe { &*host_ptr }

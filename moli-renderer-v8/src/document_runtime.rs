@@ -406,6 +406,8 @@ pub(crate) struct ConnectedStyleImportRoot {
     pub(crate) stylesheet_id: crate::live_stylesheet::StylesheetId,
     pub(crate) contents_revision: u64,
     pub(crate) import_generation: u64,
+    /// Original resource URL; the live stylesheet retains the final parser base.
+    /// Inline roots have no resource identity to exclude from their imports.
     pub(crate) root_resource_url: Option<Url>,
 }
 
@@ -413,14 +415,14 @@ impl ConnectedStyleImportRoot {
     pub(crate) fn new(
         owner: DomHandle,
         stylesheet: &crate::live_stylesheet::LiveStylesheetRef,
-        root_is_external_resource: bool,
+        root_resource_url: Option<Url>,
     ) -> Self {
         Self {
             owner,
             stylesheet_id: stylesheet.id(),
             contents_revision: stylesheet.contents_revision(),
             import_generation: stylesheet.import_generation(),
-            root_resource_url: root_is_external_resource.then(|| stylesheet.base_url().clone()),
+            root_resource_url,
         }
     }
 

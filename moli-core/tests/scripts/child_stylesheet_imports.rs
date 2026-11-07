@@ -61,6 +61,7 @@ impl ChildImportServer {
     async fn spawn() -> Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let origin = format!("http://{}", listener.local_addr()?);
+        let cross_origin = format!("http://localhost:{}", listener.local_addr()?.port());
         let assets = Arc::new(Mutex::new(HashMap::<String, Arc<Asset>>::new()));
         let server_assets = assets.clone();
         let task = tokio::spawn(async move {
@@ -71,6 +72,7 @@ impl ChildImportServer {
                     accepted = listener.accept() => {
                         let Ok((mut stream, _)) = accepted else { break };
                         let assets = assets.clone();
+                        let cross_origin = cross_origin.clone();
                         connections.spawn(async move {
                             let mut request = Vec::new();
                             while !request.ends_with(b"\r\n\r\n") && request.len() < 16384 {
@@ -86,7 +88,49 @@ impl ChildImportServer {
                                 format!("{token}:{}", url.path())
                             } else { token.clone() };
                             let asset = assets.lock().entry(asset_token).or_default().clone();
+                            let mut extra_headers = String::new();
+                            let mut status = "200 OK";
+                            if url.path().ends_with(".css") {
+                                asset.count.fetch_add(1, Ordering::AcqRel);
+                                asset.started.notify_waiters();
+                            }
                             let (mime, body) = match url.path() {
+                                "/child-import-entry.css" => {
+                                    status = "302 Found";
+                                    extra_headers = format!("Location: /child-import-final.css?token={token}\r\n");
+                                    ("text/css", String::new())
+                                }
+                                "/child-import-final.css" => ("text/css", format!("@import url('/child-import-entry.css?token={token}#cycle'); :root {{ --redirect-cycle: ready; }}")),
+                                "/child-import-csp-page" => {
+                                    let mode = query.get("mode").map(String::as_str).unwrap_or("enforce");
+                                    let kind = query.get("kind").map(String::as_str).unwrap_or("linked");
+                                    let policy = "style-src 'self' 'nonce-allowed'";
+                                    let meta = if mode == "meta" { format!("<meta http-equiv='Content-Security-Policy' content=\"{policy}\">") } else {
+                                        extra_headers = format!("Content-Security-Policy{}: {policy}\r\n", if mode == "report" { "-Report-Only" } else { "" });
+                                        String::new()
+                                    };
+                                    let root = format!("/child-import-csp-root.css?token={token}");
+                                    let style = if kind == "inline" { format!("<style nonce='allowed'>@import url('{root}');</style>") } else { format!("<link rel='stylesheet' href='{root}'>") };
+                                    ("text/html", format!(r#"<!doctype html>{meta}<script>
+                                      globalThis.styleViolations = [];
+                                      document.addEventListener('securitypolicyviolation', event => styleViolations.push({{
+                                        target: event.target === document, directive: event.effectiveDirective,
+                                        disposition: event.disposition, documentURI: event.documentURI, blockedURI: event.blockedURI
+                                      }}));
+                                    </script>{style}<script>globalThis.afterStylesheet = true;
+                                      document.addEventListener('DOMContentLoaded', () => globalThis.stylesheetDcl = true);
+                                    </script><body>CSP imports"#))
+                                }
+                                "/child-import-csp-root.css" => ("text/css", format!("@import url('/child-import-csp-branch.css?token={token}'); @import url('data:text/css,:root{{--csp-data:applied}}'); :root {{ --csp-root: ready; }}")),
+                                "/child-import-csp-branch.css" => ("text/css", format!("@import url('{}{}?token={token}'); @import url('/child-import-csp-allowed.css?token={token}');", if token.contains("redirect") { "" } else { &cross_origin }, if token.contains("redirect") { "/child-import-csp-hop.css" } else { "/child-import-csp-blocked.css" })),
+                                "/child-import-csp-hop.css" => {
+                                    status = "302 Found";
+                                    extra_headers = format!("Location: {cross_origin}/child-import-csp-blocked.css?token={token}\r\n");
+                                    ("text/css", String::new())
+                                }
+                                "/child-import-csp-blocked.css" => ("text/css", format!("@import url('/child-import-csp-descendant.css?token={token}'); :root {{ --csp-blocked: applied; }}")),
+                                "/child-import-csp-allowed.css" => ("text/css", ":root { --csp-allowed: ready; }".to_owned()),
+                                "/child-import-csp-descendant.css" => ("text/css", ":root { --csp-descendant: applied; }".to_owned()),
                                 "/child-import-parent" => {
                                     let kind = query.get("kind").map(String::as_str).unwrap_or("linked");
                                     let scenario = query.get("scenario").map(String::as_str).unwrap_or("nested");
@@ -114,8 +158,6 @@ impl ChildImportServer {
                                     ("text/html", format!("<!doctype html>{style}<script>{probe}</script><body>Child imports"))
                                 }
                                 "/child-import-root.css" | "/child-import-branch.css" | "/child-import-leaf.css" => {
-                                    asset.count.fetch_add(1, Ordering::AcqRel);
-                                    asset.started.notify_waiters();
                                     let scenario = query.get("scenario").map(String::as_str).unwrap_or("nested");
                                     if scenario == "delayed" && url.path() == "/child-import-branch.css" { asset.wait(true).await; }
                                     let body = match url.path() {
@@ -137,11 +179,11 @@ impl ChildImportServer {
                                 }
                                 _ => ("text/html", "<!doctype html><body>preload consumption".to_owned()),
                             };
-                            let status = if url.path() == "/child-import-leaf.css"
+                            if url.path() == "/child-import-leaf.css"
                                 && query.get("scenario").is_some_and(|value| value == "invalid") {
-                                "404 Not Found"
-                            } else { "200 OK" };
-                            let response = format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                                status = "404 Not Found";
+                            }
+                            let response = format!("HTTP/1.1 {status}\r\n{extra_headers}Content-Type: {mime}\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
                             let _ = stream.write_all(response.as_bytes()).await;
                             let _ = stream.write_all(body.as_bytes()).await;
                         });
@@ -253,5 +295,185 @@ async fn child_parser_imports_hold_scripts_and_frame_load_until_the_graph_finish
             "{kind}: {value}"
         );
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_linked_import_cycle_keeps_both_root_url_identities() -> Result<()> {
+    let server = ChildImportServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser.fetch(&server.origin).await?;
+    let value = tokio::time::timeout(Duration::from_secs(30), page.evaluate_runtime_expression_with_await_async(r#"
+      (async () => {
+        const frame = document.createElement('iframe');
+        const loaded = new Promise(resolve => frame.onload = resolve);
+        frame.srcdoc = '<!doctype html><link rel="stylesheet" href="/child-import-entry.css?token=redirect-cycle"><script>globalThis.afterStylesheet = true;</script><body>Redirect cycle';
+        document.body.append(frame);
+        await loaded;
+        const child = frame.contentWindow;
+        const root = frame.contentDocument.styleSheets[0];
+        const imported = root.cssRules[0].styleSheet;
+        return JSON.stringify({href:root.href, rules:root.cssRules.length,
+          importedRules:imported ? imported.cssRules.length : 0,
+          style:child.getComputedStyle(frame.contentDocument.documentElement).getPropertyValue('--redirect-cycle').trim(),
+          script:child.afterStylesheet === true, ready:frame.contentDocument.readyState});
+      })()
+    "#, true)).await??;
+    let value: serde_json::Value =
+        serde_json::from_str(value["value"].as_str().context("redirect cycle snapshot")?)?;
+    assert_eq!(
+        value,
+        serde_json::json!({"href":format!("{}/child-import-entry.css?token=redirect-cycle", server.origin),"rules":2,"importedRules":0,"style":"ready","script":true,"ready":"complete"})
+    );
+    for name in ["entry", "final"] {
+        assert_eq!(
+            server
+                .assets
+                .lock()
+                .get(&format!("redirect-cycle:/child-import-{name}.css"))
+                .map(|asset| asset.count.load(Ordering::Acquire)),
+            Some(1),
+            "{name}: cycle must not refetch either root identity"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_parser_imports_enforce_the_child_csp_before_fetch() -> Result<()> {
+    let server = ChildImportServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser.fetch(&server.origin).await?;
+    let expression = r#"(async () => {
+      const parentViolations = [];
+      document.addEventListener('securitypolicyviolation', event => parentViolations.push(event.blockedURI));
+      const meta = document.createElement('meta');
+      meta.httpEquiv = 'Content-Security-Policy'; meta.content = "style-src 'none'";
+      document.head.append(meta);
+      const rows = [];
+      for (const kind of ['linked', 'inline']) {
+        for (const mode of ['enforce', 'meta', 'report']) {
+          for (const hop of ['direct', 'redirect']) {
+            const frame = document.createElement('iframe');
+            const loaded = new Promise(resolve => frame.onload = resolve);
+            const token = kind + '-' + mode + '-' + hop;
+            frame.src = '/child-import-csp-page?kind=' + kind + '&mode=' + mode + '&token=' + token;
+            document.body.append(frame);
+            await loaded;
+            const child = frame.contentWindow;
+            const style = child.getComputedStyle(frame.contentDocument.documentElement);
+            rows.push({token, kind, mode, hop, script:child.afterStylesheet === true,
+              dcl:child.stylesheetDcl === true, ready:frame.contentDocument.readyState,
+              root:style.getPropertyValue('--csp-root').trim(), allowed:style.getPropertyValue('--csp-allowed').trim(),
+              blocked:style.getPropertyValue('--csp-blocked').trim(), data:style.getPropertyValue('--csp-data').trim(),
+              descendant:style.getPropertyValue('--csp-descendant').trim(), violations:child.styleViolations});
+            frame.remove();
+          }
+        }
+      }
+      return JSON.stringify({rows, parentViolations});
+    })()"#;
+    let result = tokio::time::timeout(
+        Duration::from_secs(30),
+        page.evaluate_runtime_expression_with_await_async(expression, true),
+    )
+    .await??;
+    let result: serde_json::Value =
+        serde_json::from_str(result["value"].as_str().context("child CSP results")?)?;
+    assert_eq!(
+        result["parentViolations"],
+        serde_json::json!([]),
+        "child violations must stay in the child Document"
+    );
+    let rows = result["rows"].as_array().context("CSP rows")?;
+    assert_eq!(rows.len(), 12);
+    for row in rows {
+        let token = row["token"].as_str().unwrap();
+        let reporting = row["mode"] == "report";
+        for field in ["script", "dcl"] {
+            assert_eq!(row[field], true, "{row}");
+        }
+        assert_eq!(row["ready"], "complete", "{row}");
+        for field in ["root", "allowed"] {
+            assert_eq!(row[field], "ready", "{row}");
+        }
+        for field in ["blocked", "data", "descendant"] {
+            assert_eq!(row[field], if reporting { "applied" } else { "" }, "{row}");
+        }
+        let violations = row["violations"].as_array().context("child violations")?;
+        // A cross-origin import, a data: import, and (only when reporting)
+        // the cross-origin descendant are checked against the child policy.
+        assert_eq!(violations.len(), if reporting { 3 } else { 2 }, "{row}");
+        for violation in violations {
+            assert_eq!(violation["target"], true, "{row}");
+            assert_eq!(violation["directive"], "style-src-elem", "{row}");
+            assert_eq!(
+                violation["disposition"],
+                if reporting { "report" } else { "enforce" },
+                "{row}"
+            );
+            assert!(
+                violation["documentURI"]
+                    .as_str()
+                    .unwrap()
+                    .contains("/child-import-csp-page?"),
+                "{row}"
+            );
+        }
+        for (name, expected) in [
+            ("root", 1),
+            ("branch", 1),
+            ("allowed", 1),
+            ("blocked", usize::from(reporting)),
+            ("descendant", usize::from(reporting)),
+            ("hop", usize::from(row["hop"] == "redirect")),
+        ] {
+            let count = server
+                .assets
+                .lock()
+                .get(&format!("{token}:/child-import-csp-{name}.css"))
+                .map_or(0, |asset| asset.count.load(Ordering::Acquire));
+            assert_eq!(count, expected, "{name}: {row}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_srcdoc_imports_use_the_inherited_origin_for_csp_self() -> Result<()> {
+    let server = ChildImportServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser.fetch(&server.origin).await?;
+    let result = tokio::time::timeout(Duration::from_secs(30), page.evaluate_runtime_expression_with_await_async(r#"
+      (async () => {
+        const frame = document.createElement('iframe');
+        const loaded = new Promise(resolve => frame.onload = resolve);
+        const rootUrl = new URL('/child-import-csp-root.css?token=srcdoc-csp', location.href).href;
+        frame.srcdoc = `<!doctype html><meta http-equiv="Content-Security-Policy" content="style-src 'self'">
+          <base href="https://unrelated-base.invalid/">
+          <link rel="stylesheet" href="${rootUrl}">
+          <script>globalThis.afterStylesheet = true;</script><body>Inherited CSP origin`;
+        document.body.append(frame);
+        await loaded;
+        const style = frame.contentWindow.getComputedStyle(frame.contentDocument.documentElement);
+        return JSON.stringify({root:style.getPropertyValue('--csp-root').trim(),
+          allowed:style.getPropertyValue('--csp-allowed').trim(),
+          blocked:style.getPropertyValue('--csp-blocked').trim(),
+          data:style.getPropertyValue('--csp-data').trim(),
+          script:frame.contentWindow.afterStylesheet === true, ready:frame.contentDocument.readyState});
+      })()
+    "#, true)).await??;
+    let result: serde_json::Value =
+        serde_json::from_str(result["value"].as_str().context("srcdoc CSP result")?)?;
+    assert_eq!(
+        result,
+        serde_json::json!({"root":"ready", "allowed":"ready", "blocked":"", "data":"", "script":true, "ready":"complete"})
+    );
+    assert!(
+        !server
+            .assets
+            .lock()
+            .contains_key("srcdoc-csp:/child-import-csp-blocked.css")
+    );
     Ok(())
 }

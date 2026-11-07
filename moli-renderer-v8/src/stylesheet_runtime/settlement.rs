@@ -208,7 +208,11 @@ impl DocumentRuntime {
             }
             let import_root = prepared.as_ref().and_then(|_| {
                 host.linked_live_stylesheet(load.owner()).map(|stylesheet| {
-                    ConnectedStyleImportRoot::new(load.owner(), &stylesheet, true)
+                    ConnectedStyleImportRoot::new(
+                        load.owner(),
+                        &stylesheet,
+                        Some(request_url.clone()),
+                    )
                 })
             });
             match self.admit_linked_stylesheet_import_graph(load.fetch(), import_root.clone()) {
