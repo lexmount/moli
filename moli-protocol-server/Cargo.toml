@@ -5,6 +5,7 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
+moli-inspector-json = { path = "../moli-inspector-json" }
 anyhow = "1.0.100"
 axum = { version = "0.8.6", features = ["ws"] }
 base64 = "0.22"

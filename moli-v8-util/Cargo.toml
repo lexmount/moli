@@ -5,6 +5,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+moli-inspector-json = { path = "../moli-inspector-json" }
 moli-web-errors = { path = "../moli-web-errors" }
 serde_json = "1.0.145"
 v8 = "152.2.0"
