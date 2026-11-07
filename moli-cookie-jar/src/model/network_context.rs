@@ -835,10 +835,13 @@ pub fn redirect_types_for_request(
 }
 
 fn same_site_context_rank(context: NetworkSameSiteContext) -> u8 {
-    match same_site_inclusion_class(context) {
-        NetworkSameSiteInclusionClass::Strict => 2,
-        NetworkSameSiteInclusionClass::Lax => 1,
-        NetworkSameSiteInclusionClass::Cross => 0,
+    // The unsafe navigation allowance can include recent default cookies.
+    // An explicit CrossSite restriction must remain stricter across redirects.
+    match context {
+        NetworkSameSiteContext::SameSiteStrict => 3,
+        NetworkSameSiteContext::SameSiteLax => 2,
+        NetworkSameSiteContext::SameSiteLaxMethodUnsafe => 1,
+        NetworkSameSiteContext::CrossSite => 0,
     }
 }
 
@@ -895,34 +898,6 @@ pub fn advance_cookie_request_context(
             recomputed.site_context.schemeful_context,
         ),
     );
-    let site_context = if let Some(site_for_cookies_url) = previous_context
-        .browser_context
-        .site_for_cookies_url
-        .as_ref()
-    {
-        NetworkSiteContext::new(
-            if current_request_is_cross_site_to_explicit_site_for_cookies(
-                current_request_url,
-                site_for_cookies_url,
-                false,
-            ) {
-                NetworkSameSiteContext::CrossSite
-            } else {
-                site_context.context
-            },
-            if current_request_is_cross_site_to_explicit_site_for_cookies(
-                current_request_url,
-                site_for_cookies_url,
-                true,
-            ) {
-                NetworkSameSiteContext::CrossSite
-            } else {
-                site_context.schemeful_context
-            },
-        )
-    } else {
-        site_context
-    };
     let redirect_types = redirect_types_for_request(
         original_request_url,
         current_request_url,
@@ -984,23 +959,6 @@ pub fn advance_cookie_request_context(
                 redirect_types.schemeful_context.redirect_type,
             )),
         ))
-}
-
-fn current_request_is_cross_site_to_explicit_site_for_cookies(
-    request_url: &Url,
-    site_for_cookies_url: &Url,
-    schemeful: bool,
-) -> bool {
-    matches!(
-        approximate_same_site_context(
-            request_url,
-            site_for_cookies_url,
-            schemeful,
-            NetworkCookieRequestType::Subresource,
-            true
-        ),
-        NetworkSameSiteContext::CrossSite
-    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1418,8 +1376,8 @@ mod tests {
     }
 
     #[test]
-    fn redirect_chain_keeps_top_level_request_cross_site_when_final_url_is_cross_site_to_site_for_cookies()
-     {
+    fn redirect_chain_keeps_top_level_request_lax_when_final_url_is_cross_site_to_site_for_cookies()
+    {
         let initiator_url = parse("https://app.example.com/index.html");
         let original_request_url = parse("https://cdn.example.com/start");
         let current_request_url = parse("https://other.test/final");
@@ -1434,11 +1392,11 @@ mod tests {
 
         assert_eq!(
             advanced.site_context.context,
-            NetworkSameSiteContext::CrossSite
+            NetworkSameSiteContext::SameSiteLax
         );
         assert_eq!(
             advanced.site_context.schemeful_context,
-            NetworkSameSiteContext::CrossSite
+            NetworkSameSiteContext::SameSiteLax
         );
         assert_eq!(
             advanced.site_context_metadata.context.redirect_type,
