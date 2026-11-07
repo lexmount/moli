@@ -167,6 +167,7 @@ fn pending_fetch_continuation<'s>(
                 dispatch_scope,
             )
             .expect("test Fetch should capture its CSP report context"),
+            String::new(),
         ),
     )
 }

@@ -328,6 +328,7 @@ fn register_pending_window_fetch_for_test(
         fetch_context,
         v8::Global::new(scope, resolver),
         keepalive,
+        String::new(),
         connect_policy,
         csp_report_context,
         Some(cancel_handle.clone()),
@@ -492,6 +493,7 @@ fn register_pending_window_fetch_with_connect_policy_for_test(
         fetch_context,
         v8::Global::new(scope, resolver),
         keepalive,
+        String::new(),
         crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(&policy),
         csp_report_context,
         Some(cancel_handle.clone()),
@@ -2420,5 +2422,6 @@ mod xml_serializer_receivers;
 
 mod hyperlink_audit_owner;
 
+mod fetch_integrity;
 mod fetch_referrer;
 mod sqlite_web_storage;
