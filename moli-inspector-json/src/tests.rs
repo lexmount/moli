@@ -204,3 +204,45 @@ fn raw_construction_rejects_reserved_params_but_retains_user_payload_fields() {
     );
     assert!(!message.is_materialized());
 }
+
+#[test]
+fn params_keys_preserve_every_isolated_surrogate_without_a_business_view() {
+    for unit in 0xd800..=0xdfff {
+        let params = format!(r#"{{"\u{unit:04x}":1,"value":"\ud800"}}"#);
+        let raw = format!(r#"{{"method":"Example.event","params":{params}}}"#);
+        let message = InspectorJson::from_slice(raw.as_bytes()).unwrap();
+        let encoded = message.to_string();
+        let envelope: BTreeMap<String, &RawValue> = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(envelope["params"].get(), params);
+        assert!(!message.is_materialized());
+    }
+    for params in [
+        r#"{"\ud83d\ude00":1,"\\ud800":2,"\u0000":3}"#.to_owned(),
+        r#"{"\\u005f_moliFetchRequestId":1,"\ud800":{"__moliFetchRequestId":2}}"#.to_owned(),
+        format!(r#"{{"\ud800":{}0{}}}"#, "[".repeat(150), "]".repeat(150)),
+    ] {
+        let raw = format!(r#"{{"method":"Example.event","params":{params}}}"#);
+        let message = InspectorJson::from_slice(raw.as_bytes()).unwrap();
+        assert!(message.to_string().contains(&params));
+        assert!(!message.is_materialized());
+    }
+}
+
+#[test]
+fn surrogate_params_keys_cannot_bypass_reserved_field_validation() {
+    for key in [
+        "__moliFetchRequestId",
+        "__moliBlockedInterceptors",
+        r"\u005f_moliFetchRequestId",
+        r"__moliBlockedInterceptor\u0073",
+    ] {
+        for params in [
+            format!(r#"{{"\ud800":1,"{key}":"private"}}"#),
+            format!(r#"{{"{key}":"private","\udfff":1}}"#),
+        ] {
+            let raw = format!(r#"{{"method":"Example.event","params":{params}}}"#);
+            let error = InspectorJson::from_slice(raw.as_bytes()).unwrap_err();
+            assert!(error.to_string().contains("Parsed message"), "{error}");
+        }
+    }
+}
