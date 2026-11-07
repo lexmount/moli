@@ -174,9 +174,10 @@ pub(in crate::native_bridge) use self::input::{
 };
 pub(crate) use self::labels::control_label_handles;
 pub(in crate::native_bridge) use self::labels::{
-    control_labels_getter_function, label_activation_control_handle, label_control_getter_function,
-    label_control_handle, label_form_getter_function, label_html_for_getter_function,
-    label_html_for_setter_function, label_receives_programmatic_focus,
+    control_labels_getter_function, label_activation_control_handle, label_activation_label_handle,
+    label_control_getter_function, label_control_handle, label_form_getter_function,
+    label_html_for_getter_function, label_html_for_setter_function,
+    label_receives_programmatic_focus,
 };
 pub(in crate::native_bridge) use self::owner::form_associated_form_getter_function;
 pub(crate) use self::owner::{

@@ -31,11 +31,11 @@ use super::super::{
     contenteditable_editing_host, dispatch_beforeinput, dispatch_popover_toggle_events,
     dispatch_public_event, element_attribute, element_has_attribute, form_associated_form_owner,
     is_disabled_form_control, is_focusable, is_valid_submit_button,
-    label_activation_control_handle, perform_popover_invoker_default_action,
-    perform_summary_click_default_action, replace_text_control_selection,
-    resolve_url_like_attribute, resolved_reflected_element_attribute_handle,
-    scroll_node_into_view_at_start, set_reflected_boolean_attribute, submit_form_with_submit_event,
-    update_focus,
+    label_activation_control_handle, label_activation_label_handle, label_control_handle,
+    perform_popover_invoker_default_action, perform_summary_click_default_action,
+    replace_text_control_selection, resolve_url_like_attribute,
+    resolved_reflected_element_attribute_handle, scroll_node_into_view_at_start,
+    set_reflected_boolean_attribute, submit_form_with_submit_event, update_focus,
 };
 use super::targets::{
     SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
@@ -952,6 +952,10 @@ fn click_handle_internal(
 
     let pending_child_navigations_before_click =
         unsafe { &*runtime_ptr }.pending_live_child_browsing_context_navigation_snapshot();
+    // Dispatch chooses the activation target from the original event path.
+    // Listeners can detach or reparent the clicked descendant, but must not
+    // redirect the default action to a different ancestor afterwards.
+    let default_action = click_activation_default_action_handle(unsafe { &*runtime_ptr }, handle);
     if let Some(outcome) = dispatch_click_event(
         scope,
         runtime_ptr,
@@ -974,40 +978,46 @@ fn click_handle_internal(
             );
         }
         let mut pending_file_chooser = None;
-        let pending_download =
-            click_activation_default_action_handle(unsafe { &*runtime_ptr }, handle).and_then(
-                |default_action| match default_action {
-                    ClickActivationDefaultAction::Element(handle) => perform_click_default_action(
-                        scope,
-                        runtime_ptr,
-                        handle,
-                        coordinates.client_x,
-                        coordinates.client_y,
-                        button,
-                        modifiers,
-                        user_initiated,
-                        &pending_child_navigations_before_click,
-                    ),
-                    ClickActivationDefaultAction::LabelControl(control) => {
-                        let control_outcome = click_handle_internal(
-                            scope,
-                            runtime_ptr,
-                            control,
-                            InputEventCoordinates::default(),
-                            0,
-                            0,
-                            0,
-                            modifiers,
-                            user_initiated,
-                            // Label activation focuses its associated control,
-                            // even when the initiating script click does not.
-                            ClickFocusBehavior::Apply,
-                        );
-                        pending_file_chooser = control_outcome.pending_file_chooser;
-                        control_outcome.pending_download
-                    }
-                },
-            );
+        let pending_download = default_action.and_then(|default_action| match default_action {
+            ClickActivationDefaultAction::Element(handle) => {
+                if is_disabled_form_control(unsafe { &*runtime_ptr }, handle) {
+                    return None;
+                }
+                perform_click_default_action(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                    coordinates.client_x,
+                    coordinates.client_y,
+                    button,
+                    modifiers,
+                    user_initiated,
+                    &pending_child_navigations_before_click,
+                )
+            }
+            ClickActivationDefaultAction::Label(label) => {
+                // Only the label's identity is fixed before dispatch.
+                // Its associated control can change in a listener.
+                let control = label_control_handle(unsafe { &*runtime_ptr }, label)
+                    .filter(|control| *control != handle)?;
+                let control_outcome = click_handle_internal(
+                    scope,
+                    runtime_ptr,
+                    control,
+                    InputEventCoordinates::default(),
+                    0,
+                    0,
+                    0,
+                    modifiers,
+                    user_initiated,
+                    // Label activation focuses its associated control,
+                    // even when the initiating script click does not.
+                    ClickFocusBehavior::Apply,
+                );
+                pending_file_chooser = control_outcome.pending_file_chooser;
+                control_outcome.pending_download
+            }
+        });
         return input_dispatch_outcome_after_click(
             runtime_ptr,
             true,
@@ -1053,8 +1063,8 @@ fn click_activation_default_action_handle(
     runtime: &JsContextHost,
     target: DomHandle,
 ) -> Option<ClickActivationDefaultAction> {
-    if let Some(control) = label_activation_control_handle(runtime, target) {
-        return Some(ClickActivationDefaultAction::LabelControl(control));
+    if let Some(label) = label_activation_label_handle(runtime, target) {
+        return Some(ClickActivationDefaultAction::Label(label));
     }
 
     let mut current = Some(target);
@@ -1089,11 +1099,12 @@ fn hyperlink_activation_default_action_handle(
 
 enum ClickActivationDefaultAction {
     Element(DomHandle),
-    LabelControl(DomHandle),
+    Label(DomHandle),
 }
 
 fn element_has_click_activation_behavior(runtime: &JsContextHost, handle: DomHandle) -> bool {
     element_is_anchor_with_href(runtime, handle)
+        || runtime.dom_host().is_html_element_named(handle, "input")
         || is_html_option_element(runtime, handle)
         || is_valid_submit_button(runtime, handle)
         || is_valid_reset_button(runtime, handle)
@@ -1546,7 +1557,12 @@ fn perform_click_default_action(
     if dispatch_button_popover_toggle_events_if_needed(scope, runtime_ptr, handle) {
         return None;
     }
-    if perform_popover_invoker_default_action(scope, runtime_ptr, handle) {
+    if (runtime.dom_host().is_html_element_named(handle, "button")
+        || is_button_input(runtime, handle)
+        || is_valid_submit_button(runtime, handle)
+        || is_valid_reset_button(runtime, handle))
+        && perform_popover_invoker_default_action(scope, runtime_ptr, handle)
+    {
         return None;
     }
     None
