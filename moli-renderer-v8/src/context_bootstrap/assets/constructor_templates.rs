@@ -68,7 +68,7 @@ use super::super::{
         channel_merger_constructor, channel_splitter_constructor,
         constant_source_constructor_callback, delay_constructor, gain_node_constructor_callback,
         media_element_source_constructor_callback, offline_audio_context_constructor_callback,
-        stereo_panner_constructor,
+        stereo_panner_constructor, wave_shaper_constructor,
     },
     webrtc::{
         rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
@@ -1037,6 +1037,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::ConstantSourceNode,
                 constant_source_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::WaveShaperNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::WaveShaperNode,
+                wave_shaper_constructor
             ))
             .length(1)
             .build(scope)

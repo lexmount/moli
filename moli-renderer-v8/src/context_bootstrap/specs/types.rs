@@ -201,6 +201,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     AudioDestinationNode,
     AudioBufferSourceNode,
     ConstantSourceNode,
+    WaveShaperNode,
     ChannelMergerNode,
     ChannelSplitterNode,
     DelayNode,
