@@ -8,6 +8,37 @@ const CHANNEL_COUNT: &str = "__moliAudioNodeChannelCount";
 const CHANNEL_MODE: &str = "__moliAudioNodeChannelMode";
 const INTERPRETATION: &str = "__moliAudioNodeChannelInterpretation";
 
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "AudioNodeOptions")]
+pub(super) struct AudioNodeOptions {
+    channel_count: Option<u32>,
+    #[webidl(converter = "enum")]
+    channel_count_mode: Option<ChannelCountMode>,
+    #[webidl(converter = "enum")]
+    channel_interpretation: Option<ChannelInterpretation>,
+}
+
+pub(super) fn apply_options<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+    options: AudioNodeOptions,
+) -> bool {
+    if let Some(count) = options.channel_count
+        && !set_channel_count(scope, node, count)
+    {
+        return false;
+    }
+    if let Some(mode) = options.channel_count_mode
+        && !set_channel_mode(scope, node, mode)
+    {
+        return false;
+    }
+    if let Some(interpretation) = options.channel_interpretation {
+        set_interpretation(scope, node, interpretation);
+    }
+    true
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::AudioNode, enumerable, receiver)]
 struct AudioNodePrototypeDeclaration {
@@ -57,7 +88,7 @@ pub(super) fn initialize<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'
     let source = web_api_interfaces::AudioScheduledSourceNode::is_instance(scope, node)
         || web_api_interfaces::MediaElementAudioSourceNode::is_instance(scope, node);
     let destination = web_api_interfaces::AudioDestinationNode::is_instance(scope, node);
-    let compressor = web_api_interfaces::DynamicsCompressorNode::is_instance(scope, node);
+    let clamped = has_stereo_channel_limit(scope, node);
     set_web_audio_number_slot(scope, node, INPUT_COUNT, if source { 0.0 } else { 1.0 });
     // The existing terminal destination backend has no output port. Capturing
     // its output, as proposed by Web Audio 1.1, needs a separate backend change.
@@ -70,7 +101,7 @@ pub(super) fn initialize<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'
     set_web_audio_number_slot(scope, node, CHANNEL_COUNT, 2.0);
     let mode = if destination {
         "explicit"
-    } else if compressor {
+    } else if clamped {
         "clamped-max"
     } else {
         "max"
@@ -149,8 +180,22 @@ fn channel_count_setter<'s>(
     let Some(parsed) = webidl::parse_args::<ChannelCountArgs>(scope, &args) else {
         return;
     };
-    let node = args.this();
-    let value = parsed.value;
+    set_channel_count(scope, args.this(), parsed.value);
+}
+
+fn has_stereo_channel_limit<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+) -> bool {
+    web_api_interfaces::DynamicsCompressorNode::is_instance(scope, node)
+        || web_api_interfaces::StereoPannerNode::is_instance(scope, node)
+}
+
+fn set_channel_count<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+    value: u32,
+) -> bool {
     if let Some(count) = offline_destination_channel_count(scope, node) {
         if f64::from(value) != count {
             throw_dom_exception(
@@ -160,7 +205,7 @@ fn channel_count_setter<'s>(
                 "Offline destination channel count cannot be changed.",
             );
         }
-        return;
+        return f64::from(value) == count;
     }
     if value == 0 {
         throw_dom_exception(
@@ -169,7 +214,7 @@ fn channel_count_setter<'s>(
             9,
             "Audio nodes require at least one channel.",
         );
-        return;
+        return false;
     }
     if web_api_interfaces::AudioDestinationNode::is_instance(scope, node) && value > 2 {
         throw_dom_exception(
@@ -178,20 +223,19 @@ fn channel_count_setter<'s>(
             1,
             "Destination channel count exceeds the backend limit.",
         );
-        return;
+        return false;
     }
-    if value > 32
-        || (web_api_interfaces::DynamicsCompressorNode::is_instance(scope, node) && value > 2)
-    {
+    if value > 32 || (has_stereo_channel_limit(scope, node) && value > 2) {
         throw_dom_exception(
             scope,
             "NotSupportedError",
             9,
             "Audio node channel count exceeds its limit.",
         );
-        return;
+        return false;
     }
     set_web_audio_number_slot(scope, node, CHANNEL_COUNT, f64::from(value));
+    true
 }
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
@@ -225,7 +269,14 @@ fn channel_mode_setter<'s>(
     let Some(value) = <ChannelCountMode as webidl::WebIdlEnum>::parse_token(&parsed.value) else {
         return;
     };
-    let node = args.this();
+    set_channel_mode(scope, args.this(), value);
+}
+
+fn set_channel_mode<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+    value: ChannelCountMode,
+) -> bool {
     if offline_destination_channel_count(scope, node).is_some()
         && !matches!(value, ChannelCountMode::Explicit)
     {
@@ -235,18 +286,16 @@ fn channel_mode_setter<'s>(
             11,
             "Offline destination channel count mode cannot be changed.",
         );
-        return;
+        return false;
     }
-    if web_api_interfaces::DynamicsCompressorNode::is_instance(scope, node)
-        && matches!(value, ChannelCountMode::Max)
-    {
+    if has_stereo_channel_limit(scope, node) && matches!(value, ChannelCountMode::Max) {
         throw_dom_exception(
             scope,
             "NotSupportedError",
             9,
-            "Dynamics compressor does not support max channel count mode.",
+            "This audio node does not support max channel count mode.",
         );
-        return;
+        return false;
     }
     let value = match value {
         ChannelCountMode::Max => "max",
@@ -254,6 +303,7 @@ fn channel_mode_setter<'s>(
         ChannelCountMode::Explicit => "explicit",
     };
     set_private_value(scope, node, CHANNEL_MODE, v8str(scope, value).into());
+    true
 }
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
@@ -265,55 +315,21 @@ pub(super) enum ChannelInterpretation {
     Discrete,
 }
 
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "AudioNodeOptions")]
-pub(super) struct AudioNodeOptions {
-    channel_count: Option<u32>,
-    #[webidl(converter = "enum")]
-    channel_count_mode: Option<ChannelCountMode>,
-    #[webidl(converter = "enum")]
-    channel_interpretation: Option<ChannelInterpretation>,
-}
-
 impl AudioNodeOptions {
     pub(super) fn apply<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
         node: v8::Local<'s, v8::Object>,
     ) -> bool {
-        if let Some(count) = self.channel_count {
-            if !(1..=32).contains(&count) {
-                throw_dom_exception(
-                    scope,
-                    "NotSupportedError",
-                    9,
-                    "Audio node channel count exceeds its limit.",
-                );
-                return false;
-            }
-            set_web_audio_number_slot(scope, node, CHANNEL_COUNT, f64::from(count));
-        }
-        if let Some(mode) = self.channel_count_mode {
-            set_private_value(
-                scope,
-                node,
-                CHANNEL_MODE,
-                v8str(scope, webidl::WebIdlEnumSnapshot::snapshot_token(&mode)).into(),
-            );
-        }
-        if let Some(interpretation) = self.channel_interpretation {
-            set_private_value(
-                scope,
-                node,
-                INTERPRETATION,
-                v8str(
-                    scope,
-                    webidl::WebIdlEnumSnapshot::snapshot_token(&interpretation),
-                )
-                .into(),
-            );
-        }
-        true
+        apply_options(
+            scope,
+            node,
+            Self {
+                channel_count: self.channel_count,
+                channel_count_mode: self.channel_count_mode,
+                channel_interpretation: self.channel_interpretation,
+            },
+        )
     }
 }
 
@@ -336,14 +352,17 @@ fn interpretation_setter<'s>(
     else {
         return;
     };
+    set_interpretation(scope, args.this(), value);
+}
+
+fn set_interpretation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+    value: ChannelInterpretation,
+) {
     let value = match value {
         ChannelInterpretation::Speakers => "speakers",
         ChannelInterpretation::Discrete => "discrete",
     };
-    set_private_value(
-        scope,
-        args.this(),
-        INTERPRETATION,
-        v8str(scope, value).into(),
-    );
+    set_private_value(scope, node, INTERPRETATION, v8str(scope, value).into());
 }

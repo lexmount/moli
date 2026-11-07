@@ -1580,6 +1580,14 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::ConstantSourceNode,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::DelayNode::DESCRIPTOR,
+        kind: ConstructorKind::DelayNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::StereoPannerNode::DESCRIPTOR,
+        kind: ConstructorKind::StereoPannerNode,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::AudioDestinationNode::DESCRIPTOR,
         kind: ConstructorKind::AudioDestinationNode,
     },
