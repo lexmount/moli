@@ -122,6 +122,16 @@ impl WorkerGlobalState {
         request_id
     }
 
+    pub(in crate::worker) fn register_pending_service_worker_unregister(
+        &mut self,
+        resolver: v8::Global<v8::PromiseResolver>,
+    ) -> u64 {
+        let request_id = self.service_worker_update_request_ids.allocate();
+        self.pending_service_worker_unregistrations
+            .insert(request_id, resolver);
+        request_id
+    }
+
     pub(in crate::worker) fn take_pending_service_worker_update(
         &mut self,
         request_id: u64,
@@ -976,7 +986,7 @@ pub(in crate::worker) fn drain_service_worker_push_unsubscribe_result(
 
 pub(in crate::worker) struct PendingServiceWorkerUpdate {
     pub(in crate::worker) resolver: v8::Global<v8::PromiseResolver>,
-    pub(in crate::worker) registration: v8::Global<v8::Object>,
+    pub(in crate::worker) registration: Option<v8::Global<v8::Object>>,
 }
 
 pub(in crate::worker) fn drain_service_worker_update_result(
@@ -996,9 +1006,15 @@ pub(in crate::worker) fn drain_service_worker_update_result(
     };
     let resolver = v8::Local::new(scope, &pending.resolver);
     match result {
-        Ok(_) => {
-            let registration = v8::Local::new(scope, &pending.registration);
-            let _ = resolver.resolve(scope, registration.into());
+        Ok(snapshot) => {
+            let registration = pending
+                .registration
+                .as_ref()
+                .map(|object| v8::Local::new(scope, object))
+                .or_else(|| build_worker_service_worker_registration(scope, &snapshot).ok());
+            if let Some(registration) = registration {
+                let _ = resolver.resolve(scope, registration.into());
+            }
         }
         Err(error) => {
             let exception = if error.kind.rejects_as_type_error_for_update() {
@@ -1015,6 +1031,23 @@ pub(in crate::worker) fn drain_service_worker_update_result(
             let _ = resolver.reject(scope, exception);
         }
     }
+}
+
+pub(in crate::worker) fn drain_service_worker_unregister_result(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    request_id: u64,
+    result: bool,
+) {
+    let Some(pending) = state
+        .borrow_mut()
+        .pending_service_worker_unregistrations
+        .remove(&request_id)
+    else {
+        return;
+    };
+    let resolver = v8::Local::new(scope, &pending);
+    let _ = resolver.resolve(scope, v8::Boolean::new(scope, result).into());
 }
 
 #[cfg(test)]

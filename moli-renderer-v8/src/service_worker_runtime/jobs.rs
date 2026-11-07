@@ -112,6 +112,22 @@ pub(crate) struct ServiceWorkerRegistrationUpdate {
     pub(crate) completion: ServiceWorkerRegisterJob,
 }
 
+pub(crate) struct ServiceWorkerRegistrationRequest {
+    pub(crate) script_url: Url,
+    pub(crate) scope_url: Url,
+    pub(crate) document_url: Url,
+    pub(crate) storage_key: String,
+    pub(crate) script_kind: WorkerScriptKind,
+    pub(crate) update_via_cache: ServiceWorkerUpdateViaCache,
+    pub(crate) request_client: ResourceRequestClient,
+    pub(crate) network_policy: WorkerNetworkPolicy,
+    pub(crate) worker_context_runtime: RendererWorkerContextRuntime,
+    pub(crate) broadcast_channel_top_level_site: Option<String>,
+    pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
+    pub(crate) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
+    pub(crate) completion: ServiceWorkerRegisterJob,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ServiceWorkerRegisterJobPhase {
     Initial,
@@ -272,21 +288,46 @@ impl ServiceWorkerPendingRegisterJob {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct ServiceWorkerUnregisterJob {
-    pub(super) request_id: u64,
-    pub(super) document_owner: crate::window_document_identity::WindowDocumentOwner,
-    pub(super) completion_tx: RendererPageServiceWorkerTaskSender,
+pub(super) enum ServiceWorkerUnregisterJob {
+    Page {
+        request_id: u64,
+        document_owner: crate::window_document_identity::WindowDocumentOwner,
+        completion_tx: RendererPageServiceWorkerTaskSender,
+    },
+    Worker {
+        request_id: u64,
+        completion_tx: tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerMessage>,
+    },
 }
 
 impl ServiceWorkerUnregisterJob {
     pub(super) fn send(self, result: bool) {
-        let _ =
-            self.completion_tx
-                .send_service_worker_unregister(ServiceWorkerUnregisterCompletion {
-                    request_id: self.request_id,
-                    document_owner: self.document_owner,
-                    result,
-                });
+        match self {
+            Self::Page {
+                request_id,
+                document_owner,
+                completion_tx,
+            } => {
+                let _ = completion_tx.send_service_worker_unregister(
+                    ServiceWorkerUnregisterCompletion {
+                        request_id,
+                        document_owner,
+                        result,
+                    },
+                );
+            }
+            Self::Worker {
+                request_id,
+                completion_tx,
+            } => {
+                let _ = completion_tx.send(
+                    crate::worker::WorkerMessage::ServiceWorkerUnregisterResult {
+                        request_id,
+                        result,
+                    },
+                );
+            }
+        }
     }
 }
 

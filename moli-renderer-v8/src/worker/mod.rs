@@ -119,3 +119,9 @@ pub(crate) use thread::with_nested_error_selection_gate_for_test;
 pub(crate) use handle::{
     WorkerPendingFetchContinue, WorkerPendingSubresourceFetch, WorkerPendingXhrContinue,
 };
+
+pub(crate) use global_scope::{
+    try_worker_service_worker_get_registration, try_worker_service_worker_get_registrations,
+    try_worker_service_worker_register,
+
+};

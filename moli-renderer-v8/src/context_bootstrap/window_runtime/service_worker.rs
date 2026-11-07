@@ -303,6 +303,16 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
         return;
     };
     let scope = &mut v8::ContextScope::new(scope, context);
+    if crate::worker::try_worker_service_worker_register(
+        scope,
+        script_argument,
+        options.requested_scope.as_deref(),
+        options.script_kind,
+        options.update_via_cache,
+        &mut rv,
+    ) {
+        return;
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         let Some(resolver) = v8::PromiseResolver::new(scope) else {
             return;
@@ -1047,6 +1057,14 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registration_ca
         return;
     };
     let promise = resolver.get_promise(scope);
+    if crate::worker::try_worker_service_worker_get_registration(
+        scope,
+        &parsed.client_url,
+        resolver,
+    ) {
+        rv.set(promise.into());
+        return;
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         let _ = resolver.resolve(scope, v8::undefined(scope).into());
         rv.set(promise.into());
@@ -1108,6 +1126,10 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registrations_c
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
+    if crate::worker::try_worker_service_worker_get_registrations(scope, resolver) {
+        rv.set(resolver.get_promise(scope).into());
+        return;
+    }
     let owner = service_worker_container_owner_scope(scope, args.this());
     let states = context_host_ptr_from_global_bridge(scope)
         .and_then(|host_ptr| {
