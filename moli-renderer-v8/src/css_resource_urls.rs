@@ -64,6 +64,13 @@ impl StylesheetLoadBlockingResource {
         self
     }
 
+    pub(crate) fn with_resource_timing_initiator(mut self, source: Option<String>) -> Self {
+        if let Self::Font { font, .. } = &mut self {
+            font.resource_timing_initiator = source;
+        }
+        self
+    }
+
     pub(crate) fn kind(&self) -> StylesheetLoadBlockingResourceKind {
         match self {
             Self::Image(_) => StylesheetLoadBlockingResourceKind::Image,
@@ -88,6 +95,15 @@ pub(crate) enum StylesheetSubresourceTarget {
 }
 
 impl StylesheetSubresourceRequest {
+    pub(crate) fn resource_timing_initiator(&self) -> Option<&str> {
+        match &self.target {
+            StylesheetSubresourceTarget::Font(font) => {
+                font.font.resource_timing_initiator.as_deref()
+            }
+            StylesheetSubresourceTarget::Image(_) => None,
+        }
+    }
+
     pub(crate) fn image(
         url: Url,
         identity: Option<crate::native_bridge::CssImageResourceRequestIdentity>,
@@ -121,6 +137,7 @@ impl StylesheetSubresourceRequest {
 /// Parsed declaration metadata, before any network source is selected.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct StylesheetWebFont {
+    resource_timing_initiator: Option<String>,
     resource_key: String,
     registration_slot: String,
     face: Arc<WebFontFace>,
@@ -298,6 +315,7 @@ fn stylesheet_web_font_resource_with_descriptor(
     StylesheetLoadBlockingResource::font(
         request_url,
         StylesheetWebFont {
+            resource_timing_initiator: None,
             resource_key: slot,
             registration_slot: format!(
                 "stylesheet-font-face:anonymous:{}",
