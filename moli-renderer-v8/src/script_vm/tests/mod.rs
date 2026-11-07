@@ -2194,6 +2194,7 @@ mod input_value_native_receivers;
 
 mod canvas_webgl;
 mod child_dynamic_inline_scripts;
+mod convolver_interfaces;
 mod credential_interface_exposure_interfaces;
 mod credential_interfaces;
 mod credential_signals;
