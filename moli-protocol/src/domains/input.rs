@@ -1,3 +1,8 @@
+#[cfg(feature = "ace-protocol")]
+mod ace_page_task;
+#[cfg(feature = "ace-protocol")]
+pub(crate) use ace_page_task::handle_ace_page_task_input_dispatch_outcome;
+
 use anyhow::{Context as _, Result};
 
 use crate::automation::{

@@ -4860,6 +4860,8 @@ pub enum RendererPageCommand {
     PageDiagnosticsSnapshot,
     HasPendingLocationNavigation,
     DispatchPreparedElementClick(RendererPreparedPointerClick),
+    #[cfg(feature = "ace-protocol")]
+    AcePageTask(Box<dyn crate::ace_page_task::AcePageTask>),
     DispatchMouseEventAtPoint {
         x: f64,
         y: f64,
@@ -6184,6 +6186,8 @@ pub enum RendererPageReply {
     DocumentLifecycleEvents(Vec<RendererDocumentLifecycleEvent>),
     PendingSubresourceContinueOutcome(crate::PendingSubresourceContinueOutcome),
     PageDiagnosticsSnapshot(RendererPageDiagnosticsSnapshot),
+    #[cfg(feature = "ace-protocol")]
+    AcePageTask(Box<crate::ace_page_task::AcePageTaskExecution>),
     InputDispatchOutcome(RendererInputDispatchOutcome),
     SetDocumentContentResult(RendererSetDocumentContentResult),
     ScrollIntoViewResult(RendererScrollIntoViewResult),
@@ -6374,25 +6378,27 @@ impl RendererPageTable {
 }
 
 impl RendererPageReply {
-    pub(crate) fn input_dispatch_outcome(&self) -> Option<&RendererInputDispatchOutcome> {
+    pub(crate) fn input_dispatch_outcomes(&self) -> &[RendererInputDispatchOutcome] {
         match self {
             Self::InputDispatchOutcome(outcome) | Self::ElementClickDispatch(Ok(outcome)) => {
-                Some(outcome)
+                std::slice::from_ref(outcome)
             }
-            Self::NativeCommandReady(ready) => ready.input_dispatch_outcome(),
-            _ => None,
+            #[cfg(feature = "ace-protocol")]
+            Self::AcePageTask(result) => &result.input_outcomes,
+            Self::NativeCommandReady(ready) => ready.input_dispatch_outcomes(),
+            _ => &[],
         }
     }
 
-    pub(crate) fn input_dispatch_outcome_mut(
-        &mut self,
-    ) -> Option<&mut RendererInputDispatchOutcome> {
+    pub(crate) fn input_dispatch_outcomes_mut(&mut self) -> &mut [RendererInputDispatchOutcome] {
         match self {
             Self::InputDispatchOutcome(outcome) | Self::ElementClickDispatch(Ok(outcome)) => {
-                Some(outcome)
+                std::slice::from_mut(outcome)
             }
-            Self::NativeCommandReady(ready) => ready.input_dispatch_outcome_mut(),
-            _ => None,
+            #[cfg(feature = "ace-protocol")]
+            Self::AcePageTask(result) => &mut result.input_outcomes,
+            Self::NativeCommandReady(ready) => ready.input_dispatch_outcomes_mut(),
+            _ => &mut [],
         }
     }
 }

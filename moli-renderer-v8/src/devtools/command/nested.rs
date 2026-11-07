@@ -9,6 +9,8 @@ impl RendererPageCommand {
         use RendererDevToolsMainNestedDispatch::{InspectorSession, OwnerOnly, PageAgent};
         match self {
             Self::WebMcp { .. } => OwnerOnly,
+            #[cfg(feature = "ace-protocol")]
+            Self::AcePageTask(..) => OwnerOnly,
             Self::ForDocument { command, .. } => command.nested_dispatch(),
             Self::Native(command) => command.operation.nested_dispatch(),
             Self::Inspector(envelope)

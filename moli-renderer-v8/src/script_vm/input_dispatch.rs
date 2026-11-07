@@ -6,6 +6,8 @@ use moli_file_api::data_transfer::{
 use std::cell::Cell;
 use std::rc::Rc;
 
+#[cfg(feature = "ace-protocol")]
+mod ace_page_tasks;
 mod drag_source;
 use drag_source::dispatch_drag_source_event;
 

@@ -6,6 +6,8 @@ edition = "2024"
 
 [features]
 default = []
+# Native ACE page tasks for embedders. Public browser builds leave this disabled.
+ace-protocol = []
 # Diagnostic-only page-created global snapshots. Core integration tests enable
 # this through a dev-dependency; normal browser builds leave it compiled out.
 test-support = []

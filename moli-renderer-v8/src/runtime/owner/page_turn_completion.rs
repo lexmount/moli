@@ -316,7 +316,15 @@ impl RendererOwnerHandle {
         mut reply: RendererPageReply,
         download: RendererPendingDownloadActivation,
     ) -> RendererPageReply {
-        if let Some(outcome) = reply.input_dispatch_outcome_mut() {
+        #[cfg(feature = "ace-protocol")]
+        if let RendererPageReply::AcePageTask(execution) = &mut reply {
+            execution.input_outcomes.push(RendererInputDispatchOutcome {
+                pending_download: Some(download),
+                ..Default::default()
+            });
+            return reply;
+        }
+        if let Some(outcome) = reply.input_dispatch_outcomes_mut().last_mut() {
             outcome.pending_download = Some(download);
         }
         reply

@@ -1,3 +1,6 @@
+#[cfg(feature = "ace-protocol")]
+mod ace_page_task;
+
 use super::*;
 use anyhow::{Context as _, Result};
 

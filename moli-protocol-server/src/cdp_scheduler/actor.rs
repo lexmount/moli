@@ -1,3 +1,6 @@
+#[cfg(feature = "ace-protocol")]
+mod ace_page_tasks;
+
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -81,6 +84,8 @@ struct InFlightCommandState {
 
 enum CompletedActorWork {
     Command(CompletedCdpCommandDispatch),
+    #[cfg(feature = "ace-protocol")]
+    AcePageTask(moli_protocol::ace_page_task::CompletedAcePageTaskDispatch),
     FrontendControl,
 }
 
@@ -93,6 +98,8 @@ struct BlockedCommandDispatch {
 
 enum InFlightWork {
     Command(Box<InFlightCommandState>),
+    #[cfg(feature = "ace-protocol")]
+    AcePageTask(Box<ace_page_tasks::InFlightAcePageTask>),
     FrontendControl(CommandWaitTask),
 }
 
@@ -101,12 +108,16 @@ impl InFlightWork {
         match self {
             Self::Command(state) => Some(state),
             Self::FrontendControl(_) => None,
+            #[cfg(feature = "ace-protocol")]
+            Self::AcePageTask(_) => None,
         }
     }
 
     fn turn(&self) -> u64 {
         match self {
             Self::Command(state) => state.pending_turn,
+            #[cfg(feature = "ace-protocol")]
+            Self::AcePageTask(state) => state.turn,
             Self::FrontendControl(_) => 0,
         }
     }
@@ -114,6 +125,8 @@ impl InFlightWork {
     fn into_wait_task(self) -> CommandWaitTask {
         match self {
             Self::Command(state) => state.wait_task,
+            #[cfg(feature = "ace-protocol")]
+            Self::AcePageTask(state) => state.wait_task,
             Self::FrontendControl(task) => task,
         }
     }
@@ -125,6 +138,10 @@ fn page_javascript_owner_is_blocked(
     scheduler: &CdpScheduler,
     in_flight_commands: &InFlightCommands,
 ) -> bool {
+    #[cfg(feature = "ace-protocol")]
+    if ace_page_tasks::blocks_page_javascript(in_flight_commands) {
+        return true;
+    }
     scheduler.has_pending_javascript_dialog()
         || in_flight_commands
             .values()
@@ -466,6 +483,13 @@ async fn run_cdp_scheduler_actor(
                         let _ = completion_tx.send(Ok(()));
                     }
                     CdpFrontendControlRequest::Checkpoint => {
+                    }
+                    #[cfg(feature = "ace-protocol")]
+                    CdpFrontendControlRequest::AcePageTask(request) => {
+                        let (target_id, task, reply) = request.into_parts();
+                        ace_page_tasks::start(&mut scheduler, target_id, task, reply,
+                            &pending_command_completion_tx, &mut in_flight_commands,
+                            &mut next_in_flight_command_token);
                     }
                     CdpFrontendControlRequest::ExecuteInternalCommand { command, registration, completion_tx } => {
                         let command = *command;
@@ -2248,6 +2272,21 @@ async fn handle_pending_command_completion(
             }
             return true;
         }
+        #[cfg(feature = "ace-protocol")]
+        InFlightWork::AcePageTask(state) => {
+            return ace_page_tasks::complete(
+                frontend_router,
+                scheduler,
+                scheduler_input_rx,
+                pending_runtime_deferred_replies,
+                adapter_scheduler,
+                pending_command_completion_tx,
+                in_flight_commands,
+                state,
+                completion,
+            )
+            .await;
+        }
         InFlightWork::Command(state) => state,
     };
     let completion = CommandWaitCompletion {
@@ -2256,6 +2295,10 @@ async fn handle_pending_command_completion(
             CompletedActorWork::Command(completed) => completed,
             CompletedActorWork::FrontendControl => {
                 unreachable!("command wait completed as control work")
+            }
+            #[cfg(feature = "ace-protocol")]
+            CompletedActorWork::AcePageTask(_) => {
+                unreachable!("command wait completed as ACE page task work")
             }
         }),
     };

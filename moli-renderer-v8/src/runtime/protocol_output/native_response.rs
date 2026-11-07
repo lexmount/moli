@@ -438,25 +438,25 @@ impl RendererCdpCall {
 }
 
 impl RendererNativeCommandReadyResponse {
-    pub(crate) fn input_dispatch_outcome(
+    pub(crate) fn input_dispatch_outcomes(
         &self,
-    ) -> Option<&crate::runtime::RendererInputDispatchOutcome> {
+    ) -> &[crate::runtime::RendererInputDispatchOutcome] {
         match &self.reply {
             NativeReadyReply::Projected {
                 reply: Ok(reply), ..
-            } => reply.input_dispatch_outcome(),
-            _ => None,
+            } => reply.input_dispatch_outcomes(),
+            _ => &[],
         }
     }
 
-    pub(crate) fn input_dispatch_outcome_mut(
+    pub(crate) fn input_dispatch_outcomes_mut(
         &mut self,
-    ) -> Option<&mut crate::runtime::RendererInputDispatchOutcome> {
+    ) -> &mut [crate::runtime::RendererInputDispatchOutcome] {
         match &mut self.reply {
             NativeReadyReply::Projected {
                 reply: Ok(reply), ..
-            } => reply.input_dispatch_outcome_mut(),
-            _ => None,
+            } => reply.input_dispatch_outcomes_mut(),
+            _ => &mut [],
         }
     }
 }

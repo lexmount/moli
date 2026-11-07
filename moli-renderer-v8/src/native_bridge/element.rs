@@ -21,6 +21,8 @@ use crate::document_runtime::DomHandle;
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiTemplateValue};
 
+#[cfg(feature = "ace-protocol")]
+pub(crate) mod ace_page_task;
 mod activation;
 mod anchors;
 mod animations;

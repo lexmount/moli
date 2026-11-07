@@ -50,3 +50,6 @@ pub use domains::page::{
     PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
     PageScreencastSubscriptionStatus, PendingPageScreencastCapture,
 };
+
+#[cfg(feature = "ace-protocol")]
+pub use conn::ace_page_task;
