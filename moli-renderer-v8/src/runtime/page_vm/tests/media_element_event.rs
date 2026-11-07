@@ -646,3 +646,78 @@ async fn volume_changes_use_ordered_media_tasks_only_when_state_changes() {
         Ok::<_, anyhow::Error>(())
     }).await.expect("volumechange uses the media task source");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn cold_volume_writes_and_conversion_reentry_queue_only_actual_changes() {
+    run_page_vm_async_test(async move {
+        for tag in ["audio", "video"] {
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+            let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://example.test/cold-volume")?,
+            );
+            page.vm_mut().eval(&format!(
+                r#"
+globalThis.coldVolumeTrace = [];
+globalThis.coldVolumeConversions = 0;
+globalThis.coldMedia = document.createElement({tag:?});
+document.body.append(coldMedia);
+coldMedia.onvolumechange = () => {{
+  coldVolumeTrace.push(coldMedia.volume);
+  Promise.resolve().then(() => coldVolumeTrace.push('microtask'));
+}};
+if (coldMedia.volume !== 1) throw Error('initial playback volume');
+coldMedia.volume = coldMedia.volume;
+coldMedia.volume = 1;
+coldMedia.volume = {{valueOf() {{coldVolumeConversions++; return 1;}}}};
+if (coldVolumeConversions !== 1 || coldMedia.volume !== 1) throw Error('cold conversion');
+"#
+            ))?;
+            assert!(
+                page.claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent,
+                )
+                .is_none(),
+                "{tag}: equal cold values must not queue volumechange"
+            );
+            assert_eq!(page.vm_mut().eval("coldVolumeTrace.join('|')")?, "");
+            page.vm_mut().eval(
+                r#"
+coldVolumeConversions = 0;
+coldMedia.volume = {valueOf() {
+  coldVolumeConversions++;
+  coldMedia.volume = 0.7;
+  return 0.7;
+}};
+if (coldVolumeConversions !== 1 || coldMedia.volume !== 0.7) throw Error('reentrant conversion');
+"#,
+            )?;
+            assert_eq!(page.vm_mut().eval("coldVolumeTrace.join('|')")?, "");
+            let task = page
+                .claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent,
+                )
+                .expect("inner conversion must queue its one actual volume change");
+            assert_eq!(
+                task.media_element_event_kind(),
+                Some(RendererPageMediaElementEventTaskKind::VolumeChange)
+            );
+            page.run_claimed_selected_page_task_for_test(task, &loader)
+                .await?;
+            assert_eq!(
+                page.vm_mut().eval("coldVolumeTrace.join('|')")?,
+                "0.7|microtask"
+            );
+            assert!(
+                page.claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent,
+                )
+                .is_none(),
+                "{tag}: outer equality after conversion must not queue a duplicate"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("cold writes and reentrant conversion use current native volume");
+}
