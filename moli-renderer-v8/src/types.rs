@@ -1528,6 +1528,7 @@ pub(super) struct ChildClassicScriptLoadCompletion {
 
 #[derive(Debug)]
 pub(super) struct ChildBlockingStylesheetNetworkResult {
+    pub(super) is_root: bool,
     pub(super) frame_id: Option<String>,
     pub(super) document_url: Url,
     pub(super) request_url: Url,
@@ -1541,6 +1542,9 @@ pub(super) struct ChildBlockingStylesheetLoadCompletion {
     pub(super) owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     pub(super) signature: crate::DocumentBlockingStylesheetSignature,
     pub(super) network_results: Vec<ChildBlockingStylesheetNetworkResult>,
+    pub(super) import_graph:
+        Option<std::sync::Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>>,
+    pub(super) import_roots: Vec<crate::document_runtime::ConnectedStyleImportRoot>,
 }
 
 impl ChildBlockingStylesheetLoadCompletion {
@@ -1548,6 +1552,10 @@ impl ChildBlockingStylesheetLoadCompletion {
         self.network_results
             .iter()
             .all(|result| result.terminal.is_ready())
+            && self
+                .import_graph
+                .as_ref()
+                .is_none_or(|graph| graph.successful())
     }
 }
 

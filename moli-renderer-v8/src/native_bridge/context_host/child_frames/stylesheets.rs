@@ -105,23 +105,21 @@ impl JsContextHost {
         signature: DocumentBlockingStylesheetSignature,
         fetcher: RendererStylesheetFetcher,
     ) {
-        let requests = match &signature {
-            DocumentBlockingStylesheetSignature::Link { url, options } => vec![(
-                url.clone(),
-                options.clone(),
-                crate::types::SubresourceRequestInitiatorType::Parser,
-            )],
-            DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls } => urls
-                .iter()
-                .cloned()
-                .map(|url| {
-                    (
-                        url,
-                        StylesheetFetchOptions::default(),
-                        crate::types::SubresourceRequestInitiatorType::Css,
-                    )
+        let import_roots = if matches!(
+            &signature,
+            DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { .. }
+        ) {
+            self.frame_document_blocking_stylesheets
+                .node_ids_for_signature(owner.document_owner(), &signature)
+                .into_iter()
+                .filter_map(|node| {
+                    self.owner_live_stylesheet(node).map(|sheet| {
+                        crate::document_runtime::ConnectedStyleImportRoot::new(node, &sheet, false)
+                    })
                 })
-                .collect(),
+                .collect()
+        } else {
+            Vec::new()
         };
         let completion_tx = self.resource_completion_tx.clone();
         let frame_id = self
@@ -132,19 +130,84 @@ impl JsContextHost {
             .document_resource_loader_for_owner(owner)
             .expect("accepted child stylesheet requires its Document authority");
         resource_loader.spawn_resource_task(async move {
-            let mut network_results = Vec::with_capacity(requests.len());
-            for (request_url, options, initiator_type) in requests {
-                let options = fetcher.prepare_stylesheet_fetch_options(options);
-                let terminal = fetcher
-                    .fetch_stylesheet_resource(document_url.clone(), request_url.clone(), options)
-                    .await;
-                network_results.push(ChildBlockingStylesheetNetworkResult {
-                    frame_id: frame_id.clone(),
-                    document_url: document_url.clone(),
-                    request_url,
-                    initiator_type,
-                    terminal,
-                });
+            let document_options =
+                fetcher.prepare_stylesheet_fetch_options(StylesheetFetchOptions::default());
+            let mut network_results = Vec::new();
+            let import_graph = match &signature {
+                DocumentBlockingStylesheetSignature::Link { url, options } => {
+                    let options = fetcher.prepare_stylesheet_fetch_options(options.clone());
+                    let terminal = fetcher
+                        .fetch_stylesheet_resource(document_url.clone(), url.clone(), options)
+                        .await;
+                    let graph = if let Some(response) = terminal.ready_response() {
+                        let urls = crate::style_engine::stylesheet_top_level_import_urls(
+                            response.body_text(),
+                            &response.final_url,
+                            false,
+                        )
+                        .unwrap_or_default();
+                        let options = crate::document_runtime::stylesheet_import_options(
+                            &terminal,
+                            &document_options,
+                        )
+                        .expect("a usable stylesheet retains its import request policy");
+                        Some(
+                            crate::document_runtime::fetch_complete_stylesheet_import_graph(
+                                fetcher.clone(),
+                                document_url.clone(),
+                                urls,
+                                options,
+                            )
+                            .await,
+                        )
+                    } else {
+                        None
+                    };
+                    network_results.push(ChildBlockingStylesheetNetworkResult {
+                        is_root: true,
+                        frame_id: frame_id.clone(),
+                        document_url: document_url.clone(),
+                        request_url: url.clone(),
+                        initiator_type: crate::types::SubresourceRequestInitiatorType::Parser,
+                        terminal,
+                    });
+                    graph
+                }
+                DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls } => {
+                    let options = StylesheetFetchOptions::for_import(
+                        document_url.clone(),
+                        document_options
+                            .document_referrer_policy()
+                            .map(str::to_owned),
+                    )
+                    .with_document_referrer_policy(
+                        document_options
+                            .document_referrer_policy()
+                            .map(str::to_owned),
+                    );
+                    Some(
+                        crate::document_runtime::fetch_complete_stylesheet_import_graph(
+                            fetcher,
+                            document_url.clone(),
+                            urls.clone(),
+                            options,
+                        )
+                        .await,
+                    )
+                }
+            }
+            .map(std::sync::Arc::new);
+            if let Some(graph) = &import_graph {
+                network_results.extend(graph.network_results().iter().map(|result| {
+                    ChildBlockingStylesheetNetworkResult {
+                        is_root: false,
+                        frame_id: frame_id.clone(),
+                        document_url: document_url.clone(),
+                        request_url: result.request_url().clone(),
+                        initiator_type: crate::types::SubresourceRequestInitiatorType::Css,
+                        terminal: result.terminal().clone(),
+                    }
+                }));
             }
             let _ = completion_tx.send_child_blocking_stylesheet(
                 ChildBlockingStylesheetLoadCompletion {
@@ -152,6 +215,8 @@ impl JsContextHost {
                     owner,
                     signature,
                     network_results,
+                    import_graph,
+                    import_roots,
                 },
             );
         });
@@ -208,6 +273,7 @@ impl JsContextHost {
             );
             return;
         };
+        let mut import_roots = completion.import_roots.clone();
         let mut installed_stylesheet_count = 0;
         let mut stylesheet_subresources = Vec::new();
         let optional_resource_fetch_mask = self
@@ -232,7 +298,11 @@ impl JsContextHost {
                     network_result.request_url.clone()
                 }
             };
-            for owner in linked_stylesheet_owners.iter().copied() {
+            for owner in linked_stylesheet_owners
+                .iter()
+                .copied()
+                .filter(|_| network_result.is_root)
+            {
                 let Some(prepared) = self.prepare_linked_stylesheet_resource(
                     owner,
                     &stylesheet_text,
@@ -242,6 +312,7 @@ impl JsContextHost {
                 ) else {
                     continue;
                 };
+                let has_imports = prepared.has_import_rules();
                 self.install_linked_stylesheet(
                     crate::document_runtime::InstallLinkedStylesheet::from_prepared(
                         owner,
@@ -250,6 +321,11 @@ impl JsContextHost {
                     ),
                 );
                 self.retain_linked_stylesheet_import_options(owner, terminal);
+                if has_imports && let Some(sheet) = self.linked_live_stylesheet(owner) {
+                    import_roots.push(crate::document_runtime::ConnectedStyleImportRoot::new(
+                        owner, &sheet, true,
+                    ));
+                }
                 installed_stylesheet_count += 1;
             }
             let Some(response) = ready_response else {
@@ -276,6 +352,24 @@ impl JsContextHost {
                     continue;
                 };
                 stylesheet_subresources.push((binding, resource));
+            }
+        }
+        if let Some(graph) = &completion.import_graph {
+            let responses = crate::document_runtime::live_stylesheet_import_responses(graph);
+            for root in import_roots {
+                if self
+                    .live_stylesheet(root.stylesheet_id)
+                    .is_none_or(|sheet| !root.matches_stylesheet(&sheet))
+                {
+                    continue;
+                }
+                if self
+                    .install_live_stylesheet_import_graph(root.clone(), &responses)
+                    .is_some()
+                {
+                    let _ = self
+                        .refresh_live_stylesheet_after_import_graph(root.owner, root.stylesheet_id);
+                }
             }
         }
         let released = self

@@ -3550,7 +3550,10 @@ document.body.appendChild(replacementFrame);
                                 owner: old_child_owner,
                                 signature: crate::DocumentBlockingStylesheetSignature::
                                     ParserCreatedStyleImport { urls: Vec::new() },
-                                network_results: vec![ChildBlockingStylesheetNetworkResult {
+                                import_graph: None,
+                import_roots: Vec::new(),
+                network_results: vec![ChildBlockingStylesheetNetworkResult {
+                    is_root: true,
                                     frame_id: Some("retired-child-frame".to_owned()),
                                     document_url: Url::parse(
                                         "https://old-document.test/child",

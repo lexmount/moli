@@ -1043,6 +1043,8 @@ mod tests {
                 urls: Vec::new(),
             },
             network_results: Vec::new(),
+            import_graph: None,
+            import_roots: Vec::new(),
         }
     }
 
