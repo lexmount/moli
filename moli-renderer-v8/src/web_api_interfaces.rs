@@ -60,6 +60,7 @@ interfaces! {
     DelayNode: AudioNode;
     GainNode: AudioNode;
     StereoPannerNode: AudioNode;
+    WaveShaperNode: AudioNode;
     Blob;
     BlobEvent: Event;
     MIDIConnectionEvent: Event;

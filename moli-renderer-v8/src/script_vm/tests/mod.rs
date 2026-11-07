@@ -2343,6 +2343,7 @@ mod video_codecs_shell;
 
 mod idb_database_native_receivers;
 
+mod wave_shaper_interfaces;
 mod web_lock_interface_exposure_interfaces;
 mod webgl_interfaces;
 mod webidl_collections;

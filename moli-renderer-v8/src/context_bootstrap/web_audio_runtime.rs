@@ -19,6 +19,9 @@ mod media_element_source;
 mod node;
 mod param_nodes;
 mod source;
+mod wave_shaper;
+
+pub(in crate::context_bootstrap) use wave_shaper::constructor as wave_shaper_constructor;
 
 pub(in crate::context_bootstrap) use buffer::constructor as audio_buffer_constructor;
 pub(in crate::context_bootstrap) use channel_nodes::{
@@ -392,6 +395,8 @@ struct BaseAudioContextPrototypeDeclaration {
 
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 3, callback = buffer::create)]
     create_buffer: (),
+    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = wave_shaper::create)]
+    create_wave_shaper: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = channel_nodes::create_channel_merger)]
     create_channel_merger: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = channel_nodes::create_channel_splitter)]
@@ -477,6 +482,7 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
     source::install(scope, template, interface_name);
     match interface_name {
         "AudioBuffer" => buffer::install(scope, template),
+        "WaveShaperNode" => wave_shaper::install(scope, template),
         "Worklet" => WorkletPrototypeDeclaration::initialize_prototype_template(
             scope,
             template.prototype_template(scope),
