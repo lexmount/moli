@@ -357,6 +357,26 @@ impl<Entry> PageTurnScheduler<Entry> {
         } else {
             oldest
         };
+        // Font loading has its own task source. Prefer a ready posted message
+        // over deferred font work, so message protocols can finish their
+        // current exchange before font completion callbacks. This is a Page
+        // scheduling policy, not a specified cross-source ordering. Apply the
+        // ordinary bounded-run fairness below to prevent message starvation
+        // of font work, and never inspect or reorder either source's payloads.
+        let oldest = if matches!(oldest, RendererPageReadyDescriptor::FontLoading { .. }) {
+            descriptors
+                .iter()
+                .copied()
+                .find(|descriptor| {
+                    matches!(
+                        descriptor,
+                        RendererPageReadyDescriptor::WindowMessage { .. }
+                    )
+                })
+                .unwrap_or(oldest)
+        } else {
+            oldest
+        };
         let oldest_source = oldest.source_kind();
         let should_apply_fairness = self.arbitration.last_selected_source == Some(oldest_source)
             && self.arbitration.consecutive_from_source >= MAX_CONSECUTIVE_PAGE_TASKS_PER_SOURCE
@@ -513,16 +533,17 @@ mod tests {
             RendererPageChildRealmMaterializationTarget,
             RendererPageDedicatedWorkerClientEventOwner, RendererPageDeviceSensorOwner,
             RendererPageDomManipulationOwner, RendererPageFileReadingOwner,
-            RendererPageHistoryTraversalOwner, RendererPageHistoryTraversalTaskId,
-            RendererPageHistoryTraversalTaskKind, RendererPageIndexedDbTaskOwner,
-            RendererPageMediaElementEventOwner, RendererPageMessagePortDeliveryOwner,
-            RendererPageMiscPlatformApiOwner, RendererPageNavigationAndTraversalHead,
-            RendererPageNetworkingOwner, RendererPageOpfsTaskId, RendererPageOpfsTaskOwner,
-            RendererPageRenderingUpdateHead, RendererPageRenderingUpdateOwner,
-            RendererPageRenderingUpdateTaskId, RendererPageRenderingUpdateTaskKind,
-            RendererPageSharedWorkerClientEventOwner, RendererPageUserInteractionOwner,
-            RendererPageWebCryptoTaskId, RendererPageWebCryptoTaskOwner,
-            RendererPageWebLocksTaskId, RendererPageWebLocksTaskOwner, RendererPageWebSocketOwner,
+            RendererPageFontLoadingOwner, RendererPageHistoryTraversalOwner,
+            RendererPageHistoryTraversalTaskId, RendererPageHistoryTraversalTaskKind,
+            RendererPageIndexedDbTaskOwner, RendererPageMediaElementEventOwner,
+            RendererPageMessagePortDeliveryOwner, RendererPageMiscPlatformApiOwner,
+            RendererPageNavigationAndTraversalHead, RendererPageNetworkingOwner,
+            RendererPageOpfsTaskId, RendererPageOpfsTaskOwner, RendererPageRenderingUpdateHead,
+            RendererPageRenderingUpdateOwner, RendererPageRenderingUpdateTaskId,
+            RendererPageRenderingUpdateTaskKind, RendererPageSharedWorkerClientEventOwner,
+            RendererPageUserInteractionOwner, RendererPageWebCryptoTaskId,
+            RendererPageWebCryptoTaskOwner, RendererPageWebLocksTaskId,
+            RendererPageWebLocksTaskOwner, RendererPageWebSocketOwner,
             RendererPageWebSocketReadiness, RendererPageWindowMessageOwner,
             RendererPageWindowMessageTaskId,
         },
@@ -602,6 +623,22 @@ mod tests {
         RendererPageReadyDescriptor::MiscPlatformApi {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageMiscPlatformApiOwner::new(
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
+                WindowDocumentTaskTarget::new(
+                    WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
+                        FrameSchedulerLaneId(order),
+                        LocalWindowId(order + 1),
+                        DocumentId(order + 2),
+                    )),
+                    OwnerDispatchScope::Top,
+                ),
+            ),
+        }
+    }
+    fn font_loading_descriptor(ready_at: Instant, order: u64) -> RendererPageReadyDescriptor {
+        RendererPageReadyDescriptor::FontLoading {
+            ready: ready_metadata(ready_at, order),
+            owner: RendererPageFontLoadingOwner::new(
                 RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowDocumentTaskTarget::new(
                     WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
@@ -1122,6 +1159,9 @@ mod tests {
             }
             RendererPageTaskSourceKind::MiscPlatformApi => {
                 misc_platform_api_descriptor(runnable_since, order)
+            }
+            RendererPageTaskSourceKind::FontLoading => {
+                font_loading_descriptor(runnable_since, order)
             }
             RendererPageTaskSourceKind::DeviceSensor => {
                 device_sensor_descriptor(runnable_since, order)
@@ -1669,7 +1709,7 @@ mod tests {
     }
 
     #[test]
-    fn oldest_runnable_head_can_win_from_every_page_source() {
+    fn oldest_runnable_head_respects_posted_message_over_font_policy() {
         let base = Instant::now();
         for expected in RendererPageTaskSourceKind::ALL {
             let descriptors =
@@ -1689,10 +1729,37 @@ mod tests {
                 .expect("each source matrix must retain a runnable head");
             assert_eq!(
                 selected.source_kind(),
-                expected,
-                "the oldest runnable head from {expected:?} must be selectable"
+                if expected == RendererPageTaskSourceKind::FontLoading {
+                    RendererPageTaskSourceKind::WindowMessage
+                } else {
+                    expected
+                },
+                "the oldest runnable head from {expected:?} must respect source policy"
             );
         }
+    }
+
+    #[test]
+    fn posted_messages_precede_font_work_with_bounded_fairness() {
+        let mut scheduler = PageTurnScheduler::new(());
+        let base = Instant::now();
+        let font = font_loading_descriptor(base, 1);
+        let message = window_message_descriptor(base + std::time::Duration::from_millis(1), 2);
+        for _ in 0..MAX_CONSECUTIVE_PAGE_TASKS_PER_SOURCE {
+            assert_eq!(
+                scheduler.select_ready_descriptor([font, message]),
+                Some(message)
+            );
+        }
+        assert_eq!(
+            scheduler.select_ready_descriptor([font, message]),
+            Some(font)
+        );
+        assert_eq!(scheduler.select_ready_descriptor([font]), Some(font));
+        assert_eq!(
+            scheduler.select_ready_descriptor([font, message]),
+            Some(message)
+        );
     }
 
     #[test]

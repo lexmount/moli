@@ -107,6 +107,17 @@ impl PageVmTaskExecutorTestHarness {
             .await
     }
 
+    pub(crate) fn has_ready_font_loading_task_for_test(&self) -> bool {
+        self.page_vm
+            .page_task_executor_sources_for_test()
+            .has_scheduler_task_for_executor_test(|descriptor| {
+                matches!(
+                    descriptor,
+                    crate::page_task_queue::RendererPageReadyDescriptor::FontLoading { .. }
+                )
+            })
+    }
+
     pub(crate) fn has_ready_dom_manipulation_family_for_test(
         &self,
         family: super::PageDomManipulationTestFamily,

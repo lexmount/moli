@@ -26,6 +26,7 @@ use crate::page_task_queue::RendererPageChildModulepreloadEventActionSender;
 use crate::page_task_queue::RendererPageDedicatedWorkerClientEventSender;
 use crate::page_task_queue::RendererPageDeviceSensorSender;
 use crate::page_task_queue::RendererPageFileReadingSender;
+use crate::page_task_queue::RendererPageFontLoadingSender;
 use crate::page_task_queue::RendererPageIndexedDbTaskSender;
 use crate::page_task_queue::RendererPageInternalLoadingSender;
 use crate::page_task_queue::RendererPageMainParserContinuationSender;
@@ -77,6 +78,7 @@ pub(crate) struct RendererPageJsContextTaskSenders {
     user_interaction: RendererPageUserInteractionSender,
     file_reading: RendererPageFileReadingSender,
     misc_platform_api: RendererPageMiscPlatformApiSender,
+    font_loading: RendererPageFontLoadingSender,
     device_sensor: RendererPageDeviceSensorSender,
     canvas_blob_serialization: RendererPageCanvasBlobSerializationSender,
     navigation_and_traversal: RendererPageNavigationAndTraversalSender,
@@ -151,6 +153,9 @@ impl RendererPageJsContextTaskSenders {
 
     pub(crate) fn misc_platform_api(&self) -> &RendererPageMiscPlatformApiSender {
         &self.misc_platform_api
+    }
+    pub(crate) fn font_loading(&self) -> &RendererPageFontLoadingSender {
+        &self.font_loading
     }
     pub(crate) fn device_sensor(&self) -> &RendererPageDeviceSensorSender {
         &self.device_sensor
@@ -374,6 +379,7 @@ impl PageRuntimeTaskSource {
                 user_interaction: routes.user_interaction_sender(root_document),
                 file_reading: routes.file_reading_sender(root_document),
                 misc_platform_api: routes.misc_platform_api_sender(root_document),
+                font_loading: routes.font_loading_sender(root_document),
                 device_sensor: routes.device_sensor_sender(root_document),
                 canvas_blob_serialization: routes.canvas_blob_serialization_sender(root_document),
                 navigation_and_traversal: routes.navigation_and_traversal_sender(root_document),

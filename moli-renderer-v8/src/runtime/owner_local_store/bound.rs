@@ -932,6 +932,10 @@ pub(in crate::runtime) async fn advance_page_owner_one_turn_via_local_task(
                 ) => Some(task.owner),
                 _ => None,
             };
+            let main_completion_recheck_owner = match &task {
+                RendererPageSchedulerTask::MainDocumentRuntime(task) => task.completion_recheck_owner(),
+                _ => None,
+            };
             let replacement_lifecycle_snapshot = entry
                 .page_vm()
                 .document_replacement_lifecycle_action_snapshot();
@@ -965,16 +969,21 @@ pub(in crate::runtime) async fn advance_page_owner_one_turn_via_local_task(
             };
 
             if application.is_ok()
-                && main_lifecycle_owner.is_some_and(|owner| {
+                && (main_lifecycle_owner.is_some_and(|owner| {
                     owner.root_document == entry.page_vm().document_lifecycle.identity().document
                         && entry.page_vm().vm().current_main_document_task_owner() == Some(owner.body.owner())
-                })
+                }) || main_completion_recheck_owner.is_some_and(|owner| {
+                    owner.root_document() == entry.page_vm().document_lifecycle.identity().document
+                        && entry.page_vm().vm().current_main_document_task_owner() == Some(owner.document_owner())
+                        && entry.page_vm().vm().check_main_document_completion(owner.document_owner()) == Some(true)
+                }))
             {
                 let (_, pending) = entry.page_vm_and_document_lifecycle_turn_mut();
                 if let Some(pending) = pending {
-                    // Resume the exact driver to consume its receipt. An
-                    // executed event publishes the reached stage before other
-                    // sources run; a blocked load returns to its prerequisites.
+                    // Resume an exact event receipt or a completion recheck
+                    // that just made the parked lifecycle ready. Admit its
+                    // next DOM task before ordinary sources can overtake it;
+                    // that task still revalidates its owner and load delays.
                     pending.owner_turn_is_runnable = true;
                 }
             }

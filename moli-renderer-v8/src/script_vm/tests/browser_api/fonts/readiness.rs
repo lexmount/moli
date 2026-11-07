@@ -736,6 +736,70 @@ async fn font_set_finish_task_rechecks_fonts_started_before_dispatch() {
 }
 
 #[tokio::test]
+async fn font_loading_uses_its_own_source_and_task_end_checkpoint() {
+    use crate::runtime::PageSelectedTaskTestSelector;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page =
+        new_storage_page_task_executor_test_vm_with_loader("https://font-source.test/", &loader);
+    finish_main_document_load_for_test(&mut page);
+    page.eval(
+        r#"
+        globalThis.fontTrace = [];
+        const fonts = document.fonts;
+        fonts.addEventListener('loading', () => {
+            fontTrace.push('loading');
+            queueMicrotask(() => fontTrace.push('loading-microtask'));
+        });
+        fonts.addEventListener('loadingdone', () => fontTrace.push('done'));
+        fonts.addEventListener('loadingerror', () => fontTrace.push('error'));
+        const face = new FontFace('Missing', 'local("MoliMissingFontSource-93465")');
+        fonts.add(face);
+        face.load().catch(() => {});
+        fonts.ready.then(() => fontTrace.push('ready'));
+    "#,
+    )
+    .unwrap();
+    assert!(
+        !page.has_ready_timeout(),
+        "font work must not enter the author timer heap"
+    );
+    assert_eq!(page.eval("fontTrace.join('|')").unwrap(), "");
+    assert!(
+        page.run_one_exact_selected_page_task_executor_turn(
+            PageSelectedTaskTestSelector::FontLoading,
+            &loader,
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(
+        page.eval("fontTrace.join('|')").unwrap(),
+        "loading|loading-microtask"
+    );
+    assert!(
+        page.run_one_exact_selected_page_task_executor_turn(
+            PageSelectedTaskTestSelector::FontLoading,
+            &loader,
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(
+        page.eval("fontTrace.join('|')").unwrap(),
+        "loading|loading-microtask|done|error|ready"
+    );
+    assert!(
+        !page
+            .run_one_exact_selected_page_task_executor_turn(
+                PageSelectedTaskTestSelector::FontLoading,
+                &loader,
+            )
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
 async fn font_loading_tasks_preserve_order_and_reentrant_cycle_promises() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut page = new_storage_page_task_executor_test_vm_with_loader(

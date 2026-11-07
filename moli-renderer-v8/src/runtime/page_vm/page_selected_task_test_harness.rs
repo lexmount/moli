@@ -57,6 +57,7 @@ pub(crate) enum PageSelectedTaskTestSelector {
     DynamicImportOwnerAction,
     FileReading,
     MiscPlatformApi,
+    FontLoading,
     ContentSecurityPolicyViolation,
     DeviceSensor,
     CanvasBlobSerialization,
@@ -307,6 +308,9 @@ impl PageSelectedTaskTestSelector {
                     RendererPageReadyDescriptor::MiscPlatformApi { .. }
                 )
             }
+            Self::FontLoading => {
+                matches!(descriptor, RendererPageReadyDescriptor::FontLoading { .. })
+            }
             Self::DeviceSensor => {
                 matches!(descriptor, RendererPageReadyDescriptor::DeviceSensor { .. })
             }
@@ -428,6 +432,7 @@ impl PageSelectedTaskTestSelector {
             )
             | (Self::FileReading, RendererPageSchedulerTask::FileReading(_))
             | (Self::MiscPlatformApi, RendererPageSchedulerTask::MiscPlatformApi(_))
+            | (Self::FontLoading, RendererPageSchedulerTask::FontLoading(_))
             | (Self::DeviceSensor, RendererPageSchedulerTask::DeviceSensor(_))
             | (
                 Self::CanvasBlobSerialization,

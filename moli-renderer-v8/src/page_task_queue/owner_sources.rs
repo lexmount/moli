@@ -73,6 +73,10 @@ use super::{
         RendererPageFileReadingOwner, RendererPageFileReadingRoute, RendererPageFileReadingSender,
         RendererPageFileReadingSource, RendererPageFileReadingTask,
     },
+    font_loading::{
+        RendererPageFontLoadingOwner, RendererPageFontLoadingRoute, RendererPageFontLoadingSender,
+        RendererPageFontLoadingSource, RendererPageFontLoadingTask,
+    },
     indexed_db_task::{
         RendererPageIndexedDbTask, RendererPageIndexedDbTaskOwner, RendererPageIndexedDbTaskRoute,
         RendererPageIndexedDbTaskSender, RendererPageIndexedDbTaskSource,
@@ -188,6 +192,7 @@ pub(crate) struct RendererPageOwnedTaskSources {
     user_interaction: RendererPageUserInteractionSource,
     file_reading: RendererPageFileReadingSource,
     misc_platform_api: RendererPageMiscPlatformApiSource,
+    font_loading: RendererPageFontLoadingSource,
     device_sensor: RendererPageDeviceSensorSource,
     canvas_blob_serialization: RendererPageCanvasBlobSerializationSource,
     navigation_and_traversal: RendererPageNavigationAndTraversalSource,
@@ -228,6 +233,7 @@ pub(crate) struct RendererPageTaskProducerRoutes {
     user_interaction: RendererPageUserInteractionRoute,
     file_reading: RendererPageFileReadingRoute,
     misc_platform_api: RendererPageMiscPlatformApiRoute,
+    font_loading: RendererPageFontLoadingRoute,
     device_sensor: RendererPageDeviceSensorRoute,
     canvas_blob_serialization: RendererPageCanvasBlobSerializationRoute,
     navigation_and_traversal: RendererPageNavigationAndTraversalRoute,
@@ -290,6 +296,10 @@ pub(crate) enum RendererPageReadyDescriptor {
     MiscPlatformApi {
         ready: RendererPageTaskReadyMetadata,
         owner: RendererPageMiscPlatformApiOwner,
+    },
+    FontLoading {
+        ready: RendererPageTaskReadyMetadata,
+        owner: RendererPageFontLoadingOwner,
     },
     DeviceSensor {
         ready: RendererPageTaskReadyMetadata,
@@ -417,6 +427,7 @@ impl RendererPageReadyDescriptor {
             | Self::UserInteraction { ready, .. }
             | Self::FileReading { ready, .. }
             | Self::MiscPlatformApi { ready, .. }
+            | Self::FontLoading { ready, .. }
             | Self::DeviceSensor { ready, .. }
             | Self::CanvasBlobSerialization { ready, .. }
             | Self::NavigationAndTraversal { ready, .. }
@@ -455,6 +466,7 @@ impl RendererPageReadyDescriptor {
             Self::UserInteraction { .. } => RendererPageTaskSourceKind::UserInteraction,
             Self::FileReading { .. } => RendererPageTaskSourceKind::FileReading,
             Self::MiscPlatformApi { .. } => RendererPageTaskSourceKind::MiscPlatformApi,
+            Self::FontLoading { .. } => RendererPageTaskSourceKind::FontLoading,
             Self::DeviceSensor { .. } => RendererPageTaskSourceKind::DeviceSensor,
             Self::CanvasBlobSerialization { .. } => {
                 RendererPageTaskSourceKind::CanvasBlobSerialization
@@ -513,6 +525,7 @@ impl RendererPageReadyDescriptor {
             | Self::UserInteraction { ready, .. }
             | Self::FileReading { ready, .. }
             | Self::MiscPlatformApi { ready, .. }
+            | Self::FontLoading { ready, .. }
             | Self::DeviceSensor { ready, .. }
             | Self::CanvasBlobSerialization { ready, .. }
             | Self::NavigationAndTraversal { ready, .. }
@@ -561,6 +574,7 @@ pub(crate) enum RendererPageTaskSourceKind {
     UserInteraction,
     FileReading,
     MiscPlatformApi,
+    FontLoading,
     DeviceSensor,
     CanvasBlobSerialization,
     NavigationAndTraversal,
@@ -591,13 +605,14 @@ pub(crate) enum RendererPageTaskSourceKind {
 }
 
 impl RendererPageTaskSourceKind {
-    pub(crate) const ALL: [Self; 33] = [
+    pub(crate) const ALL: [Self; 34] = [
         Self::ActionWindow,
         Self::Timer,
         Self::DomManipulation,
         Self::UserInteraction,
         Self::FileReading,
         Self::MiscPlatformApi,
+        Self::FontLoading,
         Self::DeviceSensor,
         Self::CanvasBlobSerialization,
         Self::NavigationAndTraversal,
@@ -641,6 +656,7 @@ pub(crate) enum RendererPageSchedulerTask {
     UserInteraction(RendererPageUserInteractionTask),
     FileReading(RendererPageFileReadingTask),
     MiscPlatformApi(RendererPageMiscPlatformApiTask),
+    FontLoading(RendererPageFontLoadingTask),
     DeviceSensor(RendererPageDeviceSensorTask),
     CanvasBlobSerialization(RendererPageCanvasBlobSerializationTask),
     NavigationAndTraversal(RendererPageNavigationAndTraversalTask),
@@ -704,6 +720,10 @@ impl RendererPageOwnedTaskSources {
             owner_wake.clone(),
             RendererOwnerWakeSource::MiscPlatformApiTask,
         );
+        let font_loading = RendererPageFontLoadingSource::new(
+            owner_wake.clone(),
+            RendererOwnerWakeSource::FontLoadingTask,
+        );
         let device_sensor = RendererPageDeviceSensorSource::new(
             owner_wake.clone(),
             RendererOwnerWakeSource::DeviceSensorTask,
@@ -759,6 +779,7 @@ impl RendererPageOwnedTaskSources {
             user_interaction: user_interaction.route(),
             file_reading: file_reading.route(),
             misc_platform_api: misc_platform_api.route(),
+            font_loading: font_loading.route(),
             device_sensor: device_sensor.route(),
             canvas_blob_serialization: canvas_blob_serialization.route(),
             navigation_and_traversal: navigation_and_traversal.route(),
@@ -794,6 +815,7 @@ impl RendererPageOwnedTaskSources {
                 user_interaction,
                 file_reading,
                 misc_platform_api,
+                font_loading,
                 device_sensor,
                 canvas_blob_serialization,
                 navigation_and_traversal,
@@ -837,6 +859,7 @@ impl RendererPageOwnedTaskSources {
             && self
                 .misc_platform_api
                 .route_matches(&routes.misc_platform_api)
+            && self.font_loading.route_matches(&routes.font_loading)
             && self.device_sensor.route_matches(&routes.device_sensor)
             && self
                 .canvas_blob_serialization
@@ -925,6 +948,7 @@ impl RendererPageOwnedTaskSources {
             user_interaction: self.user_interaction.route(),
             file_reading: self.file_reading.route(),
             misc_platform_api: self.misc_platform_api.route(),
+            font_loading: self.font_loading.route(),
             device_sensor: self.device_sensor.route(),
             canvas_blob_serialization: self.canvas_blob_serialization.route(),
             navigation_and_traversal: self.navigation_and_traversal.route(),
@@ -991,6 +1015,15 @@ impl RendererPageOwnedTaskSources {
                     .misc_platform_api
                     .next_ready_owner()
                     .expect("ready miscellaneous-platform task must retain its exact owner"),
+            }
+        });
+        let font_loading = self.font_loading.next_ready_metadata().map(|ready| {
+            RendererPageReadyDescriptor::FontLoading {
+                ready,
+                owner: self
+                    .font_loading
+                    .next_ready_owner()
+                    .expect("ready font-loading task must retain its exact owner"),
             }
         });
         let device_sensor = self.device_sensor.next_ready_metadata().map(|ready| {
@@ -1280,6 +1313,7 @@ impl RendererPageOwnedTaskSources {
             user_interaction,
             file_reading,
             misc_platform_api,
+            font_loading,
             device_sensor,
             canvas_blob_serialization,
             navigation_and_traversal,
@@ -1365,6 +1399,17 @@ impl RendererPageOwnedTaskSources {
                     "selected miscellaneous-platform head changed before dequeue"
                 );
                 RendererPageSchedulerTask::MiscPlatformApi(task)
+            }
+            RendererPageReadyDescriptor::FontLoading { ready, .. } => {
+                let (actual, task) = self
+                    .font_loading
+                    .pop_front()
+                    .expect("selected font-loading task must remain queued");
+                assert_eq!(
+                    actual, ready,
+                    "selected font-loading head changed before dequeue"
+                );
+                RendererPageSchedulerTask::FontLoading(task)
             }
             RendererPageReadyDescriptor::DeviceSensor { ready, .. } => {
                 let (actual, task) = self
@@ -1702,6 +1747,7 @@ impl RendererPageOwnedTaskSources {
             || self.user_interaction.has_ready_task()
             || self.file_reading.has_ready_task()
             || self.misc_platform_api.has_ready_task()
+            || self.font_loading.has_ready_task()
             || self.device_sensor.has_ready_task()
             || self.canvas_blob_serialization.has_ready_task()
             || self.navigation_and_traversal.has_ready_task()
@@ -1750,6 +1796,7 @@ impl RendererPageOwnedTaskSources {
         self.user_interaction.clear();
         self.file_reading.clear();
         self.misc_platform_api.clear();
+        self.font_loading.clear();
         self.device_sensor.clear();
         self.canvas_blob_serialization.clear();
         self.navigation_and_traversal.clear();
@@ -1833,6 +1880,12 @@ impl RendererPageTaskProducerRoutes {
         root_document: RendererDocumentToken,
     ) -> RendererPageMiscPlatformApiSender {
         self.misc_platform_api.sender(root_document)
+    }
+    pub(crate) fn font_loading_sender(
+        &self,
+        root_document: RendererDocumentToken,
+    ) -> RendererPageFontLoadingSender {
+        self.font_loading.sender(root_document)
     }
     pub(crate) fn device_sensor_sender(
         &self,

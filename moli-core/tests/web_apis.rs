@@ -4454,8 +4454,13 @@ async fn chrome_fontfaceset_ready_keeps_stable_promise_until_loading_starts_subs
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-fontfaceset-ready-basic"))
+        .await?;
+
+    // The fixture writes its result after FontFaceSet.ready, whose task may
+    // run after load. Await that completion before inspecting its attributes.
+    page.evaluate_runtime_expression_with_await_async("document.fonts.ready", true)
         .await?;
 
     assert!(

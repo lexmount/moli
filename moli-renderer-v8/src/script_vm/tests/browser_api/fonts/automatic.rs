@@ -14,6 +14,49 @@ fn automatic_vm() -> (
     (vm, completions)
 }
 
+fn automatic_page_vm() -> (
+    crate::runtime::PageVmTaskExecutorTestHarness,
+    crate::network::ResourceRequestClientOwner,
+) {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_optional_resource_fetch_mask(OptionalResourceFetchMask::FONT);
+    let dom=DomHost::from_dom(HtmlParser::SCRIPTING_ENABLED.parse(
+        Url::parse("https://font-selection-order.test/").unwrap(),
+        "<!doctype html><html><head></head><body><span id='probe' style='display:inline-block;font:40px OrderFace'>AAAA</span><iframe id='frame'></iframe></body></html>".to_owned(),
+    ));
+    let mut page = crate::runtime::PageVmTaskExecutorTestHarness::new_with_dom_host(dom, &loader);
+    finish_main_document_load_for_test(&mut page);
+    page.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    (page, loader)
+}
+
+async fn complete_page_font_resources(
+    page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+) {
+    for _ in 0..32 {
+        if page
+            .run_one_exact_selected_page_task_executor_turn(
+                crate::runtime::PageSelectedTaskTestSelector::FontLoading,
+                loader,
+            )
+            .await
+            .unwrap()
+        {
+            continue;
+        }
+        if page
+            .run_one_page_resource_completion_selected_task_executor_turn(loader)
+            .await
+            .unwrap()
+        {
+            continue;
+        }
+        return;
+    }
+    panic!("font Page tasks did not become idle");
+}
+
 #[test]
 fn automatic_font_requests_follow_the_document_resource_policy() {
     let (_, wide) = order_font_data();
@@ -310,18 +353,21 @@ fn resources_match_capabilities_before_unicode_ranges() {
     );
 }
 
-#[test]
-fn font_resource_requests_run_as_window_owned_tasks() {
-    let (mut vm, mut completions) = automatic_vm();
+#[tokio::test]
+async fn font_resource_requests_run_as_window_owned_tasks() {
+    let (mut vm, loader) = automatic_page_vm();
     let (_, wide) = order_font_data();
     vm.eval(&format!("globalThis.face=new FontFace('OrderFace','url(data:font/ttf;base64,{wide})');document.fonts.add(face)")).unwrap();
     vm.reconcile_document_font_resources();
     assert!(
-        vm.has_ready_timeout(),
+        vm.has_ready_font_loading_task_for_test(),
         "resource processing must schedule a load without another JS read"
     );
-    complete_local_font_resources(&mut vm, &mut completions);
-    refresh_layout_for_test(&mut vm);
+    complete_page_font_resources(&mut vm, &loader).await;
+    assert!(
+        vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
+            .unwrap()
+    );
     assert_eq!(
         vm.eval("[face.status,probe.getBoundingClientRect().width].join(',')")
             .unwrap(),
@@ -659,10 +705,10 @@ fn font_set_ready_waits_for_all_synchronous_fallback_failures() {
     }
 }
 
-#[test]
-fn automatic_fonts_retired_creation_window_does_not_block_live_fallback() {
+#[tokio::test]
+async fn automatic_fonts_retired_creation_window_does_not_block_live_fallback() {
     for retirement in ["before-demand", "after-queue", "live"] {
-        let (mut vm, mut completions) = automatic_vm();
+        let (mut vm, loader) = automatic_page_vm();
         vm.set_layout_policy(moli_page_types::LayoutPolicy::Mock);
         let (_, wide) = order_font_data();
         vm.eval(&format!(
@@ -679,7 +725,7 @@ fn automatic_fonts_retired_creation_window_does_not_block_live_fallback() {
         if retirement == "after-queue" {
             vm.eval("probe.style.fontFamily='RetiredFace'").unwrap();
             vm.reconcile_document_font_resources();
-            assert!(vm.has_ready_timeout());
+            assert!(vm.has_ready_font_loading_task_for_test());
         }
         if retirement != "live" {
             vm.eval("frame.remove()").unwrap();
@@ -689,7 +735,7 @@ fn automatic_fonts_retired_creation_window_does_not_block_live_fallback() {
         // synchronously start a stranded queued face and mask this failure.
         for _ in 0..3 {
             vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
-            complete_local_font_resources(&mut vm, &mut completions);
+            complete_page_font_resources(&mut vm, &loader).await;
         }
         assert_eq!(
             vm.eval("[retired.status,fallback.status].join(',')")

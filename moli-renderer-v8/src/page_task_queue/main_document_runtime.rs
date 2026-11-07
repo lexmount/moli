@@ -107,6 +107,19 @@ impl RendererPageMainDocumentRuntimeTask {
         self.action.kind()
     }
 
+    pub(crate) fn completion_recheck_owner(&self) -> Option<RendererPageMainDocumentRuntimeOwner> {
+        let RendererPageMainDocumentRuntimeAction::ExecuteReadyPostParseWork(work) = &self.action
+        else {
+            return None;
+        };
+        matches!(
+            work.0.as_lifecycle_work(),
+            Some(super::PostParseLifecycleWork::CheckMainDocumentCompletion { owner })
+                if *owner == self.owner.document_owner()
+        )
+        .then_some(self.owner)
+    }
+
     pub(crate) fn into_action(self) -> RendererPageMainDocumentRuntimeAction {
         self.action
     }

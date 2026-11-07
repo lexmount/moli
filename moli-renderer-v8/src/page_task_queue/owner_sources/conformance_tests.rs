@@ -60,6 +60,10 @@ use crate::{
         RendererPageWebCryptoTaskSender, RendererPageWindowMessageSender,
         RendererPageWindowMessageTaskId,
     },
+    page_task_queue::{
+        RendererPageFontLoadingSender, RendererPageFontLoadingTaskId,
+        RendererPageFontLoadingTaskKind,
+    },
     resource_ready::RendererPageTaskReadyMetadata,
     runtime::{RendererDocumentToken, RendererPageToken},
     shared_worker_runtime::SharedWorkerClientEvent,
@@ -76,15 +80,16 @@ use super::{
     RendererPageDeviceSensorSource, RendererPageDomManipulationSource,
     RendererPageDomManipulationTask, RendererPageDynamicImportOwnerActionSender,
     RendererPageDynamicImportOwnerActionSource, RendererPageFileReadingSource,
-    RendererPageIndexedDbTaskSource, RendererPageInternalLoadingSource,
-    RendererPageMainDocumentRuntimeSource, RendererPageMediaElementEventSource,
-    RendererPageMessagePortDeliverySource, RendererPageMiscPlatformApiSource,
-    RendererPageModuleReactionSource, RendererPageModulepreloadStartSender,
-    RendererPageModulepreloadStartSource, RendererPageNavigationAndTraversalSource,
-    RendererPageNetworkingSource, RendererPageOwnedTaskSources, RendererPageReadyDescriptor,
-    RendererPageRenderingUpdateSource, RendererPageSchedulerTask,
-    RendererPageSharedWorkerClientEventSource, RendererPageUserInteractionSource,
-    RendererPageWebCryptoTaskSource, RendererPageWindowMessageSource,
+    RendererPageFontLoadingSource, RendererPageIndexedDbTaskSource,
+    RendererPageInternalLoadingSource, RendererPageMainDocumentRuntimeSource,
+    RendererPageMediaElementEventSource, RendererPageMessagePortDeliverySource,
+    RendererPageMiscPlatformApiSource, RendererPageModuleReactionSource,
+    RendererPageModulepreloadStartSender, RendererPageModulepreloadStartSource,
+    RendererPageNavigationAndTraversalSource, RendererPageNetworkingSource,
+    RendererPageOwnedTaskSources, RendererPageReadyDescriptor, RendererPageRenderingUpdateSource,
+    RendererPageSchedulerTask, RendererPageSharedWorkerClientEventSource,
+    RendererPageUserInteractionSource, RendererPageWebCryptoTaskSource,
+    RendererPageWindowMessageSource,
 };
 use crate::page_task_queue::{
     RendererPageBroadcastChannelDeliveryProducer, RendererPageBroadcastChannelDeliverySender,
@@ -241,6 +246,12 @@ struct MiscPlatformApiLane {
     source: Option<RendererPageMiscPlatformApiSource>,
     initial_sender: RendererPageMiscPlatformApiSender,
     replacement_sender: RendererPageMiscPlatformApiSender,
+    wake_rx: tokio::sync::mpsc::UnboundedReceiver<RendererOwnerWake>,
+}
+struct FontLoadingLane {
+    source: Option<RendererPageFontLoadingSource>,
+    initial_sender: RendererPageFontLoadingSender,
+    replacement_sender: RendererPageFontLoadingSender,
     wake_rx: tokio::sync::mpsc::UnboundedReceiver<RendererOwnerWake>,
 }
 struct DeviceSensorLane {
@@ -1410,6 +1421,42 @@ impl MiscPlatformApiLane {
             .is_ok()
     }
 }
+impl FontLoadingLane {
+    fn new() -> Self {
+        let (wake_tx, wake_rx) = tokio::sync::mpsc::unbounded_channel();
+        let source = RendererPageFontLoadingSource::new(
+            RendererOwnerWakeSender::new(
+                wake_tx,
+                RendererPageToken::new_for_testing(document_token(1).page_id),
+            ),
+            RendererOwnerWakeSource::FontLoadingTask,
+        );
+        let route = source.route();
+        Self {
+            source: Some(source),
+            initial_sender: route.sender(document_token(1)),
+            replacement_sender: route.sender(document_token(2)),
+            wake_rx,
+        }
+    }
+
+    fn enqueue_with(sender: &RendererPageFontLoadingSender, sequence: u64) -> bool {
+        sender
+            .send(
+                WindowDocumentTaskTarget::new(
+                    WindowDocumentOwner::Frame(task_owner(sequence + 1_730)),
+                    OwnerDispatchScope::Top,
+                ),
+                RendererPageFontLoadingTaskId::from_raw(sequence),
+                match sequence % 3 {
+                    0 => RendererPageFontLoadingTaskKind::FontFaceSetLoading,
+                    1 => RendererPageFontLoadingTaskKind::FontFaceSetCompletion,
+                    _ => RendererPageFontLoadingTaskKind::FontFaceLoad,
+                },
+            )
+            .is_ok()
+    }
+}
 impl DeviceSensorLane {
     fn new() -> Self {
         let (wake_tx, wake_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1444,6 +1491,27 @@ impl DeviceSensorLane {
 }
 
 impl TypedPageSourceConformance for MiscPlatformApiLane {
+    fn enqueue_initial(&mut self, sequence: u64) -> bool {
+        Self::enqueue_with(&self.initial_sender, sequence)
+    }
+
+    fn enqueue_replacement(&mut self, sequence: u64) -> bool {
+        Self::enqueue_with(&self.replacement_sender, sequence)
+    }
+
+    fn pop_ready_metadata(&mut self) -> Option<RendererPageTaskReadyMetadata> {
+        self.source.as_mut()?.pop_front().map(|(ready, _)| ready)
+    }
+
+    fn take_wake(&mut self) -> Option<RendererOwnerWake> {
+        self.wake_rx.try_recv().ok()
+    }
+
+    fn retire_consumer(&mut self) {
+        drop(self.source.take());
+    }
+}
+impl TypedPageSourceConformance for FontLoadingLane {
     fn enqueue_initial(&mut self, sequence: u64) -> bool {
         Self::enqueue_with(&self.initial_sender, sequence)
     }
@@ -2762,4 +2830,9 @@ fn unified_ready_descriptors_expose_one_fifo_head_per_typed_source() {
         18,
         "one Page turn must remove only the selected source head"
     );
+}
+
+#[test]
+fn font_loading_source_conforms_to_page_queue_contract() {
+    assert_fifo_replacement_and_route_retirement(FontLoadingLane::new());
 }

@@ -259,10 +259,15 @@ fn queue_font_face_set_task<'s>(
         .data(data.into())
         .build(scope)
         .expect("font loading task");
-    // The internal task scheduler captures this realm's exact Window/Document
-    // lifetime and discards the callback when that owner retires.
+    // Keep the CSS Font Loading task source and this Realm's exact lifetime.
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        unsafe { &mut *host_ptr }.queue_internal_task(scope, callback);
+        use crate::page_task_queue::RendererPageFontLoadingTaskKind;
+        let kind = if finish {
+            RendererPageFontLoadingTaskKind::FontFaceSetCompletion
+        } else {
+            RendererPageFontLoadingTaskKind::FontFaceSetLoading
+        };
+        unsafe { &mut *host_ptr }.queue_font_loading_task(scope, callback, kind);
     } else {
         crate::worker::queue_worker_font_task(scope, callback);
     }

@@ -821,6 +821,7 @@ pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_
 mod canvas_blob_serialization;
 mod device_sensor;
 mod document_context_transition;
+mod font_loading_tasks;
 mod initial_window_document;
 mod isolated_worlds;
 mod main_document_lifecycle;

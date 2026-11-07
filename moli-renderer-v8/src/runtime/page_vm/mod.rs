@@ -118,6 +118,7 @@ pub(crate) use page_webtransport::AuthorizedCurrentPageWebTransport;
 mod page_webrtc;
 pub(crate) use page_webrtc::AuthorizedCurrentPageWebRtc;
 mod page_device_sensor;
+mod page_font_loading;
 #[cfg(test)]
 mod page_media_element_event_body_test_support;
 mod page_message_port_delivery;
@@ -233,6 +234,7 @@ pub(crate) use page_dynamic_import_owner_action::AuthorizedCurrentChildDynamicIm
 pub(crate) use page_element_toggle_event::AuthorizedCurrentPageElementToggleEvent;
 pub(crate) use page_file_entry_file_callback::AuthorizedCurrentPageFileEntryFileCallback;
 pub(crate) use page_file_reading::AuthorizedCurrentPageFileReadingTask;
+pub(crate) use page_font_loading::AuthorizedCurrentPageFontLoadingTask;
 pub(crate) use page_form_navigation::AuthorizedCurrentPageFormNavigation;
 pub(crate) use page_hash_change_delivery::AuthorizedCurrentPageHashChangeDelivery;
 pub(crate) use page_history_traversal::AuthorizedCurrentPageHistoryTraversal;

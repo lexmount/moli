@@ -55,6 +55,15 @@ impl PageVm {
                 .await?;
                 Ok(())
             }
+            RendererPageSchedulerTask::FontLoading(task) => {
+                let outcome = self.apply_selected_page_font_loading_turn(task)?;
+                self.finish_selected_page_task_completion(
+                    outcome.action.into_page_task_completion(),
+                    loader,
+                )
+                .await?;
+                Ok(())
+            }
             RendererPageSchedulerTask::DeviceSensor(task) => {
                 let outcome = self.apply_selected_page_device_sensor_turn(task)?;
                 self.finish_selected_page_task_completion(

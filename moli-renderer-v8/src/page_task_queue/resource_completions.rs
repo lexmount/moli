@@ -187,6 +187,8 @@ pub(crate) enum RendererOwnerWakeSource {
     /// A callback entered the exact Window/Document miscellaneous-platform
     /// task source. The Host-local payload owns callback Realm identity.
     MiscPlatformApiTask,
+    /// A font algorithm entered its exact Window/Document font-loading source.
+    FontLoadingTask,
     DeviceSensorTask,
     CanvasBlobSerializationTask,
     /// One exact Window/realm history traversal entered the stable HTML
