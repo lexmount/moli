@@ -174,6 +174,7 @@ pub(crate) fn start_event_source_request<'s>(
             prepared.owner,
             &prepared.document_url,
             &prepared.resolved_url,
+            crate::document_runtime::DocumentConnectCspCheckOrder::ReportOnlyThenEnforce,
         )
         .into_blocking_violation()
     {

@@ -43,6 +43,14 @@ impl DocumentSubresourceCspKind {
     }
 }
 
+/// The initial connect check either visits the installed policy list, or
+/// performs the loader's report-only pass before its enforcement pass.
+#[derive(Clone, Copy)]
+pub(crate) enum DocumentConnectCspCheckOrder {
+    PolicyList,
+    ReportOnlyThenEnforce,
+}
+
 #[must_use = "report-only and enforced CSP results must be handled together"]
 pub(crate) struct DocumentContentSecurityPolicyCheck {
     report_only_violation: Option<DocumentContentSecurityPolicyViolation>,
@@ -1309,6 +1317,57 @@ impl DocumentRuntime {
             ContentSecurityPolicyDisposition::Report,
             ContentSecurityPolicyScriptElementRequest::parser_inserted_with_nonce(nonce),
         )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn document_connect_csp_violations_for_document(
+        &self,
+        document_handle: Option<DomHandle>,
+        document_url: &Url,
+        response: &[ContentSecurityPolicy],
+        report_only: &[ContentSecurityPolicy],
+        endpoints: &ContentSecurityPolicyReportingEndpoints,
+        request_url: &Url,
+        order: DocumentConnectCspCheckOrder,
+    ) -> Vec<DocumentContentSecurityPolicyViolation> {
+        let mut enforced = self.document_content_security_policies_for_optional_document(
+            document_handle,
+            response,
+            endpoints,
+        );
+        // Enforced response policies precede delivered meta policies. Keep
+        // that boundary until the report-only response policies are inserted.
+        let meta = enforced.split_off(response.len());
+        let report = document_response_content_security_policies(report_only, endpoints);
+        let enforced = enforced
+            .into_iter()
+            .zip(std::iter::repeat(ContentSecurityPolicyDisposition::Enforce));
+        let report = report
+            .into_iter()
+            .zip(std::iter::repeat(ContentSecurityPolicyDisposition::Report));
+        let meta = meta
+            .into_iter()
+            .zip(std::iter::repeat(ContentSecurityPolicyDisposition::Enforce));
+        let (first, second) = match order {
+            DocumentConnectCspCheckOrder::PolicyList => (enforced, report),
+            DocumentConnectCspCheckOrder::ReportOnlyThenEnforce => (report, enforced),
+        };
+        first
+            .chain(second)
+            .chain(meta)
+            .filter_map(|(policy, disposition)| {
+                let mut violation = document_connect_policy_violation(
+                    std::slice::from_ref(&policy.policy),
+                    &policy.reporting_endpoints,
+                    document_url,
+                    request_url,
+                    ContentSecurityPolicyRedirectStatus::NoRedirect,
+                    disposition,
+                )?;
+                apply_document_policy_reporting_flags(&mut violation, &policy);
+                Some(violation)
+            })
+            .collect()
     }
 
     #[allow(clippy::too_many_arguments)]

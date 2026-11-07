@@ -1636,7 +1636,7 @@ fn xml_http_request_dispatches_download_progress_before_done() {
 
 #[test]
 fn xml_http_request_document_csp_blocks_connect_src_and_dispatches_event() {
-    let mut vm = new_storage_test_vm("https://xhr-connect-csp.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://xhr-connect-csp.test/");
     vm.set_response_content_security_policies(&[String::from("connect-src 'none'")]);
 
     vm.eval(
@@ -1663,14 +1663,13 @@ fn xml_http_request_document_csp_blocks_connect_src_and_dispatches_event() {
 "#,
     )
     .expect("XHR CSP block setup should run");
-    assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
-        1
-    );
+    assert_eq!(vm.eval("globalThis.__xhrCspEvents.length").unwrap(), "0");
     vm.eval("0")
         .expect("follow-up checkpoint should drain queued XHR CSP failure");
     let result = vm
-        .eval("JSON.stringify({events: __xhrCspEvents, result: __xhrCspResult})")
+        .eval_after_selected_page_tasks(
+            "JSON.stringify({events: __xhrCspEvents, result: __xhrCspResult})",
+        )
         .expect("XHR CSP result should be readable");
 
     assert_eq!(
@@ -1681,7 +1680,7 @@ fn xml_http_request_document_csp_blocks_connect_src_and_dispatches_event() {
 
 #[test]
 fn xml_http_request_document_csp_report_only_dispatches_without_blocking() {
-    let mut vm = new_storage_test_vm("https://xhr-connect-report-only.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://xhr-connect-report-only.test/");
     vm.set_response_content_security_report_only_policies(&[String::from("connect-src 'none'")]);
 
     vm.eval(
@@ -1709,13 +1708,15 @@ fn xml_http_request_document_csp_report_only_dispatches_without_blocking() {
     )
     .expect("XHR CSP report-only setup should run");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
-        1
+        vm.eval("globalThis.__xhrReportOnlyEvents.length").unwrap(),
+        "0"
     );
     vm.eval("0")
         .expect("follow-up checkpoint should drain queued XHR report-only response");
     let result = vm
-        .eval("JSON.stringify({events: __xhrReportOnlyEvents, result: __xhrReportOnlyResult})")
+        .eval_after_selected_page_tasks(
+            "JSON.stringify({events: __xhrReportOnlyEvents, result: __xhrReportOnlyResult})",
+        )
         .expect("XHR CSP report-only result should be readable");
 
     assert_eq!(

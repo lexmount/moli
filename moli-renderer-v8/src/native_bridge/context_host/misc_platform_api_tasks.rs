@@ -37,7 +37,7 @@ impl JsContextHost {
     /// Inline handlers report on the policy's exact Window/Document. The
     /// element is retained until the task runs, when its connectivity is
     /// checked again; disconnecting or adopting it must retarget the event.
-    pub(crate) fn queue_inline_csp_violation_task(
+    pub(crate) fn queue_content_security_policy_violation_task(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         owner: OwnerDispatchScope,
