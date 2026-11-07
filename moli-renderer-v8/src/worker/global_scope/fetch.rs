@@ -215,7 +215,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                     if request.auth_requires_buffered_transport()
                         || request.request_mode == RequestMode::NoCors
                         || !request.transport_follows_redirects()
-                        || browser_request_needs_manual_preflight_redirects(
+                        || browser_request_needs_manual_redirects(
                             &request,
                             &cors_preflight_request_headers,
                         )
@@ -553,7 +553,7 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
         let (result, network_request_headers) = match request {
             Ok(request)
                 if request.auth_requires_buffered_transport()
-                    || browser_request_needs_manual_preflight_redirects(
+                    || browser_request_needs_manual_redirects(
                         &request,
                         &cors_preflight_request_headers,
                     ) =>
