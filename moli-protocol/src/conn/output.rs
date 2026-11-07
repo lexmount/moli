@@ -1,5 +1,5 @@
 use anyhow::Result;
-use moli_inspector_json::InspectorJson;
+use moli_inspector_json::{InspectorJson, PRIVATE_PROTOCOL_PARAM_FIELDS};
 use std::sync::Arc;
 
 use crate::automation::{
@@ -2449,6 +2449,8 @@ impl ProtocolDeliveryEnvelope {
         match self.payload {
             BackgroundProtocolEventPayload::Protocol(event) => match event.message.into_parsed() {
                 Ok(value) => strip_moli_private_protocol_fields(value).into(),
+                // Raw construction rejects the same private params that Parsed
+                // messages strip here; only Inspector wire fields can bypass it.
                 Err(raw) => raw,
             },
             payload => Self {
@@ -4428,10 +4430,11 @@ fn strip_moli_private_protocol_fields(mut message: Value) -> Value {
     let preserve_blocked_intercepts =
         message.get("method").and_then(Value::as_str) == Some("Fetch.requestPaused");
     if let Some(params) = message.get_mut("params").and_then(Value::as_object_mut) {
-        if !preserve_blocked_intercepts {
-            params.remove("__moliBlockedInterceptors");
+        for key in PRIVATE_PROTOCOL_PARAM_FIELDS {
+            if !preserve_blocked_intercepts || *key != "__moliBlockedInterceptors" {
+                params.remove(*key);
+            }
         }
-        params.remove("__moliFetchRequestId");
     }
     message
 }
@@ -5892,5 +5895,44 @@ mod tests {
         assert_eq!(message["params"]["requestId"], json!("FETCH-1"));
         assert!(message["params"].get("__moliBlockedInterceptors").is_none());
         assert!(message["params"].get("__moliFetchRequestId").is_none());
+    }
+
+    #[test]
+    fn cdp_output_cannot_bypass_private_field_filtering_with_raw_json() {
+        use moli_inspector_json::{InspectorJson, PRIVATE_PROTOCOL_PARAM_FIELDS};
+
+        for method in ["Network.requestWillBeSent", "Fetch.requestPaused"] {
+            let host = json!({"method":method,"params":{
+                "requestId":"public-id",
+                "__moliFetchRequestId":"private-id",
+                "__moliBlockedInterceptors":["interceptor"]
+            }});
+            assert!(InspectorJson::from_slice(host.to_string().as_bytes()).is_err());
+            let wire = BackgroundProtocolEvent::immediate(host).into_cdp_message();
+            assert_eq!(wire["params"]["requestId"], "public-id");
+            for key in PRIVATE_PROTOCOL_PARAM_FIELDS {
+                assert_eq!(
+                    wire["params"].get(*key).is_some(),
+                    method == "Fetch.requestPaused" && *key == "__moliBlockedInterceptors"
+                );
+            }
+        }
+        let mut inspector = InspectorJson::from_slice(
+            br#"{"method":"Runtime.consoleAPICalled","params":{"type":"log"}}"#,
+        )
+        .unwrap();
+        inspector.value_mut()["params"]["__moliFetchRequestId"] = json!("private-id");
+        let wire = BackgroundProtocolEvent::immediate(inspector).into_cdp_message();
+        assert!(wire["params"].get("__moliFetchRequestId").is_none());
+        let inspector = InspectorJson::from_slice(
+            br#"{"method":"Runtime.consoleAPICalled","params":{"args":[{"value":{"__moliFetchRequestId":"\ud800"}}]}}"#,
+        )
+        .unwrap();
+        let wire = BackgroundProtocolEvent::immediate(inspector).into_cdp_message();
+        assert!(!wire.is_materialized());
+        assert!(
+            wire.to_string()
+                .contains(r#""__moliFetchRequestId":"\ud800""#)
+        );
     }
 }

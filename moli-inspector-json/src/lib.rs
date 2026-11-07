@@ -31,6 +31,11 @@ struct RawInspectorSource {
     method: Option<String>,
 }
 
+/// Host metadata belongs in Parsed messages, where the CDP boundary removes it.
+/// Raw Inspector messages reject these reserved parameter names at construction.
+pub const PRIVATE_PROTOCOL_PARAM_FIELDS: &[&str] =
+    &["__moliBlockedInterceptors", "__moliFetchRequestId"];
+
 impl Clone for RawInspectorJson {
     fn clone(&self) -> Self {
         Self {
@@ -74,9 +79,13 @@ impl RawInspectorJson {
 }
 
 impl InspectorJson {
-    /// Validate the envelope and retain each JSON field without decoding its body.
+    /// Validate an Inspector envelope and retain each field without decoding its
+    /// body. Host-generated protocol messages with Moli metadata must use From<Value>.
     pub fn from_slice(bytes: &[u8]) -> serde_json::Result<Self> {
         let mut fields: BTreeMap<String, Box<RawValue>> = serde_json::from_slice(bytes)?;
+        if let Some(params) = fields.get("params") {
+            validate_inspector_params(params)?;
+        }
         let id = fields
             .remove("id")
             .map(|value| serde_json::from_str(value.get()))
@@ -231,6 +240,31 @@ impl InspectorJson {
             Self::Raw(raw) => raw.value.get().is_some(),
         }
     }
+}
+
+fn validate_inspector_params(params: &RawValue) -> serde_json::Result<()> {
+    let text = params.get();
+    // An ASCII reserved name is either literal or uses a Unicode escape. This
+    // conservative prefilter keeps ordinary Inspector payloads on the raw path;
+    // serde_json does the actual field-name decoding, including escaped names.
+    if !text.trim_start().starts_with('{')
+        || (!PRIVATE_PROTOCOL_PARAM_FIELDS
+            .iter()
+            .any(|key| text.contains(key))
+            && !text.contains(r"\u"))
+    {
+        return Ok(());
+    }
+    let fields: BTreeMap<String, &RawValue> = serde_json::from_str(text)?;
+    if PRIVATE_PROTOCOL_PARAM_FIELDS
+        .iter()
+        .any(|key| fields.contains_key(*key))
+    {
+        return Err(<serde_json::Error as serde::de::Error>::custom(
+            "Moli protocol metadata requires a Parsed message",
+        ));
+    }
+    Ok(())
 }
 
 impl From<&Value> for InspectorJson {
