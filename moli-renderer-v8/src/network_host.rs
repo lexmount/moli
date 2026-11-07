@@ -21,6 +21,7 @@ mod request_scope;
 mod response;
 mod stylesheet_subresource;
 mod subresource;
+pub(crate) use subresource::SubresourceRequestDispatch;
 mod text_track;
 mod url_helpers;
 mod xhr;

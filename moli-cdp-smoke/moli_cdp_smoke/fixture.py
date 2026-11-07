@@ -688,6 +688,70 @@ class FixtureServer:
                     return
                 if route == "/plain":
                     self._send_html("<!doctype html><main>plain ok</main>")
+                elif route == "/fetch-dispatch/page":
+                    self._send_html("<!doctype html><main>resource dispatch</main>")
+                elif route == "/fetch-dispatch/sw.js":
+                    resources = {
+                        "font.woff2": ("font/woff2", (REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes()),
+                        "image.png": ("image/png", TRANSPARENT_PNG),
+                        "tone.wav": ("audio/wav", FETCH_MEDIA_WAV),
+                        "captions.vtt": ("text/vtt", FETCH_MEDIA_CAPTIONS),
+                    }
+                    encoded = {name: [mime, base64.b64encode(body).decode("ascii")]
+                               for name, (mime, body) in resources.items()}
+                    self._send_js("const resources=" + json.dumps(encoded) + ";" + """
+                      self.addEventListener('install', event => event.waitUntil(self.skipWaiting()));
+                      self.addEventListener('activate', event => event.waitUntil(clients.claim()));
+                      self.addEventListener('fetch', event => {
+                        const url = new URL(event.request.url);
+                        if (!url.pathname.startsWith('/fetch-dispatch/sw/')) return;
+                        let name = url.pathname.split('/').pop();
+                        if (name === 'continued.woff2') {
+                          event.respondWith(event.request.text().then(body => {
+                            if (event.request.method !== 'POST' || body !== 'font override'
+                                || event.request.headers.get('X-Fetch-Override') !== 'kept') {
+                              return new Response('override lost', {status:400});
+                            }
+                            const font = resources['font.woff2'];
+                            return new Response(Uint8Array.from(atob(font[1]), char => char.charCodeAt(0)),
+                                                {headers:{'Content-Type':font[0]}});
+                          }));
+                          return;
+                        }
+                        const resource = resources[name];
+                        if (!resource) return;
+                        const bytes = Uint8Array.from(atob(resource[1]), char => char.charCodeAt(0));
+                        event.respondWith(new Response(bytes, {headers:{'Content-Type':resource[0]}}));
+                      });
+                    """)
+                elif route == "/fetch-dispatch/status":
+                    path = query.get("path", [""])[0]
+                    self._send_json({"requests": outer.request_count(path),
+                                     "headers": outer.resource_request_headers(path)})
+                elif route.startswith("/fetch-dispatch/sw/"):
+                    outer._record_resource_request(self.path, self.headers)
+                    self._send_text("resource is only available from the service worker", status=HTTPStatus.NOT_FOUND)
+                elif route.startswith(("/fetch-dispatch/network/", "/fetch-dispatch/cache/", "/fetch-dispatch/auth/")):
+                    outer._record_resource_request(self.path, self.headers)
+                    if route.startswith("/fetch-dispatch/auth/") and self.headers.get("Authorization") != "Basic Zm9udDpzZWNyZXQ=":
+                        self._send_common(HTTPStatus.UNAUTHORIZED, "text/plain", b"font authentication required",
+                                          {"WWW-Authenticate": 'Basic realm="fetch-font"'})
+                        return
+                    name = route.rsplit("/", 1)[-1]
+                    if name == "redirect-font.woff2":
+                        self._send_common(HTTPStatus.FOUND, "text/plain", b"",
+                                          {"Location": self.path.replace("redirect-font.woff2", "font.woff2")})
+                        return
+                    mime, body = {
+                        "font.woff2": ("font/woff2", (REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes()),
+                        "image.png": ("image/png", TRANSPARENT_PNG),
+                        "tone.wav": ("audio/wav", FETCH_MEDIA_WAV),
+                        "captions.vtt": ("text/vtt", FETCH_MEDIA_CAPTIONS),
+                    }[name]
+                    if route.startswith("/fetch-dispatch/cache/"):
+                        self._send_cacheable(mime, body)
+                    else:
+                        self._send_common(HTTPStatus.OK, mime, body)
                 elif route == "/fetch-font.woff2":
                     outer._record_resource_request(self.path, self.headers)
                     self._send_common(

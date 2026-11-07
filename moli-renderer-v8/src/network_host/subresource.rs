@@ -3,7 +3,7 @@ use crate::{
     native_bridge::{JsContextHost, OwnerDispatchScope},
     network::context::{DocumentResourceLoader, SubresourceRequestEnvironment},
     service_worker_runtime::{
-        ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination,
+        ServiceWorkerClientId, ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination,
         service_worker_fetch_request_metadata,
     },
     types::{
@@ -45,6 +45,41 @@ impl SubresourceFetchOptions {
         metadata: BrowserRequestMetadata::Image,
         destination: ServiceWorkerRequestDestination::Image,
     };
+
+    pub(super) const AUDIO: Self = Self {
+        resource_type: SubresourceResourceType::Audio,
+        request_resource_type: RequestResourceType::Media,
+        metadata: BrowserRequestMetadata::Audio,
+        destination: ServiceWorkerRequestDestination::Audio,
+        ..Self::CSS_IMAGE
+    };
+
+    pub(super) const VIDEO: Self = Self {
+        resource_type: SubresourceResourceType::Video,
+        metadata: BrowserRequestMetadata::Video,
+        destination: ServiceWorkerRequestDestination::Video,
+        ..Self::AUDIO
+    };
+
+    pub(super) const TEXT_TRACK: Self = Self {
+        resource_type: SubresourceResourceType::TextTrack,
+        request_resource_type: RequestResourceType::TextTrack,
+        metadata: BrowserRequestMetadata::TextTrack,
+        destination: ServiceWorkerRequestDestination::Track,
+        ..Self::CSS_IMAGE
+    };
+
+    pub(super) fn with_request_modes(
+        self,
+        request_mode: RequestMode,
+        credentials_mode: RequestCredentialsMode,
+    ) -> Self {
+        Self {
+            request_mode,
+            credentials_mode,
+            ..self
+        }
+    }
 }
 
 /// Captures one resource request without starting it. The caller first admits
@@ -55,10 +90,8 @@ pub(super) struct PreparedSubresourceFetch {
     pub(super) network_partition_key: Option<String>,
     pub(super) network_context: AsyncSubresourceNetworkContext,
     pub(super) pending_info: PendingSubresourceFetchInfo,
-    request: Request,
+    pub(super) dispatch: SubresourceRequestDispatch,
     resource_loader: DocumentResourceLoader,
-    owner: OwnerDispatchScope,
-    destination: ServiceWorkerRequestDestination,
 }
 
 impl PreparedSubresourceFetch {
@@ -117,7 +150,7 @@ impl PreparedSubresourceFetch {
             registration: if host.should_intercept_subresource(options.resource_type) {
                 SubresourceFetchRegistration::Intercepted
             } else {
-                SubresourceFetchRegistration::Dispatched(FetchCancelHandle::new())
+                SubresourceFetchRegistration::Direct(FetchCancelHandle::new())
             },
             network_partition_key,
             network_context: AsyncSubresourceNetworkContext {
@@ -128,68 +161,118 @@ impl PreparedSubresourceFetch {
                 policy_context,
             },
             pending_info,
-            request,
+            dispatch: SubresourceRequestDispatch {
+                request,
+                client_id: host.service_worker_client_id_for_subresource_owner(owner),
+                destination: options.destination,
+            },
             resource_loader: resource_loader.clone(),
-            owner,
-            destination: options.destination,
         })
     }
 
-    pub(super) fn dispatch(
-        self,
-        host: &mut JsContextHost,
-        internal_id: u64,
-        service_worker_failure: &str,
-    ) {
-        let SubresourceFetchRegistration::Dispatched(cancel_handle) = self.registration else {
+    pub(super) fn dispatch(self, host: &JsContextHost, internal_id: u64) {
+        let SubresourceFetchRegistration::Direct(cancel_handle) = self.registration else {
             return;
         };
-        let loader = self.resource_loader.request_client().clone();
-        let task_runner = self.resource_loader.task_runner();
-        let info = self.pending_info;
-        let client_id = host.service_worker_client_id_for_subresource_owner(self.owner);
-        if matches!(info.url.scheme(), "http" | "https")
-            && host
-                .service_worker_controller_for_fetch(client_id, &info.document_url, &info.url)
+        self.dispatch.dispatch(
+            host,
+            internal_id,
+            self.resource_loader.request_client().clone(),
+            self.resource_loader.task_runner(),
+            self.network_context,
+            self.pending_info.request_cookie_report,
+            cancel_handle,
+        );
+    }
+}
+
+/// Execution data captured before exposing a pause. Both direct dispatch and
+/// Fetch.continueRequest use this path without re-entering interception.
+#[derive(Clone)]
+pub(crate) struct SubresourceRequestDispatch {
+    pub(crate) request: Request,
+    client_id: ServiceWorkerClientId,
+    destination: ServiceWorkerRequestDestination,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("service worker subresource dispatch failed")]
+struct ServiceWorkerSubresourceDispatchError;
+
+impl SubresourceRequestDispatch {
+    pub(crate) fn with_request(&self, request: Request) -> Self {
+        Self {
+            request,
+            client_id: self.client_id,
+            destination: self.destination,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn dispatch(
+        self,
+        host: &JsContextHost,
+        internal_id: u64,
+        loader: ResourceRequestClient,
+        task_runner: crate::network::RendererResourceTaskRunner,
+        network_context: AsyncSubresourceNetworkContext,
+        request_cookie_report: Option<moli_cookie_jar::StoredCookieQueryReport>,
+        cancel_handle: FetchCancelHandle,
+    ) {
+        let request = self.request;
+        let request_url = request.url.clone();
+        let request_method = request.method.clone();
+        let request_headers = request.request_headers.clone();
+        let request_body = request
+            .body
+            .as_ref()
+            .map(|body| String::from_utf8_lossy(body).into_owned());
+        // Use the initiating client's identity and frozen loader, including its
+        // bypass setting, rather than looking up the currently installed Page.
+        let browser_context_runtime = host.browser_context_runtime();
+        if matches!(request_url.scheme(), "http" | "https")
+            && !loader.bypass_service_worker()
+            && browser_context_runtime
+                .service_worker_controller_for_fetch(self.client_id, &request_url)
                 .is_some()
         {
             let dispatch = ServiceWorkerFetchDispatch {
                 internal_id,
                 request: host.service_worker_fetch_request(
-                    client_id,
-                    info.url.clone(),
-                    info.method.clone(),
-                    Vec::new(),
-                    None,
+                    self.client_id,
+                    request_url.clone(),
+                    request_method.clone(),
+                    request_headers.clone(),
+                    request.body.clone(),
                     self.destination,
-                    self.request.request_mode,
-                    self.request.credentials_mode,
-                    RequestRedirectMode::Follow,
-                    self.request.priority_hints.fetch_priority,
-                    service_worker_fetch_request_metadata(&self.request),
+                    request.request_mode,
+                    request.credentials_mode,
+                    request.redirect_mode(),
+                    request.priority_hints.fetch_priority,
+                    service_worker_fetch_request_metadata(&request),
                 ),
                 cors_preflight_request_headers: Vec::new(),
-                request_cookie_report: info.request_cookie_report,
-                network_context: self.network_context,
+                request_cookie_report,
+                network_context,
                 completion_tx: host.resource_completion_sender(),
                 request_client: loader,
                 resource_task_runner: task_runner,
                 cancel_handle,
                 direct_completion_tx: None,
             };
-            if !host.dispatch_service_worker_fetch(dispatch) {
+            if !browser_context_runtime.dispatch_service_worker_fetch_request(dispatch, request) {
                 let _ = host.resource_completion_sender().send_async_subresource(
                     AsyncSubresourceFetchCompletion {
                         internal_id,
-                        request_url: info.url,
-                        request_method: info.method,
-                        request_headers: info.request_headers,
-                        request_body: info.request_body,
+                        request_url,
+                        request_method,
+                        request_headers,
+                        request_body,
                         response_status_text: None,
                         skip_fetch_security_validation: false,
                         response_filter: None,
                         network_error_text: None,
-                        result: Err(service_worker_failure.to_owned()).into(),
+                        result: Err(ServiceWorkerSubresourceDispatchError.to_string()).into(),
                     },
                 );
             }
@@ -199,15 +282,15 @@ impl PreparedSubresourceFetch {
             task_runner,
             host.resource_completion_sender(),
             loader,
-            self.request,
+            request,
             Some(cancel_handle),
             Vec::new(),
             internal_id,
-            self.network_context,
-            info.url,
-            info.method,
-            info.request_headers,
-            info.request_body,
+            network_context,
+            request_url,
+            request_method,
+            request_headers,
+            request_body,
         );
     }
 }

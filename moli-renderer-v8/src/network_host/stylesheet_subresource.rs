@@ -121,6 +121,7 @@ pub(crate) fn start_stylesheet_subresource_fetch(
             binding,
             owner,
             prepared.registration.clone(),
+            &prepared.dispatch,
             options.credentials_mode,
             options.request_mode,
             prepared.network_partition_key.clone(),
@@ -130,11 +131,7 @@ pub(crate) fn start_stylesheet_subresource_fetch(
         )
         .context("stylesheet subresource owner changed before request binding")?;
 
-    prepared.dispatch(
-        host,
-        internal_id,
-        "service worker stylesheet subresource dispatch failed",
-    );
+    prepared.dispatch(host, internal_id);
     Ok(StylesheetSubresourceFetchStart::Pending)
 }
 

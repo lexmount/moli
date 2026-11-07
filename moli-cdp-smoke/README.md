@@ -30,6 +30,24 @@ counts and Fetch/Network correlation. Chromium 145 rejects the explicit
 retain `TextTrack`. Moli follows that classification. As with Image/Font,
 Fetch.disable terminates Moli's paused loads and resumes Chromium's loads.
 
+The default `fetch-resource-dispatch` group verifies Service Worker responses
+for FontFace, paint-demanded CSS fonts/images, audio/video and text tracks with
+Fetch disabled, URL-nonmatching patterns and matching patterns. Worker-owned
+URLs return 404 at the origin, so successful decoding with zero origin requests
+proves routing was preserved. It also covers SW response-stage bodies and Moli's
+request URL/header overrides, plus automatic and explicit continuation with
+Network extra headers, blocked URLs and disabled HTTP caching across Documents.
+Worker network fallback is checked with extra headers, blocked URLs and a
+redirect that must drop current-request-only header overrides. Authentication
+retry also verifies that page headers survive the challenged request. Offline
+cases require SW-owned fonts to load successfully while network-owned fonts
+fail, for both unmatched patterns and explicit continuation.
+Chromium serves SW-produced responses before its network-service Fetch hook;
+Moli additionally supports pausing before SW dispatch. Matching SW cases require
+pauses on Moli, while Chromium calibrates the SW result and origin count. Network
+blocked URLs can also fail before Chromium's Fetch hook. These differences do not
+relax the resource outcome, server header or origin count assertions.
+
 This shared registration currently covers element images, CSS images and fonts,
 FontFace loads, audio/video elements and text tracks. It does not unify every
 resource loader. Explicit Stylesheet filters and Manifest filters remain

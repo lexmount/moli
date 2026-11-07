@@ -36,6 +36,7 @@ class GroupSelectionTests(unittest.TestCase):
         self.assertIn("font-face", DEFAULT_GROUP_NAMES)
         self.assertIn("fetch-font", DEFAULT_GROUP_NAMES)
         self.assertIn("fetch-media", DEFAULT_GROUP_NAMES)
+        self.assertIn("fetch-resource-dispatch", DEFAULT_GROUP_NAMES)
         self.assertIn("media-error", DEFAULT_GROUP_NAMES)
         self.assertIn("locale-timezone-inputs", DEFAULT_GROUP_NAMES)
         self.assertIn("webgl-viewport", DEFAULT_GROUP_NAMES)

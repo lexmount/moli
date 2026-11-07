@@ -13,14 +13,14 @@ pub(crate) type SharedNavigationResponseResult =
 #[derive(Clone)]
 pub(crate) enum SubresourceFetchRegistration {
     Intercepted,
-    Dispatched(moli_fetch::FetchCancelHandle),
+    Direct(moli_fetch::FetchCancelHandle),
 }
 
 impl SubresourceFetchRegistration {
     pub(crate) fn cancel_handle(&self) -> Option<moli_fetch::FetchCancelHandle> {
         match self {
             Self::Intercepted => None,
-            Self::Dispatched(cancel_handle) => Some(cancel_handle.clone()),
+            Self::Direct(cancel_handle) => Some(cancel_handle.clone()),
         }
     }
 }
@@ -537,6 +537,9 @@ impl PendingSubresourceExecutionContext {
 }
 
 pub(super) struct PendingSubresourceFetchState {
+    // Element and CSS loads retain the original request and SW client across
+    // interception; resuming must not reconstruct them from the current Page.
+    pub(super) dispatch: Option<Box<crate::network_host::SubresourceRequestDispatch>>,
     pub(super) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(super) request_origin: moli_url::WebOrigin,
     pub(super) info: PendingSubresourceFetchInfo,

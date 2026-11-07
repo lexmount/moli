@@ -1,6 +1,37 @@
 use super::*;
 
 impl ScriptVm {
+    pub(super) fn spawn_running_resource_request(
+        &mut self,
+        dispatch: crate::network_host::SubresourceRequestDispatch,
+        state: RunningSubresourceFetchState,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+    ) {
+        let internal_id = state.pending.info.internal_id;
+        let loader = state.pending.load.request_client();
+        let task_runner = state.pending.load.task_runner();
+        let network_context = crate::types::AsyncSubresourceNetworkContext {
+            frame_id: state.pending.info.frame_id.clone(),
+            document_url: state.pending.info.document_url.clone(),
+            request_origin: state.pending.request_origin.clone(),
+            resource_type: state.pending.info.resource_type,
+            policy_context: state.pending.policy_context,
+        };
+        let cookie_report = state.pending.info.request_cookie_report.clone();
+        let mut host = self._context_host.borrow_mut();
+        host.begin_active_subresource_request();
+        host.record_running_subresource_fetch(state);
+        dispatch.dispatch(
+            &host,
+            internal_id,
+            loader,
+            task_runner,
+            network_context,
+            cookie_report,
+            cancel_handle,
+        );
+    }
+
     pub(in crate::script_vm) fn spawn_running_subresource_fetch(
         &mut self,
         request_client: ResourceRequestClient,
