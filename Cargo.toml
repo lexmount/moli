@@ -1,5 +1,5 @@
 [workspace]
-exclude = ["vendor/quinn-0.11.12", "vendor/web-transport-proto-0.6.3"]
+exclude = ["vendor/quinn-0.11.12", "vendor/web-transport-proto-0.6.3", "vendor/web-transport-quinn-0.13.5"]
 resolver = "3"
 members = [
     "moli",
@@ -106,6 +106,7 @@ license = "MIT OR Apache-2.0"
 # Backport terminal-reader waker cleanup for passive RESET observers.
 quinn = { path = "vendor/quinn-0.11.12" }
 web-transport-proto = { path = "vendor/web-transport-proto-0.6.3" }
+web-transport-quinn = { path = "vendor/web-transport-quinn-0.13.5" }
 # Share glyph preparation between CPU rendering and PDF ink measurement.
 glifo = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3df09316c4ef1299ba" }
 vello_common = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3df09316c4ef1299ba" }
