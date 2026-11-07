@@ -23,6 +23,15 @@ pub struct ObjectUrlEntry<AccessKey> {
     pub access_key: Option<AccessKey>,
 }
 
+/// An object URL snapshot that retains its backing without starting I/O.
+/// Consumers authorize the captured creator key before reading the data.
+#[derive(Clone, Debug)]
+pub struct ObjectUrlResourceEntry<AccessKey> {
+    pub data: BlobData,
+    pub mime_type: String,
+    pub access_key: Option<AccessKey>,
+}
+
 #[derive(Clone, Debug)]
 struct BlobState<OwnerId, PartitionId> {
     owner_id: Option<OwnerId>,
@@ -296,20 +305,32 @@ where
     where
         AccessKey: Clone,
     {
-        let (data, mime_type, access_key) = {
-            let url = url.split_once('#').map_or(url, |(url, _)| url);
-            let object_urls = self.object_urls.lock();
-            let state = object_urls.get(url)?;
-            let (data, mime_type) = self.object_url_blob_data(state.blob_id)?;
-            (data, mime_type, state.access_key.clone())
-        };
-        let bytes = data
+        let entry = self.object_url_resource_entry(url)?;
+        let bytes = entry
+            .data
             .shared_bytes()
-            .or_else(|| data.read_blocking().ok().map(Arc::from))?;
+            .or_else(|| entry.data.read_blocking().ok().map(Arc::from))?;
         Some(ObjectUrlEntry {
             bytes,
+            mime_type: entry.mime_type,
+            access_key: entry.access_key,
+        })
+    }
+
+    /// Capture the immutable backing and creator key under the URL-store lock.
+    /// The snapshot remains usable after URL revocation and wrapper release.
+    pub fn object_url_resource_entry(&self, url: &str) -> Option<ObjectUrlResourceEntry<AccessKey>>
+    where
+        AccessKey: Clone,
+    {
+        let url = url.split_once('#').map_or(url, |(url, _)| url);
+        let object_urls = self.object_urls.lock();
+        let state = object_urls.get(url)?;
+        let (data, mime_type) = self.object_url_blob_data(state.blob_id)?;
+        Some(ObjectUrlResourceEntry {
+            data,
             mime_type,
-            access_key,
+            access_key: state.access_key.clone(),
         })
     }
 
@@ -443,6 +464,57 @@ fn random_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_entries_retain_lazy_data_without_url_or_wrapper_references() {
+        use std::sync::atomic::AtomicUsize;
+
+        #[derive(Debug)]
+        struct Source(AtomicUsize);
+        impl crate::BlobSource for Source {
+            fn read(&self, range: std::ops::Range<usize>, complete: crate::BlobReadCompletion) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                complete(Ok(b"retained"[range].to_vec()));
+            }
+        }
+        let store = BlobStore::<u64, u64, String>::default();
+        let source = Arc::new(Source(AtomicUsize::new(0)));
+        let weak = Arc::downgrade(&source);
+        let blob = store.create_blob_from_data(
+            Some(1),
+            Some(2),
+            BlobData::from_source(source.clone(), 8),
+            "text/javascript".to_owned(),
+        );
+        let key = "creator".to_owned();
+        let url = store
+            .create_object_url_with_access_key(Some(1), blob, "null", Some(key.clone()))
+            .unwrap();
+        let captured = store
+            .object_url_resource_entry(&format!("{url}#fragment"))
+            .unwrap();
+        assert!(
+            store
+                .object_url_resource_entry(&format!("{url}?query"))
+                .is_none()
+        );
+        assert_eq!(source.0.load(Ordering::Relaxed), 0);
+        assert!(store.revoke_object_url(&url));
+        store.release_blob_wrapper_ref(blob);
+        assert!(store.blob_size(blob).is_none());
+        assert!(store.object_url_resource_entry(&url).is_none());
+        assert_eq!(captured.access_key, Some(key));
+        let ObjectUrlResourceEntry {
+            data, mime_type, ..
+        } = captured;
+        assert_eq!(mime_type, "text/javascript");
+        assert_eq!(data.slice(2..6).read_blocking().unwrap(), b"tain");
+        assert_eq!(source.0.load(Ordering::Relaxed), 1);
+        drop(source);
+        assert!(weak.upgrade().is_some());
+        drop(data);
+        assert!(weak.upgrade().is_none());
+    }
 
     #[test]
     fn shared_blob_backing_is_installed_without_copy_and_outlives_wrapper_release() {
