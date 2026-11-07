@@ -26,6 +26,33 @@ use crate::util::v8str;
 
 pub(crate) type DocumentContentSecurityPolicyViolation = ContentSecurityPolicyUrlViolation;
 
+/// Native Document metadata retained independently of a queued report's owner.
+#[derive(Clone, Default)]
+pub(crate) struct DocumentCspViolationMetadata {
+    pub(crate) response_status: u16,
+    pub(crate) referrer: String,
+}
+
+impl DocumentCspViolationMetadata {
+    pub(crate) fn apply_fields<'a>(
+        &'a self,
+        fields: ContentSecurityPolicyViolationEventFields<'a>,
+    ) -> ContentSecurityPolicyViolationEventFields<'a> {
+        ContentSecurityPolicyViolationEventFields {
+            referrer: &self.referrer,
+            status_code: i32::from(self.response_status),
+            ..fields
+        }
+    }
+
+    pub(crate) fn event_fields<'a>(
+        &'a self,
+        violation: &'a DocumentContentSecurityPolicyViolation,
+    ) -> ContentSecurityPolicyViolationEventFields<'a> {
+        self.apply_fields(ContentSecurityPolicyViolationEventFields::from(violation))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DocumentSubresourceCspKind {
     Image,
@@ -1705,7 +1732,12 @@ impl DocumentRuntime {
             .current_main_document_task_owner()
             .ok_or_else(|| anyhow::anyhow!("main CSP violation document owner is unavailable"))?;
         if send_report {
-            let fields = ContentSecurityPolicyViolationEventFields::from(violation);
+            let metadata = host.document_csp_violation_metadata(
+                target
+                    .and_then(|target| self.dom_host.owner_document_handle(target))
+                    .unwrap_or_else(|| self.document_handle()),
+            );
+            let fields = metadata.event_fields(violation);
             crate::network_host::send_content_security_policy_reports_for_window(
                 scope,
                 host,
@@ -1765,11 +1797,14 @@ impl DocumentRuntime {
             EventTargetHandle::Node(task.target().unwrap_or_else(|| self.document_handle()));
         let event_target_value =
             event_target_value(scope, host_ptr, event_target).map_err(anyhow::Error::msg)?;
-        let event = create_content_security_policy_violation_event(
+        let metadata =
+            unsafe { &*host_ptr }.document_csp_violation_metadata(self.document_handle());
+        let fields = metadata.event_fields(violation);
+        let event = create_content_security_policy_violation_event_with_fields(
             scope,
             event_target_value,
             event_target_value,
-            violation,
+            &fields,
         )
         .map_err(anyhow::Error::msg)?;
         self.dispatch_public_event_best_effort(
@@ -2311,20 +2346,6 @@ pub(crate) fn document_content_security_policy_error_message(
     format!(
         "{operation}: blocked by Content Security Policy for `{}`.",
         violation.blocked_uri
-    )
-}
-
-pub(crate) fn create_content_security_policy_violation_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    current_target: v8::Local<'s, v8::Value>,
-    target: v8::Local<'s, v8::Value>,
-    violation: &DocumentContentSecurityPolicyViolation,
-) -> anyhow::Result<v8::Local<'s, v8::Object>> {
-    create_content_security_policy_violation_event_with_fields(
-        scope,
-        current_target,
-        target,
-        &ContentSecurityPolicyViolationEventFields::from(violation),
     )
 }
 

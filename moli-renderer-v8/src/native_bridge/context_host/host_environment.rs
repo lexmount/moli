@@ -75,6 +75,15 @@ fn hover_chain_for_input_hit(runtime: &JsContextHost, hit: Option<DomHandle>) ->
 }
 
 impl JsContextHost {
+    pub(crate) fn document_referrer_for_document_handle(&self, document: DomHandle) -> &str {
+        if document == self.document_handle() {
+            return &self.document_policy_container().document_referrer;
+        }
+        self.child_browsing_context_referrer_for_document_handle(document)
+            .or_else(|| self.lightweight_popup_referrer_for_document_handle(document))
+            .unwrap_or("")
+    }
+
     pub(crate) fn media_query_matches_for_document(
         &self,
         document: DomHandle,

@@ -16,7 +16,6 @@ use crate::{
         sync_window_location_history_navigation_runtime_surface,
         sync_window_location_runtime_state, web_storage_area_key_for_storage_key,
     },
-    document_runtime::create_content_security_policy_violation_event,
     document_runtime::{DocumentPolicyContainer, DocumentSandboxPolicy, DomHandle},
     host::{DispatchStatus, HostTimerOwner, PopupWindowEventTarget, event_dispatch_status},
     native_bridge::{
@@ -3048,11 +3047,16 @@ impl JsContextHost {
                 &violation.report_to_endpoints,
             );
         }
-        match create_content_security_policy_violation_event(
+        let metadata = self
+            .document_csp_violation_metadata_for_owner(OwnerDispatchScope::LightweightPopup(
+                popup_id,
+            ))
+            .unwrap_or_default();
+        match crate::document_runtime::create_content_security_policy_violation_event_with_fields(
             scope,
             window.into(),
             window.into(),
-            violation,
+            &metadata.event_fields(violation),
         ) {
             Ok(event) => {
                 self.dispatch_lightweight_popup_window_event(
