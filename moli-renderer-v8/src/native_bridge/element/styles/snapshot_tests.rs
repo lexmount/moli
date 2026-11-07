@@ -89,6 +89,61 @@ fn document_export_checks_flat_tree_membership_linearly_in_either_node_order() {
 }
 
 #[test]
+fn document_export_reuses_one_style_resolution_context_for_its_targets() {
+    use crate::style_engine::take_style_resolution_context_count_for_test;
+
+    let depth = 128;
+    let body = format!("{}HELLO{}", "<div>".repeat(depth), "</div>".repeat(depth));
+    let properties = ["display", "visibility"].map(str::to_owned);
+    let unbatched = {
+        let vm = fixture(&body);
+        let host = vm.context_host_weak_for_test().upgrade().unwrap();
+        let host = host.borrow();
+        let nodes = divs_in_subtree(&host, host.document_handle());
+        let mut observation = StyleObservation::new(&host);
+        take_style_resolution_context_count_for_test();
+        let values = nodes
+            .into_iter()
+            .map(|node| {
+                let style = observation.read(node);
+                properties
+                    .iter()
+                    .map(|property| style.property(property))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            take_style_resolution_context_count_for_test() >= depth,
+            "the unbatched control must exercise repeated single-node resolution",
+        );
+        values
+    };
+    for reverse in [false, true] {
+        let vm = fixture(&body);
+        let host = vm.context_host_weak_for_test().upgrade().unwrap();
+        let host = host.borrow();
+        let mut nodes = divs_in_subtree(&host, host.document_handle());
+        if reverse {
+            nodes.reverse();
+        }
+        take_style_resolution_context_count_for_test();
+        let values = computed_style_export_values_for_document_snapshot(&host, nodes, &properties);
+        let contexts = take_style_resolution_context_count_for_test();
+        assert!(
+            contexts <= 3,
+            "a cold export must share its resolver: {contexts} contexts for {depth} nodes",
+        );
+        assert_eq!(
+            values
+                .into_iter()
+                .map(|style| style.values)
+                .collect::<Vec<_>>(),
+            unbatched
+        );
+    }
+}
+
+#[test]
 fn document_export_shares_shadow_scope_queries_across_nodes_and_properties() {
     let depth = 256;
     let mut vm = fixture("<main id=host></main>");
