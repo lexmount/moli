@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash};
+use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use crate::{LayoutBoxId, LayoutPosition, LayoutWorld};
 
@@ -12,6 +12,10 @@ pub(crate) enum PaintOrderEvent {
     BoxBackground(LayoutBoxId),
     TableCollapsedBorders(LayoutBoxId),
     BoxContents(LayoutBoxId),
+    /// The text of the inline formatting context this box owns. It follows the
+    /// box's contents so in-flow atomic inline backgrounds can paint between
+    /// the inline box backgrounds and the text of their line.
+    BoxText(LayoutBoxId),
     BoxOutline(LayoutBoxId),
     PopStackingContext(LayoutBoxId),
 }
@@ -21,6 +25,7 @@ enum UnitKind {
     Background,
     TableCollapsedBorders,
     Contents,
+    Text,
     Outline,
 }
 
@@ -76,6 +81,10 @@ struct ContextCollection {
     positioned: Vec<AtomicPaintEntry>,
     positive_contexts: Vec<ChildContext>,
     outlines: Vec<PaintUnit>,
+    /// Contents sequence of each in-flow box in this context. An inline
+    /// formatting context's text and atomic backgrounds sort at its owner's
+    /// key, in the order they were pushed.
+    contents_sequences: HashMap<LayoutBoxId, usize>,
 }
 
 /// Builds one deterministic CSS stacking order for the current one-shot world.
@@ -108,11 +117,15 @@ fn emit_context<N>(
     events.push(PaintOrderEvent::BoxBackground(root));
 
     let mut collection = ContextCollection::default();
+    let root_contents_sequence = next_sequence(sequence);
     collection.inline_contents.push(PaintUnit {
         id: root,
         kind: UnitKind::Contents,
-        sequence: next_sequence(sequence),
+        sequence: root_contents_sequence,
     });
+    collection
+        .contents_sequences
+        .insert(root, root_contents_sequence);
     if world.collapsed_table_borders.contains_key(&root) {
         collection.table_collapsed_borders.push(PaintUnit {
             id: root,
@@ -123,6 +136,13 @@ fn emit_context<N>(
 
     for child in ordered_children(world, root) {
         collect_subtree(world, child, None, sequence, &mut collection);
+    }
+    if world.boxes[root.index()].inline_layout.is_some() {
+        collection.inline_contents.push(PaintUnit {
+            id: root,
+            kind: UnitKind::Text,
+            sequence: root_contents_sequence,
+        });
     }
 
     collection
@@ -216,24 +236,44 @@ fn collect_subtree<N>(
             }
         })
     };
-    push_unit(
-        collection,
-        group,
-        PaintUnit {
-            id,
-            kind: UnitKind::Background,
-            sequence: next_sequence(sequence),
-        },
-    );
+    let background = PaintUnit {
+        id,
+        kind: UnitKind::Background,
+        sequence: next_sequence(sequence),
+    };
+    // An in-flow atomic inline paints its background at its place in the line,
+    // in front of the inline boxes that wrap it and behind the line's text.
+    let atomic_owner_sequence = layout_box
+        .inline_context_owner
+        .filter(|_| group == PaintGroup::NormalFlow && !layout_box.inline_flattened)
+        .and_then(|owner| collection.contents_sequences.get(&owner).copied());
+    match atomic_owner_sequence {
+        Some(sequence) => collection.inline_contents.push(PaintUnit {
+            sequence,
+            ..background
+        }),
+        None => push_unit(collection, group, background),
+    }
+    let contents_sequence = next_sequence(sequence);
     push_unit(
         collection,
         group,
         PaintUnit {
             id,
             kind: UnitKind::Contents,
-            sequence: next_sequence(sequence),
+            sequence: contents_sequence,
         },
     );
+    let text = layout_box.inline_layout.is_some().then_some(PaintUnit {
+        id,
+        kind: UnitKind::Text,
+        sequence: contents_sequence,
+    });
+    if group == PaintGroup::NormalFlow {
+        collection.contents_sequences.insert(id, contents_sequence);
+    } else if let Some(text) = text {
+        push_unit(collection, group, text);
+    }
     // Atomic pseudo-context descendants inherit their ancestor's paint level.
     // Ordinary in-flow descendants do not: each child must classify itself as
     // normal, floating, atomic-inline, or positioned. Positioned descendants
@@ -244,6 +284,11 @@ fn collect_subtree<N>(
     };
     for child in ordered_children(world, id) {
         collect_subtree(world, child, descendant_group, sequence, collection);
+    }
+    if group == PaintGroup::NormalFlow
+        && let Some(text) = text
+    {
+        push_unit(collection, group, text);
     }
     if world.collapsed_table_borders.contains_key(&id) {
         push_unit(
@@ -272,7 +317,7 @@ fn push_unit(collection: &mut ContextCollection, group: PaintGroup, unit: PaintU
         PaintGroup::NormalFlow => match unit.kind {
             UnitKind::Background => collection.block_backgrounds.push(unit),
             UnitKind::TableCollapsedBorders => collection.table_collapsed_borders.push(unit),
-            UnitKind::Contents => collection.inline_contents.push(unit),
+            UnitKind::Contents | UnitKind::Text => collection.inline_contents.push(unit),
             UnitKind::Outline => collection.outlines.push(unit),
         },
         PaintGroup::AtomicInline => collection.inline_contents.push(unit),
@@ -312,6 +357,7 @@ fn emit_unit(unit: PaintUnit, events: &mut Vec<PaintOrderEvent>) {
         }
         UnitKind::TableCollapsedBorders => PaintOrderEvent::TableCollapsedBorders(unit.id),
         UnitKind::Contents => PaintOrderEvent::BoxContents(unit.id),
+        UnitKind::Text => PaintOrderEvent::BoxText(unit.id),
         UnitKind::Outline => PaintOrderEvent::BoxOutline(unit.id),
     };
     events.push(event);
