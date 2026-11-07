@@ -4,6 +4,7 @@
 //! or protocol commands. It owns metadata-only probes and bounded decode/parse
 //! contracts; renderer resource owners decide when and how long results live.
 
+mod avif;
 mod bounded;
 mod budget;
 mod jpeg;
@@ -12,6 +13,7 @@ mod raster;
 mod rgba;
 mod svg;
 
+pub use avif::{AvifDecodeError, decode_avif};
 pub use budget::{MAX_DECODED_RGBA_BYTES, MAX_ENCODED_IMAGE_BYTES};
 pub use jpeg::{EncodedJpeg, JpegDecodeError, JpegEncodeError, decode_jpeg, encode_jpeg};
 pub use png::{
