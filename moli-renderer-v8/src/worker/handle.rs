@@ -148,6 +148,8 @@ pub(crate) enum WorkerMessage {
     DispatchPendingPromiseRejections,
     /// Run one task from the worker's networking task source.
     RunNetworkingTask,
+    /// Deliver a local XHR failure after its already queued CSP violations.
+    DispatchXhrFailure { xhr_id: u32, error_text: String },
     /// A worker spawned from this worker has queued a parent-facing event.
     NestedWorkerEvent {
         worker_id: DedicatedWorkerId,

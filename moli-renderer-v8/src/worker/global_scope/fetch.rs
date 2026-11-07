@@ -2060,12 +2060,14 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         return;
     }
 
-    let csp_error = super::content_security_policy::queue_worker_fetch_csp_violations(
+    let csp_error = super::content_security_policy::queue_worker_request_csp_violations(
         scope,
         &state,
         &document_url,
         &resolved_url,
         crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
+        "fetch",
+        crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
     );
     if let Some(message) = csp_error {
         record_worker_subresource_failure(
