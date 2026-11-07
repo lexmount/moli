@@ -94,6 +94,7 @@ async fn eval_font_loading_fixture(url: &str, script: &str) -> String {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut page =
         crate::runtime::PageVmTaskExecutorTestHarness::new(url::Url::parse(url).unwrap(), &loader);
+    finish_main_document_load_for_test(&mut page);
     let source = format!(
         "url(data:font/ttf;base64,{})",
         base64::engine::general_purpose::STANDARD.encode(include_bytes!(

@@ -125,6 +125,9 @@ impl ScriptVm {
                             "current main load dispatch did not settle exactly once".to_owned(),
                         );
                     } else {
+                        self.settle_loaded_document_font_set(
+                            self.document_runtime.document_handle(),
+                        );
                         let followup = self
                             .prepare_top_level_meta_refresh_navigation(owner)
                             .unwrap_or(MainDocumentLifecycleFollowup::None);

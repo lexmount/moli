@@ -2049,6 +2049,28 @@ async fn spawn_child_external_classic_source_error_server() -> (
     (format!("http://{addr}/missing-classic.js"), path_rx, server)
 }
 
+fn finish_main_document_load_for_test(vm: &mut ScriptVm) {
+    // Font domain fixtures exercise later loading cycles, so their initial
+    // parsed Document must have completed its real native lifecycle first.
+    // Page dispatcher tests cover owner admission and load ordering separately.
+    let owner = vm.current_main_document_task_owner().unwrap();
+    let interactive = vm.finish_current_main_document_parsing(owner).unwrap();
+    vm.apply_main_document_interactive_lifecycle_action(interactive)
+        .unwrap();
+    vm.dispatch_main_document_domcontentloaded_lifecycle(owner);
+    assert!(
+        vm.dispatch_main_document_window_load_lifecycle(owner)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .document_is_completely_loaded(vm.document_runtime.document_handle()),
+        Some(true)
+    );
+}
+
 fn new_parsed_test_vm(url: &str, markup: &str) -> StandaloneScriptVmHarness {
     new_parsed_test_vm_with_completion_sender(
         url,

@@ -4,6 +4,17 @@
 use super::*;
 
 impl ScriptVm {
+    pub(super) fn settle_loaded_document_font_set(&mut self, document: DomHandle) {
+        if let Err(error) = self.with_default_context_scope(|scope, host_ptr| {
+            crate::context_bootstrap::settle_document_font_face_set_ready(
+                scope, host_ptr, document,
+            );
+            Ok(())
+        }) {
+            tracing::warn!(%error, "failed to settle document font readiness after load");
+        }
+    }
+
     pub(super) fn reconcile_document_font_resources(&mut self) {
         if let Err(error) = self.with_default_context_scope(|scope, host_ptr| {
             DocumentRuntime::reconcile_document_web_fonts_in_current_scope(scope, host_ptr);

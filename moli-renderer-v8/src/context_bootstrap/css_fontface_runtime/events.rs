@@ -308,6 +308,23 @@ pub(super) fn font_face_set_loading_started<'s>(
         return;
     }
     set_font_face_set_status(scope, owner, "loading");
+    ensure_font_face_set_ready_is_pending(scope, owner);
+    for slot in [LOADED_FACES, FAILED_FACES] {
+        let array = v8::Array::new(scope, 0);
+        set_private_value(scope, owner, slot, array.into());
+    }
+    queue_font_face_set_task(scope, owner, false);
+}
+
+pub(super) fn ensure_font_face_set_ready_is_pending<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) {
+    // The initial Document promise can already be waiting for the environment
+    // when its first font starts loading. Keep that same pending promise.
+    if super::loading::resolver_from_slot(scope, owner, READY_RESOLVER).is_some() {
+        return;
+    }
     let resolver = v8::PromiseResolver::new(scope).expect("FontFaceSet ready resolver");
     set_private_value(scope, owner, READY_RESOLVER, resolver.into());
     set_private_value(
@@ -316,11 +333,6 @@ pub(super) fn font_face_set_loading_started<'s>(
         FONT_FACE_SET_READY_SLOT,
         resolver.get_promise(scope).into(),
     );
-    for slot in [LOADED_FACES, FAILED_FACES] {
-        let array = v8::Array::new(scope, 0);
-        set_private_value(scope, owner, slot, array.into());
-    }
-    queue_font_face_set_task(scope, owner, false);
 }
 
 pub(super) fn notify_font_face_set_owners_of_load<'s>(
@@ -363,7 +375,7 @@ pub(super) fn finish_font_set_if_idle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) {
-    if !font_set_is_loading_and_idle(scope, owner)
+    if !font_set_can_finish(scope, owner)
         || get_private_value(scope, owner, FINISH_QUEUED).is_some_and(|value| value.is_true())
     {
         return;
@@ -377,16 +389,16 @@ pub(super) fn finish_font_set_if_idle<'s>(
     queue_font_face_set_task(scope, owner, true);
 }
 
-fn font_set_is_loading_and_idle<'s>(
+fn font_set_can_finish<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if super::loading::string_slot(scope, owner, FONT_FACE_SET_STATUS_SLOT) != "loading" {
+    if super::loading::resolver_from_slot(scope, owner, READY_RESOLVER).is_none() {
         return false;
     }
     // Native CSS requests can be pending before a JS wrapper is projected.
     // Conversely, the native CSS queue does not contain JS-created faces.
-    if super::storage::document_font_face_set_has_pending_requests(scope, owner) {
+    if super::storage::document_font_face_set_is_pending(scope, owner) {
         return false;
     }
     let pending = super::storage::font_face_set_faces_array(scope, owner).is_some_and(|faces| {
@@ -411,7 +423,7 @@ fn finish_font_set_task<'s>(scope: &mut v8::PinScope<'s, '_>, owner: v8::Local<'
     // A synchronously completed fallback can queue another finish task and
     // expose more demand without leaving a face Loading. Let that task settle
     // selection before resolving the same ready promise and loading cycle.
-    if !font_set_is_loading_and_idle(scope, owner)
+    if !font_set_can_finish(scope, owner)
         || get_private_value(scope, owner, FINISH_QUEUED).is_some_and(|value| value.is_true())
     {
         return;
