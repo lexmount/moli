@@ -103,7 +103,8 @@ use stylesheet_runtime::{ConnectedLinkReadinessFetchOptions, ConnectedLoadParame
 pub(crate) use stylesheet_runtime::{
     ConnectedLoadCompletion, LinkedStylesheetImportGraphCompletion,
     LiveStylesheetImportLoadCompletion, StylesheetImportCompletionAuthority,
-    fetch_complete_stylesheet_import_graph, live_stylesheet_import_responses,
+    fetch_complete_stylesheet_import_graph, fetch_complete_stylesheet_import_graph_from_root,
+    live_stylesheet_import_responses,
 };
 use stylesheet_runtime::{
     ConnectedLoadOperation, LinkedStylesheetImportGraphs, QueuedConnectedStyleLoad,
