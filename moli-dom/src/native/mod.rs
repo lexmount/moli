@@ -2301,6 +2301,31 @@ mod tests {
     }
 
     #[test]
+    fn containing_shadow_root_follows_light_and_shadow_tree_moves() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let light = host.create_element("main");
+        assert!(host.append_child(host.document_handle(), light));
+        let child = host.create_element("section");
+        assert!(host.append_child(light, child));
+        assert_eq!(host.containing_shadow_root(child), None);
+
+        let shadow_host = host.create_element("div");
+        assert!(host.append_child(light, shadow_host));
+        let root = host.attach_shadow_root(shadow_host, "closed").unwrap();
+        for _ in 0..2 {
+            assert_eq!(host.containing_shadow_root(child), None);
+            assert!(host.append_child(root, child));
+            assert_eq!(host.containing_shadow_root(child), Some(root));
+            assert!(host.remove_child(light, shadow_host));
+            assert_eq!(host.containing_shadow_root(child), Some(root));
+            assert!(host.append_child(light, shadow_host));
+            assert_eq!(host.containing_shadow_root(child), Some(root));
+            assert!(host.append_child(light, child));
+        }
+        assert_eq!(host.containing_shadow_root(child), None);
+    }
+
+    #[test]
     fn connected_shadow_roots_snapshot_cache_uses_shadow_connection_version() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         let document = host.document_node_id();
