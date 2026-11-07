@@ -181,11 +181,13 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
             } else {
                 snapshot
                     .stores
-                    .get(store.name())
+                    .values()
+                    .find(|metadata| Rc::ptr_eq(&metadata.identity, &store.metadata.identity))
                     .cloned()
                     .expect("existing store has upgrade snapshot")
             };
             store.metadata = metadata;
+            store.name_override = None;
         }
     }
     for table in &tables {
@@ -203,15 +205,31 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
             })
             .collect::<Vec<_>>();
         for (id, store, created_in_upgrade) in indexes {
-            // A collected alias may have been swept by the store lookup.
-            if indexed_db_object_store_transaction(scope, store) == Some(transaction)
-                && let Some(index) = table
-                    .borrow()
+            if indexed_db_object_store_transaction(scope, store) != Some(transaction) {
+                continue;
+            }
+            let metadata = indexed_db_object_store_metadata(scope, store)
+                .expect("existing index has a retained object store");
+            // State lookup may sweep a collected alias. Do not retain a table
+            // borrow across another wrapper lookup.
+            let index = table
+                .borrow()
+                .indexes
+                .get(&id)
+                .and_then(std::rc::Weak::upgrade);
+            let Some(index) = index else {
+                continue;
+            };
+            let mut index = index.borrow_mut();
+            index.deleted = created_in_upgrade;
+            if !created_in_upgrade {
+                index.info = metadata
                     .indexes
-                    .get(&id)
-                    .and_then(std::rc::Weak::upgrade)
-            {
-                index.borrow_mut().deleted = created_in_upgrade;
+                    .values()
+                    .find(|candidate| Rc::ptr_eq(&candidate.identity, &index.identity))
+                    .expect("existing index has upgrade snapshot")
+                    .info
+                    .clone();
             }
         }
     }
@@ -233,6 +251,11 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
     store_name: &moli_indexeddb::IndexedDbName,
 ) {
     let metadata = indexed_db_database_store_metadata(scope, database, store_name);
+    let transaction = object_property_as_object(
+        scope,
+        database,
+        INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT,
+    );
     for table in indexed_db_handle_tables(scope, database) {
         for store in table
             .borrow()
@@ -244,6 +267,9 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
             if store.deleted
                 || store.name() != store_name
                 || store.database.to_local(scope) != Some(database)
+                || transaction.is_some_and(|transaction| {
+                    store.transaction.to_local(scope) != Some(transaction)
+                })
             {
                 continue;
             }

@@ -3746,7 +3746,7 @@ fn indexed_db_object_store_index_metadata_is_available() {
 
     assert_eq!(
         result,
-        "name|false|false|false|name|false|true|by-id|id|true|false|by-id|kv"
+        "|false|false|false||false|true|by-id|id|true|false|by-id|kv"
     );
 }
 

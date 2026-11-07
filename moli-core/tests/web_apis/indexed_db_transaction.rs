@@ -570,6 +570,53 @@ async fn indexed_db_schema_names_keep_utf16_identity_through_sqlite_operations()
     Ok(())
 }
 
+async fn assert_schema_rename(scenarios: &[&str]) -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-schema-rename.js");
+    for target in ["window", "child", "worker"] {
+        for scenario in scenarios {
+            let case = format!("{target}/{scenario}");
+            let source = format!(
+                "{fixture}\nschemaRenameProbe('schema-rename-{target}-{scenario}', '{scenario}').then(finish, error => finish({{state:'error',error:String(error),checks:schemaRenameChecks}}));"
+            );
+            let result = run_probe(&browser, &server, target, &source)
+                .await
+                .map_err(|error| error.context(format!("schema rename {case}")))?;
+            assert_eq!(result["state"], "pass", "{case}: {result}");
+            let expected = match *scenario {
+                "validation" => 53,
+                "cursor-store" | "cursor-index" => 76,
+                "rollback-explicit" | "rollback-constraint" => 32,
+                _ => unreachable!("unknown schema rename scenario"),
+            };
+            assert_eq!(
+                result["checks"].as_array().unwrap().len(),
+                expected,
+                "{case}: {result}"
+            );
+        }
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_schema_rename_validates_native_name_attributes() -> Result<()> {
+    assert_schema_rename(&["validation"]).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_schema_rename_keeps_cursors_and_admitted_operations_on_original_sources()
+-> Result<()> {
+    assert_schema_rename(&["cursor-store", "cursor-index"]).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_schema_rename_abort_restores_aliases_and_reused_names() -> Result<()> {
+    assert_schema_rename(&["rollback-explicit", "rollback-constraint"]).await
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_schema_attributes_preserve_native_state_and_handle_identity() -> Result<()> {
     let server = FixtureServer::spawn().await?;
