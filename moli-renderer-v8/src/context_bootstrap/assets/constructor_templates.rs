@@ -67,7 +67,7 @@ use super::super::{
         build_audio_context_constructor_template, build_audio_worklet_node_constructor_template,
         channel_merger_constructor, channel_splitter_constructor,
         constant_source_constructor_callback, convolver_constructor, delay_constructor,
-        gain_node_constructor_callback, media_element_source_constructor_callback,
+        gain_node_constructor_callback, iir_constructor, media_element_source_constructor_callback,
         offline_audio_context_constructor_callback, stereo_panner_constructor,
         wave_shaper_constructor,
     },
@@ -1048,6 +1048,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
                 convolver_constructor
             ))
             .length(1)
+            .build(scope)
+        }
+        ConstructorKind::IIRFilterNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::IIRFilterNode,
+                iir_constructor
+            ))
+            .length(2)
             .build(scope)
         }
         ConstructorKind::WaveShaperNode => {

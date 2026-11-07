@@ -17,6 +17,8 @@ mod gain;
 
 pub(in crate::context_bootstrap) use convolver::constructor as convolver_constructor;
 mod graph;
+mod iir;
+pub(in crate::context_bootstrap) use iir::constructor as iir_constructor;
 mod listener;
 mod media_element_source;
 mod node;
@@ -402,6 +404,8 @@ struct BaseAudioContextPrototypeDeclaration {
     create_wave_shaper: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = convolver::create)]
     create_convolver: (),
+    #[webapi(method = "createIIRFilter", receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 2, callback = iir::create)]
+    create_iir_filter: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = channel_nodes::create_channel_merger)]
     create_channel_merger: (),
     #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = channel_nodes::create_channel_splitter)]
@@ -489,6 +493,7 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
         "AudioBuffer" => buffer::install(scope, template),
         "WaveShaperNode" => wave_shaper::install(scope, template),
         "ConvolverNode" => convolver::install(scope, template),
+        "IIRFilterNode" => iir::install(scope, template),
         "Worklet" => WorkletPrototypeDeclaration::initialize_prototype_template(
             scope,
             template.prototype_template(scope),

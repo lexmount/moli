@@ -59,6 +59,7 @@ interfaces! {
     ConstantSourceNode: AudioScheduledSourceNode;
     DelayNode: AudioNode;
     GainNode: AudioNode;
+    IIRFilterNode: AudioNode;
     StereoPannerNode: AudioNode;
     WaveShaperNode: AudioNode;
     ConvolverNode: AudioNode;
