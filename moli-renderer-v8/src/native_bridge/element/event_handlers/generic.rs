@@ -366,14 +366,7 @@ fn node_event_handler_target_context<'s>(
     handle: crate::document_runtime::DomHandle,
 ) -> Option<v8::Local<'s, v8::Context>> {
     let runtime = unsafe { &*runtime_ptr };
-    let owner_document = runtime.dom_host().owner_document_handle(handle)?;
-    let dispatch_scope = if owner_document == runtime.dom_host().document_handle() {
-        crate::native_bridge::OwnerDispatchScope::Top
-    } else {
-        crate::native_bridge::OwnerDispatchScope::Child(
-            runtime.child_browsing_context_host_for_document_handle(owner_document)?,
-        )
-    };
+    let dispatch_scope = runtime.owner_dispatch_scope_for_node(handle)?;
     let owner = runtime.current_window_execution_context_owner(dispatch_scope)?;
     runtime
         .window_execution_context(scope, owner, dispatch_scope)
@@ -438,6 +431,9 @@ fn compile_node_event_attribute_handler<'s>(
         scope,
         runtime_ptr,
         handle,
+        (!(super::is_body_or_frameset_element(unsafe { &*runtime_ptr }, handle)
+            && super::is_body_window_event_handler_attribute(handler_name)))
+        .then_some(handle),
         source,
         &[event_argument],
         &context_extensions,

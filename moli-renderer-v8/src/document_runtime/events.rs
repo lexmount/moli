@@ -39,7 +39,7 @@ impl DocumentRuntime {
         let dom_host = &self.dom_host;
         self.events.clear_targets_matching(|target| match target {
             EventTargetHandle::Window => clear_window,
-            EventTargetHandle::ChildWindow(_) => clear_window,
+            EventTargetHandle::ChildWindow(_) | EventTargetHandle::PopupWindow(_) => clear_window,
             EventTargetHandle::Node(handle) => {
                 handle == document_handle
                     || (dom_host.owner_document_handle(handle) == Some(document_handle)
@@ -431,7 +431,7 @@ impl DocumentRuntime {
         } else {
             self.build_propagation_path(dispatch_target, composed)
         };
-        self.append_child_document_window_to_path(scope, host_ptr, &mut path);
+        self.append_document_window_to_path(scope, host_ptr, &mut path);
         trim_window_from_subresource_load_path(dispatch_target, event_type.as_deref(), &mut path);
         dispatch_public_event(
             &mut self.events,
@@ -501,16 +501,18 @@ impl DocumentRuntime {
         path
     }
 
-    fn append_child_document_window_to_path(
+    fn append_document_window_to_path(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         path: &mut Vec<EventTargetHandle>,
     ) {
-        if path
-            .iter()
-            .any(|target| matches!(target, EventTargetHandle::ChildWindow(_)))
-        {
+        if path.iter().any(|target| {
+            matches!(
+                target,
+                EventTargetHandle::ChildWindow(_) | EventTargetHandle::PopupWindow(_)
+            )
+        }) {
             return;
         }
         let trailing_main_window = path.last() == Some(&EventTargetHandle::Window);
@@ -538,6 +540,14 @@ impl DocumentRuntime {
                 path.pop();
             }
             path.push(EventTargetHandle::ChildWindow(target));
+        } else if let Some(popup_id) =
+            host.lightweight_popup_id_for_document_handle(document_handle)
+            && let Some(target) = host.current_popup_window_event_target(popup_id)
+        {
+            if trailing_main_window {
+                path.pop();
+            }
+            path.push(EventTargetHandle::PopupWindow(target));
         }
     }
 
@@ -560,9 +570,9 @@ impl DocumentRuntime {
         let mut filtered = Vec::new();
         for entry in full_path {
             let include = match entry {
-                EventTargetHandle::Window | EventTargetHandle::ChildWindow(_) => {
-                    source_root_is_document
-                }
+                EventTargetHandle::Window
+                | EventTargetHandle::ChildWindow(_)
+                | EventTargetHandle::PopupWindow(_) => source_root_is_document,
                 EventTargetHandle::Node(handle) => {
                     self.dom_host.root_node_handle(handle) == Some(source_root)
                         || self.flat_tree_contains_for_event_path(handle, target_handle)

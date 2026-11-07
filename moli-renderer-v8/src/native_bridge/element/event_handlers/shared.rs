@@ -16,6 +16,7 @@ pub(super) fn compile_event_attribute_handler<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
     handle: DomHandle,
+    element: Option<DomHandle>,
     source: &str,
     arguments: &[v8::Local<'s, v8::String>],
     context_extensions: &[v8::Local<'s, v8::Object>],
@@ -28,6 +29,7 @@ pub(super) fn compile_event_attribute_handler<'s>(
         scope,
         host_ptr,
         owner,
+        element,
         &base_url,
         source,
         EventAttributeHandlerScope::Element,
@@ -58,6 +60,7 @@ pub(crate) fn compile_event_attribute_handler_for_owner<'s>(
         scope,
         host_ptr,
         owner,
+        None,
         &base_url,
         source,
         handler_scope,
@@ -70,6 +73,7 @@ fn compile_event_attribute_handler_for_owner_with_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
     owner: OwnerDispatchScope,
+    element: Option<DomHandle>,
     base_url: &url::Url,
     source: &str,
     handler_scope: EventAttributeHandlerScope,
@@ -80,7 +84,8 @@ fn compile_event_attribute_handler_for_owner_with_context<'s>(
     if !host.owner_scripting_enabled(owner) {
         return None;
     }
-    if !unsafe { &mut *host_ptr }.allows_inline_event_handler_by_csp(scope, owner, source) {
+    if !unsafe { &mut *host_ptr }.allows_inline_event_handler_by_csp(scope, owner, element, source)
+    {
         return None;
     }
     let body = match handler_scope {

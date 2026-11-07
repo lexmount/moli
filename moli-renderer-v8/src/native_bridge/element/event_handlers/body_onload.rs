@@ -42,7 +42,8 @@ pub(crate) fn compile_window_body_event_attribute<'s>(
         None,
     );
     let event = v8_string(scope, "event")?;
-    let handler = compile_event_attribute_handler(scope, host_ptr, handle, &source, &[event], &[]);
+    let handler =
+        compile_event_attribute_handler(scope, host_ptr, handle, None, &source, &[event], &[]);
     if let Some(handler) = handler
         && let Some(name) = v8_string(scope, &name)
     {
@@ -172,7 +173,7 @@ fn body_window_event_handler_getter<'s>(
         return;
     }
     if let Some(handler) =
-        compile_event_attribute_handler(scope, runtime_ptr, handle, &source, &arguments, &[])
+        compile_event_attribute_handler(scope, runtime_ptr, handle, None, &source, &arguments, &[])
     {
         handler.set_name(v8str(scope, handler_name));
         body_window_event_handler_set(scope, handler_name, handler.into());

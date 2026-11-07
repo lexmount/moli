@@ -2320,11 +2320,22 @@ pub(crate) fn create_content_security_policy_violation_event<'s>(
     target: v8::Local<'s, v8::Value>,
     violation: &DocumentContentSecurityPolicyViolation,
 ) -> anyhow::Result<v8::Local<'s, v8::Object>> {
-    let event = create_security_policy_violation_event(
+    create_content_security_policy_violation_event_with_fields(
         scope,
+        current_target,
+        target,
         &ContentSecurityPolicyViolationEventFields::from(violation),
     )
-    .ok_or_else(|| anyhow::anyhow!("failed to create CSP violation event"))?;
+}
+
+pub(crate) fn create_content_security_policy_violation_event_with_fields<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    current_target: v8::Local<'s, v8::Value>,
+    target: v8::Local<'s, v8::Value>,
+    fields: &ContentSecurityPolicyViolationEventFields<'_>,
+) -> anyhow::Result<v8::Local<'s, v8::Object>> {
+    let event = create_security_policy_violation_event(scope, fields)
+        .ok_or_else(|| anyhow::anyhow!("failed to create CSP violation event"))?;
     let _ = crate::context_bootstrap::event_backing(scope, event).set(
         scope,
         v8str(scope, "target").into(),
