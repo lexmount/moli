@@ -2233,11 +2233,10 @@ impl ProtocolDeliveryEnvelope {
     }
 
     pub fn is_document_network_response_started(&self) -> bool {
-        let Some(message) = self.protocol_message() else {
+        if self.protocol_method() != Some("Network.responseReceived") {
             return false;
-        };
-        message.get("method").and_then(Value::as_str) == Some("Network.responseReceived")
-            && self.network_resource_type() == Some(DevToolsNetworkResourceType::Document)
+        }
+        self.network_resource_type() == Some(DevToolsNetworkResourceType::Document)
     }
 
     pub fn trace_network_summary(
@@ -2294,11 +2293,11 @@ impl ProtocolDeliveryEnvelope {
             }
             _ => {}
         }
-        let message = self.protocol_message()?;
-        let method = message.get("method")?.as_str()?;
+        let method = self.protocol_method()?;
         if !method.starts_with("Network.") && !method.starts_with("Fetch.") {
             return None;
         }
+        let message = self.protocol_message()?;
         let params = message.get("params")?;
         let request_id = params
             .get("requestId")
@@ -5934,5 +5933,60 @@ mod tests {
             wire.to_string()
                 .contains(r#""__moliFetchRequestId":"\ud800""#)
         );
+    }
+
+    #[test]
+    fn document_response_classification_keeps_unrelated_raw_events_opaque() {
+        let message = moli_inspector_json::InspectorJson::from_slice(
+            br#"{"method":"Debugger.scriptParsed","params":{"description":"\ud800"}}"#,
+        )
+        .unwrap();
+        let event = BackgroundProtocolEvent::immediate(message);
+        assert!(!event.is_document_network_response_started());
+        assert!(!event.protocol_json().unwrap().is_materialized());
+    }
+
+    #[test]
+    fn network_tracing_keeps_unrelated_raw_events_opaque() {
+        let message = moli_inspector_json::InspectorJson::from_slice(
+            br#"{"method":"Runtime.consoleAPICalled","params":{"args":[{"value":"\udfff"}]}}"#,
+        )
+        .unwrap();
+        let event = BackgroundProtocolEvent::immediate(message);
+        assert_eq!(event.trace_network_summary(), None);
+        assert!(!event.protocol_json().unwrap().is_materialized());
+    }
+
+    #[test]
+    fn raw_network_events_keep_document_classification_and_trace_details() {
+        for (method, type_field, resource_type, document_started) in [
+            ("Network.responseReceived", "type", "Document", true),
+            ("Network.responseReceived", "type", "Script", false),
+            ("Fetch.requestPaused", "resourceType", "Document", false),
+        ] {
+            let url_field = if method == "Network.responseReceived" {
+                "response"
+            } else {
+                "request"
+            };
+            let raw = format!(
+                r#"{{"method":"{method}","params":{{"{type_field}":"{resource_type}","requestId":"REQ-1","{url_field}":{{"url":"https://example.test/"}}}}}}"#
+            );
+            let message = moli_inspector_json::InspectorJson::from_slice(raw.as_bytes()).unwrap();
+            let event = BackgroundProtocolEvent::immediate(message);
+            assert_eq!(
+                event.is_document_network_response_started(),
+                document_started
+            );
+            assert_eq!(
+                event.trace_network_summary(),
+                Some((
+                    method,
+                    Some(resource_type),
+                    Some("REQ-1"),
+                    Some("https://example.test/")
+                ))
+            );
+        }
     }
 }

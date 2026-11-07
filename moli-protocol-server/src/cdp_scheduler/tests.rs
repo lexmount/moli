@@ -2175,6 +2175,33 @@ fn navigation_gate_release_precedes_later_renderer_boundary_network_output() {
 }
 
 #[test]
+fn foreground_load_wait_network_barrier_keeps_unrelated_raw_events_opaque() {
+    let mut barrier =
+        ForegroundNavigationNetworkBarrier::for_navigation_wait(Some(DevToolsNavigationWait::Load));
+    let raw = format!(
+        r#"{{"method":"Debugger.scriptParsed","params":{{"sourceMapURL":"{}","description":"\ud800"}}}}"#,
+        "x".repeat(256 * 1024)
+    );
+    let message = moli_inspector_json::InspectorJson::from_slice(raw.as_bytes()).unwrap();
+    let events = barrier
+        .route_event(BackgroundProtocolEvent::immediate(message))
+        .into_background_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].protocol_method(), Some("Debugger.scriptParsed"));
+    assert!(!events[0].protocol_json().unwrap().is_materialized());
+    assert_eq!(
+        events
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_cdp_message()
+            .to_string(),
+        raw
+    );
+    assert!(barrier.finish().is_empty());
+}
+
+#[test]
 fn foreground_load_wait_network_barrier_releases_document_response_before_subresources() {
     let mut barrier =
         ForegroundNavigationNetworkBarrier::for_navigation_wait(Some(DevToolsNavigationWait::Load));
