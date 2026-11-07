@@ -491,7 +491,9 @@ pub(in crate::native_bridge::document) fn build_detached_document_all<'s>(
         Some(data.into()),
     );
     let collection = object_template.new_instance(scope)?;
-    let _ = collection.set_prototype(scope, prototype.into());
+    collection
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     DetachedDocumentAllCollectionDeclaration::new(data, values.len() as f64)
         .initialize(scope, collection)
         .ok()?;

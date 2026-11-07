@@ -126,8 +126,10 @@ fn install_named_storage_runtime_state<'s>(
     };
     let owner_value = v8::BigInt::new_from_u64(scope, owner);
     let _ = storage.set_internal_field(STORAGE_OWNER_INTERNAL_FIELD_INDEX, owner_value.into());
-    if let Some(prototype) = prototype {
-        let _ = storage.set_prototype(scope, prototype.into());
+    if let Some(prototype) = prototype
+        && storage.set_prototype(scope, prototype.into()) != Some(true)
+    {
+        return Err(anyhow!("failed to set Storage prototype"));
     }
     web_api_interfaces::Storage::DESCRIPTOR.initialize(scope, storage)?;
     set_private_value(scope, global, slot_name, storage.into());

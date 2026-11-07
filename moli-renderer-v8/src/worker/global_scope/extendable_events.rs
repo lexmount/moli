@@ -162,10 +162,16 @@ pub(super) fn install_service_worker_extendable_event_constructors<'s>(
     let extendable_proto = constructor_prototype(scope, extendable_ctor, "ExtendableEvent")?;
     set_worker_to_string_tag(scope, extendable_proto, "ExtendableEvent");
     if let Some(event_ctor) = global_constructor_object(scope, "Event") {
-        let _ = extendable_ctor.set_prototype(scope, event_ctor.into());
+        extendable_ctor
+            .set_prototype(scope, event_ctor.into())
+            .filter(|set| *set)
+            .ok_or_else(|| anyhow!("failed to inherit ExtendableEvent constructor"))?;
     }
     if let Some(event_proto) = global_constructor_prototype(scope, "Event") {
-        let _ = extendable_proto.set_prototype(scope, event_proto.into());
+        extendable_proto
+            .set_prototype(scope, event_proto.into())
+            .filter(|set| *set)
+            .ok_or_else(|| anyhow!("failed to inherit ExtendableEvent prototype"))?;
     }
     ExtendableEventConstructorGlobalDeclaration::new(extendable_ctor)
         .initialize(scope, global)
@@ -177,8 +183,14 @@ pub(super) fn install_service_worker_extendable_event_constructors<'s>(
         .ok_or_else(|| anyhow!("failed to build ExtendableMessageEvent constructor"))?;
     let message_proto = constructor_prototype(scope, message_ctor, "ExtendableMessageEvent")?;
     set_worker_to_string_tag(scope, message_proto, "ExtendableMessageEvent");
-    let _ = message_ctor.set_prototype(scope, extendable_ctor.into());
-    let _ = message_proto.set_prototype(scope, extendable_proto.into());
+    message_ctor
+        .set_prototype(scope, extendable_ctor.into())
+        .filter(|set| *set)
+        .ok_or_else(|| anyhow!("failed to inherit ExtendableMessageEvent constructor"))?;
+    message_proto
+        .set_prototype(scope, extendable_proto.into())
+        .filter(|set| *set)
+        .ok_or_else(|| anyhow!("failed to inherit ExtendableMessageEvent prototype"))?;
     ExtendableMessageEventConstructorGlobalDeclaration::new(message_ctor)
         .initialize(scope, global)
         .map_err(|error| anyhow!("failed to initialize ExtendableMessageEvent global: {error}"))?;
@@ -190,12 +202,18 @@ pub(super) fn install_service_worker_extendable_event_constructors<'s>(
     if let Some(client_ctor) = global_constructor_object(scope, "Client")
         && let Some(window_ctor) = global_constructor_object(scope, "WindowClient")
     {
-        let _ = window_ctor.set_prototype(scope, client_ctor.into());
+        window_ctor
+            .set_prototype(scope, client_ctor.into())
+            .filter(|set| *set)
+            .ok_or_else(|| anyhow!("failed to inherit WindowClient constructor"))?;
     }
     if let Some(client_proto) = global_constructor_prototype(scope, "Client")
         && let Some(window_proto) = global_constructor_prototype(scope, "WindowClient")
     {
-        let _ = window_proto.set_prototype(scope, client_proto.into());
+        window_proto
+            .set_prototype(scope, client_proto.into())
+            .filter(|set| *set)
+            .ok_or_else(|| anyhow!("failed to inherit WindowClient prototype"))?;
     }
 
     Ok(())
@@ -536,7 +554,9 @@ fn extendable_message_event_ports<'s>(
         }
         let _ = ports.set_index(scope, index, port);
     }
-    let _ = ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
+    ports
+        .set_integrity_level(scope, v8::IntegrityLevel::Frozen)?
+        .then_some(())?;
     Some(ports)
 }
 

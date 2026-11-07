@@ -20,7 +20,9 @@ pub(in crate::context_bootstrap) fn bind_file_world_wrapper<'s>(
         get_private_value(scope, source, FILE_LAST_MODIFIED_SLOT)?.number_value(scope)?;
     initialize_file_metadata(scope, wrapper, &name, modified);
     let prototype = super::super::ensure_intrinsic_interface_prototype(scope, "File").ok()?;
-    wrapper.set_prototype(scope, prototype.into())?;
+    wrapper
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     Some(())
 }
 
