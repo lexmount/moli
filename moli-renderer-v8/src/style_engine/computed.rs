@@ -987,6 +987,54 @@ fn with_style_resolution_context<'dom, R>(
     result
 }
 
+/// Both resolver entry points replace the same canonical ElementData. Keep
+/// pseudo invalidation and restyle publication independent of their scheduling.
+fn clear_element_styles_for_resolution<E: TElement>(world: &DocumentStyleWorld, element: E) {
+    let handle = DomHandle::new(element.as_node().debug_id());
+    world.pseudo_style_cache.invalidate_handles([handle]);
+    // Keep dirty values published until an observation actually resolves them.
+    unsafe {
+        element.ensure_data().styles = ElementStyles::default();
+    }
+}
+
+fn publish_resolved_element_styles<E: TElement>(
+    world: &DocumentStyleWorld,
+    element: E,
+    styles: ElementStyles,
+    required_generation: u64,
+) {
+    unsafe {
+        let mut data = element.ensure_data();
+        data.styles = styles;
+        data.clear_restyle_state();
+    }
+    world
+        .document_state
+        .lazy_invalidation_roots
+        .mark_element_current(
+            DomHandle::new(element.as_node().debug_id()),
+            required_generation,
+        );
+}
+
+fn element_style_is_current<E: TElement>(
+    world: &DocumentStyleWorld,
+    element: E,
+    required_generation: u64,
+) -> bool {
+    world
+        .document_state
+        .lazy_invalidation_roots
+        .element_is_current(
+            DomHandle::new(element.as_node().debug_id()),
+            required_generation,
+        )
+        && element
+            .borrow_data()
+            .is_some_and(|data| data.has_styles() && data.hint.is_empty())
+}
+
 fn resolve_element_styles<'dom>(
     world: &DocumentStyleWorld,
     dom_adapter: &'dom moli_selector::StyloDomHostBinding<'dom>,
@@ -998,28 +1046,14 @@ fn resolve_element_styles<'dom>(
         let ancestor_resolution_count =
             materialize_ancestor_styles_for_resolution(context, element, world, validation_path);
         let target = DomHandle::new(element.as_node().debug_id());
-        world.pseudo_style_cache.invalidate_handles([target]);
-        // `resolve_style` is the single-node initial-style API. Keep dirty
-        // values published until this observation begins, then replace only
-        // the demanded path from ancestors to target.
-        unsafe {
-            element.ensure_data().styles = ElementStyles::default();
-        }
+        clear_element_styles_for_resolution(world, element);
         let styles = resolve_style(context, element, RuleInclusion::All, pseudo_element, None);
-        unsafe {
-            let mut data = element.ensure_data();
-            data.styles = styles.clone();
-            data.clear_restyle_state();
-        }
         let required_generation = world
             .document_state
             .lazy_invalidation_roots
             .required_generation_for_checked_element(target)
             .unwrap_or_default();
-        world
-            .document_state
-            .lazy_invalidation_roots
-            .mark_element_current(target, required_generation);
+        publish_resolved_element_styles(world, element, styles.clone(), required_generation);
         world
             .document_state
             .note_element_style_resolutions(ancestor_resolution_count.saturating_add(1));
@@ -1089,10 +1123,7 @@ pub(super) fn prepare_style_observation_targets(
                             handle,
                             quirks_mode,
                         );
-                        world.pseudo_style_cache.invalidate_handles([handle]);
-                        unsafe {
-                            element.ensure_data().styles = ElementStyles::default();
-                        }
+                        clear_element_styles_for_resolution(&world, element);
                         // Unlike the one-off `resolve_style` API, this entry
                         // keeps the observation's recovered ancestor filter.
                         let styles = StyleResolverForElement::new(
@@ -1103,20 +1134,12 @@ pub(super) fn prepare_style_observation_targets(
                         )
                         .resolve_style_with_default_parents()
                         .into();
-                        unsafe {
-                            let mut data = element.ensure_data();
-                            data.styles = styles;
-                            data.clear_restyle_state();
-                        }
                         let generation = world
                             .document_state
                             .lazy_invalidation_roots
                             .required_generation_for_checked_element(handle)
                             .unwrap_or_default();
-                        world
-                            .document_state
-                            .lazy_invalidation_roots
-                            .mark_element_current(handle, generation);
+                        publish_resolved_element_styles(&world, element, styles, generation);
                         inherited_change = true;
                         resolutions += 1;
                     }
@@ -1169,32 +1192,13 @@ where
     let mut resolution_count = 0_u64;
     let mut force_descendants = false;
     for (ancestor, required_generation) in ancestors {
-        let handle = DomHandle::new(ancestor.as_node().debug_id());
-        let canonical_is_current = ancestor
-            .borrow_data()
-            .is_some_and(|data| data.has_styles() && data.hint.is_empty())
-            && world
-                .document_state
-                .lazy_invalidation_roots
-                .element_is_current(handle, required_generation);
-        if canonical_is_current && !force_descendants {
+        if element_style_is_current(world, ancestor, required_generation) && !force_descendants {
             continue;
         }
-        world.pseudo_style_cache.invalidate_handles([handle]);
-        unsafe {
-            ancestor.ensure_data().styles = ElementStyles::default();
-        }
+        clear_element_styles_for_resolution(world, ancestor);
         let styles = resolve_style(context, ancestor, RuleInclusion::All, None, None);
         resolution_count = resolution_count.saturating_add(1);
-        unsafe {
-            let mut data = ancestor.ensure_data();
-            data.styles = styles;
-            data.clear_restyle_state();
-        }
-        world
-            .document_state
-            .lazy_invalidation_roots
-            .mark_element_current(handle, required_generation);
+        publish_resolved_element_styles(world, ancestor, styles, required_generation);
         force_descendants = true;
     }
     resolution_count
@@ -1241,17 +1245,11 @@ fn style_validation_path_needs_resolution(
     validation_path: &[StyleValidationPathEntry],
 ) -> bool {
     validation_path.iter().any(|entry| {
-        !world
-            .document_state
-            .lazy_invalidation_roots
-            .element_is_current(entry.element, entry.required_generation)
-            || dom_adapter
-                .element(host, entry.element)
-                .is_none_or(|element| {
-                    element
-                        .borrow_data()
-                        .is_none_or(|data| !data.has_styles() || !data.hint.is_empty())
-                })
+        dom_adapter
+            .element(host, entry.element)
+            .is_none_or(|element| {
+                !element_style_is_current(world, element, entry.required_generation)
+            })
     })
 }
 
