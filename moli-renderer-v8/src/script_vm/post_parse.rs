@@ -374,27 +374,21 @@ impl ScriptVmContextBootstrap {
             mode,
             runtime_observable_context_token,
         )?;
-        // SecureContext is origin-based, not document-URL-based. Initial
-        // about:blank/srcdoc child contexts can keep about:* document URLs while
-        // inheriting the creator's origin, so child bootstrap must ask the
-        // context host for the origin-aware URL instead of using current_url().
-        let secure_context_url = match mode {
+        // Capture trust from the complete native ancestor chain.
+        let secure_context_available = match mode {
             WindowContextBootstrapMode::Isolated {
                 child_handle: Some(child_handle),
                 ..
             }
             | WindowContextBootstrapMode::ChildDefault { child_handle, .. } => {
-                unsafe { &*host_ptr }
-                    .child_browsing_context_secure_context_url(child_handle)
-                    .unwrap_or_else(|| unsafe { &*host_ptr }.document_url().clone())
+                unsafe { &*host_ptr }.child_browsing_context_secure_context_available(child_handle)
             }
             WindowContextBootstrapMode::MainDefault
             | WindowContextBootstrapMode::Isolated {
                 child_handle: None, ..
-            } => unsafe { &*host_ptr }
-                .current_main_document_resource_loader()
-                .and_then(|loader| url::Url::parse(loader.fetch_context().origin()).ok())
-                .unwrap_or_else(|| unsafe { &*host_ptr }.document_url().clone()),
+            } => unsafe { &*host_ptr }.secure_context_available_for_dispatch_scope(
+                crate::native_bridge::OwnerDispatchScope::Top,
+            ),
         };
         if let WindowContextBootstrapMode::Isolated { child_handle, .. } = mode {
             let owner_context = match child_handle {
@@ -409,7 +403,7 @@ impl ScriptVmContextBootstrap {
             let owner = owner_context.global(scope);
             crate::context_bootstrap::bind_isolated_window_history_owner(scope, global, owner);
         }
-        finish_context_bootstrap(scope, unsafe { &mut *host_ptr }, &secure_context_url)?;
+        finish_context_bootstrap(scope, unsafe { &mut *host_ptr }, secure_context_available)?;
         match mode {
             WindowContextBootstrapMode::Isolated {
                 child_handle: Some(child_handle),

@@ -447,11 +447,9 @@ fn shared_worker_constructor_context(
             .page_shared_worker_client_event_sender()
             .bind_execution_context(execution_context);
         let worker_host_bridge_sender = host.page_worker_host_bridge_event_sender().clone();
-        let secure_context_url = child_handle
-            .and_then(|handle| host.child_browsing_context_secure_context_url(handle))
-            .or_else(|| host.active_lightweight_popup_base_url(scope))
-            .unwrap_or_else(|| host.document_url().clone());
-        let creator_secure_context = moli_url::is_potentially_trustworthy_url(&secure_context_url);
+        let creator_secure_context = host
+            .secure_context_available_for_window_execution_context_identity(execution_context)
+            .unwrap_or(false);
         let resource_loader = host.document_resource_loader_for_dispatch_scope(owner_scope)?;
         let context = SharedWorkerConstructorContext {
             base_url,

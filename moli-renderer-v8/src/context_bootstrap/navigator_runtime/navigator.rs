@@ -1108,15 +1108,14 @@ fn navigator_geolocation_secure_context_available(
         return false;
     };
     let host = unsafe { &*host_ptr };
-    let url = if let Some(owner_child) = owner_child {
-        host.child_browsing_context_secure_context_url(owner_child)
-    } else if let Some(owner_popup) = owner_popup {
-        host.lightweight_popup_document_url(owner_popup)
-            .or_else(|| Some(host.document_url().clone()))
+    let owner = if let Some(child) = owner_child {
+        crate::native_bridge::OwnerDispatchScope::Child(child)
+    } else if let Some(popup) = owner_popup {
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup)
     } else {
-        Some(host.document_url().clone())
+        crate::native_bridge::OwnerDispatchScope::Top
     };
-    url.is_some_and(|url| moli_url::is_potentially_trustworthy_url(&url))
+    host.secure_context_available_for_dispatch_scope(owner)
 }
 
 fn effective_navigator_languages<'s>(

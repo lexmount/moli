@@ -368,6 +368,7 @@ pub(super) struct LightweightPopupStorageScope {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LightweightPopupDocumentState {
+    secure_context_available: bool,
     pub(super) base_url: Url,
     pub(super) policy_container: DocumentPolicyContainer,
     pub(super) document_domain_override: Option<String>,
@@ -470,8 +471,13 @@ fn inherit_lightweight_popup_opener_sandbox(
 }
 
 impl LightweightPopupDocumentState {
-    fn new(base_url: Url, policy_container: DocumentPolicyContainer) -> Self {
+    fn new(
+        base_url: Url,
+        policy_container: DocumentPolicyContainer,
+        secure_context_available: bool,
+    ) -> Self {
         Self {
+            secure_context_available,
             base_url,
             policy_container,
             document_domain_override: None,
@@ -488,6 +494,7 @@ impl LightweightPopupDocumentState {
         base_url: Url,
         response: DocumentPolicyContainer,
     ) -> Self {
+        self.secure_context_available = moli_url::is_potentially_trustworthy_url(&base_url);
         self.base_url = base_url;
         self.document_domain_override = None;
         self.policy_container.referrer_policy = response.referrer_policy;
@@ -905,8 +912,13 @@ impl JsContextHost {
             &mut initial_policy_container.sandbox,
             opener_sandbox_policy,
         );
-        let initial_document_state =
-            LightweightPopupDocumentState::new(initial_base_url.clone(), initial_policy_container);
+        let initial_document_state = LightweightPopupDocumentState::new(
+            initial_base_url.clone(),
+            initial_policy_container,
+            opener_endpoint.is_some_and(|endpoint| {
+                self.secure_context_available_for_dispatch_scope(endpoint.dispatch_scope())
+            }),
+        );
         let initial_resource_origin = initial_origin.serialized_origin();
         let session_storage_store = match opener {
             Some(opener) => self.cloned_lightweight_popup_session_storage_store(
@@ -1047,8 +1059,15 @@ impl JsContextHost {
         let parsed_url = Url::parse(href).ok()?;
         let initial_base_url = lightweight_popup_initial_base_url(&parsed_url, creator_base_url);
         let window = self.lightweight_popup_window(scope, popup_id)?;
-        let mut navigation_state =
-            LightweightPopupDocumentState::new(initial_base_url, creator_policy_container);
+        let mut navigation_state = LightweightPopupDocumentState::new(
+            initial_base_url,
+            creator_policy_container,
+            lightweight_popup_initiator_endpoint(scope, opener, opener_child_handle).is_some_and(
+                |endpoint| {
+                    self.secure_context_available_for_dispatch_scope(endpoint.dispatch_scope())
+                },
+            ),
+        );
         let opener_sandbox_policy = self
             .lightweight_popup_record(popup_id)
             .and_then(|record| record.opener_sandbox_policy);
@@ -1198,6 +1217,11 @@ impl JsContextHost {
         self.lightweight_popup_browsing_contexts
             .get(&popup_id)
             .map(|record| record.location_url.clone())
+    }
+
+    pub(crate) fn popup_secure_context_available(&self, popup_id: u64) -> bool {
+        self.lightweight_popup_document_record(popup_id)
+            .is_some_and(|document| document.state.secure_context_available)
     }
 
     pub(crate) fn lightweight_popup_document_url(&self, popup_id: u64) -> Option<Url> {

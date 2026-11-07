@@ -1522,7 +1522,7 @@ pub(crate) fn install_wpt_webdriver_runtime_state(
 pub(crate) fn finish_context_bootstrap(
     scope: &mut v8::PinScope<'_, '_>,
     document_runtime: &mut JsContextHost,
-    secure_context_url: &url::Url,
+    secure_context_available: bool,
 ) -> Result<()> {
     super::exposed_interfaces::initialize_realm_interface_registry(
         scope,
@@ -1545,7 +1545,7 @@ pub(crate) fn finish_context_bootstrap(
         );
     }
     let _ = global.delete(scope, console_key.into());
-    install_window_runtime_state(scope, global, document_runtime, secure_context_url)?;
+    install_window_runtime_state(scope, global, document_runtime, secure_context_available)?;
     // WPT harness helper only. Normal builds keep the feature disabled so pages
     // do not observe non-standard `webdriver` / `WebDriver` globals.
     #[cfg(feature = "wpt-extensions")]
@@ -1875,9 +1875,8 @@ fn install_window_runtime_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
     runtime: &DocumentRuntime,
-    secure_context_url: &url::Url,
+    secure_context_available: bool,
 ) -> Result<()> {
-    let secure_context_available = moli_url::is_potentially_trustworthy_url(secure_context_url);
     set_private_value(
         scope,
         global,
