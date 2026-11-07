@@ -2948,6 +2948,7 @@ dependencies = [
  "rcgen",
  "serde",
  "strum",
+ "thiserror",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",

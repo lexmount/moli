@@ -122,11 +122,14 @@ fn request_mode_validation_is_pure_and_admission_rechecks_recorded_policy() -> R
             anyhow::bail!("recorded redirect denied");
         }));
     request.validate_request_mode_for_url(&target)?;
-    assert!(
-        request
-            .validate_request_mode_for_url(&Url::parse("https://cross.test/")?)
-            .is_err()
-    );
+    let cross_origin_url = Url::parse("https://cross.test/")?;
+    let error = request
+        .validate_request_mode_for_url(&cross_origin_url)
+        .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<crate::RequestModeError>(),
+        Some(crate::RequestModeError::CrossOrigin { url }) if url == &cross_origin_url
+    ));
     assert_eq!(
         calls.load(Ordering::SeqCst),
         0,

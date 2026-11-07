@@ -29,17 +29,17 @@ pub(crate) fn start_stylesheet_subresource_fetch(
 ) -> Result<StylesheetSubresourceFetchStart> {
     ensure!(
         host.stylesheet_subresource_load_delay_is_current(binding),
-        "stylesheet subresource document owner is stale"
+        ResourceFetchError::StaleOwner
     );
     let owner = binding
         .child_handle()
         .map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child);
     let resource_loader = host
         .document_resource_loader_for_owner(binding.owner())
-        .context("stylesheet Document resource authority is unavailable")?;
+        .context(ResourceFetchError::NoResourceLoader)?;
     let environment = host
         .subresource_request_environment(&resource_loader, owner)
-        .context("stylesheet Document request environment is unavailable")?;
+        .context(ResourceFetchError::NoRequestEnvironment)?;
     let (request_url, target) = request.into_parts();
     let options = match &target {
         StylesheetSubresourceTarget::Image(_) => SubresourceFetchOptions::CSS_IMAGE,
@@ -114,13 +114,14 @@ pub(crate) fn start_stylesheet_subresource_fetch(
         environment,
         request_url,
         options,
-    )?;
+    );
     let internal_id = host
-        .record_async_stylesheet_subresource_fetch(
+        .record_stylesheet_subresource_fetch(
             v8::Global::new(scope, scope.get_current_context()),
             binding,
             owner,
-            prepared.cancel_handle.clone(),
+            prepared.registration.clone(),
+            &prepared.dispatch,
             options.credentials_mode,
             options.request_mode,
             prepared.network_partition_key.clone(),
@@ -128,13 +129,9 @@ pub(crate) fn start_stylesheet_subresource_fetch(
             target,
             prepared.pending_info.clone(),
         )
-        .context("stylesheet subresource owner changed before request binding")?;
+        .context(ResourceFetchError::OwnerChangedBeforeBinding)?;
 
-    prepared.dispatch(
-        host,
-        internal_id,
-        "service worker stylesheet subresource dispatch failed",
-    );
+    prepared.dispatch(host, internal_id);
     Ok(StylesheetSubresourceFetchStart::Pending)
 }
 

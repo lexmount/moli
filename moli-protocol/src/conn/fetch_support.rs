@@ -104,7 +104,10 @@ impl FetchResourceTypeFilter {
             Self::Script => resource_type == DevToolsNetworkResourceType::Script,
             Self::Stylesheet => resource_type == DevToolsNetworkResourceType::Stylesheet,
             Self::Image => resource_type == DevToolsNetworkResourceType::Image,
-            Self::Media => resource_type == DevToolsNetworkResourceType::Media,
+            Self::Media => matches!(
+                resource_type,
+                DevToolsNetworkResourceType::Media | DevToolsNetworkResourceType::TextTrack
+            ),
             Self::Font => resource_type == DevToolsNetworkResourceType::Font,
             Self::TextTrack => resource_type == DevToolsNetworkResourceType::TextTrack,
             Self::Ping => resource_type == DevToolsNetworkResourceType::Ping,
@@ -118,10 +121,8 @@ impl FetchResourceTypeFilter {
 
     pub fn subresource_type(self) -> Option<SubresourceResourceType> {
         match self {
-            Self::Stylesheet | Self::Media | Self::TextTrack => None,
-            // Fonts load through the standard pending-subresource pipeline
-            // (renderer font_face host reports SubresourceResourceType::Font),
-            // so the scheduler can pause them like images and scripts.
+            Self::Stylesheet | Self::TextTrack => None,
+            Self::Media => Some(SubresourceResourceType::Media),
             Self::Font => Some(SubresourceResourceType::Font),
             // Top-level navigations pause in the protocol; child frame
             // navigations pause in the renderer like subresources.
@@ -151,6 +152,7 @@ impl FetchResourceTypeFilter {
             Self::Document
                 | Self::Script
                 | Self::Image
+                | Self::Media
                 | Self::Font
                 | Self::Fetch
                 | Self::EventSource
@@ -1875,17 +1877,15 @@ mod tests {
             FetchResourceTypeFilter::Script.subresource_type(),
             Some(SubresourceResourceType::Script)
         );
-        for filter in [
-            FetchResourceTypeFilter::Stylesheet,
-            FetchResourceTypeFilter::Media,
-            FetchResourceTypeFilter::TextTrack,
-        ] {
-            assert!(!filter.supports_fetch_enable(), "{filter:?}");
-            assert_eq!(filter.subresource_type(), None, "{filter:?}");
-        }
+        assert!(!FetchResourceTypeFilter::Stylesheet.supports_fetch_enable());
+        assert_eq!(FetchResourceTypeFilter::Stylesheet.subresource_type(), None);
+        assert!(!FetchResourceTypeFilter::TextTrack.supports_fetch_enable());
+        assert_eq!(FetchResourceTypeFilter::TextTrack.subresource_type(), None);
         for filter in [
             FetchResourceTypeFilter::Document,
             FetchResourceTypeFilter::Image,
+            FetchResourceTypeFilter::Media,
+            FetchResourceTypeFilter::Font,
             FetchResourceTypeFilter::Fetch,
             FetchResourceTypeFilter::EventSource,
             FetchResourceTypeFilter::Xhr,
@@ -1896,6 +1896,29 @@ mod tests {
         ] {
             assert!(filter.supports_fetch_enable(), "{filter:?}");
         }
+    }
+
+    #[test]
+    fn media_filter_matches_text_tracks_and_configures_the_shared_renderer_type() {
+        let patterns = vec![FetchInterceptionPattern {
+            url_pattern: "*".to_owned(),
+            resource_type_filter: Some(FetchResourceTypeFilter::Media),
+            request_stage: FetchRequestStage::Request,
+        }];
+        let url = Url::parse("https://example.test/captions.vtt").unwrap();
+        for resource_type in [
+            DevToolsNetworkResourceType::Media,
+            DevToolsNetworkResourceType::TextTrack,
+        ] {
+            assert!(matching_fetch_pattern(&patterns, resource_type, &url).is_some());
+        }
+        assert!(
+            matching_fetch_pattern(&patterns, DevToolsNetworkResourceType::Font, &url).is_none()
+        );
+        assert_eq!(
+            fetch_subresource_interception_config_for_patterns(true, &patterns),
+            (true, Some(SubresourceResourceType::Media))
+        );
     }
 
     #[test]

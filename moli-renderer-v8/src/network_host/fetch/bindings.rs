@@ -251,10 +251,10 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         return;
     }
 
-    if let Err(message) = moli_fetch::FetchUrlList::new(&prepared.resolved_url, &[])
+    if let Err(error) = moli_fetch::FetchUrlList::new(&prepared.resolved_url, &[])
         .validate_request_mode(prepared.request_mode, &prepared.request_origin)
     {
-        rv.set(make_rejected_promise(scope, &message).into());
+        rv.set(make_rejected_promise(scope, &error.to_string()).into());
         return;
     }
 

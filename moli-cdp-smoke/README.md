@@ -8,6 +8,57 @@ The `protocol` group also opens prompts with two attached Page sessions. Each
 session receives one opening and one closing notification; either session can
 handle the prompt and resume the original evaluation with its supplied text.
 
+The default `fetch-font` group enables mixed Font/Image patterns before
+navigation and loads the fixture's valid WOFF2 through CSS `@font-face` and
+`FontFace.load()`. Six font scenarios cover request-stage continue, fulfill,
+fail and disable, plus response-stage body reading and continuation. Four CSS
+image/font controls drive `Page.captureScreenshot` to demand real paint resources,
+then verify the shared admission path with continue and fail. A nonmatching
+`fetch()` uses the same URL pattern; font status, fixture request counts and a
+correlated Network terminal verify the actual outcome. Calibration against the
+pinned Chromium 145.0.7632.6 on 2026-11-07 also observed a failed initial font
+attempt followed by a new interception ID with the same Network ID. The group
+settles each interception and still requires exactly one successful response
+body at response stage and one Network terminal per request.
+
+The default `fetch-media` group drives real audio, video and text-track element
+loads. Eleven scenarios cover single Media filters, mixed Image/Media/Font
+patterns, continue/fulfill/fail/disable and response-stage body reading. Valid
+PCM WAV and WebVTT fixtures verify media metadata or parsed cues, server request
+counts and Fetch/Network correlation. Chromium 145 rejects the explicit
+`TextTrack` Fetch filter: text-track pauses use `Media` while Network events
+retain `TextTrack`. Moli follows that classification. As with Image/Font,
+Fetch.disable terminates Moli's paused loads and resumes Chromium's loads.
+
+The default `fetch-resource-dispatch` group verifies Service Worker responses
+for FontFace, paint-demanded CSS fonts/images, audio/video and text tracks with
+Fetch disabled, URL-nonmatching patterns and matching patterns. Worker-owned
+URLs return 404 at the origin, so successful decoding with zero origin requests
+proves routing was preserved. It also covers SW response-stage bodies and Moli's
+request URL/header overrides, plus automatic and explicit continuation with
+Network extra headers, blocked URLs and disabled HTTP caching across Documents.
+Worker network fallback is checked with extra headers, blocked URLs and a
+redirect that must drop current-request-only header overrides. Authentication
+retry also verifies that page headers survive the challenged request. Offline
+cases require SW-owned fonts to load successfully while network-owned fonts
+fail, for both unmatched patterns and explicit continuation.
+CSS image cases compare complete Network/Fetch response bodies and decoded red
+background pixels after completion. Cross-origin SW fonts without CORS response
+headers must keep loading after response-stage continuation. Explicit header
+replacement, including an empty list, must omit page defaults on the current
+request and restore them only on a subsequent redirect.
+Chromium serves SW-produced responses before its network-service Fetch hook;
+Moli additionally supports pausing before SW dispatch. Matching SW cases require
+pauses on Moli, while Chromium calibrates the SW result and origin count. Network
+blocked URLs can also fail before Chromium's Fetch hook. These differences do not
+relax the resource outcome, server header or origin count assertions.
+
+This shared registration currently covers element images, CSS images and fonts,
+FontFace loads, audio/video elements and text tracks. It does not unify every
+resource loader. Explicit Stylesheet filters and Manifest filters remain
+unsupported; parser-blocking stylesheets and the separate connected-link
+preload/compression-dictionary path require their own interception integration.
+
 ## Chromium Behavior Evidence
 
 CI runs every default group twice per engine: `CDP smoke` uses the HEAD Moli
@@ -153,6 +204,7 @@ or identical scenario counts:
 | Scrollbar startup / emulation | CLI/environment matrix; current document updates immediately | Default visible, `--hide-scrollbars`; emulation applies on navigation |
 | Locale/timezone across contexts | Shared process defaults and exclusive claims | Independent renderer defaults and claims |
 | Fetch body streams | Buffered seeking and explicit rejection of continuation after body take | Sequential reads; EOF may require a separate empty read |
+| Fetch.disable with paused subresources | Terminates pending Font and Image loads | Resumes pending Font and Image loads |
 | WebSocket events and URL blocking | Extra generic request events, payload lengths, and WebSocket URL blocking | Dedicated WebSocket events and payload data; URL blocking excludes WebSockets |
 | Hosted file URLs | Capability error before navigation/interception | File navigation and interception; missing file returns `ERR_FILE_NOT_FOUND` |
 | Other capability boundaries | Stack timing privacy, unsupported CPU throttling, PI rename extension | Observed stack timing, successful throttling, rejected PI rename |

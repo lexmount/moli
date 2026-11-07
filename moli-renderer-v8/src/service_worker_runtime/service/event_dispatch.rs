@@ -244,24 +244,36 @@ impl ServiceWorkerRuntimeService {
     }
 
     pub(crate) fn dispatch_controlled_fetch(&self, dispatch: ServiceWorkerFetchDispatch) -> bool {
+        let request = &dispatch.request;
+        let native_request = {
+            let origin = dispatch.network_context.request_origin.clone();
+            moli_fetch::Request::new_browser(
+                &request.method,
+                request.url.clone(),
+                request.body.clone(),
+                moli_fetch::RequestHeaders::from_byte_strings(&request.headers)
+                    .expect("service worker request headers are ByteStrings"),
+                origin,
+            )
+            .with_initiator_url(&dispatch.network_context.document_url)
+            .with_request_mode(request.request_mode)
+            .with_credentials_mode(request.credentials_mode)
+            .with_redirect_mode(request.redirect_mode)
+            .with_fetch_priority_hint(request.priority)
+        };
+        self.dispatch_controlled_fetch_request(dispatch, native_request)
+    }
+
+    /// Resource interception already owns the complete browser request. Keep
+    /// its redirect headers, partition and policy when the worker falls back.
+    pub(crate) fn dispatch_controlled_fetch_request(
+        &self,
+        dispatch: ServiceWorkerFetchDispatch,
+        native_request: moli_fetch::Request,
+    ) -> bool {
         let request = dispatch.request.clone();
         let fetch_job = ServiceWorkerFetchJob {
-            request: {
-                let origin = dispatch.network_context.request_origin.clone();
-                moli_fetch::Request::new_browser(
-                    &request.method,
-                    request.url.clone(),
-                    request.body.clone(),
-                    moli_fetch::RequestHeaders::from_byte_strings(&request.headers)
-                        .expect("service worker request headers are ByteStrings"),
-                    origin,
-                )
-                .with_initiator_url(&dispatch.network_context.document_url)
-                .with_request_mode(request.request_mode)
-                .with_credentials_mode(request.credentials_mode)
-                .with_redirect_mode(request.redirect_mode)
-                .with_fetch_priority_hint(request.priority)
-            },
+            request: native_request,
             internal_id: dispatch.internal_id,
             owner: None,
             cors_preflight_request_headers: dispatch.cors_preflight_request_headers,

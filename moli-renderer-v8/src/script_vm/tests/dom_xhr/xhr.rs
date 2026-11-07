@@ -2426,6 +2426,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                         response_filter: None,
                         pending: super::PendingSubresourceFetchState {
+                            dispatch: None,
                             redirect_headers: None,
                             request_origin: moli_url::WebOrigin::from_url(&document_url),
                             info: crate::types::PendingSubresourceFetchInfo {
@@ -2584,6 +2585,7 @@ async fn async_subresource_failure_network_error_override_preserves_fetch_reject
 
                 context_host.borrow_mut().restore_pending_subresource_fetch(
                     super::PendingSubresourceFetchState {
+                        dispatch: None,
                         redirect_headers: None,
                         request_origin: moli_url::WebOrigin::from_url(&document_url),
                         info: crate::types::PendingSubresourceFetchInfo {
@@ -2721,6 +2723,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                         response_filter: None,
                         pending: super::PendingSubresourceFetchState {
+                            dispatch: None,
                             redirect_headers: None,
                             request_origin: moli_url::WebOrigin::from_url(
                                 &(Url::parse("https://streaming-fetch-body-error.test/")
@@ -2890,6 +2893,7 @@ fn install_streaming_fetch_response_fixture(
                 .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                     response_filter: None,
                     pending: super::PendingSubresourceFetchState {
+                        dispatch: None,
                         redirect_headers: None,
                         request_origin: moli_url::WebOrigin::from_url(&document_url),
                         info: crate::types::PendingSubresourceFetchInfo {
@@ -2996,6 +3000,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                         response_filter: None,
                         pending: super::PendingSubresourceFetchState {
+                            dispatch: None,
                             redirect_headers: None,
                             request_origin: moli_url::WebOrigin::from_url(
                                 &(Url::parse("https://streaming-fetch-body-cancel.test/")
@@ -3651,6 +3656,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                 .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                     response_filter: None,
                     pending: super::PendingSubresourceFetchState {
+                        dispatch: None,
                         redirect_headers: None,
                         request_origin: moli_url::WebOrigin::from_url(
                             &(Url::parse("https://xhr-streaming-materialize-error.test/")

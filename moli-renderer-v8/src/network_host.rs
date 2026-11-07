@@ -18,9 +18,12 @@ mod media;
 mod preflight_events;
 mod request;
 mod request_scope;
+mod resource_fetch_error;
+pub(crate) use resource_fetch_error::ResourceFetchError;
 mod response;
 mod stylesheet_subresource;
 mod subresource;
+pub(crate) use subresource::SubresourceRequestDispatch;
 mod text_track;
 mod url_helpers;
 mod xhr;
@@ -178,7 +181,7 @@ pub(crate) use self::stylesheet_subresource::{
     StylesheetSubresourceFetchStart, start_stylesheet_subresource_fetch,
 };
 pub(crate) use self::text_track::{
-    TextTrackResourceFetchStart, start_text_track_resource_fetch, text_track_response_result,
+    TextTrackResourceFetchStart, start_text_track_resource_fetch, text_track_response_terminal,
 };
 pub(crate) use self::url_helpers::merge_byte_string_request_headers;
 pub(in crate::network_host) use self::url_helpers::merge_subresource_request_headers;

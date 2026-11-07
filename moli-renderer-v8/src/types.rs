@@ -10,6 +10,21 @@ pub(crate) type NetworkBodySourceId = u64;
 pub(crate) type SharedNavigationResponseResult =
     std::sync::Arc<std::result::Result<NavigationResponse, String>>;
 
+#[derive(Clone)]
+pub(crate) enum SubresourceFetchRegistration {
+    Intercepted,
+    Direct(moli_fetch::FetchCancelHandle),
+}
+
+impl SubresourceFetchRegistration {
+    pub(crate) fn cancel_handle(&self) -> Option<moli_fetch::FetchCancelHandle> {
+        match self {
+            Self::Intercepted => None,
+            Self::Direct(cancel_handle) => Some(cancel_handle.clone()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct DedicatedWorkerId(u64);
 
@@ -522,6 +537,9 @@ impl PendingSubresourceExecutionContext {
 }
 
 pub(super) struct PendingSubresourceFetchState {
+    // Element and CSS loads retain the original request and SW client across
+    // interception; resuming must not reconstruct them from the current Page.
+    pub(super) dispatch: Option<Box<crate::network_host::SubresourceRequestDispatch>>,
     pub(super) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(super) request_origin: moli_url::WebOrigin,
     pub(super) info: PendingSubresourceFetchInfo,
@@ -570,6 +588,10 @@ pub(super) struct PendingSubresourceResponseState {
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) response: NavigationResponse,
+    pub(super) encoded: Option<moli_parkable_image::ParkableImage>,
+    pub(super) response_status_text: Option<String>,
+    pub(super) skip_fetch_security_validation: bool,
+    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
 }
 
 pub(super) struct PendingSubresourceAuthState {
@@ -581,6 +603,10 @@ pub(super) struct PendingSubresourceAuthState {
     pub(super) intercept_response: bool,
     pub(super) initial_network_request_headers: Option<Vec<(String, String)>>,
     pub(super) response: NavigationResponse,
+    pub(super) encoded: Option<moli_parkable_image::ParkableImage>,
+    pub(super) response_status_text: Option<String>,
+    pub(super) skip_fetch_security_validation: bool,
+    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
 }
 
 pub(super) struct RunningSubresourceFetchState {
@@ -650,6 +676,7 @@ impl AsyncSubresourceFetchResult {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn into_result(self) -> std::result::Result<NavigationResponse, String> {
         match self {
             Self::Response(response) | Self::Image { response, .. } => Ok(response),
