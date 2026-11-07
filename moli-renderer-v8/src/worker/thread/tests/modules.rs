@@ -5354,6 +5354,7 @@ async fn service_worker_importscripts_reports_imported_script_resource() {
             WorkerToParentMessage::ServiceWorkerSkipWaiting {
                 registration_id,
                 version_id,
+                ..
             } => {
                 assert_eq!(
                     registration_id,
@@ -5446,6 +5447,7 @@ async fn service_worker_module_static_import_reports_imported_script_resource() 
             WorkerToParentMessage::ServiceWorkerSkipWaiting {
                 registration_id,
                 version_id,
+                ..
             } => {
                 assert_eq!(
                     registration_id,
@@ -5537,6 +5539,7 @@ async fn service_worker_module_static_json_import_reports_json_resource_kind() {
             WorkerToParentMessage::ServiceWorkerSkipWaiting {
                 registration_id,
                 version_id,
+                ..
             } => {
                 assert_eq!(
                     registration_id,
@@ -5629,6 +5632,7 @@ async fn service_worker_module_static_text_import_reports_text_resource_kind() {
             WorkerToParentMessage::ServiceWorkerSkipWaiting {
                 registration_id,
                 version_id,
+                ..
             } => {
                 assert_eq!(
                     registration_id,
