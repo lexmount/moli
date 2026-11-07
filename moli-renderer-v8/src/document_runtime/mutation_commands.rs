@@ -2014,16 +2014,25 @@ fn execute_committed_inline_classic_script(
     ) else {
         return;
     };
-    let Some(source) = v8::String::new(scope, &source) else {
-        return;
-    };
-    let Some(script) = v8::Script::compile(scope, source, None) else {
-        return;
-    };
+    let script_url = runtime.document.url().clone();
+    let base_url = runtime
+        .dom_host
+        .document_base_url_for_handle(runtime.dom_host.document_handle())
+        .unwrap_or_else(|| script_url.clone());
     unsafe { &mut *host_ptr }.push_current_inline_script(node);
-    let run_result = crate::script_execution::execute_compiled_script(scope, script);
+    // Script failures are reported to Window rather than escaping from the
+    // inserting DOM operation. Keep currentScript set while reporting them.
+    let run_result = crate::script_vm::execute_source_text_on_current_stack(
+        scope,
+        &source,
+        Some(&script_url),
+        Some(&base_url),
+        0,
+        nonce.as_deref(),
+        false,
+    );
     unsafe { &mut *host_ptr }.pop_current_inline_script(node);
-    if run_result.is_some() {
+    if run_result.is_ok() {
         let _ = runtime.enqueue_script_event_lifecycle_work(
             crate::host::ScriptEventKind::Load,
             &host_script_handle,
