@@ -95,6 +95,7 @@ mod navigation_recursion;
 mod nested_frame_access;
 mod node_tree_mutation_bindings;
 mod notification_init;
+mod opaque_document_cookie;
 mod opaque_wasm_origins;
 mod parent_node_bindings;
 mod payload_event_init;
