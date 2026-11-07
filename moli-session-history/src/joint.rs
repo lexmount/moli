@@ -265,6 +265,38 @@ impl JointSessionHistory {
         })
     }
 
+    /// Snapshot this context at every retained joint-history step.
+    pub fn context_entries(
+        &self,
+        context: SessionHistoryContextId,
+    ) -> Vec<(SessionHistoryStepId, SessionHistoryEntry)> {
+        self.steps
+            .iter()
+            .filter_map(|step| {
+                step.entries
+                    .get(&context)
+                    .cloned()
+                    .map(|entry| (step.id, entry))
+            })
+            .collect()
+    }
+
+    /// Reattach a saved context to its retained step identities.
+    /// Traversal admission continues to compare the resulting transition.
+    pub fn restore_context(
+        &mut self,
+        context: SessionHistoryContextId,
+        parent: SessionHistoryContextId,
+        entries: &[(SessionHistoryStepId, SessionHistoryEntry)],
+    ) {
+        self.parents.insert(context, parent);
+        for step in &mut self.steps {
+            if let Some((_, entry)) = entries.iter().find(|(id, _)| *id == step.id) {
+                step.entries.insert(context, entry.clone());
+            }
+        }
+    }
+
     pub fn prune_all_but_current(&mut self) {
         if self.steps.len() == 1 {
             return;
