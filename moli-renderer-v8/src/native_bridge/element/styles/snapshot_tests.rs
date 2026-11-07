@@ -55,6 +55,66 @@ fn divs_in_subtree(host: &JsContextHost, root: DomHandle) -> Vec<DomHandle> {
     nodes
 }
 
+fn shadow_inheritance_fixture(mode: &str) -> (StandaloneScriptVmHarness, DomHandle) {
+    let mut vm = fixture(
+        "<main id=host style='font-weight:700;letter-spacing:3px;font-style:italic;text-transform:uppercase'></main>",
+    );
+    vm.eval(&format!(
+        "const root = document.getElementById('host').attachShadow({{mode:'{mode}'}}); root.innerHTML = '<span>Hello</span>'; globalThis.styleTarget = root.firstElementChild",
+    ))
+    .unwrap();
+    let handle = {
+        let host = vm.context_host_weak_for_test().upgrade().unwrap();
+        let host = host.borrow();
+        let shadow_host = host.dom_host().element_handle_by_id("host").unwrap();
+        let root = host.dom_host().shadow_root_handle(shadow_host).unwrap();
+        host.dom_host().child_handles(root).next().unwrap()
+    };
+    (vm, handle)
+}
+
+#[test]
+fn cold_document_export_inherits_from_shadow_host_like_single_node_resolution() {
+    let properties = [
+        "font-weight",
+        "letter-spacing",
+        "font-style",
+        "text-transform",
+    ]
+    .map(str::to_owned);
+    for mode in ["open", "closed"] {
+        let expected = {
+            let (vm, node) = shadow_inheritance_fixture(mode);
+            let host = vm.context_host_weak_for_test().upgrade().unwrap();
+            let host = host.borrow();
+            let mut observation = StyleObservation::new(&host);
+            let style = observation.read(node);
+            properties
+                .iter()
+                .map(|property| style.property(property))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(expected, ["700", "3px", "italic", "uppercase"]);
+
+        // A separate DOM must reach the batch resolver with no styles warmed
+        // by getComputedStyle or the single-node control above.
+        let (mut vm, node) = shadow_inheritance_fixture(mode);
+        {
+            let host = vm.context_host_weak_for_test().upgrade().unwrap();
+            let host = host.borrow();
+            let values =
+                computed_style_export_values_for_document_snapshot(&host, [node], &properties);
+            assert_eq!(values[0].values, expected, "cold {mode} shadow tree");
+        }
+        assert_eq!(
+            vm.eval("JSON.stringify(['font-weight','letter-spacing','font-style','text-transform'].map(name => getComputedStyle(styleTarget).getPropertyValue(name)))")
+                .unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+            "the batch result must also leave the canonical cache correct",
+        );
+    }
+}
+
 #[test]
 fn document_export_checks_flat_tree_membership_linearly_in_either_node_order() {
     let depth = 256;
