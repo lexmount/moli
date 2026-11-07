@@ -4,6 +4,19 @@
 use super::*;
 
 impl ScriptVm {
+    pub(super) fn settle_loaded_document_font_set(&mut self, document: DomHandle) {
+        // A document without a script realm cannot have an observed font
+        // promise. Native load completion must preserve lazy realm creation.
+        if let Err(error) = self.with_current_main_world_scope(|scope, host_ptr| {
+            crate::context_bootstrap::settle_document_font_face_set_ready(
+                scope, host_ptr, document,
+            );
+            Ok(())
+        }) {
+            tracing::warn!(%error, "failed to settle document font readiness after load");
+        }
+    }
+
     pub(super) fn reconcile_document_font_resources(&mut self) {
         if self.current_main_world().is_none() {
             let host = self._context_host.borrow();

@@ -145,6 +145,7 @@ async fn child_document_fonts_ready_waits_for_its_own_resource() {
         "<!doctype html><span id=parentTarget style='display:inline-block;font:20px ChildReady,serif'>iiii</span><iframe id=frame></iframe>",
         &loader,
     );
+    finish_main_document_load_for_test(&mut vm);
     vm.set_layout_policy(LayoutPolicy::OnDemand);
     vm.eval(&format!(r#"
         globalThis.child=frame.contentWindow;
@@ -187,6 +188,22 @@ async fn child_document_fonts_ready_waits_for_its_own_resource() {
     vm.perform_owner_lane_task_microtask_checkpoints().unwrap();
     refresh_child_geometry_without_paint(&vm);
     assert_eq!(vm.eval("childReady").unwrap(), "false");
+    // Admit the replacement realm before its lifecycle tasks. document.close()
+    // already applied interactive, leaving DCL/complete and load delivery.
+    while vm.run_child_realm_materialization_body_for_test().unwrap() {}
+    for _ in 0..2 {
+        assert!(
+            vm.run_child_frame_task_source_once_for_test(
+                ChildFrameSemanticTurnKind::DocumentLifecycle
+            )
+            .await
+        );
+    }
+    assert_eq!(vm.eval("childReady").unwrap(), "false");
+    assert!(
+        vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::HostLoad)
+            .await
+    );
     run_font_tasks(&mut vm);
     assert_eq!(vm.eval("JSON.stringify([rootReady,childReady,child.document.fonts.status,childTarget.offsetWidth,childFace.status,childFaceLoaded])").unwrap(), r#"[true,true,"loaded",48,"loaded",true]"#);
     assert_eq!(vm.eval("String(parentTarget.offsetWidth)").unwrap(), parent);

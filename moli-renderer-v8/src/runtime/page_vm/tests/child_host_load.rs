@@ -2,6 +2,115 @@ use super::*;
 
 use crate::page_task_queue::PageChildHostLoadTargetEffect;
 
+#[tokio::test(flavor = "current_thread")]
+async fn child_font_set_ready_waits_for_its_load_delivery() {
+    run_page_vm_async_test(async {
+        for start_font in [false, true] {
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+            let (mut page_vm, _resources, _wakes) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://font-environment.test/child-load")?,
+            );
+            let source = format!(
+                r#"<!doctype html><script>
+parent.fontReadyTrace.push('parse');
+const fonts = document.fonts;
+const captured = fonts.ready;
+if ({start_font}) {{
+  const face = new FontFace('Environment', 'local("MoliMissingEnvironmentFont-18403")');
+  fonts.add(face);
+  face.load().catch(() => {{}});
+}}
+parent.fontPromiseUnchanged = captured === fonts.ready;
+captured.then(value => parent.fontReadyTrace.push('ready:' + (value === fonts)));
+addEventListener('load', () => parent.fontReadyTrace.push('window-load'));
+</script><body>child</body>"#
+            );
+            page_vm.vm_mut().eval(&format!(
+                r#"
+globalThis.fontReadyTrace = [];
+const frame = document.createElement('iframe');
+frame.id = 'font-environment';
+frame.onload = () => fontReadyTrace.push('element-load');
+frame.srcdoc = {};
+document.body.append(frame);
+"#,
+                serde_json::to_string(&source)?
+            ))?;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm,
+                ChildFrameSemanticTurnKind::NavigationCommit,
+                "font readiness child parser",
+            )
+            .await;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm,
+                ChildFrameSemanticTurnKind::DocumentScriptReady,
+                "font readiness parser script",
+            )
+            .await;
+            for _ in 0..8 {
+                if !page_vm
+                    .run_one_due_timer_selected_task_for_test(&loader)
+                    .await?
+                {
+                    break;
+                }
+            }
+            assert_eq!(page_vm.vm_mut().eval("fontReadyTrace.join('|')")?, "parse");
+            assert_eq!(page_vm.vm_mut().eval("fontPromiseUnchanged")?, "true");
+
+            for label in ["interactive", "DOMContentLoaded", "complete"] {
+                run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                    &mut page_vm,
+                    ChildFrameSemanticTurnKind::DocumentLifecycle,
+                    label,
+                )
+                .await;
+            }
+            for _ in 0..8 {
+                if !page_vm
+                    .run_one_due_timer_selected_task_for_test(&loader)
+                    .await?
+                {
+                    break;
+                }
+            }
+            assert_eq!(
+                page_vm.vm_mut().eval("fontReadyTrace.join('|')")?,
+                "parse",
+                "complete readystatechange alone must not release fonts.ready before load"
+            );
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm,
+                ChildFrameSemanticTurnKind::HostLoad,
+                "font readiness child load",
+            )
+            .await;
+            assert_eq!(
+                page_vm.vm_mut().eval("fontReadyTrace.join('|')")?,
+                "parse|window-load|element-load"
+            );
+            for _ in 0..8 {
+                if !page_vm
+                    .run_one_due_timer_selected_task_for_test(&loader)
+                    .await?
+                {
+                    break;
+                }
+            }
+            assert_eq!(
+                page_vm.vm_mut().eval("fontReadyTrace.join('|')")?,
+                "parse|window-load|element-load|ready:true",
+                "load delivery must settle the captured promise without another getter"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("child font readiness must follow its own Document load");
+}
+
 async fn install_child_host_load_completion_fixture(
     page_vm: &mut PageVm,
     frame_id: &str,

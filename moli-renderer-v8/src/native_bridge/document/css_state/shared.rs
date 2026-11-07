@@ -6,7 +6,6 @@ pub(super) const FONTS_SLOT: &str = "__moliFonts";
 pub(super) const FONT_FACE_SET_CONNECTED_FACES_SLOT: &str = "__moliFontFaceSetConnectedFaces";
 pub(super) const FONT_FACE_SET_CONNECTED_OWNER_FACES_SLOT: &str =
     "__moliFontFaceSetConnectedOwnerFaces";
-pub(super) const FONT_FACE_SET_OWNER_DOCUMENT_SLOT: &str = "__moliFontFaceSetOwnerDocument";
 
 pub(super) fn object_bool_property(
     scope: &mut v8::PinScope<'_, '_>,
