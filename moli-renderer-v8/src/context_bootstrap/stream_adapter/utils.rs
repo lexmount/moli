@@ -1,4 +1,5 @@
 use super::*;
+pub(in crate::context_bootstrap) use moli_v8_util::buffer_source_bytes_from_value as value_buffer_source_bytes;
 use moli_webapi_declare::WebApiObject;
 
 const DELAYED_PENDING_READ_ENTRY_SLOT: &str = "__moliReadableStreamDelayedEntry";
@@ -279,26 +280,6 @@ pub(in crate::context_bootstrap) fn suppress_promise_unhandled_rejection<'s>(
     // author can replace catch, its getter, or the Promise species constructor.
     // Looking them up here would add observable script to the native algorithm.
     promise.mark_as_handled();
-}
-
-pub(in crate::context_bootstrap) fn value_buffer_source_bytes(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) -> Option<Vec<u8>> {
-    if let Ok(buffer) = v8::Local::<v8::ArrayBuffer>::try_from(value) {
-        let view = v8::Uint8Array::new(scope, buffer, 0, buffer.byte_length())?;
-        let mut bytes = vec![0; view.byte_length()];
-        let written = view.copy_contents(&mut bytes);
-        bytes.truncate(written);
-        return Some(bytes);
-    }
-    if let Ok(view) = v8::Local::<v8::ArrayBufferView>::try_from(value) {
-        let mut bytes = vec![0; view.byte_length()];
-        let written = view.copy_contents(&mut bytes);
-        bytes.truncate(written);
-        return Some(bytes);
-    }
-    None
 }
 
 pub(in crate::context_bootstrap) fn call_named_method<'s>(

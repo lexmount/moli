@@ -3,6 +3,7 @@ use crate::util::{
     callback_data_index_value, get_private_value, serialize_v8_iter_array, set_private_value,
 };
 use crate::web_api_interfaces;
+use moli_v8_util::buffer_source_bytes_from_value as buffer_source_value_bytes;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(WebApiObject)]
@@ -584,26 +585,6 @@ fn cloned_public_exponent_view<'s>(
         .and_then(|value| buffer_source_value_bytes(scope, value))
         .and_then(|bytes| blob::array_buffer_from_bytes(scope, bytes))
         .and_then(|buffer| v8::Uint8Array::new(scope, buffer, 0, buffer.byte_length()))
-}
-
-fn buffer_source_value_bytes<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<Vec<u8>> {
-    if let Ok(buffer) = v8::Local::<v8::ArrayBuffer>::try_from(value) {
-        let view = v8::Uint8Array::new(scope, buffer, 0, buffer.byte_length())?;
-        let mut bytes = vec![0; view.byte_length()];
-        let written = view.copy_contents(&mut bytes);
-        bytes.truncate(written);
-        return Some(bytes);
-    }
-    if let Ok(view) = v8::Local::<v8::ArrayBufferView>::try_from(value) {
-        let mut bytes = vec![0; view.byte_length()];
-        let written = view.copy_contents(&mut bytes);
-        bytes.truncate(written);
-        return Some(bytes);
-    }
-    None
 }
 
 fn cloned_usages_array<'s>(
