@@ -1,3 +1,4 @@
+pub(in crate::native_bridge::document) use self::detached_document_all_item_callback as detached_document_all_call_callback;
 use crate::native_bridge::collections::{
     STATIC_COLLECTION_LENGTH_SLOT, initialize_collection_identity,
 };
@@ -434,33 +435,6 @@ fn collect_detached_document_all_values<'s>(
     let children = detached_child_node_objects(scope, node);
     for child in children {
         collect_detached_document_all_values(scope, child, out);
-    }
-}
-
-pub(in crate::native_bridge::document) fn detached_document_all_call_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(data) = v8::Local::<v8::Object>::try_from(args.data()) else {
-        rv.set_null();
-        return;
-    };
-    let Some(items) = object_property_as_object(scope, data, "items") else {
-        rv.set_null();
-        return;
-    };
-    let Some(named) = object_property_as_object(scope, data, "named") else {
-        rv.set_null();
-        return;
-    };
-    let Some(name_or_index) = detached_document_all_name_or_index(scope, &args) else {
-        rv.set_null();
-        return;
-    };
-    match resolve_detached_document_all_value(scope, items, named, name_or_index) {
-        Some(value) => rv.set(value),
-        None => rv.set_null(),
     }
 }
 
