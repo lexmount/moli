@@ -1,3 +1,4 @@
+pub(super) use super::properties::class_list_value_getter_callback as class_list_to_string_callback;
 use super::{
     identity::class_list_runtime_handle_and_kind_from_object,
     tokens::{class_list_tokens, set_class_list_tokens, token_list_attribute_name},
@@ -325,28 +326,4 @@ pub(super) fn class_list_supports_callback<'s>(
         handle,
         &parsed.token,
     ));
-}
-
-pub(super) fn class_list_to_string_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle, kind)) =
-        class_list_runtime_handle_and_kind_from_object(scope, args.this())
-    else {
-        rv.set_null();
-        return;
-    };
-    let value = element_attribute(
-        unsafe { &*runtime_ptr },
-        handle,
-        token_list_attribute_name(kind),
-    )
-    .unwrap_or_default();
-    let Some(value) = v8_string(scope, &value) else {
-        rv.set_null();
-        return;
-    };
-    rv.set(value.into());
 }
