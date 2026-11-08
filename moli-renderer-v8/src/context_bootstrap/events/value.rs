@@ -21,6 +21,7 @@ const STATUS_MESSAGE_SLOT: &str = "__moliWebGlContextEventStatusMessage";
 const TIMECODE_SLOT: &str = "__moliValueEventTimecode";
 const TOOL_NAME_SLOT: &str = "__moliToolEventName";
 const GAMEPAD_SLOT: &str = "__moliValueEventGamepad";
+const DTMF_TONE_SLOT: &str = "__moliRtcDtmfTone";
 const PICTURE_IN_PICTURE_WINDOW_SLOT: &str = "__moliPictureInPictureEventWindow";
 
 const PAYMENT_METHOD_NAME_SLOT: &str = "__moliPaymentMethodChangeEventMethodName";
@@ -45,6 +46,7 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     MidiMessage = 10,
     MidiConnection = 11,
     MediaStreamTrack = 12,
+    RtcDtmfToneChange = 13,
 }
 
 impl ValueEventKind {
@@ -59,6 +61,7 @@ impl ValueEventKind {
             Self::Gamepad => "GamepadEvent",
             Self::PictureInPicture => "PictureInPictureEvent",
             Self::PaymentRequestUpdate => "PaymentRequestUpdateEvent",
+            Self::RtcDtmfToneChange => "RTCDTMFToneChangeEvent",
             Self::PaymentMethodChange => "PaymentMethodChangeEvent",
             Self::MidiMessage => "MIDIMessageEvent",
             Self::MidiConnection => "MIDIConnectionEvent",
@@ -327,6 +330,22 @@ struct MediaStreamTrackEventInit<'s> {
     track: v8::Local<'s, v8::Object>,
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::RTCDTMFToneChangeEvent, enumerable, receiver)]
+struct RtcDtmfToneChangeEventPrototype {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, DTMF_TONE_SLOT))]
+    tone: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "RTCDTMFToneChangeEventInit")]
+struct RtcDtmfToneChangeEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(with = string_member)]
+    tone: v8::Local<'s, v8::String>,
+}
+
 fn string_member<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -409,6 +428,9 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
         "PictureInPictureEvent" => {
             PictureInPictureEventPrototype::initialize_prototype_template(scope, prototype)
         }
+        "RTCDTMFToneChangeEvent" => {
+            RtcDtmfToneChangeEventPrototype::initialize_prototype_template(scope, prototype)
+        }
         "GamepadEvent" => {
             GamepadEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
@@ -477,6 +499,7 @@ fn value_event_constructor<'s>(
         Some(10) => ValueEventKind::MidiMessage,
         Some(11) => ValueEventKind::MidiConnection,
         Some(12) => ValueEventKind::MediaStreamTrack,
+        Some(13) => ValueEventKind::RtcDtmfToneChange,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -595,6 +618,17 @@ fn value_event_constructor<'s>(
                     scope, dictionary,
                 )?;
                 set_event_private_value(scope, state, MEDIA_TRACK_SLOT, parsed.track.into());
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
+            }
+            ValueEventKind::RtcDtmfToneChange => {
+                let parsed = webidl::parse_dictionary_object::<RtcDtmfToneChangeEventInit>(
+                    scope, dictionary,
+                )?;
+                set_event_private_value(scope, state, DTMF_TONE_SLOT, parsed.tone.into());
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
