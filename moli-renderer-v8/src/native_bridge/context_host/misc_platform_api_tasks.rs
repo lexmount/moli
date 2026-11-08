@@ -1,14 +1,13 @@
 use moli_webidl_callback::WebIdlCallbackFunction;
 
 use crate::{
-    content_security_policy::ContentSecurityPolicyViolationEventFields,
     context_bootstrap::{
         LegacyStorageQuotaCallbackOutcome, LegacyStorageQuotaCallbackTask,
         LegacyStorageQuotaCallbackTaskEffect,
     },
     document_runtime::{
-        DocumentContentSecurityPolicyViolation, DomHandle, EventTargetHandle,
-        create_content_security_policy_violation_event_with_fields,
+        DocumentContentSecurityPolicyViolation, DocumentCspViolationMetadata, DomHandle,
+        EventTargetHandle, create_content_security_policy_violation_event_with_fields,
     },
     page_task_queue::{
         PageMiscPlatformApiTargetEffect, RendererPageMiscPlatformApiTaskId,
@@ -30,6 +29,7 @@ pub(crate) enum MiscPlatformApiTask {
     ContentSecurityPolicyViolation {
         element: Option<DomHandle>,
         violation: Box<DocumentContentSecurityPolicyViolation>,
+        metadata: DocumentCspViolationMetadata,
     },
 }
 
@@ -48,13 +48,10 @@ impl JsContextHost {
         else {
             return false;
         };
-        let fields = ContentSecurityPolicyViolationEventFields {
-            status_code: i32::from(
-                self.content_security_policy_response_status(owner)
-                    .unwrap_or(0),
-            ),
-            ..ContentSecurityPolicyViolationEventFields::from(violation)
-        };
+        let metadata = self
+            .document_csp_violation_metadata_for_owner(owner)
+            .unwrap_or_default();
+        let fields = metadata.event_fields(violation);
         match target.owner() {
             WindowDocumentOwner::Frame(document_owner) => {
                 // SAFETY: the Host and its DocumentRuntime share one ScriptVm.
@@ -96,6 +93,7 @@ impl JsContextHost {
             MiscPlatformApiTask::ContentSecurityPolicyViolation {
                 element,
                 violation: Box::new(violation.clone()),
+                metadata,
             },
         )
     }
@@ -204,7 +202,11 @@ impl JsContextHost {
                 task.invoke(scope, host_ptr),
                 LegacyStorageQuotaCallbackTaskEffect::CallbackInvoked
             ),
-            MiscPlatformApiTask::ContentSecurityPolicyViolation { element, violation } => {
+            MiscPlatformApiTask::ContentSecurityPolicyViolation {
+                element,
+                violation,
+                metadata,
+            } => {
                 // CSP checks the shadow-including root at dispatch time, not
                 // at the earlier compilation attempt. A stale owner has
                 // already been rejected by the Page task arbiter.
@@ -223,16 +225,7 @@ impl JsContextHost {
                             scope,
                             value,
                             value,
-                            &ContentSecurityPolicyViolationEventFields {
-                                status_code: i32::from(
-                                    self.dom_host()
-                                        .document_source_response_status_for_handle(
-                                            resolved.document_handle,
-                                        )
-                                        .unwrap_or(0),
-                                ),
-                                ..ContentSecurityPolicyViolationEventFields::from(&*violation)
-                            },
+                            &metadata.event_fields(&violation),
                         )
                         .ok()
                     })

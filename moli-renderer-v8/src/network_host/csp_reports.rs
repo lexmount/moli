@@ -101,6 +101,7 @@ pub(crate) struct WindowCspReportRequestContext {
     request_client: ResourceRequestClient,
     frame_id: Option<String>,
     document_url: url::Url,
+    violation_metadata: crate::document_runtime::DocumentCspViolationMetadata,
     request_origin: moli_url::WebOrigin,
     network_partition_key: Option<String>,
     policy_context: crate::types::SubresourcePolicyContext,
@@ -180,8 +181,9 @@ fn send_content_security_policy_reports_from_window_context(
     report_uri_endpoints: &[String],
     report_to_endpoints: &[String],
 ) {
+    let fields = request_context.violation_metadata.apply_fields(*fields);
     for request in
-        content_security_policy_report_requests(fields, report_uri_endpoints, report_to_endpoints)
+        content_security_policy_report_requests(&fields, report_uri_endpoints, report_to_endpoints)
     {
         send_content_security_policy_report_request(host, request_context, request);
     }
@@ -469,6 +471,8 @@ fn window_csp_report_request_context_for_identity(
         resource_loader,
         frame_id,
         document_url,
+        violation_metadata: host
+            .document_csp_violation_metadata_for_owner(identity.dispatch_scope())?,
         request_origin,
         network_partition_key: active_subresource_network_partition_key(
             host,

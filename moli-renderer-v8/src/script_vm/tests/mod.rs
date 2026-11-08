@@ -1,5 +1,6 @@
 mod baseline_drag_views;
 mod beforeinput_target_validation;
+mod csp_metadata;
 mod fetch_cache_modes;
 mod fetch_csp_owner_tasks;
 
