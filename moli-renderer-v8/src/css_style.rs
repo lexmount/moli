@@ -1759,7 +1759,7 @@ fn collect_box_shorthand_entry(
     ))
 }
 
-fn compress_box_components(values: &[String]) -> Option<String> {
+pub(crate) fn compress_box_components(values: &[String]) -> Option<String> {
     match values {
         [start, end] if start == end => Some(start.clone()),
         [start, end] => Some(format!("{start} {end}")),

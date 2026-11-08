@@ -10,6 +10,7 @@ use super::pdb_compat::{
 };
 use super::property_access::serialize_font_variant_shorthand_values;
 use super::*;
+pub(super) use crate::css_style::compress_box_components;
 
 pub(crate) fn parse_style_property_entries_with_base(
     name: &str,
@@ -476,22 +477,6 @@ pub(super) fn style_entry_value(entries: &[StyleEntry], name: &str) -> Option<St
         .iter()
         .find(|entry| entry.name == name)
         .map(|entry| entry.value.clone())
-}
-
-pub(super) fn compress_box_components(values: &[String]) -> Option<String> {
-    match values {
-        [start, end] if start == end => Some(start.clone()),
-        [start, end] => Some(format!("{start} {end}")),
-        [top, right, bottom, left] if top == right && top == bottom && top == left => {
-            Some(top.clone())
-        }
-        [top, right, bottom, left] if top == bottom && right == left => {
-            Some(format!("{top} {right}"))
-        }
-        [top, right, bottom, left] if right == left => Some(format!("{top} {right} {bottom}")),
-        [top, right, bottom, left] => Some(format!("{top} {right} {bottom} {left}")),
-        _ => None,
-    }
 }
 
 pub(super) fn border_shorthand_resets_border_image(name: &str) -> bool {
