@@ -29,17 +29,58 @@ const MAX_DATA_STYLESHEET_IMPORT_URL_BYTES: usize = 16 * 1024;
 #[derive(Default)]
 struct ConnectedNetworkStyleImportGraph {
     pending_urls: VecDeque<Url>,
-    admitted_identities: HashSet<Url>,
+    requested_identities: HashSet<Url>,
+    root_response_identity: Option<Url>,
 }
 
 impl ConnectedNetworkStyleImportGraph {
+    fn new(root: Option<&crate::stylesheet_blocking::StylesheetImportNetworkResult>) -> Self {
+        Self {
+            // A linked root is an ancestor of every branch, unlike imported
+            // redirect targets, which can be valid dependencies of siblings.
+            root_response_identity: root
+                .and_then(|result| result.terminal().ready_response())
+                .map(|response| import_url_identity(&response.final_url)),
+            ..Self::default()
+        }
+    }
+
     fn extend(&mut self, urls: impl IntoIterator<Item = Url>) {
         for url in urls {
             let identity = import_url_identity(&url);
-            if self.admitted_identities.insert(identity) {
+            if self.root_response_identity.as_ref() != Some(&identity)
+                && self.requested_identities.insert(identity)
+            {
                 self.pending_urls.push_back(url);
             }
         }
+    }
+
+    fn response_imports(
+        &mut self,
+        result: &crate::stylesheet_blocking::StylesheetImportNetworkResult,
+    ) -> Vec<Url> {
+        let request_identity = import_url_identity(result.request_url());
+        self.requested_identities.insert(request_identity.clone());
+        let Some(response) = result.terminal().ready_response() else {
+            return Vec::new();
+        };
+        let response_identity = import_url_identity(&response.final_url);
+        crate::style_engine::stylesheet_top_level_import_urls(
+            response.body_text(),
+            &response.final_url,
+            false,
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|url| {
+            let identity = import_url_identity(url);
+            // The response cannot import itself through either URL. Its final
+            // URL is not a globally admitted request: a sibling importing it
+            // must still pass Fetch and its own request-time CSP check.
+            identity != request_identity && identity != response_identity
+        })
+        .collect()
     }
 
     fn take_pending(&mut self) -> Vec<Url> {
@@ -55,8 +96,8 @@ pub(crate) fn fetch_complete_stylesheet_import_graph(
     fetch_stylesheet_import_graph(stylesheet_fetcher, document_url, urls, None)
 }
 
-/// Continue from a root fetched with its link-specific request options. Seed
-/// both URL identities so an import cycle cannot fetch that root a second time.
+/// Continue from a root fetched with its link-specific request options. Keep
+/// its request identity separate from the response's redirect/parser base.
 pub(crate) fn fetch_complete_stylesheet_import_graph_from_root(
     stylesheet_fetcher: crate::stylesheet_blocking::RendererStylesheetFetcher,
     document_url: Url,
@@ -87,7 +128,7 @@ fn fetch_stylesheet_import_graph(
         ConnectedStyleImportReadiness::Pending(urls) => (true, urls),
     };
     let mut network_results = Vec::new();
-    let mut import_graph = ConnectedNetworkStyleImportGraph::default();
+    let mut import_graph = ConnectedNetworkStyleImportGraph::new(root.as_ref());
     let mut pending_results: Vec<_> = root.into_iter().collect();
     import_graph.extend(urls);
     let mut data_expansions = 0;
@@ -102,35 +143,13 @@ fn fetch_stylesheet_import_graph(
     async move {
         pending_results.extend(join_all(initial_requests).await);
         while !pending_results.is_empty() {
-            // Admit every completed response in this batch before discovering any
-            // descendants. Redirect aliases and their final URLs share an identity
-            // for both root and imported sheets.
-            for result in &pending_results {
-                import_graph
-                    .admitted_identities
-                    .insert(import_url_identity(result.request_url()));
-                if let Some(response) = result.terminal().ready_response() {
-                    import_graph
-                        .admitted_identities
-                        .insert(import_url_identity(&response.final_url));
-                }
-            }
             for result in std::mem::take(&mut pending_results) {
-                let terminal = result.terminal();
-                successful &= terminal.is_ready();
-                if let Some(response) = terminal.ready_response() {
-                    let nested_urls = crate::style_engine::stylesheet_top_level_import_urls(
-                        response.body_text(),
-                        &response.final_url,
-                        false,
-                    )
-                    .unwrap_or_default();
-                    match readiness(nested_urls) {
-                        ConnectedStyleImportReadiness::Ready(nested_successful) => {
-                            successful &= nested_successful;
-                        }
-                        ConnectedStyleImportReadiness::Pending(urls) => import_graph.extend(urls),
+                successful &= result.terminal().is_ready();
+                match readiness(import_graph.response_imports(&result)) {
+                    ConnectedStyleImportReadiness::Ready(nested_successful) => {
+                        successful &= nested_successful;
                     }
+                    ConnectedStyleImportReadiness::Pending(urls) => import_graph.extend(urls),
                 }
                 network_results.push(result);
             }
@@ -339,6 +358,89 @@ mod tests {
         graph.extend([first.clone(), duplicate, second.clone()]);
         assert_eq!(graph.take_pending(), vec![first, second]);
         assert!(graph.take_pending().is_empty());
+    }
+
+    #[test]
+    fn redirected_import_does_not_admit_its_final_url_for_sibling_requests() {
+        use crate::stylesheet_blocking::{StylesheetFetchTerminal, StylesheetImportNetworkResult};
+
+        let alias = Url::parse("https://example.test/alias.css").unwrap();
+        let branch = Url::parse("https://example.test/branch.css").unwrap();
+        let direct = Url::parse("https://example.test/real.css#direct").unwrap();
+        let mut graph = ConnectedNetworkStyleImportGraph::default();
+        graph.extend([alias.clone(), branch.clone()]);
+        assert_eq!(graph.take_pending(), [alias.clone(), branch.clone()]);
+
+        let redirected = StylesheetImportNetworkResult::new(
+            alias,
+            0.0,
+            StylesheetFetchTerminal::ready(
+                crate::protocol_types::NavigationResponse::from_text_body(
+                    Url::parse("https://example.test/real.css").unwrap(),
+                    200,
+                    Vec::new(),
+                    "@import './real.css#self';".to_owned(),
+                ),
+                true,
+            ),
+        );
+        assert!(graph.response_imports(&redirected).is_empty());
+
+        let sibling = StylesheetImportNetworkResult::new(
+            branch.clone(),
+            0.0,
+            StylesheetFetchTerminal::ready(
+                crate::protocol_types::NavigationResponse::from_text_body(
+                    branch,
+                    200,
+                    Vec::new(),
+                    "@import './real.css#direct';".to_owned(),
+                ),
+                true,
+            ),
+        );
+        let imports = graph.response_imports(&sibling);
+        graph.extend(imports);
+        assert_eq!(graph.take_pending(), [direct]);
+        graph.extend([Url::parse("https://example.test/real.css#duplicate").unwrap()]);
+        assert!(graph.take_pending().is_empty());
+    }
+
+    #[test]
+    fn root_import_cycles_match_both_request_and_response_urls() {
+        let root = crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
+            Url::parse("https://example.test/root.css").unwrap(),
+            0.0,
+            crate::stylesheet_blocking::StylesheetFetchTerminal::ready(
+                crate::protocol_types::NavigationResponse::from_text_body(
+                    Url::parse("https://example.test/redirected.css").unwrap(),
+                    200,
+                    Vec::new(),
+                    concat!(
+                        "@import './root.css#cycle';",
+                        "@import './redirected.css#cycle';",
+                        "@import './leaf.css';",
+                    )
+                    .to_owned(),
+                ),
+                true,
+            ),
+        );
+        let mut graph = ConnectedNetworkStyleImportGraph::new(Some(&root));
+        let imports = graph.response_imports(&root);
+        assert_eq!(
+            imports,
+            [Url::parse("https://example.test/leaf.css").unwrap()]
+        );
+        graph.extend(imports);
+        graph.extend([
+            root.request_url().clone(),
+            Url::parse("https://example.test/redirected.css#nested-cycle").unwrap(),
+        ]);
+        assert_eq!(
+            graph.take_pending(),
+            [Url::parse("https://example.test/leaf.css").unwrap()]
+        );
     }
 
     #[test]
