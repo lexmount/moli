@@ -20,6 +20,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     PaymentRequestUpdateEvent,
     PaymentMethodChangeEvent,
     MediaStream,
+    MediaRecorder,
     MediaStreamTrackEvent,
     UiEvent,
     FocusEvent,
