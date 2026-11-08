@@ -333,6 +333,7 @@ fn websocket_constructor_callback_inner<'s>(
         owner.dispatch_scope(),
         &document_url,
         &url,
+        crate::document_runtime::DocumentConnectCspCheckOrder::PolicyList,
     );
     if !csp_outcome.blocks_request() && websocket_mixed_content_is_blocked(&document_url, &url) {
         throw_websocket_dom_exception(
@@ -422,6 +423,7 @@ fn websocket_stream_constructor_callback_inner<'s>(
         owner.dispatch_scope(),
         &document_url,
         &url,
+        crate::document_runtime::DocumentConnectCspCheckOrder::PolicyList,
     );
     if !csp_outcome.blocks_request() && websocket_mixed_content_is_blocked(&document_url, &url) {
         throw_websocket_dom_exception(

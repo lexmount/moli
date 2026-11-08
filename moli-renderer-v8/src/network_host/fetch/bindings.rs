@@ -228,6 +228,7 @@ fn window_fetch_callback_in_relevant_realm<'s>(
             owner,
             &prepared.document_url,
             &prepared.resolved_url,
+            crate::document_runtime::DocumentConnectCspCheckOrder::PolicyList,
         )
         .into_blocking_violation()
     {

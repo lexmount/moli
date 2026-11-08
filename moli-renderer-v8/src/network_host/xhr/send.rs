@@ -119,6 +119,7 @@ pub(super) fn xhr_send_callback<'s>(
             owner,
             &prepared.document_url,
             &prepared.resolved_url,
+            crate::document_runtime::DocumentConnectCspCheckOrder::ReportOnlyThenEnforce,
         )
         .into_blocking_violation()
     {

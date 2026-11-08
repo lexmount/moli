@@ -129,7 +129,7 @@ fn websocket_minimal_surface_is_feature_detectable() {
 
 #[test]
 fn websocket_document_csp_blocks_connect_src_and_dispatches_event() {
-    let mut vm = new_storage_test_vm("https://websocket-connect-csp.test/");
+    let mut vm = new_storage_page_task_executor_test_vm("https://websocket-connect-csp.test/");
     vm.set_response_content_security_policies(&[String::from("connect-src 'none'")]);
     vm.set_response_content_security_report_only_policies(&[String::from("connect-src 'none'")]);
 
@@ -156,19 +156,22 @@ fn websocket_document_csp_blocks_connect_src_and_dispatches_event() {
 
     assert_eq!(result, "0");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
-        2
+        vm.eval("globalThis.__websocketCspResult.events.length")
+            .unwrap(),
+        "0"
     );
     assert_eq!(
-        vm.eval("JSON.stringify(globalThis.__websocketCspResult)")
+        vm.eval_after_selected_page_tasks("JSON.stringify(globalThis.__websocketCspResult)")
             .expect("queued WebSocket CSP violations should be observable"),
-        r#"{"readyState":0,"events":[{"blockedURI":"wss://websocket-connect-csp.test/socket","effectiveDirective":"connect-src","disposition":"report","instance":true},{"blockedURI":"wss://websocket-connect-csp.test/socket","effectiveDirective":"connect-src","disposition":"enforce","instance":true}]}"#
+        r#"{"readyState":0,"events":[{"blockedURI":"wss://websocket-connect-csp.test/socket","effectiveDirective":"connect-src","disposition":"enforce","instance":true},{"blockedURI":"wss://websocket-connect-csp.test/socket","effectiveDirective":"connect-src","disposition":"report","instance":true}]}"#
     );
 }
 
 #[test]
 fn websocket_document_csp_block_precedes_mixed_content_rejection() {
-    let mut vm = new_storage_test_vm("http://localhost:8000/trusted-types/reporting.html");
+    let mut vm = new_storage_page_task_executor_test_vm(
+        "http://localhost:8000/trusted-types/reporting.html",
+    );
     vm.set_response_content_security_policies(&[String::from("connect-src 'none'")]);
 
     let result = vm
@@ -199,19 +202,23 @@ fn websocket_document_csp_block_precedes_mixed_content_rejection() {
 
     assert_eq!(result, "socket:0:ws://common/blank.html");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
-        1
+        vm.eval("globalThis.__websocketMixedContentCspResult.events.length")
+            .unwrap(),
+        "0"
     );
     assert_eq!(
-        vm.eval("JSON.stringify(globalThis.__websocketMixedContentCspResult)")
-            .expect("queued mixed-content WebSocket CSP violation should be observable"),
+        vm.eval_after_selected_page_tasks(
+            "JSON.stringify(globalThis.__websocketMixedContentCspResult)"
+        )
+        .expect("queued mixed-content WebSocket CSP violation should be observable"),
         r#"{"outcome":"socket:0:ws://common/blank.html","events":[{"blockedURI":"ws://common/blank.html","effectiveDirective":"connect-src","disposition":"enforce"}]}"#
     );
 }
 
 #[test]
 fn websocket_document_csp_report_only_dispatches_without_blocking() {
-    let mut vm = new_storage_test_vm("https://websocket-connect-report-only.test/");
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://websocket-connect-report-only.test/");
     vm.set_response_content_security_report_only_policies(&[String::from("connect-src 'none'")]);
 
     let result = vm
@@ -237,12 +244,15 @@ fn websocket_document_csp_report_only_dispatches_without_blocking() {
 
     assert_eq!(result, "0");
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
-        1
+        vm.eval("globalThis.__websocketReportOnlyCspResult.events.length")
+            .unwrap(),
+        "0"
     );
     assert_eq!(
-        vm.eval("JSON.stringify(globalThis.__websocketReportOnlyCspResult)")
-            .expect("queued report-only WebSocket CSP violation should be observable"),
+        vm.eval_after_selected_page_tasks(
+            "JSON.stringify(globalThis.__websocketReportOnlyCspResult)"
+        )
+        .expect("queued report-only WebSocket CSP violation should be observable"),
         r#"{"readyState":0,"events":[{"blockedURI":"wss://websocket-connect-report-only.test/socket","effectiveDirective":"connect-src","disposition":"report","instance":true}]}"#
     );
 }

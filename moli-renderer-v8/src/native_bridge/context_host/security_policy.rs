@@ -476,7 +476,7 @@ impl JsContextHost {
             }
         }
         for violation in report_only_violations.iter().chain(&enforced_violations) {
-            self.queue_inline_csp_violation_task(scope, owner, element, violation);
+            self.queue_content_security_policy_violation_task(scope, owner, element, violation);
         }
         enforced_violations.is_none()
     }
@@ -666,14 +666,35 @@ impl JsContextHost {
         owner: OwnerDispatchScope,
         document_url: &url::Url,
         request_url: &url::Url,
+        order: crate::document_runtime::DocumentConnectCspCheckOrder,
     ) -> DocumentCspOutcome {
-        self.check_document_connect_csp_for_owner_with_redirect_status(
-            scope,
-            owner,
-            document_url,
-            request_url,
-            ContentSecurityPolicyRedirectStatus::NoRedirect,
-        )
+        let Some(mut violations) =
+            self.document_connect_csp_violations_for_owner(owner, document_url, request_url, order)
+        else {
+            return DocumentCspOutcome::Allowed;
+        };
+        if violations.is_empty() {
+            return DocumentCspOutcome::Allowed;
+        }
+        if !self.active_inspector_dispatch
+            && let Some((source, line, column)) = current_script_violation_location(scope)
+        {
+            for violation in &mut violations {
+                violation.source_file.clone_from(&source);
+                violation.line_number = line;
+                violation.column_number = column;
+            }
+        }
+        for violation in &violations {
+            self.queue_content_security_policy_violation_task(scope, owner, None, violation);
+        }
+        match violations
+            .into_iter()
+            .find(|violation| violation.disposition == ContentSecurityPolicyDisposition::Enforce)
+        {
+            Some(violation) => DocumentCspOutcome::Blocked(violation),
+            None => DocumentCspOutcome::Allowed,
+        }
     }
 
     pub(crate) fn check_document_connect_csp_for_owner_with_redirect_status<'s>(
@@ -706,6 +727,54 @@ impl JsContextHost {
             scope, host_ptr, owner, &violation,
         );
         DocumentCspOutcome::Blocked(violation)
+    }
+
+    fn document_connect_csp_violations_for_owner(
+        &self,
+        owner: OwnerDispatchScope,
+        document_url: &url::Url,
+        request_url: &url::Url,
+        order: crate::document_runtime::DocumentConnectCspCheckOrder,
+    ) -> Option<Vec<DocumentContentSecurityPolicyViolation>> {
+        // SAFETY: the Host and its DocumentRuntime share one ScriptVm.
+        let runtime = unsafe { &*self.runtime };
+        match owner {
+            OwnerDispatchScope::Top => {
+                let policy = runtime.document_policy_container();
+                Some(runtime.document_connect_csp_violations_for_document(
+                    Some(runtime.document_handle()),
+                    runtime.document_url(),
+                    &policy.response_content_security_policies,
+                    &policy.response_content_security_report_only_policies,
+                    &policy.content_security_reporting_endpoints,
+                    request_url,
+                    order,
+                ))
+            }
+            OwnerDispatchScope::Child(handle) => {
+                Some(runtime.document_connect_csp_violations_for_document(
+                    self.child_browsing_context_document_handle(handle),
+                    document_url,
+                    self.child_response_content_security_policies(handle),
+                    self.child_response_content_security_report_only_policies(handle),
+                    &self.child_content_security_reporting_endpoints(handle),
+                    request_url,
+                    order,
+                ))
+            }
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
+                let policy = self.lightweight_popup_policy_container(popup_id)?;
+                Some(runtime.document_connect_csp_violations_for_document(
+                    self.lightweight_popup_document_handle(popup_id),
+                    document_url,
+                    &policy.response_content_security_policies,
+                    &policy.response_content_security_report_only_policies,
+                    &policy.content_security_reporting_endpoints,
+                    request_url,
+                    order,
+                ))
+            }
+        }
     }
 
     fn document_connect_csp_check_for_owner_with_redirect_status(

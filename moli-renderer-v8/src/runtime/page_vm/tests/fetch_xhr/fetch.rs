@@ -1118,31 +1118,33 @@ async fn opener_calling_popup_fetch_uses_popup_response_csp() {
                                 if (event.data !== "popup-ready") {
                                     return;
                                 }
-                                popup.addEventListener("securitypolicyviolation", event => {
-                                    globalThis.__popupFetchCspEvents.push({
-                                        blockedURI: event.blockedURI,
-                                        effectiveDirective: event.effectiveDirective,
-                                        disposition: event.disposition,
-                                        instance: event instanceof SecurityPolicyViolationEvent,
+                                const reported = new Promise(resolve => {
+                                    popup.addEventListener("securitypolicyviolation", event => {
+                                        globalThis.__popupFetchCspEvents.push({
+                                            blockedURI: event.blockedURI,
+                                            effectiveDirective: event.effectiveDirective,
+                                            disposition: event.disposition,
+                                            instance: event instanceof SecurityPolicyViolationEvent,
+                                        });
+                                        resolve();
                                     });
                                 });
-                                popup.fetch("data:text/plain,blocked").then(
-                                    () => {
-                                        globalThis.__popupFetchCspObserved = JSON.stringify({
-                                            fulfilled: true,
-                                            events: globalThis.__popupFetchCspEvents,
-                                        });
-                                    },
-                                    error => {
-                                        globalThis.__popupFetchCspObserved = JSON.stringify({
-                                            name: error && error.name,
-                                            isTypeError: error instanceof TypeError,
-                                            hasCspMessage: String(error && error.message)
-                                                .includes("Content Security Policy"),
-                                            events: globalThis.__popupFetchCspEvents,
-                                        });
-                                    }
-                                ).finally(() => {
+                                const rejected = popup.fetch("data:text/plain,blocked").then(
+                                    () => ({ fulfilled: true }),
+                                    error => ({
+                                        name: error && error.name,
+                                        isTypeError: error instanceof TypeError,
+                                        hasCspMessage: String(error && error.message)
+                                            .includes("Content Security Policy"),
+                                        eventsAtRejection: globalThis.__popupFetchCspEvents.length,
+                                    })
+                                );
+                                Promise.all([rejected, reported]).then(([result]) => {
+                                    globalThis.__popupFetchCspObserved = JSON.stringify({
+                                        ...result,
+                                        events: globalThis.__popupFetchCspEvents,
+                                    });
+                                }).finally(() => {
                                     globalThis.__popupFetchCspDone = true;
                                 });
                             });
@@ -1173,6 +1175,7 @@ async fn opener_calling_popup_fetch_uses_popup_response_csp() {
                 "name": "TypeError",
                 "isTypeError": true,
                 "hasCspMessage": true,
+                "eventsAtRejection": 0,
                 "events": [{
                     "blockedURI": "data",
                     "effectiveDirective": "connect-src",
@@ -1191,21 +1194,27 @@ async fn popup_response_websocket_uses_popup_response_csp() {
         let popup_body = r#"<!doctype html><script>
 (() => {
   const events = [];
-  addEventListener("securitypolicyviolation", event => {
-    events.push({
-      blockedURI: event.blockedURI,
-      effectiveDirective: event.effectiveDirective,
-      disposition: event.disposition,
-      instance: event instanceof SecurityPolicyViolationEvent,
+  const reported = new Promise(resolve => {
+    addEventListener("securitypolicyviolation", event => {
+      events.push({
+        blockedURI: event.blockedURI,
+        effectiveDirective: event.effectiveDirective,
+        disposition: event.disposition,
+        instance: event instanceof SecurityPolicyViolationEvent,
+      });
+      resolve();
     });
   });
   const socket = new WebSocket("/socket");
-  opener.__popupWebSocketCspObserved = JSON.stringify({
+  const constructed = {
     url: socket.url,
     readyState: socket.readyState,
-    events,
+    eventsAtConstruction: events.length,
+  };
+  reported.then(() => {
+    opener.__popupWebSocketCspObserved = JSON.stringify({...constructed, events});
+    opener.postMessage("popup-websocket-csp-done", "*");
   });
-  opener.postMessage("popup-websocket-csp-done", "*");
 })();
 </script>"#
             .to_owned();
@@ -1259,6 +1268,7 @@ async fn popup_response_websocket_uses_popup_response_csp() {
             json!({
                 "url": expected_socket_url,
                 "readyState": 0,
+                "eventsAtConstruction": 0,
                 "events": [{
                     "blockedURI": expected_socket_url,
                     "effectiveDirective": "connect-src",
