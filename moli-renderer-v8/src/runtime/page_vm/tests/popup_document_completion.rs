@@ -77,6 +77,7 @@ fn loaded_popup_completion(
         target,
         Ok(PopupDocumentLoadOutcome::Loaded(Box::new(
             LoadedChildDocument {
+                response_status: None,
                 final_url: Url::parse(final_url).expect("popup completion final URL"),
                 policy_container: crate::document_runtime::DocumentPolicyContainer::default(),
                 content_type: Some("text/html".to_owned()),

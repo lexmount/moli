@@ -194,6 +194,11 @@ impl JsContextHost {
         };
         self.dom_host_mut()
             .set_document_character_set_for_handle(document_handle, &snapshot.character_set);
+        self.dom_host_mut()
+            .set_document_source_response_status_for_handle(
+                document_handle,
+                snapshot.response_status,
+            );
         let document_url = self.document_url_for_handle(document_handle);
         let document_base_url = self.document_base_url_for_handle(document_handle);
         let parser_base_url = document_base_url.clone();
