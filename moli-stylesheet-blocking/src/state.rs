@@ -1667,6 +1667,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn physical_fetch_preserves_integrity_attribute_whitespace() {
+        let mut state = StylesheetBlockingState::default();
+        let document_url = Url::parse("https://example.com/").unwrap();
+        let stylesheet_url = Url::parse("https://example.com/shared.css").unwrap();
+        let mut fetches = Vec::new();
+        for (index, integrity) in [
+            None,
+            Some(""),
+            Some("     "),
+            Some("sha256-foo"),
+            Some(" sha256-foo "),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let options = StylesheetFetchOptions::from_link_attributes(
+                None, None, integrity, None, None, None,
+            );
+            fetches.push(state.discover_link_url(
+                &PendingStylesheetFetcher,
+                NodeId::new(index + 1),
+                document_url.clone(),
+                stylesheet_url.clone(),
+                options,
+            ));
+        }
+
+        assert!(fetches[0].ptr_eq(&fetches[1]));
+        assert!(!fetches[0].ptr_eq(&fetches[2]));
+        assert!(!fetches[3].ptr_eq(&fetches[4]));
+        assert_eq!(fetches[2].options().integrity(), Some("     "));
+        assert_eq!(fetches[4].options().integrity(), Some(" sha256-foo "));
+    }
+
+    #[tokio::test]
     async fn physical_key_keeps_request_compatibility_boundaries() {
         let mut state = StylesheetBlockingState::default();
         let document_url = Url::parse("https://example.com/").expect("static document url");

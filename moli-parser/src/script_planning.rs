@@ -329,7 +329,8 @@ impl ScriptFetchMetadata {
             charset: normalize_attr_token(charset),
             // Attribute presence is significant for module scripts: an explicit
             // empty value suppresses integrity metadata supplied by an import map.
-            integrity: integrity.map(str::trim).map(str::to_owned),
+            // Fetch exposes this string verbatim; SRI validation parses its tokens.
+            integrity: integrity.map(str::to_owned),
             nonce: normalize_non_empty_attr(nonce),
             fetch_priority: FetchPriorityHint::from_attribute(fetch_priority),
             parser_inserted: false,
@@ -640,9 +641,26 @@ mod tests {
     #[test]
     fn script_fetch_metadata_preserves_explicit_empty_integrity() {
         let metadata =
-            ScriptFetchMetadata::from_script_attributes(None, None, None, Some("   "), None, None);
+            ScriptFetchMetadata::from_script_attributes(None, None, None, Some(""), None, None);
 
         assert_eq!(metadata.integrity.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn parser_preserves_integrity_attribute_whitespace() {
+        let document = HtmlParser::SCRIPTING_ENABLED.parse(
+            Url::parse("https://example.test/").unwrap(),
+            "<!doctype html><script src='/blank.js' integrity='     '></script><script src='/hash.js' integrity='\t sha256-foo sha384-abc \n'></script>".to_owned(),
+        );
+        let handles = document.script_handles();
+        let blank = document.parser_script_read(handles[0]).unwrap();
+        let hashes = document.parser_script_read(handles[1]).unwrap();
+
+        assert_eq!(blank.fetch_metadata.integrity.as_deref(), Some("     "));
+        assert_eq!(
+            hashes.fetch_metadata.integrity.as_deref(),
+            Some("\t sha256-foo sha384-abc \n")
+        );
     }
 
     #[test]
