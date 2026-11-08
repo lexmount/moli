@@ -11,16 +11,7 @@ pub(crate) fn form_associated_form_owner(
     if is_form_associated_custom_element_handle(runtime, handle) {
         return custom_element_form_owner(runtime, handle, element);
     }
-    runtime
-        .dom_host()
-        .builtin_form_associated_owner(handle)
-        .filter(|candidate| {
-            runtime
-                .dom_host()
-                .node(*candidate)
-                .and_then(Node::as_element)
-                .is_some_and(|form| form.is_html_element("form"))
-        })
+    runtime.dom_host().builtin_form_associated_owner(handle)
 }
 
 fn custom_element_form_owner(
