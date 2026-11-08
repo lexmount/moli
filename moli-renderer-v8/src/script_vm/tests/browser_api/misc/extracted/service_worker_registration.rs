@@ -2320,3 +2320,52 @@ async fn navigator_service_worker_updates_keep_order_and_reregistration_moves_to
     );
     server.await.expect("all worker scripts should be fetched");
 }
+
+#[tokio::test]
+async fn service_worker_get_registration_in_blob_worker_uses_captured_native_origin() {
+    let (base_url, server) = spawn_service_worker_script_server(vec!["/app/worker.js"]).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+        globalThis.__workerRegistrationDone = false;
+        (async () => {
+            const registration = await navigator.serviceWorker.register('worker.js');
+            const source = `onmessage = async event => {
+                try {
+                    self.origin = 'https://different-origin.test';
+                    const sw = navigator.serviceWorker;
+                    const registration = await sw.getRegistration(event.data + 'page.html#fragment');
+                    const relative = await sw.getRegistration('relative.html').then(() => 'resolved', e => e.name);
+                    const foreign = await sw.getRegistration('https://different-origin.test/page.html').then(() => 'resolved', e => e.name);
+                    postMessage([registration.scope === event.data, relative, foreign, self.origin].join('|'));
+                } catch (error) { postMessage('error:' + error.name + ':' + error.message); }
+            };`;
+            const url = URL.createObjectURL(new Blob([source], {type:'text/javascript'}));
+            const worker = new Worker(url);
+            globalThis.__workerRegistration = await new Promise(resolve => {
+                worker.onmessage = event => resolve(event.data);
+                worker.onerror = event => resolve('worker-error:' + event.message);
+                worker.postMessage(registration.scope);
+            });
+            worker.terminate();
+            URL.revokeObjectURL(url);
+        })().catch(error => { __workerRegistration = 'error:' + error.name + ':' + error.message; })
+          .finally(() => { __workerRegistrationDone = true; });
+    "#).unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(__workerRegistrationDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(__workerRegistration)").unwrap(),
+        "true|TypeError|SecurityError|https://different-origin.test"
+    );
+    server.await.unwrap();
+}
