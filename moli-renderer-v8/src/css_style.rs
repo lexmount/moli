@@ -2473,7 +2473,7 @@ fn serialize_text_decoration_shorthand_entries(entries: &[CssStyleEntry]) -> Vec
     )
 }
 
-fn serialize_text_decoration_shorthand_value(
+pub(crate) fn serialize_text_decoration_shorthand_value(
     line: &str,
     thickness: &str,
     style: &str,
