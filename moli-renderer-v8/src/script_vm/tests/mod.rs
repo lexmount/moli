@@ -2430,6 +2430,7 @@ mod media_recorder;
 mod media_streams;
 mod midi_frontend;
 mod rtc_data_channel_init;
+mod rtc_data_channel_send;
 mod rtc_dtmf_sender;
 mod rtc_stats;
 mod rtp_transceivers;
