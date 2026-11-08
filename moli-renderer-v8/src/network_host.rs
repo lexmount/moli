@@ -162,6 +162,7 @@ pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObse
 pub(crate) use self::preload::{
     apply_response_preload_request_metadata, start_document_response_links,
 };
+pub(crate) use self::request::build_service_worker_request_object;
 pub(crate) use self::request::{
     FetchArgs, RequestInfo, parse_fetch_init, parse_request_redirect_mode_label,
     request_object_credentials_mode, validate_fetch_body,
