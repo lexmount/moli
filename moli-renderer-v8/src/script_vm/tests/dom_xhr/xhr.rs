@@ -158,6 +158,7 @@ fn pending_fetch_continuation<'s>(
         crate::types::PendingWindowFetchContinuation::new(
             v8::Global::new(scope, resolver),
             false,
+            moli_fetch::RequestCacheMode::Default,
             crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(
                 &crate::document_runtime::DocumentPolicyContainer::default(),
             ),

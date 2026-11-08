@@ -1,6 +1,84 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn continued_window_fetch_preserves_cache_policy_on_the_wire() {
+    async fn response(ctx: &mut TestContext, id: u64) -> Value {
+        wait_until_messages(
+            ctx,
+            Some("SID-1"),
+            "cache-mode command response",
+            |messages| messages.iter().any(|message| message["id"] == id),
+        )
+        .await;
+        take_response_by_id(ctx, id)
+    }
+    async fn echo(headers: HeaderMap) -> String {
+        format!(
+            "{}|{}",
+            headers
+                .get("cache-control")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or(""),
+            headers
+                .get("pragma")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+        )
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/echo", get(echo)))
+            .await
+            .unwrap();
+    });
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(&mut ctx, &format!("http://{addr}/echo"), "SID-1", "TID-1").await;
+    enable_runtime_async(&mut ctx, "SID-1", 9000).await;
+    ctx.process_async(json!({"id":9001,"method":"Fetch.enable","sessionId":"SID-1"}))
+        .await;
+    ctx.expect_result(9001, json!({}), Some("SID-1"));
+    let mut id = 9010;
+    // Chrome 145's server-observed headers, including an explicitly empty
+    // continueRequest header override. The cache policy is not a header list.
+    for (mode, expected) in [("reload", "no-cache|no-cache"), ("no-cache", "max-age=0|")] {
+        for keepalive in [false, true] {
+            for replace_headers in [false, true] {
+                let url = format!("http://{addr}/echo?{id}");
+                ctx.process_async(json!({
+                    "id":id,"method":"Runtime.evaluate","sessionId":"SID-1",
+                    "params":{"expression":format!(
+                        "globalThis.cacheResult = fetch({url:?}, {{cache:{mode:?},keepalive:{keepalive}}}).then(r => r.text()); 'started'"
+                    )}
+                })).await;
+                let evaluated = response(&mut ctx, id).await;
+                assert!(evaluated.get("error").is_none(), "{evaluated:?}");
+                let pause = wait_for_request_paused(&mut ctx, &url, "cache-mode fetch pause").await;
+                let mut params = json!({"requestId":pause["params"]["requestId"]});
+                if replace_headers {
+                    params["headers"] = json!([]);
+                }
+                ctx.process_async(json!({"id":id+1,"method":"Fetch.continueRequest","sessionId":"SID-1","params":params})).await;
+                let continued = response(&mut ctx, id + 1).await;
+                assert_eq!(continued["result"], json!({}), "{continued:?}");
+                ctx.process_async(json!({
+                    "id":id+2,"method":"Runtime.evaluate","sessionId":"SID-1",
+                    "params":{"expression":"cacheResult","awaitPromise":true,"returnByValue":true}
+                }))
+                .await;
+                let response = response(&mut ctx, id + 2).await;
+                assert_eq!(
+                    response["result"]["result"]["value"], expected,
+                    "mode={mode}, keepalive={keepalive}, replace_headers={replace_headers}: {response:?}"
+                );
+                id += 10;
+            }
+        }
+    }
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn runtime_fetch_subresource_pauses_until_continue_request_then_resolves_promise() {
     async fn page() -> impl IntoResponse {
         (

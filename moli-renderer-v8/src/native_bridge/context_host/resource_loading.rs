@@ -585,6 +585,7 @@ impl JsContextHost {
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
+        cache_mode: moli_fetch::RequestCacheMode,
         request_origin: moli_url::WebOrigin,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
@@ -620,6 +621,7 @@ impl JsContextHost {
                     crate::types::PendingWindowFetchContinuation::new(
                         resolver,
                         keepalive,
+                        cache_mode,
                         connect_policy,
                         csp_report_context,
                     ),
@@ -869,6 +871,7 @@ impl JsContextHost {
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
+        cache_mode: moli_fetch::RequestCacheMode,
         request_origin: moli_url::WebOrigin,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
@@ -908,6 +911,7 @@ impl JsContextHost {
                     crate::types::PendingWindowFetchContinuation::new(
                         resolver,
                         keepalive,
+                        cache_mode,
                         connect_policy,
                         csp_report_context,
                     ),
