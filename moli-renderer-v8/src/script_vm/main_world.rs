@@ -44,7 +44,6 @@ impl MainWorld {
 #[derive(Default)]
 pub(super) struct PendingMainWorld {
     pub(super) inherited_security_token: Option<v8::Global<v8::Value>>,
-    pub(super) reuse_main_window_proxy: bool,
     pub(super) navigator_identity: Option<moli_browser_profile::BrowserIdentityProfile>,
     pub(super) history_position: Option<moli_session_history::SessionHistoryPosition>,
     pub(super) history_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
@@ -62,6 +61,11 @@ pub(super) fn initialize(
     inspector: &mut DocumentInspectorBinding,
     pending: &PendingMainWorld,
 ) -> Result<(WindowRealmRuntime, ScriptGlobalsBaseline)> {
+    // An interrupted bootstrap can retain the proxy while the main world is
+    // still Pending. Derive reuse from the live environment on every attempt.
+    let reuse_main_window_proxy = environment
+        .as_ref()
+        .is_some_and(RendererPageScriptEnvironment::has_main_window_proxy);
     let runtime = isolate
         .with_entered_renderer_document_isolate_and_bootstrap(|isolate, assets| {
             ScriptVmContextBootstrap::new_main_default(
@@ -73,7 +77,7 @@ pub(super) fn initialize(
                 indexed_db_manager,
                 Some(storage_bucket_store),
                 environment,
-                pending.reuse_main_window_proxy,
+                reuse_main_window_proxy,
             )
         })?
         .into_runtime();
@@ -119,9 +123,10 @@ pub(super) fn initialize(
         host.sync_child_browsing_context_subtree(scope, host.document_handle());
         Ok(())
     })?;
+    register_main_window_execution_context_for_bootstrap(isolate, host, &runtime.context)?;
     let url = host.borrow().document_url().clone();
     let baseline = isolate.with_renderer_document_isolate_and_inspector_mut(|v8, backend| {
-        ScriptVmDefaultWorldBootstrap::attach_context_and_capture_baseline_globals(
+        ScriptVmDefaultWorldBootstrap::capture_baseline_globals_and_attach_context(
             isolate.clone(),
             v8,
             backend,
@@ -131,7 +136,6 @@ pub(super) fn initialize(
             root_frame_id,
         )
     })?;
-    register_main_window_execution_context_for_bootstrap(isolate, host, &runtime.context)?;
     Ok((runtime, baseline))
 }
 
