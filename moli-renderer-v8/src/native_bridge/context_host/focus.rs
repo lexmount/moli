@@ -13,6 +13,31 @@ pub(super) struct DocumentFocusChangeState {
 }
 
 impl JsContextHost {
+    pub(crate) fn document_has_focus(&self, document: DomHandle) -> bool {
+        if !self.document_activity().focused || !self.document_is_fully_active(document) {
+            return false;
+        }
+        let mut document = document;
+        loop {
+            match self.window_endpoint_for_document(document) {
+                Some(PendingWindowMessageEndpoint::TopWindow)
+                | Some(PendingWindowMessageEndpoint::LightweightPopup(_)) => return true,
+                Some(PendingWindowMessageEndpoint::ChildWindow(container)) => {
+                    let Some(parent) = self.dom_host().owner_document_handle(container) else {
+                        return false;
+                    };
+                    // Inactive Documents retain their local focused area. Every
+                    // ancestor must still select this child's navigable.
+                    if self.document_focused_area(parent) != Some(container) {
+                        return false;
+                    }
+                    document = parent;
+                }
+                None => return false,
+            }
+        }
+    }
+
     pub(crate) fn focused_viewport_document(&self) -> Option<DomHandle> {
         self.focused_viewport_document.filter(|document| {
             self.active_element_handle().is_none()

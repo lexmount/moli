@@ -127,33 +127,22 @@ pub(super) fn document_has_focus_callback(
     args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let document = args.this();
-    let focused = document
-        .get(scope, v8str(scope, "defaultView").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .map(|default_view| {
-            default_view
-                .get(scope, v8str(scope, "frameElement").into())
-                .filter(|value| !value.is_null_or_undefined())
-                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-                .map(|frame_element| {
-                    frame_element
-                        .get(scope, v8str(scope, "ownerDocument").into())
-                        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-                        .and_then(|owner_document| {
-                            owner_document.get(scope, v8str(scope, "activeElement").into())
-                        })
-                        .is_some_and(|active_element| {
-                            active_element.strict_equals(frame_element.into())
-                        })
-                })
-                .unwrap_or(true)
-        })
-        .unwrap_or(false);
-    let focused = focused
-        && context_host_ptr_from_global_bridge(scope)
-            .is_some_and(|host_ptr| unsafe { &*host_ptr }.document_activity().focused);
-    rv.set_bool(focused);
+    let Ok((host_ptr, document)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        webidl::throw_type_error(scope, "Document.hasFocus called on incompatible receiver.");
+        return;
+    };
+    let host = unsafe { &*host_ptr };
+    if !host
+        .dom_host()
+        .node(document)
+        .is_some_and(crate::dom::native::Node::is_document)
+    {
+        webidl::throw_type_error(scope, "Document.hasFocus called on incompatible receiver.");
+        return;
+    }
+    rv.set_bool(host.document_has_focus(document));
 }
 
 #[cfg(test)]
