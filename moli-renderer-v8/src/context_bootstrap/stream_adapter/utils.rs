@@ -395,19 +395,7 @@ pub(in crate::context_bootstrap) fn resolve_callable_property_result<'s>(
     Ok(Some(function))
 }
 
-pub(in crate::context_bootstrap) fn set_resolved_promise(
-    scope: &mut v8::PinScope<'_, '_>,
-    rv: &mut v8::ReturnValue<'_, v8::Value>,
-    value: v8::Local<'_, v8::Value>,
-) {
-    let Some(resolver) = v8::PromiseResolver::new(scope) else {
-        rv.set_undefined();
-        return;
-    };
-    let promise = resolver.get_promise(scope);
-    let _ = resolver.resolve(scope, value);
-    rv.set(promise.into());
-}
+pub(in crate::context_bootstrap) use moli_v8_util::set_resolved_promise;
 
 pub(in crate::context_bootstrap) fn resolved_promise_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,

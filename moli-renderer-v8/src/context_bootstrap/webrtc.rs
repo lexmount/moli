@@ -4,6 +4,7 @@ use crate::util::{
 };
 use crate::web_api_interfaces;
 use crate::webidl::{self, WebIdlDictionarySerialize};
+use moli_v8_util::set_resolved_promise;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod configuration;
@@ -544,20 +545,6 @@ fn set_string_slot<'s>(
     value: &'static str,
 ) {
     set_private_value(scope, object, slot, v8str(scope, value).into());
-}
-
-fn set_resolved_promise<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rv: &mut v8::ReturnValue<'_, v8::Value>,
-    value: v8::Local<'s, v8::Value>,
-) {
-    let Some(resolver) = v8::PromiseResolver::new(scope) else {
-        rv.set_undefined();
-        return;
-    };
-    let promise = resolver.get_promise(scope);
-    let _ = resolver.resolve(scope, value);
-    rv.set(promise.into());
 }
 
 fn build_signaling_only_offer(audio: bool, video: bool, data: bool) -> String {
