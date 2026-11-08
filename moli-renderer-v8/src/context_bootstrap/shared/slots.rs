@@ -88,10 +88,6 @@ pub(in crate::context_bootstrap) const RESIZE_OBSERVER_TARGETS_SLOT: &str =
     "__moliResizeObserverTargets";
 pub(in crate::context_bootstrap) const RESIZE_OBSERVER_PENDING_TARGETS_SLOT: &str =
     "__moliResizeObserverPendingTargets";
-pub(in crate::context_bootstrap) const RESIZE_OBSERVER_QUEUE_SLOT: &str =
-    "__moliResizeObserverQueue";
-pub(in crate::context_bootstrap) const RESIZE_OBSERVER_REGISTRY_SLOT: &str =
-    "__moliResizeObservers";
 pub(in crate::context_bootstrap) const RESIZE_OBSERVER_SCHEDULED_SLOT: &str =
     "__moliResizeObserverScheduled";
 pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_CALLBACK_ID_SLOT: &str =
