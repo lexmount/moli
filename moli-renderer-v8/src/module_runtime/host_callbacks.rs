@@ -311,6 +311,9 @@ fn import_meta_resolve_callback(
         throw_type_error(scope, "Module specifier resolution is not available.");
         return;
     };
+    // V8 enters the built-in's creation realm, even when it is extracted or
+    // called from another Window. Keep that realm's settings across ToString.
+    let settings = crate::native_bridge::WindowEnvironmentSettings::for_current_realm(scope);
     let Some(specifier) = callback_arg_string(scope, &args, 0) else {
         return;
     };
@@ -321,8 +324,11 @@ fn import_meta_resolve_callback(
         throw_type_error(scope, "Module base URL is invalid.");
         return;
     };
-    let resolved =
-        unsafe { &mut *host_ptr }.resolve_module_specifier_with_base(&specifier, &base_url);
+    let host = unsafe { &mut *host_ptr };
+    let resolved = match settings {
+        Some(settings) => settings.resolve_module_specifier(host, &specifier, &base_url),
+        None => host.resolve_module_specifier_with_base(&specifier, &base_url),
+    };
     match resolved {
         Ok(module_url) => {
             let Some(value) = v8_string(scope, module_url.as_str()) else {

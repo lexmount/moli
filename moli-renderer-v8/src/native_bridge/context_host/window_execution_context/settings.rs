@@ -140,6 +140,26 @@ impl WindowEnvironmentSettings {
         self.document
     }
 
+    pub(crate) fn resolve_module_specifier(
+        &self,
+        host: &mut JsContextHost,
+        specifier: &str,
+        base_url: &Url,
+    ) -> Result<Url, String> {
+        match (
+            self.execution_identity.owner(),
+            self.execution_identity.dispatch_scope(),
+        ) {
+            (
+                super::WindowExecutionContextOwner::Frame(local_window_id),
+                OwnerDispatchScope::Child(_),
+            ) => host
+                .frame_owner_store
+                .resolve_local_window_module_specifier(local_window_id, specifier, base_url),
+            _ => host.resolve_module_specifier_with_base(specifier, base_url),
+        }
+    }
+
     pub(crate) fn api_base_url(&self, host: &JsContextHost) -> Option<Url> {
         let document = host.dom_host().node(self.document)?.as_document()?;
         // Preserve the existing bootstrap view while an initial empty Document

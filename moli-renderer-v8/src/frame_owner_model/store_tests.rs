@@ -2195,6 +2195,87 @@ fn child_module_integrity_preparation_needs_a_current_document_without_a_realm()
 }
 
 #[test]
+fn child_import_map_settings_survive_document_open_without_reviving_old_document_authority() {
+    let mut store = FrameOwnerStore::default();
+    let child_handle = handle(930);
+    let document_handle = handle(931);
+    let first_owner = commit_test_child_document(
+        &mut store,
+        child_handle,
+        document_handle,
+        "map-settings-frame",
+        None,
+    );
+    let base = url("https://map-settings-frame.test/");
+    let module_url = base.join("module.mjs").unwrap();
+    store
+        .register_current_child_document_import_map(
+            child_handle,
+            document_handle,
+            r#"{"imports":{"key":"/module.mjs"},"integrity":{"/module.mjs":"sha384-retained"}}"#,
+            &base,
+        )
+        .unwrap();
+    let plan = store
+        .plan_child_document_open_replacement(
+            child_handle,
+            document_handle,
+            base.clone(),
+            base.clone(),
+        )
+        .unwrap();
+    let opened = store
+        .commit_child_document_open_replacement(plan)
+        .current_owner()
+        .unwrap();
+    assert_eq!(opened.local_window_id, first_owner.local_window_id);
+    assert_ne!(opened.document_id, first_owner.document_id);
+    assert_eq!(
+        store.resolve_current_child_document_module_integrity(
+            child_handle,
+            first_owner,
+            &module_url,
+        ),
+        None
+    );
+    assert_eq!(
+        store.resolve_current_child_document_module_integrity(child_handle, opened, &module_url,),
+        Some("sha384-retained".to_owned())
+    );
+    assert_eq!(
+        store
+            .resolve_local_window_module_specifier(first_owner.local_window_id, "key", &base,)
+            .unwrap(),
+        module_url
+    );
+
+    let navigated = commit_test_child_document(
+        &mut store,
+        child_handle,
+        handle(932),
+        "map-settings-frame",
+        None,
+    );
+    assert_ne!(navigated.local_window_id, first_owner.local_window_id);
+    assert_eq!(
+        store
+            .resolve_current_child_document_module_integrity(child_handle, navigated, &module_url,),
+        None
+    );
+    assert!(
+        store
+            .resolve_local_window_module_specifier(navigated.local_window_id, "key", &base,)
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .resolve_local_window_module_specifier(first_owner.local_window_id, "key", &base,)
+            .unwrap(),
+        module_url
+    );
+}
+
+#[test]
 fn child_import_map_registry_is_document_scoped_across_static_and_late_resolution() {
     let mut store = FrameOwnerStore::default();
     let child_handle = handle(910);

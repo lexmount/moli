@@ -23,6 +23,10 @@ pub(crate) struct RuntimeScriptPreparationContext {
 }
 
 impl RuntimeScriptPreparationContext {
+    pub(crate) fn base_url(&self) -> &Url {
+        &self.base_url
+    }
+
     pub(crate) fn with_resource_timing_initiator(mut self, url: String) -> Self {
         self.resource_timing_initiator_url = Some(url);
         self

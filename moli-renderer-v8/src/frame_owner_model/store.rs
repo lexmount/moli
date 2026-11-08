@@ -146,6 +146,7 @@ impl FrameOwnerStore {
                 realm_id: Some(realm_id),
                 settings,
                 inherited_opaque_origin: None,
+                import_map_registry: Default::default(),
                 lifecycle: LocalWindowLifecycleState::Current,
             },
         );
@@ -164,7 +165,6 @@ impl FrameOwnerStore {
                 lifecycle: DocumentLifecycleState::Current,
                 lifecycle_progress,
                 active_requests: BTreeMap::new(),
-                import_map_registry: Default::default(),
             },
         );
         self.realms.insert(
@@ -464,7 +464,6 @@ impl FrameOwnerStore {
                 lifecycle: DocumentLifecycleState::Current,
                 lifecycle_progress,
                 active_requests: BTreeMap::new(),
-                import_map_registry: Default::default(),
             },
         );
 
@@ -605,6 +604,7 @@ impl FrameOwnerStore {
                 realm_id: None,
                 settings,
                 inherited_opaque_origin: None,
+                import_map_registry: Default::default(),
                 lifecycle: LocalWindowLifecycleState::Current,
             },
         );
@@ -625,7 +625,6 @@ impl FrameOwnerStore {
                     domcontentloaded_transition_token,
                 ),
                 active_requests: BTreeMap::new(),
-                import_map_registry: Default::default(),
             },
         );
         let frame = self
@@ -886,7 +885,6 @@ impl FrameOwnerStore {
             lifecycle: DocumentLifecycleState::Current,
             lifecycle_progress,
             active_requests: BTreeMap::new(),
-            import_map_registry: Default::default(),
         };
 
         let retired_document = self
@@ -1035,7 +1033,6 @@ impl FrameOwnerStore {
                 lifecycle: DocumentLifecycleState::Current,
                 lifecycle_progress,
                 active_requests: BTreeMap::new(),
-                import_map_registry: Default::default(),
             },
         );
 
@@ -3498,7 +3495,7 @@ impl FrameOwnerStore {
             .ok_or_else(|| "child import map has no current Document owner".to_owned())?;
         let document = self
             .documents
-            .get_mut(&owner.document_id)
+            .get(&owner.document_id)
             .filter(|document| {
                 document.local_window_id == owner.local_window_id
                     && document.lifecycle == DocumentLifecycleState::Current
@@ -3507,7 +3504,9 @@ impl FrameOwnerStore {
             .ok_or_else(|| {
                 "child import map no longer belongs to the current Document".to_owned()
             })?;
-        document
+        self.local_windows
+            .get_mut(&document.local_window_id)
+            .ok_or_else(|| "child import map Window settings are unavailable".to_owned())?
             .import_map_registry
             .register_import_map(source, base_url)
     }
@@ -3521,9 +3520,24 @@ impl FrameOwnerStore {
         if !self.child_document_task_owner_is_current(child_handle, owner) {
             return None;
         }
-        self.documents
-            .get(&owner.document_id)
-            .and_then(|document| document.import_map_registry.resolve_module_integrity(url))
+        self.local_windows
+            .get(&owner.local_window_id)
+            .and_then(|window| window.import_map_registry.resolve_module_integrity(url))
+    }
+
+    /// Pure settings lookup: retained module resolvers outlive their Window's
+    /// execution authority. This does not authorize a task or network request.
+    pub(crate) fn resolve_local_window_module_specifier(
+        &mut self,
+        local_window_id: LocalWindowId,
+        specifier: &str,
+        base_url: &Url,
+    ) -> Result<Url, String> {
+        self.local_windows
+            .get_mut(&local_window_id)
+            .ok_or_else(|| "module Window settings are unavailable".to_owned())?
+            .import_map_registry
+            .resolve_module_specifier(specifier, base_url)
     }
 
     pub(crate) fn resolve_frame_document_module_specifier(
@@ -3541,12 +3555,7 @@ impl FrameOwnerStore {
                 "child module specifier `{specifier}` lost its current Document/realm owner"
             ));
         }
-        self.documents
-            .get_mut(&owner.document_id)
-            .filter(|document| document.local_window_id == owner.local_window_id)
-            .ok_or_else(|| "child module settings object is unavailable".to_owned())?
-            .import_map_registry
-            .resolve_module_specifier(specifier, base_url)
+        self.resolve_local_window_module_specifier(owner.local_window_id, specifier, base_url)
     }
 
     pub(crate) fn resolve_frame_document_module_integrity(
@@ -3561,10 +3570,9 @@ impl FrameOwnerStore {
         ) {
             return None;
         }
-        self.documents
-            .get(&owner.document_id)
-            .filter(|document| document.local_window_id == owner.local_window_id)
-            .and_then(|document| document.import_map_registry.resolve_module_integrity(url))
+        self.local_windows
+            .get(&owner.local_window_id)
+            .and_then(|window| window.import_map_registry.resolve_module_integrity(url))
     }
 
     pub(crate) fn document_task_owner_is_current(&self, owner: FrameDocumentTaskOwner) -> bool {

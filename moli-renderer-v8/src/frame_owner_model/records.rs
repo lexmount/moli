@@ -596,6 +596,9 @@ pub(crate) struct LocalWindowRecord {
     pub(crate) document_id: DocumentId,
     pub(crate) realm_id: Option<FrameRealmId>,
     pub(crate) settings: FrameSettingsObject,
+    // Import maps and the resolved-module set belong to the Window's settings,
+    // surviving document.open() and remaining usable by retained pure resolvers.
+    pub(crate) import_map_registry: moli_import_map::ImportMapRegistryState,
     // Captured when an inherited Document moves into a new host. The host's
     // own LocalWindow id cannot reconstruct the creator's opaque origin.
     pub(crate) inherited_opaque_origin:
@@ -624,7 +627,6 @@ pub(crate) struct DocumentRecord {
     pub(crate) lifecycle: DocumentLifecycleState,
     pub(crate) lifecycle_progress: DocumentLifecycleRecord,
     pub(crate) active_requests: BTreeMap<FrameRequestId, FrameRequestRecord>,
-    pub(crate) import_map_registry: moli_import_map::ImportMapRegistryState,
 }
 
 #[derive(Debug)]
