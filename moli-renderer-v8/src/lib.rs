@@ -34,6 +34,7 @@ mod callback_invocation;
 #[cfg(test)]
 mod chromium_property_surface;
 mod common_runtime;
+mod console_forwarding;
 mod content_security_policy;
 mod context_bootstrap;
 mod cross_origin_isolation;
