@@ -75,9 +75,10 @@ impl RendererOwnerLocalStore {
             page_id,
             page_inspector.agent_token(),
         );
-        // The protocol target does not exist yet. Retain creator-script facts
-        // locally until adoption binds this exact Page to its output owner.
+        // Retain creator-script facts until protocol reserves this exact
+        // Page's output owner. A modal prefix may bind before V8 adoption.
         let journal = RendererTurnOutputJournal::new(stream);
+        pending.retain_output_journal(journal.clone());
         let environment = RendererPageScriptEnvironment::new(
             page_id.as_u64(),
             isolate.clone(),

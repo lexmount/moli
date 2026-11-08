@@ -37,9 +37,10 @@ use moli_protocol_webdriver_bidi::{
 };
 use moli_protocol_webdriver_classic::{
     CLASSIC_ELEMENT_REFERENCE_KEY, ClassicActionState, ClassicDevToolsCommandContext,
-    ClassicElementOriginViewportPoints, ClassicError, ClassicErrorCode, ClassicViewportBounds,
-    classic_element_id, element_center_from_geometry,
-    perform_actions_ticks_with_state_and_viewport, release_actions_commands,
+    ClassicElementOriginViewportPoints, ClassicError, ClassicErrorCode,
+    ClassicUnhandledPromptBehavior, ClassicViewportBounds, classic_element_id,
+    element_center_from_geometry, perform_actions_ticks_with_state_and_viewport,
+    release_actions_commands,
 };
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -95,10 +96,12 @@ pub(super) async fn ws_bidi_existing_session_upgrade_handler(
     {
         return StatusCode::CONFLICT.into_response();
     }
-    let file_prompt_handler = state
+    let Some(unhandled_prompt_behavior) = state
         .classic_session_registry
-        .file_prompt_handler_for_bidi_script_commands(&session_id)
-        .map(str::to_owned);
+        .unhandled_prompt_behavior(&session_id)
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
     let web_socket_url = format!("{}/{}", state.bidi_ws_url.trim_end_matches('/'), session_id);
     ws.on_upgrade(move |socket| async move {
         let Some(_connection) = state.control.connection() else {
@@ -109,7 +112,7 @@ pub(super) async fn ws_bidi_existing_session_upgrade_handler(
                 socket,
                 web_socket_url,
                 session_id,
-                file_prompt_handler,
+                unhandled_prompt_behavior,
                 state.bidi_session_registry,
             )
             .await
@@ -306,12 +309,18 @@ impl BidiSocketActor {
         self.bidi.attach_existing_session(session_id, registry)
     }
 
-    pub(in crate::protocol_server) fn set_file_prompt_handler_for_script_commands(
+    pub(in crate::protocol_server) fn configure_existing_session_prompt_handlers(
         &mut self,
-        handler: Option<&str>,
-    ) {
+        scheduler: &mut CdpScheduler,
+        behavior: &ClassicUnhandledPromptBehavior,
+    ) -> Result<(), moli_protocol_webdriver_bidi::BidiError> {
         self.bidi
-            .set_file_prompt_handler_for_script_commands(handler);
+            .set_unhandled_prompt_behavior(&behavior.returned_capability())?;
+        self.bidi.set_file_prompt_handler_for_script_commands(
+            behavior.file_prompt_handler_for_bidi_script_commands(),
+        );
+        scheduler.register_bidi_javascript_dialog_handler(self.bidi.javascript_dialog_handlers());
+        Ok(())
     }
 
     pub(in crate::protocol_server) fn release_session(
@@ -770,6 +779,7 @@ async fn handle_bidi_socket_message(
     };
     admission_event_sources.extend_protocol_output(apply_bidi_dialog_handler_lifecycle(
         scheduler,
+        bidi,
         command_method.as_deref(),
         &outcome,
     ));
@@ -1074,6 +1084,7 @@ async fn handle_bidi_socket_message(
 
 fn apply_bidi_dialog_handler_lifecycle(
     scheduler: &mut CdpScheduler,
+    bidi: &BidiConnectionState,
     method: Option<&str>,
     outcome: &BidiCommandOutcome,
 ) -> ProtocolOutputSequence {
@@ -1082,8 +1093,7 @@ fn apply_bidi_dialog_handler_lifecycle(
             .unregister_automation_javascript_dialog_handler(FrontendProtocol::WebDriverBidi);
     }
     if method == Some("session.new") && outcome.response["type"] == "success" {
-        scheduler
-            .register_automation_javascript_dialog_handler(FrontendProtocol::WebDriverBidi, false);
+        scheduler.register_bidi_javascript_dialog_handler(bidi.javascript_dialog_handlers());
     }
     ProtocolOutputSequence::empty()
 }
@@ -3430,7 +3440,8 @@ mod tests {
                 json!({"id": id, "method": method, "params": params}),
                 &mut registry,
             );
-            let _ = apply_bidi_dialog_handler_lifecycle(&mut scheduler, Some(method), &outcome);
+            let _ =
+                apply_bidi_dialog_handler_lifecycle(&mut scheduler, &bidi, Some(method), &outcome);
             assert_eq!(
                 scheduler.has_automation_javascript_dialog_handler(),
                 expected_available,
@@ -3455,7 +3466,8 @@ mod tests {
                 &mut registry,
             );
             assert_eq!(outcome.response["type"], "success");
-            let _ = apply_bidi_dialog_handler_lifecycle(&mut scheduler, Some(method), &outcome);
+            let _ =
+                apply_bidi_dialog_handler_lifecycle(&mut scheduler, &bidi, Some(method), &outcome);
             assert!(scheduler.has_automation_javascript_dialog_handler());
         }
         let _ = scheduler

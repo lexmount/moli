@@ -542,6 +542,15 @@ impl CdpScheduler {
         ProtocolOutputSequence::from_background_events(events)
     }
 
+    pub(crate) fn register_bidi_javascript_dialog_handler(
+        &mut self,
+        handlers: moli_protocol::automation::DevToolsJavaScriptDialogHandlers,
+    ) {
+        self.state
+            .with_state(|state| state.register_bidi_javascript_dialog_handler(handlers))
+            .expect("live protocol actor state");
+    }
+
     #[cfg(test)]
     pub(crate) fn has_automation_javascript_dialog_handler(&self) -> bool {
         self.state

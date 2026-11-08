@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::user_context::bidi_user_context_from_browser_context_id;
 use moli_protocol::{
-    automation::AutomationEvent,
+    automation::{AutomationEvent, DevToolsJavaScriptDialogHandlers, DevToolsUserPromptHandler},
     frame_index::{FrameIndex, FrameRecord},
 };
 use serde_json::{Value, json};
@@ -148,6 +148,60 @@ fn normalized_prompt_handler(value: &str) -> Result<&'static str, BidiError> {
     }
 }
 
+fn matched_session_capabilities(capabilities: Value) -> Result<Value, BidiError> {
+    if capabilities.get("alwaysMatch").is_none() && capabilities.get("firstMatch").is_none() {
+        return Ok(capabilities);
+    }
+    let invalid = |message: &str| BidiError::new(BidiErrorCode::InvalidArgument, message);
+    let always = match capabilities.get("alwaysMatch") {
+        None => serde_json::Map::new(),
+        Some(value) => value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| invalid("alwaysMatch must be an object"))?,
+    };
+    let first = match capabilities.get("firstMatch") {
+        None => vec![json!({})],
+        Some(Value::Array(entries)) if !entries.is_empty() => entries.clone(),
+        _ => return Err(invalid("firstMatch must be a non-empty array")),
+    };
+    let mut candidates = Vec::new();
+    for candidate in first {
+        let candidate = candidate
+            .as_object()
+            .ok_or_else(|| invalid("firstMatch entries must be objects"))?;
+        if candidate.keys().any(|key| always.contains_key(key)) {
+            return Err(invalid(
+                "alwaysMatch and firstMatch contain the same capability",
+            ));
+        }
+        let mut merged = always.clone();
+        merged.extend(candidate.clone());
+        if merged
+            .get("browserName")
+            .is_some_and(|name| !name.is_null() && !name.is_string())
+        {
+            return Err(invalid("browserName must be a string or null"));
+        }
+        candidates.push(merged);
+    }
+    candidates
+        .into_iter()
+        .find(|candidate| {
+            candidate
+                .get("browserName")
+                .and_then(Value::as_str)
+                .is_none_or(|name| name == "moli")
+        })
+        .map(Value::Object)
+        .ok_or_else(|| {
+            BidiError::new(
+                BidiErrorCode::SessionNotCreated,
+                "No matching capabilities found",
+            )
+        })
+}
+
 impl Default for BidiConnectionState {
     fn default() -> Self {
         Self {
@@ -189,6 +243,25 @@ impl BidiConnectionState {
             "accept" | "dismiss" => Some(handler),
             _ => None,
         }
+    }
+
+    pub fn javascript_dialog_handlers(&self) -> DevToolsJavaScriptDialogHandlers {
+        let handler = |kind| match self.unhandled_prompt_behavior.handler_for_prompt_type(kind) {
+            "accept" => DevToolsUserPromptHandler::Accept,
+            "dismiss" => DevToolsUserPromptHandler::Dismiss,
+            _ => DevToolsUserPromptHandler::Ignore,
+        };
+        DevToolsJavaScriptDialogHandlers {
+            alert: handler("alert"),
+            confirm: handler("confirm"),
+            prompt: handler("prompt"),
+        }
+    }
+
+    pub fn set_unhandled_prompt_behavior(&mut self, capability: &Value) -> Result<(), BidiError> {
+        self.unhandled_prompt_behavior =
+            BidiUnhandledPromptBehavior::from_capability(Some(capability))?;
+        Ok(())
     }
 
     pub fn set_file_prompt_handler_for_script_commands(&mut self, handler: Option<&str>) {
@@ -473,6 +546,10 @@ impl BidiConnectionState {
                 "session.new capabilities must be an object",
             );
         }
+        let capabilities = match matched_session_capabilities(capabilities) {
+            Ok(capabilities) => capabilities,
+            Err(error) => return error_response(Some(id), error.code, &error.message),
+        };
         let unhandled_prompt_behavior = match BidiUnhandledPromptBehavior::from_capability(
             capabilities.get("unhandledPromptBehavior"),
         ) {

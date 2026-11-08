@@ -179,7 +179,6 @@ impl PendingRendererOutputRecord {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn item(&self) -> &RendererOutputItem {
         &self.item
     }
