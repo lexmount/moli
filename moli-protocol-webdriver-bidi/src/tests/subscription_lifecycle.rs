@@ -98,6 +98,40 @@ fn invalid_prompt_capability_requests_do_not_create_a_session() {
 }
 
 #[test]
+fn invalid_prompt_behavior_in_any_first_match_candidate_rejects_session() {
+    for behavior in [
+        json!("invalid-handler"),
+        json!({"default": "invalid-handler"}),
+        json!({"alert": "invalid-handler"}),
+        json!({"confirm": 1}),
+        json!({"prompt": false}),
+        json!(false),
+    ] {
+        let valid = json!({
+            "browserName": "moli", "unhandledPromptBehavior": {"default": "ignore"},
+        });
+        let invalid = json!({
+            "browserName": "other", "unhandledPromptBehavior": behavior,
+        });
+        for candidates in [
+            vec![valid.clone(), invalid.clone()],
+            vec![invalid.clone(), valid],
+            vec![invalid],
+        ] {
+            let mut state = BidiConnectionState::new();
+            let outcome = state.handle_message_with_session_registry(
+                json!({"id": 1, "method": "session.new", "params": {
+                    "capabilities": {"firstMatch": candidates},
+                }}),
+                &mut BidiSessionRegistry::new(),
+            );
+            assert_eq!(outcome.response["error"], "invalid argument", "{outcome:?}");
+            assert!(state.session_id().is_none());
+        }
+    }
+}
+
+#[test]
 fn frame_facts_publish_lifecycle_and_retire_the_context_without_cdp_page_hooks() {
     use moli_protocol::automation::{
         AutomationEvent, DocumentLifecyclePhase, FrameDetachedEvent, NavigationFrameEvent,

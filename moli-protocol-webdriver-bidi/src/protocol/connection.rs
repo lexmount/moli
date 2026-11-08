@@ -160,6 +160,7 @@ fn matched_session_capabilities(capabilities: Value) -> Result<Value, BidiError>
             .cloned()
             .ok_or_else(|| invalid("alwaysMatch must be an object"))?,
     };
+    BidiUnhandledPromptBehavior::from_capability(always.get("unhandledPromptBehavior"))?;
     let first = match capabilities.get("firstMatch") {
         None => vec![json!({})],
         Some(Value::Array(entries)) if !entries.is_empty() => entries.clone(),
@@ -170,6 +171,8 @@ fn matched_session_capabilities(capabilities: Value) -> Result<Value, BidiError>
         let candidate = candidate
             .as_object()
             .ok_or_else(|| invalid("firstMatch entries must be objects"))?;
+        // A nonmatching candidate must still contain valid prompt policies.
+        BidiUnhandledPromptBehavior::from_capability(candidate.get("unhandledPromptBehavior"))?;
         if candidate.keys().any(|key| always.contains_key(key)) {
             return Err(invalid(
                 "alwaysMatch and firstMatch contain the same capability",
