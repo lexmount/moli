@@ -140,7 +140,7 @@ fn cdp_handle_javascript_dialog_builds_protocol_neutral_command() {
         Some("SID-page")
     );
     assert!(!command.accept);
-    assert_eq!(command.prompt_text, "typed text");
+    assert_eq!(command.prompt_text.as_deref(), Some("typed text"));
 }
 
 #[test]

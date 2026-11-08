@@ -27,7 +27,7 @@ pub(super) fn build_cdp_handle_javascript_dialog_command(
         conn,
         cmd,
         params.accept,
-        params.prompt_text.unwrap_or_default(),
+        Some(params.prompt_text.unwrap_or_default()),
     ))
 }
 
@@ -35,7 +35,7 @@ fn cdp_handle_javascript_dialog_command(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
     accept: bool,
-    prompt_text: String,
+    prompt_text: Option<String>,
 ) -> DevToolsHandleJavaScriptDialogCommand {
     let (browser_context_id, target_id) = conn
         .target_owner_identity_for_session(cmd.session_id)
@@ -297,11 +297,9 @@ pub(super) fn finish_devtools_handle_javascript_dialog_command(
         })
         .flatten()
         .ok_or_else(no_javascript_dialog_error)?;
-    let user_input = if command_prompt_text.is_empty() {
-        stored_prompt_text.unwrap_or_default()
-    } else {
-        command_prompt_text
-    };
+    let user_input = command_prompt_text
+        .or(stored_prompt_text)
+        .unwrap_or_default();
     let _ = dialog.finish(command.accept, user_input.clone());
     let closed_event = UserPromptClosedEvent {
         target_id: command.context.target_id,

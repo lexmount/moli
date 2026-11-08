@@ -3226,7 +3226,7 @@ fn maps_alert_commands_to_shared_page_dialog_commands() {
         panic!("accept alert should map to handle dialog command");
     };
     assert!(accept.accept);
-    assert_eq!(accept.prompt_text, "");
+    assert_eq!(accept.prompt_text, None);
 
     let AutomationCommand::HandleJavaScriptDialog(dismiss) = alert_handle_command(&context, false)
     else {

@@ -2027,9 +2027,11 @@ fn bidi_handle_user_prompt_command(
     Ok(DevToolsHandleJavaScriptDialogCommand {
         context: context.command_context(Some(DevToolsTargetId::from(target_id))),
         accept: optional_bool(&command.params, "accept")?.unwrap_or(true),
-        prompt_text: optional_string(&command.params, "userText")?
-            .unwrap_or_default()
-            .to_owned(),
+        prompt_text: Some(
+            optional_string(&command.params, "userText")?
+                .unwrap_or_default()
+                .to_owned(),
+        ),
     })
 }
 

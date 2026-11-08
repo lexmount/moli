@@ -1202,7 +1202,7 @@ fn maps_browsing_context_handle_user_prompt_to_shared_page_command() {
         Some("TARGET-1")
     );
     assert!(command.accept);
-    assert_eq!(command.prompt_text, "Test");
+    assert_eq!(command.prompt_text.as_deref(), Some("Test"));
 }
 
 #[test]
