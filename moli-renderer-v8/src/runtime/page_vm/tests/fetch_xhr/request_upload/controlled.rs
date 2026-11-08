@@ -50,15 +50,10 @@ async fn controlled_probe(
     let result = executor
         .run(async move {
             page.vm_mut().eval(&source)?;
-            drive_page_work_until_done_with_explicit_producer_admission(
+            drive_service_worker_until_done(
                 &mut page,
                 "String(globalThis.__controlledUploadDone===true)",
                 "controlled author upload should complete",
-                |page| {
-                    page.runtime_hooks
-                        .browser_context_runtime
-                        .drain_service_worker_service_lane();
-                },
             )
             .await?;
             page.vm_mut()

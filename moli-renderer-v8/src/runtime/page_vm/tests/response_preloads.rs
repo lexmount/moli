@@ -216,13 +216,10 @@ addEventListener('message', event => {globalThis.streamedStylePreloadResult = ev
   const child = document.createElement('iframe');child.src = '/controlled/child';document.body.appendChild(child);
 })().catch(error => {globalThis.streamedStylePreloadResult = {error:String(error)};});
 "#)?;
-            drive_page_work_until_done_with_explicit_producer_admission(
+            drive_service_worker_until_done(
                 &mut page_vm,
                 "String(globalThis.streamedStylePreloadResult !== undefined)",
                 "controlled response stylesheet preload consumption",
-                |page_vm| {
-                    page_vm.runtime_hooks.browser_context_runtime.drain_service_worker_service_lane();
-                },
             ).await?;
             let result = page_vm.vm_mut().eval("JSON.stringify(streamedStylePreloadResult)")?;
             assert_eq!(serde_json::from_str::<serde_json::Value>(&result)?, json!({"before":{"links":0,"sheets":0},"controlled":true,"color":"rgb(1, 2, 3)","label":"水🌍","timings":["link"]}));
@@ -388,13 +385,10 @@ addEventListener('message', event => { globalThis.controlledPreloadResult = even
   document.body.appendChild(frame);
 })().catch(error => { globalThis.controlledPreloadResult = {error: String(error)}; });
 "#)?;
-            drive_page_work_until_done_with_explicit_producer_admission(
+            drive_service_worker_until_done(
                 &mut page_vm,
                 "String(globalThis.controlledPreloadResult !== undefined)",
                 "controlled header preload should complete before its consumer",
-                |page_vm| {
-                    page_vm.runtime_hooks.browser_context_runtime.drain_service_worker_service_lane();
-                },
             ).await?;
             let result = page_vm.vm_mut().eval("JSON.stringify(controlledPreloadResult)")?;
             assert_eq!(serde_json::from_str::<serde_json::Value>(&result)?, json!({"before": 0, "executions": 1, "controlled": true, "links": 0, "timings": ["link"]}));
@@ -639,13 +633,10 @@ addEventListener('message', event => { globalThis.controlledPreloadResult = even
   document.body.appendChild(frame);
 })().catch(error => { globalThis.controlledPreloadResult = {error: String(error)}; });
 "#)?;
-            drive_page_work_until_done_with_explicit_producer_admission(
+            drive_service_worker_until_done(
                 &mut page_vm,
                 "String(globalThis.controlledPreloadResult !== undefined)",
                 "controlled header preload should complete before its consumer",
-                |page_vm| {
-                    page_vm.runtime_hooks.browser_context_runtime.drain_service_worker_service_lane();
-                },
             ).await?;
             let result = page_vm.vm_mut().eval("JSON.stringify(controlledPreloadResult)")?;
             assert_eq!(serde_json::from_str::<serde_json::Value>(&result)?, json!({"before": 0, "executions": 1, "controlled": true, "links": 0, "timings": ["script"], "answer": 42}));
