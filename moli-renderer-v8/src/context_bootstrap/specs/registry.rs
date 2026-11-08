@@ -41,6 +41,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::RtcEncodedVideoFrame,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::MediaStream::DESCRIPTOR,
+        kind: ConstructorKind::MediaStream,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaStreamTrackEvent::DESCRIPTOR,
+        kind: ConstructorKind::MediaStreamTrackEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::PictureInPictureEvent::DESCRIPTOR,
         kind: ConstructorKind::PictureInPictureEvent,
     },
