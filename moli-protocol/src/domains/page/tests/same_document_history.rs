@@ -13,6 +13,7 @@ mod navigation_window_reuse;
 mod no_document_navigation;
 mod popup_network_navigation;
 mod response_gate;
+mod same_document_traversal_cancellation;
 mod stale_history_traversal;
 
 use response_gate::ResponseGate;
