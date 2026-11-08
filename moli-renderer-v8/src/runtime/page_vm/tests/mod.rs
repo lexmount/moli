@@ -2272,4 +2272,5 @@ mod blob_support;
 mod request_body_transfer;
 
 mod response_body_clone;
+mod rtc_stats;
 mod rtp_transceivers;
