@@ -1,3 +1,4 @@
+pub(in crate::native_bridge::document) use self::named_node_map_set_named_item_method_callback as named_node_map_set_named_item_ns_method_callback;
 use crate::webidl;
 
 use super::super::attribute_node::{live_remove_attribute_node, live_set_attribute_node};
@@ -165,35 +166,6 @@ pub(in crate::native_bridge::document) fn named_node_map_get_named_item_ns_metho
         .filter(|namespace| !namespace.is_empty());
     let Some(value) = attribute_node_for_namespace(scope, element, namespace, &parsed.local_name)
     else {
-        rv.set_null();
-        return;
-    };
-    rv.set(value);
-}
-
-pub(in crate::native_bridge::document) fn named_node_map_set_named_item_ns_method_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(element) = named_node_map_element(scope, args.this()) else {
-        rv.set_null();
-        return;
-    };
-    let Some(parsed) = webidl::parse_args::<NamedNodeMapAttrArgs<'a>>(scope, &args) else {
-        return;
-    };
-    let attr = moli_webapi_declare::web_api_object_target(scope, parsed.attr)
-        .expect("converted Attr has native identity");
-    if let Some((runtime_ptr, _)) = detached_native_element_runtime_and_handle(scope, element) {
-        crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if let Some(value) = detached_native_set_attribute_node(scope, element, attr.into()) {
-                rv.set(value);
-            }
-        });
-        return;
-    }
-    let Some(value) = live_set_attribute_node(scope, element, attr.into()) else {
         rv.set_null();
         return;
     };
