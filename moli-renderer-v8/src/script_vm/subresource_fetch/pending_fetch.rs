@@ -91,9 +91,16 @@ fn request_for_pending_subresource(
                 None => request,
             }
         }
-        SubresourceResourceType::Fetch => {
-            request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Fetch)
-        }
+        SubresourceResourceType::Fetch => request
+            .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Fetch)
+            .with_cache_mode(
+                pending
+                    .continuation
+                    .window_fetch()
+                    .map_or(moli_fetch::RequestCacheMode::Default, |fetch| {
+                        fetch.cache_mode()
+                    }),
+            ),
         SubresourceResourceType::Manifest => request
             .with_resource_type(moli_fetch::RequestResourceType::Manifest)
             .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Manifest),

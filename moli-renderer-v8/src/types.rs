@@ -247,6 +247,7 @@ impl PendingSubresourceContinuation {
 pub(super) struct PendingWindowFetchContinuation {
     promise: PendingWindowFetchPromise,
     keepalive: bool,
+    cache_mode: moli_fetch::RequestCacheMode,
     connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
     csp_report_context: crate::network_host::WindowCspReportRequestContext,
 }
@@ -260,15 +261,21 @@ impl PendingWindowFetchContinuation {
     pub(super) fn new(
         resolver: v8::Global<v8::PromiseResolver>,
         keepalive: bool,
+        cache_mode: moli_fetch::RequestCacheMode,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
     ) -> Self {
         Self {
             promise: PendingWindowFetchPromise::Active(resolver),
             keepalive,
+            cache_mode,
             connect_policy,
             csp_report_context,
         }
+    }
+
+    pub(super) fn cache_mode(&self) -> moli_fetch::RequestCacheMode {
+        self.cache_mode
     }
 
     pub(super) fn keepalive(&self) -> bool {
