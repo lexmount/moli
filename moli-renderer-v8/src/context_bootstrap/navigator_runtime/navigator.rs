@@ -689,6 +689,25 @@ fn navigator_runtime_data_getter_callback<'s>(
         rv.set(v8::undefined(scope).into());
         return;
     };
+    if key == "serviceWorker" {
+        // Window Navigators retain their Document's native origin, including
+        // sandboxed HTTP documents and inherited about:blank/srcdoc origins.
+        // Check before returning a cached container. WorkerNavigator has its
+        // own exposure policy and does not carry this Window-only slot.
+        let origin = moli_webapi_declare::web_api_object_target(scope, args.this())
+            .and_then(|navigator| {
+                get_private_value(scope, navigator, super::protocol_handlers::ORIGIN_SLOT)
+            })
+            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok());
+        if origin.is_some_and(|origin| origin.to_rust_string_lossy(scope) == "null") {
+            crate::webidl::throw_dom_exception(
+                scope,
+                "SecurityError",
+                "Access to service workers is denied in this document origin.",
+            );
+            return;
+        }
+    }
     if matches!(key, "language" | "languages" | "userAgentData")
         && let Some(identity) = worker_navigator_identity(scope, backing)
     {
