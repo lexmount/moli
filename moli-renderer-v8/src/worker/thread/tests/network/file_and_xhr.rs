@@ -1935,3 +1935,92 @@ async fn worker_termination_releases_native_websocket_transport() {
         .await
         .expect("terminating Worker releases its native socket");
 }
+
+#[tokio::test]
+async fn worker_file_reading_replenishment_does_not_starve_timers() {
+    ensure_v8();
+    for kind in ["reader", "blob"] {
+        let source = format!(
+            r#"
+        let reads = 0, stopped = false;
+        const limit = 512, blob = new Blob(['fairness']), kind = {kind:?};
+        const reader = new FileReader();
+        function next() {{
+            if (stopped || reads >= limit) return;
+            if (kind === 'reader') reader.readAsText(blob);
+            else blob.text().then(complete);
+        }}
+        function complete() {{ ++reads; next(); }}
+        reader.onloadend = complete;
+        setTimeout(() => {{ stopped = true; postMessage(reads < limit); close(); }}, 0);
+        next();
+        "#
+        );
+        let mut handle = spawn_worker(
+            source,
+            "https://file-reading-fairness.test/worker.js".into(),
+        );
+        let message = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timer must progress during FileReading")
+            .expect("worker should report timer result");
+        assert_eq!(
+            expect_post_json(message),
+            "true",
+            "replenishing {kind} queue must yield before exhaustion"
+        );
+    }
+}
+
+#[tokio::test]
+async fn worker_file_reading_replenishment_does_not_starve_messages() {
+    ensure_v8();
+    let stop = serialize_test_string("stop");
+    let mut handle = spawn_worker(
+        r#"
+        let stopped = false;
+        const reader = new FileReader(), blob = new Blob(['messages']);
+        reader.onloadend = () => { if (!stopped) reader.readAsText(blob); };
+        onmessage = event => { stopped = true; postMessage(event.data); close(); };
+        postMessage('ready');
+        reader.readAsText(blob);
+    "#
+        .into(),
+        "https://file-reading-fairness.test/worker.js".into(),
+    );
+    let ready = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    assert_eq!(
+        expect_post_json(ready),
+        serde_json::json!("ready").to_string()
+    );
+    handle.post_message(stop);
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("message must progress during FileReading")
+        .expect("worker should echo stop");
+    assert_eq!(
+        expect_post_json(message),
+        serde_json::json!("stop").to_string()
+    );
+}
+
+#[tokio::test]
+async fn worker_file_reading_keeps_event_and_microtask_order() {
+    ensure_v8();
+    let mut handle = spawn_worker(r#"
+        const order = [], reader = new FileReader();
+        for (const type of ['loadstart','progress','load','loadend']) reader.addEventListener(type, () => {
+            order.push(type);
+            queueMicrotask(() => {
+                order.push('micro:' + type);
+                if (type === 'loadend') { postMessage(order); close(); }
+            });
+        });
+        reader.readAsText(new Blob(['microtask order']));
+    "#.into(), "https://file-reading-fairness.test/worker.js".into());
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    assert_eq!(
+        expect_post_json(message),
+        r#"["loadstart","micro:loadstart","progress","micro:progress","load","micro:load","loadend","micro:loadend"]"#
+    );
+}
