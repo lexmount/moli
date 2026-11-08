@@ -2,6 +2,7 @@ use crate::custom_elements;
 use crate::document_runtime::DomHandle;
 use crate::util::v8_string;
 use crate::webidl;
+pub(super) use crate::webidl::dom_string_property_value as property_dom_string_value;
 
 use super::super::node::{node_is_element, node_runtime_and_handle_from_object_or_detached};
 use super::{
@@ -1319,25 +1320,6 @@ pub(super) fn property_string_value(
     value: v8::Local<'_, v8::Value>,
 ) -> Option<String> {
     Some(value.to_string(scope)?.to_rust_string_lossy(scope))
-}
-
-pub(super) fn property_dom_string_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    owner: &'static str,
-    property: &'static str,
-) -> Option<String> {
-    match webidl::convert::<webidl::DomString>(
-        scope,
-        value,
-        webidl::Context::member(owner, property),
-    ) {
-        Ok(value) => Some(value.0),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
 }
 
 pub(super) fn property_usv_string_value<'s>(
