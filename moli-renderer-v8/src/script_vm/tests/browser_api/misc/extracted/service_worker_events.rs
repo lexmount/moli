@@ -1,5 +1,6 @@
 use super::*;
 
+mod navigation_preload;
 mod window_container;
 
 #[tokio::test]
