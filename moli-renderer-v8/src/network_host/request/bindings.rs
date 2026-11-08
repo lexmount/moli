@@ -5,6 +5,7 @@ use self::init::{
 };
 use super::input::request_headers_guard_for_mode;
 use super::*;
+use crate::network_host::fetch_surface::set_request_slot_value;
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
@@ -255,6 +256,61 @@ pub(crate) fn build_cached_request_object<'s>(
     )
     .bind(scope)
     .ok()
+}
+
+/// Expose the intercepted internal request without running author constructors
+/// or RequestInit conversion, which filters privileged headers and metadata.
+pub(crate) fn build_service_worker_request_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: &crate::service_worker_runtime::ServiceWorkerFetchRequest,
+) -> Option<(v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>)> {
+    let mode: &'static str = source.request_mode.into();
+    let credentials: &'static str = source.credentials_mode.into();
+    let redirect: &'static str = source.redirect_mode.into();
+    let priority: &'static str = source.priority.map_or("auto", Into::into);
+    let headers = build_headers_object_with_state(
+        scope,
+        &source.headers,
+        request_headers_guard_for_mode(mode),
+        true,
+    );
+    let signal = new_abort_signal_for_request_with_source(scope, None)?;
+    let signal_object = v8::Local::<v8::Object>::try_from(signal).ok()?;
+    let request = RequestInstanceDeclaration::new(
+        source.method.clone(),
+        source.url.to_string(),
+        headers,
+        source.destination.as_str().to_owned(),
+        source.metadata.referrer.clone(),
+        source.metadata.referrer_policy.clone(),
+        mode.to_owned(),
+        credentials.to_owned(),
+        source.metadata.cache.clone(),
+        redirect.to_owned(),
+        source.metadata.integrity.clone(),
+        source.metadata.keepalive,
+        priority.to_owned(),
+        signal,
+        "half".to_owned(),
+        source.metadata.is_history_navigation,
+        source.is_reload,
+        v8::null(scope).into(),
+    )
+    .bind(scope)
+    .ok()?;
+    let body = if let Some(payload) = &source.body_stream {
+        let stream = crate::context_bootstrap::build_readable_stream_clone_shell(scope);
+        crate::context_bootstrap::initialize_request_body_stream(scope, stream, payload)?;
+        Some(stream)
+    } else if let Some(bytes) = &source.body {
+        Some(PreparedBodySource::Bytes(bytes.clone()).into_body_stream(scope, request)?)
+    } else {
+        None
+    };
+    if let Some(body) = body {
+        set_request_slot_value(scope, request, REQUEST_BODY_SLOT, body.into());
+    }
+    Some((request, signal_object))
 }
 
 fn callback_base_url(

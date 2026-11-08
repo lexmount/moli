@@ -20,13 +20,11 @@ use crate::exception_reporting::{V8ExceptionReport, log_unhandled_promise_reject
 use crate::network_host::{
     MaterializedResponseBody, MaterializedResponseHead,
     build_navigation_preload_response_object_from_stream_for_request_mode,
-    close_pending_network_body_stream, enqueue_pending_network_body_chunk,
-    error_pending_network_body_stream_with_reason, materialize_response_object_body,
-    materialize_response_object_body_with_chunk_callback,
+    build_service_worker_request_object, close_pending_network_body_stream,
+    enqueue_pending_network_body_chunk, error_pending_network_body_stream_with_reason,
+    materialize_response_object_body, materialize_response_object_body_with_chunk_callback,
     materialize_response_object_internal_head, materialized_body_bytes_from_value,
-    new_network_body_source_id, set_request_destination_for_service_worker_fetch_event,
-    set_request_mode_for_service_worker_fetch_event,
-    set_request_navigation_flags_for_service_worker_fetch_event,
+    new_network_body_source_id,
 };
 use crate::runtime::{
     MaterializedServiceWorkerFetchResponseHead, ServiceWorkerEventId, ServiceWorkerFetchCompletion,
@@ -1039,8 +1037,8 @@ fn dispatch_service_worker_fetch_event_in_context<'s>(
     event: ServiceWorkerFetchEvent,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
 ) {
-    let Some((request, request_signal_id)) =
-        new_service_worker_fetch_request(scope, global, &event)
+    let Some((request, request_signal)) =
+        build_service_worker_request_object(scope, &event.request)
     else {
         let _ = parent_tx.send(WorkerToParentMessage::ServiceWorkerFetchCompleted(
             ServiceWorkerFetchCompletion {
@@ -1053,6 +1051,7 @@ fn dispatch_service_worker_fetch_event_in_context<'s>(
         ));
         return;
     };
+    let request_signal_id = worker_abort_signal_id(scope, request_signal);
     let Some(handled_resolver) = v8::PromiseResolver::new(scope) else {
         let _ = parent_tx.send(WorkerToParentMessage::ServiceWorkerFetchCompleted(
             ServiceWorkerFetchCompletion {
@@ -1723,113 +1722,6 @@ fn new_service_worker_periodic_sync_event<'s>(
     }
     .bind(scope)
     .ok()
-}
-
-fn new_service_worker_fetch_request<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
-    event: &ServiceWorkerFetchEvent,
-) -> Option<(v8::Local<'s, v8::Object>, Option<u32>)> {
-    let request_ctor = global
-        .get(scope, v8str(scope, "Request").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let init = v8::Object::new(scope);
-    set_object_string(scope, init, "method", &event.request.method);
-    let constructible_mode = if event.request.request_mode == moli_fetch::RequestMode::Navigate {
-        "same-origin"
-    } else {
-        event.request.request_mode.into()
-    };
-    set_object_string(scope, init, "mode", constructible_mode);
-    set_object_string(
-        scope,
-        init,
-        "credentials",
-        event.request.credentials_mode.into(),
-    );
-    set_object_string(scope, init, "redirect", event.request.redirect_mode.into());
-    set_object_string(scope, init, "cache", &event.request.metadata.cache);
-    set_object_string(scope, init, "referrer", &event.request.metadata.referrer);
-    set_object_string(
-        scope,
-        init,
-        "referrerPolicy",
-        &event.request.metadata.referrer_policy,
-    );
-    set_object_string(scope, init, "integrity", &event.request.metadata.integrity);
-    set_object_bool(scope, init, "keepalive", event.request.metadata.keepalive);
-    if let Some(priority) = event.request.priority {
-        let priority: &'static str = priority.into();
-        set_object_string(scope, init, "priority", priority);
-    }
-    let headers = v8::Object::new(scope);
-    for (name, value) in &event.request.headers {
-        set_object_string(scope, headers, name, value);
-    }
-    let _ = init.set(scope, v8str(scope, "headers").into(), headers.into());
-    if let Some(payload) = event.request.body_stream.as_ref() {
-        let stream = crate::context_bootstrap::build_readable_stream_clone_shell(scope);
-        crate::context_bootstrap::initialize_request_body_stream(scope, stream, payload)?;
-        let _ = init.set(scope, v8str(scope, "body").into(), stream.into());
-        set_object_string(scope, init, "duplex", "half");
-    } else if !matches!(event.request.method.as_str(), "GET" | "HEAD")
-        && let Some(body) = event.request.body.clone()
-    {
-        // The mutable JS buffer must not alias shared immutable upload bytes.
-        let backing_store = v8::ArrayBuffer::new_backing_store_from_vec(body.into()).make_shared();
-        let body = v8::ArrayBuffer::with_backing_store(scope, &backing_store);
-        let _ = init.set(scope, v8str(scope, "body").into(), body.into());
-    }
-    let url = v8::String::new(scope, event.request.url.as_str())?;
-    let request = request_ctor.new_instance(scope, &[url.into(), init.into()])?;
-    set_request_destination_for_service_worker_fetch_event(
-        scope,
-        request,
-        event.request.destination.as_str(),
-    );
-    set_request_mode_for_service_worker_fetch_event(
-        scope,
-        request,
-        event.request.request_mode.into(),
-    );
-    set_request_navigation_flags_for_service_worker_fetch_event(
-        scope,
-        request,
-        event.request.is_reload,
-        event.request.metadata.is_history_navigation,
-    );
-    let request_signal_id = request
-        .get(scope, v8str(scope, "signal").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .and_then(|signal| worker_abort_signal_id(scope, signal));
-    Some((request, request_signal_id))
-}
-
-fn set_object_string(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-    value: &str,
-) {
-    let Some(value) = v8::String::new(scope, value) else {
-        return;
-    };
-    let Some(key) = v8::String::new(scope, key) else {
-        return;
-    };
-    let _ = object.set(scope, key.into(), value.into());
-}
-
-fn set_object_bool(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-    value: bool,
-) {
-    let Some(key) = v8::String::new(scope, key) else {
-        return;
-    };
-    let _ = object.set(scope, key.into(), v8::Boolean::new(scope, value).into());
 }
 
 fn set_service_worker_event_id<'s>(

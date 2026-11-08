@@ -161,7 +161,8 @@ pub(super) fn apply_request_init_overrides<'s>(
     parsed: RequestInitMembers<'s>,
     state: &mut RequestConstructionState,
 ) -> Result<(), webidl::WebIdlError> {
-    if parsed.has_any_member() {
+    let has_init_members = parsed.has_any_member();
+    if has_init_members {
         if state.mode == "navigate" {
             state.mode = "same-origin".to_owned();
         }
@@ -273,8 +274,12 @@ pub(super) fn apply_request_init_overrides<'s>(
             "Request with a ReadableStream body requires cors or same-origin mode",
         ));
     }
-    let guard = request_headers_guard_for_mode(&state.mode);
-    state.headers = filter_headers_for_guard(&state.headers, guard);
+    // Empty init copies an internal request's privileged header list intact.
+    // Only actual RequestInit members require reapplying the public guard.
+    if has_init_members {
+        let guard = request_headers_guard_for_mode(&state.mode);
+        state.headers = filter_headers_for_guard(&state.headers, guard);
+    }
     Ok(())
 }
 
