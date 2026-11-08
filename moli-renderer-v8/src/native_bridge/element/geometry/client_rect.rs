@@ -36,15 +36,17 @@ pub(super) fn quad_from_client_rect(rect: ClientRect) -> LayoutQuad {
     }
 }
 
-pub(super) fn client_rect_from_quad(quad: LayoutQuad) -> ClientRect {
-    let rect = quad.bounding_rect();
-    ClientRect {
-        left: f64::from(rect.x),
-        top: f64::from(rect.y),
-        right: f64::from(rect.right()),
-        bottom: f64::from(rect.bottom()),
-        width: f64::from(rect.width),
-        height: f64::from(rect.height),
+impl From<LayoutQuad> for ClientRect {
+    fn from(quad: LayoutQuad) -> Self {
+        let rect = quad.bounding_rect();
+        Self {
+            left: f64::from(rect.x),
+            top: f64::from(rect.y),
+            right: f64::from(rect.right()),
+            bottom: f64::from(rect.bottom()),
+            width: f64::from(rect.width),
+            height: f64::from(rect.height),
+        }
     }
 }
 
