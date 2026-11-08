@@ -2438,4 +2438,5 @@ mod hyperlink_audit_owner;
 mod fetch_referrer;
 mod media_recorder;
 mod media_streams;
+mod midi_frontend;
 mod sqlite_web_storage;
