@@ -67,6 +67,7 @@ mod request_init;
 mod rtc_dictionary_init;
 mod rtc_error;
 mod rtc_peer_dictionary;
+mod rtp_capabilities;
 mod scroll_dictionary;
 mod security_policy;
 mod security_policy_event_init;
