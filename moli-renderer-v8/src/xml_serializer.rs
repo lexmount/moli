@@ -132,6 +132,27 @@ pub(crate) fn serialize_native_handle(dom_host: &DomHost, handle: NativeNodeId) 
     output
 }
 
+pub(crate) fn serialize_native_inner_html(
+    dom_host: &DomHost,
+    handle: NativeNodeId,
+) -> Option<String> {
+    let child_container = dom_host
+        .node(handle)?
+        .as_element()
+        .and_then(Element::template_contents)
+        .unwrap_or(handle);
+    let mut output = String::new();
+    let mut next_generated_prefix = 1;
+    serialize_native_children(
+        dom_host,
+        child_container,
+        &NamespaceContext::default(),
+        &mut next_generated_prefix,
+        &mut output,
+    );
+    Some(output)
+}
+
 fn serialize_native_node(
     dom_host: &DomHost,
     handle: NativeNodeId,
