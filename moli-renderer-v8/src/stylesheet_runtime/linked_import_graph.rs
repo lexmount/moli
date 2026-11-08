@@ -349,16 +349,8 @@ impl DocumentRuntime {
             super::import_graph::ConnectedStyleImportReadiness::Ready(graph_successful) => {
                 if !host_ptr.is_null() {
                     for root in &roots {
-                        if unsafe { &*host_ptr }
-                            .install_live_stylesheet_import_graph(root.clone(), &[])
-                            .is_some()
-                        {
-                            let _ = unsafe { &mut *host_ptr }
-                                .refresh_live_stylesheet_after_import_graph(
-                                    root.owner,
-                                    root.stylesheet_id,
-                                );
-                        }
+                        let _ = unsafe { &mut *host_ptr }
+                            .install_and_refresh_live_stylesheet_import_graph(root.clone(), &[]);
                     }
                 }
                 self.note_stylesheet_import_graph_completion(

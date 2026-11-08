@@ -221,15 +221,8 @@ impl DocumentRuntime {
                 LinkedStylesheetImportGraphAdmission::Completed(graph) => {
                     if let Some(root) = import_root {
                         let responses = live_stylesheet_import_responses(&graph);
-                        if host
-                            .install_live_stylesheet_import_graph(root.clone(), &responses)
-                            .is_some()
-                        {
-                            let _ = host.refresh_live_stylesheet_after_import_graph(
-                                root.owner,
-                                root.stylesheet_id,
-                            );
-                        }
+                        let _ =
+                            host.install_and_refresh_live_stylesheet_import_graph(root, &responses);
                     }
                     continue;
                 }

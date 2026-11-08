@@ -47,16 +47,15 @@ use crate::runtime::{
 };
 use crate::script_vm::{PostParseLifecycleAdvance, PostParseLifecycleCompletionAction};
 use crate::types::{
-    ChildBlockingStylesheetLoadCompletion, ChildBlockingStylesheetNetworkResult,
-    ChildClassicScriptLoadCompletion, ChildClassicScriptNetworkAttribution,
-    ChildDynamicImportFetchCompletion, ChildModuleDependencyFetchCompletion,
-    ChildModuleFetchNetworkAttribution, ChildModulepreloadFetchCompletion,
-    ChildParserModuleRootFetchCompletion, ModuleGraphFetchCompletion, ModuleGraphFetchOrdering,
-    ModuleGraphFetchRequester, ScriptKind, ScriptMode, ScriptNetworkOutput,
-    ScriptNetworkOutputItem, ScriptObservableOutput, ScriptObservableOutputItem, ScriptRun,
-    ScriptRunOutcome, ScriptSkipReason, ScriptSourceKind, SubresourceBodyFinishedResult,
-    SubresourceNetworkRecord, SubresourceRequestInitiatorType, WebSocketLifecycleEvent,
-    WebSocketNetworkEvent,
+    ChildBlockingStylesheetLoadCompletion, ChildClassicScriptLoadCompletion,
+    ChildClassicScriptNetworkAttribution, ChildDynamicImportFetchCompletion,
+    ChildModuleDependencyFetchCompletion, ChildModuleFetchNetworkAttribution,
+    ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion,
+    ModuleGraphFetchCompletion, ModuleGraphFetchOrdering, ModuleGraphFetchRequester, ScriptKind,
+    ScriptMode, ScriptNetworkOutput, ScriptNetworkOutputItem, ScriptObservableOutput,
+    ScriptObservableOutputItem, ScriptRun, ScriptRunOutcome, ScriptSkipReason, ScriptSourceKind,
+    SubresourceBodyFinishedResult, SubresourceNetworkRecord, SubresourceRequestInitiatorType,
+    WebSocketLifecycleEvent, WebSocketNetworkEvent,
 };
 use crate::types::{SubresourceNetworkOutcome, SubresourceResourceType};
 use moli_fetch::FetchConfig;

@@ -2630,13 +2630,7 @@ impl ScriptVm {
             );
         }
         for (root, responses) in import_graph_results {
-            if host
-                .install_live_stylesheet_import_graph(root.clone(), &responses)
-                .is_some()
-            {
-                let _ =
-                    host.refresh_live_stylesheet_after_import_graph(root.owner, root.stylesheet_id);
-            }
+            let _ = host.install_and_refresh_live_stylesheet_import_graph(root, &responses);
         }
         for blocking_import_graph in blocking_import_graphs {
             let (source, roots, graph) = blocking_import_graph.into_parts();
@@ -2674,13 +2668,9 @@ impl ScriptVm {
                 }
             }
             for root in roots {
-                match host.install_live_stylesheet_import_graph(root.clone(), &responses) {
+                match host.install_and_refresh_live_stylesheet_import_graph(root, &responses) {
                     Some(graph_successful) => {
                         successful &= graph_successful;
-                        let _ = host.refresh_live_stylesheet_after_import_graph(
-                            root.owner,
-                            root.stylesheet_id,
-                        );
                     }
                     None => successful = false,
                 }
