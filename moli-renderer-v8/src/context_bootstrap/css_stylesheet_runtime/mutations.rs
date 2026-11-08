@@ -1,3 +1,4 @@
+pub(crate) use self::apply_live_stylesheet_css_rule_replacement_mutation as apply_live_stylesheet_style_rule_replacement_mutation;
 use super::*;
 
 pub(crate) fn apply_stylo_top_level_insert_rule_mutation<'s>(
@@ -1262,61 +1263,6 @@ fn sync_attached_css_rule_after_replacement<'s>(
 
     let rule_type = sync_attached_css_rule_root_from_seed(scope, rule, seed);
     reset_attached_css_rule_children_after_replacement(scope, rule, parent_style_sheet, rule_type);
-}
-
-pub(crate) fn apply_live_stylesheet_style_rule_replacement_mutation<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rule: v8::Local<'s, v8::Object>,
-    rule_text: &str,
-) -> bool {
-    let Some(parent_style_sheet) = get_private_value(scope, rule, CSS_RULE_PARENT_STYLE_SHEET_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return false;
-    };
-    let Some(rule_path) = css_rule_path_in_parent_style_sheet(scope, rule, parent_style_sheet)
-    else {
-        return false;
-    };
-    if rule_path.len() == 1 {
-        let index = rule_path[0];
-        let Ok(()) = replace_css_style_sheet_live_rule(scope, parent_style_sheet, rule_text, index)
-        else {
-            return false;
-        };
-        sync_attached_css_rule_after_replacement(scope, rule, parent_style_sheet, &rule_path);
-        sync_css_style_sheet_change(scope, parent_style_sheet);
-        return true;
-    }
-
-    let Some(parent_rule) = get_private_value(scope, rule, CSS_RULE_PARENT_RULE_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return false;
-    };
-    let Some(containing_rule_type_bits) =
-        stylo_containing_rule_type_bits_for_parent_rule(scope, parent_rule)
-    else {
-        return false;
-    };
-    let parent_path = &rule_path[..rule_path.len() - 1];
-    let index = *rule_path.last().unwrap_or(&0);
-    let style_rule_context =
-        css_style_rule_selector_context_for_parent_rule(scope, Some(parent_rule));
-    let Ok(()) = replace_css_style_sheet_live_nested_rule(
-        scope,
-        parent_style_sheet,
-        parent_path,
-        rule_text,
-        index,
-        containing_rule_type_bits,
-        stylo_parse_relative_rule_type(style_rule_context),
-    ) else {
-        return false;
-    };
-    sync_attached_css_rule_after_replacement(scope, rule, parent_style_sheet, &rule_path);
-    sync_css_style_sheet_change(scope, parent_style_sheet);
-    true
 }
 
 pub(crate) fn apply_live_stylesheet_relative_style_rule_replacement_mutation<'s>(
