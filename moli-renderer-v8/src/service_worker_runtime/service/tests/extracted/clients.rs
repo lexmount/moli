@@ -3060,7 +3060,7 @@ async fn controlled_fetch_from_worker_client_dispatches_to_active_worker() {
     assert!(!completion_queue.has_ready_completion());
 }
 #[test]
-fn stopped_active_message_queues_event_and_starts_worker() {
+fn stopped_active_message_keeps_native_source_snapshot_while_starting_worker() {
     let service = new_service_worker_runtime_service();
     let registration_id = ServiceWorkerRegistrationId(1);
     let version_id = ServiceWorkerVersionId(1);
@@ -3073,16 +3073,28 @@ fn stopped_active_message_queues_event_and_starts_worker() {
         [],
     );
     let client_id = register_client_for_test(&service, url("https://example.test/app/page.html"));
-    {
-        let mut state = service.inner.state.lock();
-        state.live_clients.get_mut(&client_id).unwrap().focused = true;
-    }
     let previous_run = exact_version_run(&service, version_id);
 
+    assert!(!service.dispatch_message_to_version(
+        version_id,
+        client_id,
+        None,
+        None,
+        V8StructuredClonePayload::default(),
+    ));
+    assert_eq!(exact_version_run(&service, version_id), previous_run);
     assert!(service.dispatch_message_to_version(
         version_id,
         client_id,
         Some("https://example.test".to_owned()),
+        Some(
+            crate::service_worker_runtime::ServiceWorkerWindowClientState {
+                frame_type: ServiceWorkerClientFrameType::Auxiliary,
+                visibility_state: ServiceWorkerClientVisibilityState::Hidden,
+                focused: true,
+                last_focus_order: None,
+            }
+        ),
         V8StructuredClonePayload::default()
     ));
 
@@ -3110,11 +3122,18 @@ fn stopped_active_message_queues_event_and_starts_worker() {
             exposed_id: service_worker_exposed_client_id(client_id),
             url: url("https://example.test/app/page.html"),
             client_type: ServiceWorkerClientType::Window,
-            frame_type: ServiceWorkerClientFrameType::TopLevel,
-            visibility_state: ServiceWorkerClientVisibilityState::Visible,
+            frame_type: ServiceWorkerClientFrameType::Auxiliary,
+            visibility_state: ServiceWorkerClientVisibilityState::Hidden,
             controlled: true,
             focused: true,
         })
+    );
+    let client = state.live_clients.get(&client_id).unwrap();
+    assert!(!client.focused);
+    assert_eq!(client.frame_type, ServiceWorkerClientFrameType::TopLevel);
+    assert_eq!(
+        client.visibility_state,
+        ServiceWorkerClientVisibilityState::Visible
     );
 }
 #[test]
@@ -3141,12 +3160,14 @@ fn message_to_redundant_or_missing_version_is_dropped_silently() {
         ServiceWorkerVersionId(404),
         client_id,
         Some("https://example.test".to_owned()),
+        None,
         V8StructuredClonePayload::default()
     ));
     assert!(!service.dispatch_message_to_version(
         version_id,
         client_id,
         Some("https://example.test".to_owned()),
+        None,
         V8StructuredClonePayload::default()
     ));
 

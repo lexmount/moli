@@ -217,38 +217,13 @@ impl JsContextHost {
                     .service_worker_window_client_completion_owner(request.target)
                     .is_some()
                 {
-                    use crate::service_worker_runtime::{
-                        ServiceWorkerClientFrameType, ServiceWorkerClientVisibilityState,
-                        ServiceWorkerWindowClientState,
-                    };
-                    let focused = self.document_has_focus(resolved.document_handle);
-                    if focused && self.window_last_focus_order(dispatch_scope).is_none() {
-                        self.note_window_focus_changes();
-                    }
-                    let frame_type = match dispatch_scope {
-                        super::OwnerDispatchScope::Child(_) => ServiceWorkerClientFrameType::Nested,
-                        super::OwnerDispatchScope::Top
-                            if self.top_window_opener(scope).is_some() =>
-                        {
-                            ServiceWorkerClientFrameType::Auxiliary
-                        }
-                        super::OwnerDispatchScope::LightweightPopup(id)
-                            if self.lightweight_popup_opener_endpoint(id).is_some() =>
-                        {
-                            ServiceWorkerClientFrameType::Auxiliary
-                        }
-                        _ => ServiceWorkerClientFrameType::TopLevel,
-                    };
-                    request.reply.complete(ServiceWorkerWindowClientState {
-                        frame_type,
-                        visibility_state: if self.document_activity().visible {
-                            ServiceWorkerClientVisibilityState::Visible
-                        } else {
-                            ServiceWorkerClientVisibilityState::Hidden
-                        },
-                        focused,
-                        last_focus_order: self.window_last_focus_order(dispatch_scope),
-                    });
+                    request
+                        .reply
+                        .complete(self.capture_service_worker_window_client_state(
+                            scope,
+                            dispatch_scope,
+                            resolved.document_handle,
+                        ));
                 }
                 PageUserInteractionBodyEffect::NotApplied
             }

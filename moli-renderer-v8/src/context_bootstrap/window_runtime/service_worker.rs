@@ -2816,7 +2816,8 @@ fn service_worker_post_message_callback<'s>(
         return;
     };
     let owner = service_worker_worker_owner_scope(scope, args.this());
-    let _ = unsafe { &*host_ptr }.dispatch_service_worker_message(version_id, owner, payload);
+    let _ = unsafe { &mut *host_ptr }
+        .dispatch_service_worker_message(scope, version_id, owner, payload);
 }
 
 fn service_worker_worker_set_state<'s>(

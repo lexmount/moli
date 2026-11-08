@@ -1850,32 +1850,81 @@ impl JsContextHost {
             .dispatch_service_worker_fetch(dispatch)
     }
 
+    pub(crate) fn capture_service_worker_window_client_state(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: OwnerDispatchScope,
+        document: crate::document_runtime::DomHandle,
+    ) -> crate::service_worker_runtime::ServiceWorkerWindowClientState {
+        use crate::service_worker_runtime::{
+            ServiceWorkerClientVisibilityState, ServiceWorkerWindowClientState,
+        };
+        let focused = self.document_has_focus(document);
+        if focused && self.window_last_focus_order(owner).is_none() {
+            self.note_window_focus_changes();
+        }
+        let frame_type = match owner {
+            OwnerDispatchScope::Child(_) => ServiceWorkerClientFrameType::Nested,
+            OwnerDispatchScope::Top if self.top_window_opener(scope).is_some() => {
+                ServiceWorkerClientFrameType::Auxiliary
+            }
+            OwnerDispatchScope::LightweightPopup(id)
+                if self.lightweight_popup_opener_endpoint(id).is_some() =>
+            {
+                ServiceWorkerClientFrameType::Auxiliary
+            }
+            _ => ServiceWorkerClientFrameType::TopLevel,
+        };
+        ServiceWorkerWindowClientState {
+            frame_type,
+            visibility_state: if self.document_activity().visible {
+                ServiceWorkerClientVisibilityState::Visible
+            } else {
+                ServiceWorkerClientVisibilityState::Hidden
+            },
+            focused,
+            last_focus_order: self.window_last_focus_order(owner),
+        }
+    }
+
     pub(crate) fn dispatch_service_worker_message(
-        &self,
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         version_id: ServiceWorkerVersionId,
         owner: OwnerDispatchScope,
         payload: V8StructuredClonePayload,
     ) -> bool {
-        let Some((source_client_id, source_document_url)) = (match owner {
+        let Some((source_client_id, document)) = (match owner {
             OwnerDispatchScope::Top => {
-                Some((self.service_worker_client_id, self.document_url().clone()))
+                Some((self.service_worker_client_id, self.document_handle()))
             }
             OwnerDispatchScope::Child(handle) => self
                 .child_browsing_contexts
                 .get(&handle)
                 .and_then(|entry| entry.service_worker_client_id())
-                .zip(self.child_browsing_context_current_url(handle)),
+                .zip(self.child_browsing_context_document_handle(handle)),
             OwnerDispatchScope::LightweightPopup(popup_id) => self
                 .service_worker_popup_clients
                 .get(&popup_id)
                 .copied()
-                .zip(self.lightweight_popup_document_url(popup_id)),
+                .zip(self.lightweight_popup_document_handle(popup_id)),
         }) else {
             return false;
         };
-        let source_origin = Some(moli_url::origin_ascii_serialization(&source_document_url));
+        let source_origin = self.window_document_origin(owner);
+        let source_window_state =
+            self.capture_service_worker_window_client_state(scope, owner, document);
+        // Only immutable native data crosses to the worker. In particular,
+        // updating this message's source must not rewrite older Client objects
+        // or the registry's independently maintained lifecycle state.
         self.browser_context_runtime
-            .dispatch_service_worker_message(version_id, source_client_id, source_origin, payload)
+            .dispatch_service_worker_message(
+                version_id,
+                source_client_id,
+                source_origin,
+                source_window_state,
+                payload,
+            )
     }
 
     pub(crate) fn service_worker_fetch_request(

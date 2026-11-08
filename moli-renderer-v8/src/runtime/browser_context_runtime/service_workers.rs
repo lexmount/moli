@@ -703,6 +703,7 @@ impl RendererBrowserContextRuntime {
         version_id: ServiceWorkerVersionId,
         source_client_id: ServiceWorkerClientId,
         source_origin: Option<String>,
+        source_window_state: crate::service_worker_runtime::ServiceWorkerWindowClientState,
         payload: V8StructuredClonePayload,
     ) -> bool {
         self.service_worker_runtime_if_initialized()
@@ -711,6 +712,7 @@ impl RendererBrowserContextRuntime {
                     version_id,
                     source_client_id,
                     source_origin,
+                    Some(source_window_state),
                     payload,
                 )
             })

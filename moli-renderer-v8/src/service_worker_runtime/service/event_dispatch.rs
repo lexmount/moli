@@ -564,6 +564,7 @@ impl ServiceWorkerRuntimeService {
         version_id: ServiceWorkerVersionId,
         source_client_id: ServiceWorkerClientId,
         source_origin: Option<String>,
+        source_window_state: Option<crate::service_worker_runtime::ServiceWorkerWindowClientState>,
         payload: V8StructuredClonePayload,
     ) -> bool {
         let start = {
@@ -590,8 +591,16 @@ impl ServiceWorkerRuntimeService {
             }
             let scope_url = registration.scope_url.clone();
             let registration_storage_key = registration.storage_key.clone();
-            let source_client_snapshot =
+            let mut source_client_snapshot =
                 service_worker_client_snapshot(registration, source_client);
+            if source_client_snapshot.client_type == ServiceWorkerClientType::Window {
+                let Some(window) = source_window_state else {
+                    return false;
+                };
+                source_client_snapshot.frame_type = window.frame_type;
+                source_client_snapshot.visibility_state = window.visibility_state;
+                source_client_snapshot.focused = window.focused;
+            }
             let Some(version) = state.versions.get_mut(&version_id) else {
                 return false;
             };
