@@ -1070,7 +1070,7 @@ fn client_query_matches_live_window_clients_for_active_version() {
         ServiceWorkerClientVisibilityState::Visible
     );
 
-    let all_scope_windows = service.query_clients(&ServiceWorkerClientQuery {
+    let all_same_origin_windows = service.query_clients(&ServiceWorkerClientQuery {
         request_id: 11,
         registration_id,
         version_id,
@@ -1082,15 +1082,21 @@ fn client_query_matches_live_window_clients_for_active_version() {
         },
     });
     assert_eq!(
-        all_scope_windows
+        all_same_origin_windows
             .clients
             .iter()
             .map(|client| client.id)
             .collect::<Vec<_>>(),
-        vec![controlled_client_id, uncontrolled_client_id]
+        vec![
+            controlled_client_id,
+            uncontrolled_client_id,
+            out_of_scope_client_id
+        ]
     );
-    assert_eq!(all_scope_windows.clients[1].url, uncontrolled_page);
-    assert!(!all_scope_windows.clients[1].controlled);
+    assert_eq!(all_same_origin_windows.clients[1].url, uncontrolled_page);
+    assert!(!all_same_origin_windows.clients[1].controlled);
+    assert_eq!(all_same_origin_windows.clients[2].url, out_of_scope_page);
+    assert!(!all_same_origin_windows.clients[2].controlled);
 
     let worker_clients = service.query_clients(&ServiceWorkerClientQuery {
         request_id: 12,
@@ -1204,6 +1210,155 @@ fn client_query_matches_live_window_clients_for_active_version() {
     });
     assert!(inactive_result.clients.is_empty());
 }
+#[test]
+fn client_match_all_visibility_uses_storage_partition_and_security_instead_of_scope() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        url("https://example.test/app/worker.js"),
+        url("https://example.test/app/"),
+        [],
+    );
+    let other_controller = insert_registered_version(
+        &service,
+        ServiceWorkerRegistrationId(2),
+        ServiceWorkerVersionId(2),
+        url("https://example.test/other/worker.js"),
+        url("https://example.test/other/"),
+        [],
+    );
+    let controlled = register_client_for_test(&service, url("https://example.test/app/window"));
+    let controlled_elsewhere =
+        register_client_for_test(&service, url("https://example.test/other/window"));
+    assert_eq!(
+        service.matching_controller_for_client(controlled_elsewhere),
+        Some(other_controller)
+    );
+    let uncontrolled =
+        register_client_for_test(&service, url("https://example.test/outside/window"));
+    let dedicated = insert_live_client_record_for_test(
+        &service,
+        url("https://example.test/outside/dedicated.js"),
+        ServiceWorkerClientType::DedicatedWorker,
+    );
+    let shared = insert_live_client_record_for_test(
+        &service,
+        url("https://example.test/outside/shared.js"),
+        ServiceWorkerClientType::SharedWorker,
+    );
+    let storage_key = ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&url(
+        "https://example.test/app/",
+    ));
+    service.register_client_with_storage_key(
+        url("https://example.test/outside/other-partition"),
+        moli_storage_key::partitioned_storage_key("https://example.test", "https://other-top.test"),
+        ServiceWorkerClientFrameType::TopLevel,
+        None,
+        test_completion_sender(),
+    );
+    register_client_for_test(&service, url("https://other.test/outside/window"));
+    let inherited_blank = service.register_client_with_storage_key(
+        url("about:blank"),
+        storage_key,
+        ServiceWorkerClientFrameType::TopLevel,
+        None,
+        test_completion_sender(),
+    );
+    let blob = insert_live_client_record_for_test(
+        &service,
+        url("blob:https://example.test/c07bec18-0000-4000-8000-000000000000"),
+        ServiceWorkerClientType::DedicatedWorker,
+    );
+    for (client_type, name) in [
+        (ServiceWorkerClientType::Window, "window"),
+        (ServiceWorkerClientType::DedicatedWorker, "dedicated"),
+        (ServiceWorkerClientType::SharedWorker, "shared"),
+    ] {
+        for state_name in ["insecure", "not-ready", "discarded"] {
+            let client_id = insert_live_client_record_for_test(
+                &service,
+                url(&format!("https://example.test/outside/{state_name}-{name}")),
+                client_type,
+            );
+            let mut state = service.inner.state.lock();
+            let client = state.live_clients.get_mut(&client_id).unwrap();
+            match state_name {
+                "insecure" => client.secure_context = false,
+                "not-ready" => client.execution_ready = false,
+                "discarded" => client.discarded_or_frozen = true,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    for (query_type, expected) in [
+        (
+            ServiceWorkerClientQueryType::All,
+            vec![
+                controlled,
+                controlled_elsewhere,
+                uncontrolled,
+                inherited_blank,
+                dedicated,
+                shared,
+                blob,
+            ],
+        ),
+        (
+            ServiceWorkerClientQueryType::Window,
+            vec![
+                controlled,
+                controlled_elsewhere,
+                uncontrolled,
+                inherited_blank,
+            ],
+        ),
+        (ServiceWorkerClientQueryType::Worker, vec![dedicated, blob]),
+        (ServiceWorkerClientQueryType::SharedWorker, vec![shared]),
+    ] {
+        let result = service.query_clients(&ServiceWorkerClientQuery {
+            request_id: 40,
+            registration_id,
+            version_id,
+            kind: ServiceWorkerClientQueryKind::MatchAll {
+                options: ServiceWorkerClientQueryOptions {
+                    include_uncontrolled: true,
+                    client_type: query_type,
+                },
+            },
+        });
+        assert_eq!(
+            result
+                .clients
+                .iter()
+                .map(|client| client.id)
+                .collect::<Vec<_>>(),
+            expected
+        );
+        for client in result.clients {
+            assert_eq!(client.controlled, client.id == controlled);
+        }
+    }
+    let result = service.query_clients(&ServiceWorkerClientQuery {
+        request_id: 41,
+        registration_id,
+        version_id,
+        kind: ServiceWorkerClientQueryKind::MatchAll {
+            options: ServiceWorkerClientQueryOptions {
+                include_uncontrolled: false,
+                client_type: ServiceWorkerClientQueryType::All,
+            },
+        },
+    });
+    assert_eq!(result.clients.len(), 1);
+    assert_eq!(result.clients[0].id, controlled);
+    assert!(result.clients[0].controlled);
+}
+
 #[test]
 fn client_query_filters_existing_live_clients_by_type() {
     let service = new_service_worker_runtime_service();
