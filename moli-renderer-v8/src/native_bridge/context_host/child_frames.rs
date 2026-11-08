@@ -416,6 +416,8 @@ impl ChildBrowsingContextEntry {
         self.reset_performance_time_origin();
         self.clear_document_runtime_state();
         self.rewrite_current_navigation_url_after_load(final_url);
+        self.document_policy_container.document_referrer =
+            policy_container.document_referrer.clone();
         self.apply_loaded_referrer_policy_to_current_document(
             policy_container.referrer_policy.clone(),
         );
@@ -464,6 +466,13 @@ impl ChildBrowsingContextEntry {
         self.set_document_credentialless_state(credentialless, credentialless_storage_nonce);
         self.set_document_sandbox_policy(sandbox);
         if let Some(snapshot) = snapshot {
+            if matches!(
+                &self.live_bootstrap,
+                ChildBrowsingContextBootstrap::Srcdoc { .. }
+            ) {
+                self.document_policy_container.document_referrer =
+                    snapshot.policy_container.document_referrer.clone();
+            }
             self.sync_document_policy_from_snapshot(snapshot);
         }
         self.commit_current_navigation_entry_seed();

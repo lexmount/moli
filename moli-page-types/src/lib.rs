@@ -329,6 +329,7 @@ pub struct NavigationResponse {
     pub cache_state: moli_fetch::ResponseCacheState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_headers: Option<Vec<(String, String)>>,
+    request_referrer: Option<String>,
 }
 
 impl Clone for NavigationResponse {
@@ -350,6 +351,7 @@ impl Clone for NavigationResponse {
             cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
             network_request_headers: self.network_request_headers.clone(),
+            request_referrer: self.request_referrer.clone(),
         }
     }
 }
@@ -432,6 +434,16 @@ impl NavigationResponse {
         self
     }
 
+    /// The terminal Fetch referrer, including an explicitly omitted value.
+    pub fn with_request_referrer(mut self, referrer: Option<String>) -> Self {
+        self.request_referrer = referrer;
+        self
+    }
+
+    pub fn request_referrer(&self) -> Option<&str> {
+        self.request_referrer.as_deref()
+    }
+
     pub fn network_request_headers(&self) -> Option<&[(String, String)]> {
         self.network_request_headers.as_deref()
     }
@@ -454,6 +466,7 @@ impl NavigationResponse {
             cache_state: head.cache_state,
             negotiated_http_version: head.negotiated_http_version,
             network_request_headers: None,
+            request_referrer: None,
         }
     }
 
@@ -498,6 +511,7 @@ impl NavigationResponse {
         head.headers = headers;
         Self::from_head_and_materialized_body(head, source.materialized_body())
             .with_network_request_headers(source.network_request_headers.clone())
+            .with_request_referrer(source.request_referrer.clone())
     }
 
     pub fn into_parts(self) -> (ResponseHead, String, Vec<u8>) {

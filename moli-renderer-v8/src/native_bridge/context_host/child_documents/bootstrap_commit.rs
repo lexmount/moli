@@ -54,8 +54,22 @@ impl JsContextHost {
             }
         }
         self.cancel_child_meta_refresh_navigation(handle);
-        let cached_snapshot =
+        let mut cached_snapshot =
             self.materialize_local_child_snapshot_for_bootstrap(handle, &bootstrap);
+        if matches!(&bootstrap, ChildBrowsingContextBootstrap::Srcdoc { .. }) {
+            let policy = self.child_document_navigation_referrer_policy(handle, initiator);
+            let source = self
+                .owner_dispatch_scope_for_node(handle)
+                .and_then(|owner| self.document_referrer_source_url_for_dispatch_scope(owner));
+            if let Some(snapshot) = cached_snapshot.as_mut() {
+                snapshot.policy_container.document_referrer = source
+                    .and_then(|source| {
+                        // Srcdoc retains its containing origin despite its about: URL.
+                        moli_fetch::referrer_value(&source, &source, Some(&policy), None)
+                    })
+                    .unwrap_or_default();
+            }
+        }
         let requires_async_load = cached_snapshot.is_none()
             && self.child_document_bootstrap_requires_async_load(&bootstrap);
         let owner_credentialless = self

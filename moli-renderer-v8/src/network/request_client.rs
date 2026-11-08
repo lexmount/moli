@@ -295,12 +295,13 @@ impl ResourceRequestClient {
         let observed = self
             .fetch_raw_stream_with_cancel_after_policy_and_network_metadata(request, cancel_handle)
             .await?;
+        let request_referrer = observed.request_referrer().map(str::to_owned);
         let (response, observation_journal) = observed.into_parts_with_observation_journal();
         let response = collect_streaming_raw_response_as_text(response).await?;
-        Ok(NetworkFetchResult::with_observation_journal(
-            response,
-            observation_journal,
-        ))
+        Ok(
+            NetworkFetchResult::with_observation_journal(response, observation_journal)
+                .with_request_referrer(request_referrer),
+        )
     }
 
     pub(crate) async fn fetch_cacheable_script_text_stream(
@@ -771,6 +772,7 @@ impl ResourceRequestClient {
             .client()
             .fetch_raw_stream_with_cancel_and_network_metadata(request.clone(), cancel_handle)
             .await?;
+        let request_referrer = observed.request_referrer().map(str::to_owned);
         let (response, observation_journal) = observed.into_parts_with_observation_journal();
         let response = response.with_lifetime_lease(self.resource_runtime.clone());
         let response = if let Some(cache_key) = cache_key {
@@ -778,10 +780,10 @@ impl ResourceRequestClient {
         } else {
             response
         };
-        Ok(NetworkFetchResult::with_observation_journal(
-            response,
-            observation_journal,
-        ))
+        Ok(
+            NetworkFetchResult::with_observation_journal(response, observation_journal)
+                .with_request_referrer(request_referrer),
+        )
     }
 
     pub async fn fetch_raw_stream_with_cancel_and_network_metadata(
