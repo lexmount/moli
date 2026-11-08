@@ -196,12 +196,23 @@ pub(super) fn execute<'s>(
                 abort(scope, &admission, None);
                 return;
             }
-            if let Some(navigation) = &admission.participants[index].navigation {
-                let navigation = v8::Local::new(scope, navigation);
-                super::navigation_result::cancel_active_cross_document_navigation(
-                    scope, navigation, None,
-                );
-            }
+        }
+        let navigation = admission.participants[index]
+            .navigation
+            .as_ref()
+            .map(|value| v8::Local::new(scope, value));
+        // Every changing navigable supersedes its older navigation, including
+        // same-document traversals and opaque Documents without API trackers.
+        // Retire the physical load before abort callbacks can start a successor.
+        if !navigation.is_some_and(|navigation| {
+            super::navigation_result::cancel_active_cross_document_navigation(
+                scope, navigation, None,
+            )
+        }) {
+            super::navigation_cancellation::clear_pending_cross_document_navigation_for_window(
+                scope,
+                target.owner,
+            );
         }
         if validate(scope, &admission).is_none() {
             abort(scope, &admission, None);
@@ -209,10 +220,6 @@ pub(super) fn execute<'s>(
         }
         // Only the initiating Navigation owns this API method's info.
         let info = initiator_info.filter(|_| target.owner.strict_equals(plan.owner.into()));
-        let navigation = admission.participants[index]
-            .navigation
-            .as_ref()
-            .map(|value| v8::Local::new(scope, value));
         let outcome = navigation
             .map(|navigation| {
                 dispatch_navigation_traverse_event_with_outcome(
