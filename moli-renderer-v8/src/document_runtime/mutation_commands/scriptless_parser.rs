@@ -115,6 +115,7 @@ impl DocumentRuntime {
         if !effects.did_change() {
             return;
         }
+        self.queue_autofocus_candidates_in_subtrees(effects.tree().connected_roots());
         // Resource identities, layout invalidation and protocol DOM mutations are
         // native facts and remain observable without constructing JS wrappers.
         crate::mutation_coordinator::notify_native_dom_mutation(host_ptr, self.dom_host(), effects);
