@@ -19,6 +19,7 @@ fn document_has_focus_checks_every_live_ancestor_in_the_native_focus_chain() {
         states.push(state());
         document.getElementById('top').focus();
         states.push(state());
+        if (middle.activeElement !== inner) throw Error('inactive child lost its local focused area');
         middle.getElementById('middle').focus();
         states.push(state());
         deep.getElementById('deep').focus();
