@@ -173,6 +173,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(1)
             .build(scope)
         }
+        ConstructorKind::MediaRecorder => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::MediaRecorder,
+                super::super::media_recorder::constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::MediaStream => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::MediaStream,
