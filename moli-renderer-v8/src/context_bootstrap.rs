@@ -1047,7 +1047,7 @@ pub(crate) fn initialize_worker_file_realm_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    self::file_api::initialize_file_api_runtime_queues(scope, global)?;
+    self::resize_observer_runtime::initialize_resize_observer_runtime_state(scope, global)?;
     Ok(())
 }
 

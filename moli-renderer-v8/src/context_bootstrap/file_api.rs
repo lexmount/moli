@@ -68,4 +68,4 @@ pub(super) use file_reader_sync::file_reader_sync_constructor_callback;
 pub(crate) use file_reading::{
     FileReadingTask, flush_one_pending_file_reading_task, queue_file_reading_task,
 };
-pub(super) use install::{initialize_file_api_runtime_queues, install_file_api_template_bindings};
+pub(super) use install::install_file_api_template_bindings;
