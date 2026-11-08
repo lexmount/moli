@@ -49,6 +49,8 @@ mod document_lifecycle;
 mod document_lifecycle_turn;
 mod document_replacement;
 mod javascript_dialog;
+mod window_client_focus;
+pub use window_client_focus::RendererPendingWindowClientFocus;
 mod lifecycle_decision;
 mod main_document_ready_gate;
 mod navigation;

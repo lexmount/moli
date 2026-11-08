@@ -389,6 +389,7 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
         .expect("opened popup should be registered as a service worker window client");
     assert!(opened.controlled);
     let opened_client_id = opened.id;
+    let cached_focus_before = opened.focused;
     let opened_exposed_client_id = opened.exposed_id.clone();
     let popup_document_owner = vm
         ._context_host
@@ -423,7 +424,10 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
             },
         });
     assert_eq!(focused_clients.clients.len(), 1);
-    assert!(focused_clients.clients[0].focused);
+    assert_eq!(
+        focused_clients.clients[0].focused, cached_focus_before,
+        "requesting browser activation must not fabricate cached focus"
+    );
 
     server
         .await
@@ -721,7 +725,10 @@ async fn service_worker_popup_client_survives_javascript_reopen() {
             },
         });
     assert_eq!(current_focus.clients.len(), 1);
-    assert!(current_focus.clients[0].focused);
+    assert!(
+        !current_focus.clients[0].focused,
+        "a focus request must not mutate cached state before native activation"
+    );
 
     server
         .await

@@ -394,6 +394,12 @@ impl PreparedProtocolOutputs {
     ) -> Self {
         let mut prepared = Self::empty();
         match action {
+            RendererOwnerAction::FocusWindowClient(request) => {
+                prepared.push_produced_slot(ProtocolOutputSlot::FocusWindowClient);
+                prepared.push_prepared_payload(ProtocolOutputPayload::WindowClientFocus(
+                    crate::domains::page::window_client_focus::WindowClientFocusPreparedOutputs::from_renderer(page_source,request),
+                ));
+            }
             RendererOwnerAction::StopTopLevelLocationNavigation { source_document } => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_location_navigation_stop(
                     conn,

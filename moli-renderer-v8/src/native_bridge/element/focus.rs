@@ -699,6 +699,35 @@ pub(crate) fn update_focus(
     update_focus_from_previous(scope, runtime_ptr, previous, next);
 }
 
+/// Focus the exact Window Document after its browser has activated the tab.
+/// Preserve a local focused control, while a viewport remains an explicit
+/// Document instead of being confused with another Window's empty focus.
+pub(crate) fn focus_window_client_document(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    document: DomHandle,
+) {
+    let runtime = unsafe { &*runtime_ptr };
+    let local_area = runtime.document_focused_area(document).filter(|element| {
+        runtime.dom_host().owner_document_handle(*element) == Some(document)
+            && !runtime.dom_host().is_html_element_named(*element, "iframe")
+            && !runtime.dom_host().is_html_element_named(*element, "frame")
+            && is_focusable(runtime, *element)
+    });
+    let viewport =
+        local_area.or_else(|| runtime.child_browsing_context_host_for_document_handle(document));
+    let previous = runtime.active_element_handle();
+    update_focus_with_selection_behavior(
+        scope,
+        runtime_ptr,
+        previous,
+        viewport,
+        local_area.is_none().then_some(document),
+        SelectionBehaviorOnFocus::Preserve,
+    );
+    unsafe { &mut *runtime_ptr }.note_window_focus_changes();
+}
+
 #[derive(Clone, Copy)]
 enum SelectionBehaviorOnFocus {
     Restore,
@@ -754,7 +783,11 @@ fn update_focus_with_selection_behavior(
     if let Some(document) = viewport_document {
         unsafe { &mut *runtime_ptr }.note_document_focused_area(document, None);
     }
-    if previous == next {
+    if previous == next
+        && viewport_document.is_none_or(|document| {
+            unsafe { &*runtime_ptr }.focused_viewport_document() == Some(document)
+        })
+    {
         return;
     }
     let next_document = next.and_then(|handle| {
@@ -768,7 +801,7 @@ fn update_focus_with_selection_behavior(
             .owner_document_handle(handle)
     });
     let window_focus_transition =
-        window_focus_transition_for_handles(scope, runtime_ptr, previous, next);
+        window_focus_transition_for_handles(scope, runtime_ptr, previous, next, viewport_document);
     // Related targets do not cross Document boundaries in the focus chains.
     let same_document = previous_document == next_document;
     let next_value = same_document
@@ -834,13 +867,15 @@ fn update_focus_with_selection_behavior(
         return;
     }
     let target_is_current = |runtime: &JsContextHost| {
-        next.is_none_or(|handle| {
-            runtime.dom_host().owner_document_handle(handle) == next_document
-                && next_document.is_some_and(|document| {
-                    runtime.top_level_document_for_document(document).is_some()
-                })
-                && is_focusable(runtime, handle)
-        })
+        viewport_document
+            .is_none_or(|document| runtime.top_level_document_for_document(document).is_some())
+            && next.is_none_or(|handle| {
+                runtime.dom_host().owner_document_handle(handle) == next_document
+                    && next_document.is_some_and(|document| {
+                        runtime.top_level_document_for_document(document).is_some()
+                    })
+                    && is_focusable(runtime, handle)
+            })
     };
     if !target_is_current(unsafe { &*runtime_ptr }) {
         clear_focus_transition_style(unsafe { &mut *runtime_ptr });
@@ -932,6 +967,7 @@ fn window_focus_transition_for_handles(
     runtime_ptr: *mut JsContextHost,
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
+    viewport_document: Option<DomHandle>,
 ) -> Option<(PendingWindowMessageEndpoint, PendingWindowMessageEndpoint)> {
     let runtime = unsafe { &*runtime_ptr };
     let execution_window = current_execution_window_endpoint(scope);
@@ -947,6 +983,9 @@ fn window_focus_transition_for_handles(
     // another Document supplies the concrete new focused-frame endpoint.
     let next_window = next
         .and_then(|handle| focused_window_endpoint(runtime, handle))
+        .or_else(|| {
+            viewport_document.and_then(|document| runtime.window_endpoint_for_document(document))
+        })
         .unwrap_or(previous_window);
     if previous_window == next_window {
         return None;

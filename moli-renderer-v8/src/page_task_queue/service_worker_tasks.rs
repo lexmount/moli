@@ -107,6 +107,15 @@ impl RendererPageServiceWorkerTaskSender {
         ))
     }
 
+    pub(crate) fn send_service_worker_window_client_focus_request(
+        &self,
+        request: ServiceWorkerWindowClientStateRequest,
+    ) -> Result<(), RendererPageServiceWorkerTaskRouteClosed> {
+        self.send_internal(RendererServiceWorkerInternalTask::WindowClientFocusRequest(
+            request,
+        ))
+    }
+
     pub(crate) fn send_service_worker_clients_open_window_request(
         &self,
         completion: ServiceWorkerClientsOpenWindowRequestCompletion,

@@ -22,6 +22,7 @@ pub(in crate::domains) enum ProtocolOutputPayload {
     Page(PagePreparedOutputSlot),
     Runtime(RuntimePreparedOutputSlot),
     Target(TargetPreparedOutputSlot),
+    WindowClientFocus(crate::domains::page::window_client_focus::WindowClientFocusPreparedOutputs),
 }
 
 /// Move-only typed payloads prepared from concrete protocol-output records.
@@ -40,6 +41,8 @@ pub(in crate::domains) struct ProtocolOutputPayloads {
     page: Option<PagePreparedOutputSlot>,
     runtime: Option<RuntimePreparedOutputSlot>,
     target: Option<TargetPreparedOutputSlot>,
+    window_client_focus:
+        Option<crate::domains::page::window_client_focus::WindowClientFocusPreparedOutputs>,
 }
 
 impl ProtocolOutputPayloads {
@@ -75,6 +78,7 @@ impl ProtocolOutputPayloads {
             ProtocolOutputPayload::Page(value) => merge!(page, value),
             ProtocolOutputPayload::Runtime(value) => merge!(runtime, value),
             ProtocolOutputPayload::Target(value) => merge!(target, value),
+            ProtocolOutputPayload::WindowClientFocus(value) => merge!(window_client_focus, value),
         }
     }
 
@@ -124,6 +128,13 @@ impl ProtocolOutputPayloads {
         self.target.as_mut()
     }
 
+    pub(in crate::domains) fn window_client_focus_mut(
+        &mut self,
+    ) -> Option<&mut crate::domains::page::window_client_focus::WindowClientFocusPreparedOutputs>
+    {
+        self.window_client_focus.as_mut()
+    }
+
     #[cfg(test)]
     fn slot_count(&self) -> usize {
         [
@@ -136,6 +147,7 @@ impl ProtocolOutputPayloads {
             self.page.is_some(),
             self.runtime.is_some(),
             self.target.is_some(),
+            self.window_client_focus.is_some(),
         ]
         .into_iter()
         .filter(|present| *present)

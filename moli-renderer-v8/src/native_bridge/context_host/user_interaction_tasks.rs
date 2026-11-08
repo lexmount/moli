@@ -20,6 +20,7 @@ pub(crate) enum PendingUserInteractionTaskPayload {
         kind: crate::page_task_queue::RendererPageImageLoadEventKind,
     },
     ServiceWorkerWindowClientState(crate::types::ServiceWorkerWindowClientStateRequest),
+    ServiceWorkerWindowClientFocus(crate::types::ServiceWorkerWindowClientStateRequest),
 }
 
 pub(super) type UserInteractionTaskState = ExactWindowDocumentTaskLedger<
@@ -29,6 +30,25 @@ pub(super) type UserInteractionTaskState = ExactWindowDocumentTaskLedger<
 >;
 
 impl JsContextHost {
+    pub(crate) fn queue_service_worker_window_client_focus_request(
+        &mut self,
+        request: crate::types::ServiceWorkerWindowClientStateRequest,
+    ) -> bool {
+        let Some(owner) = self.service_worker_window_client_completion_owner(request.target) else {
+            return false;
+        };
+        let Some(target) =
+            self.current_window_document_task_target_for_dispatch_scope(owner.dispatch_scope())
+        else {
+            return false;
+        };
+        self.publish_user_interaction_task(
+            target,
+            RendererPageUserInteractionTaskKind::ServiceWorkerWindowClientFocus,
+            PendingUserInteractionTaskPayload::ServiceWorkerWindowClientFocus(request),
+        )
+    }
+
     pub(crate) fn queue_service_worker_window_client_state_request(
         &mut self,
         request: crate::types::ServiceWorkerWindowClientStateRequest,
@@ -209,6 +229,36 @@ impl JsContextHost {
         let dispatch_scope = target.dispatch_scope();
         let previous_scope = dispatch_scope.enter(scope);
         let effect = match (kind, payload) {
+            (
+                RendererPageUserInteractionTaskKind::ServiceWorkerWindowClientFocus,
+                PendingUserInteractionTaskPayload::ServiceWorkerWindowClientFocus(request),
+            ) => {
+                if self
+                    .service_worker_window_client_completion_owner(request.target)
+                    .is_some()
+                {
+                    super::super::element::focus_window_client_document(
+                        scope,
+                        host_ptr,
+                        resolved.document_handle,
+                    );
+                    // Focusing dispatches author callbacks. A replacement Document
+                    // must not supply this request's state after reentrancy.
+                    if self
+                        .service_worker_window_client_completion_owner(request.target)
+                        .is_some()
+                    {
+                        request
+                            .reply
+                            .complete(self.capture_service_worker_window_client_state(
+                                scope,
+                                dispatch_scope,
+                                resolved.document_handle,
+                            ));
+                    }
+                }
+                PageUserInteractionBodyEffect::Applied
+            }
             (
                 RendererPageUserInteractionTaskKind::ServiceWorkerWindowClientState,
                 PendingUserInteractionTaskPayload::ServiceWorkerWindowClientState(request),

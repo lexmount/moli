@@ -2096,7 +2096,7 @@ fn client_navigate_result_exposes_same_origin_window_client_only() {
     assert_eq!(about_blank_result, None);
 }
 #[test]
-fn client_focus_result_marks_current_window_client_focused() {
+fn client_focus_result_samples_native_state_without_mutating_other_clients() {
     let service = new_service_worker_runtime_service();
     let registration_id = ServiceWorkerRegistrationId(1);
     let version_id = ServiceWorkerVersionId(1);
@@ -2112,9 +2112,27 @@ fn client_focus_result_marks_current_window_client_focused() {
         register_client_for_test(&service, url("https://example.test/app/first.html"));
     let second_client_id =
         register_client_for_test(&service, url("https://example.test/app/second.html"));
+    {
+        let mut state = service.inner.state.lock();
+        state
+            .live_clients
+            .get_mut(&first_client_id)
+            .unwrap()
+            .focused = true;
+        state
+            .live_clients
+            .get_mut(&second_client_id)
+            .unwrap()
+            .focused = false;
+    }
 
     let focused = service
-        .client_focus_result_for_current_window_client(version_id, second_client_id)
+        .client_focus_result_for_current_window_client(
+            version_id,
+            second_client_id,
+            focus_target_document_owner_for_test(&service, second_client_id),
+            Some(focused_native_window_state_for_test()),
+        )
         .expect("focus should produce a window client snapshot");
     assert_eq!(focused.id, second_client_id);
     assert!(focused.focused);
@@ -2136,7 +2154,7 @@ fn client_focus_result_marks_current_window_client_focused() {
             .iter()
             .map(|client| client.id)
             .collect::<Vec<_>>(),
-        vec![second_client_id, first_client_id]
+        vec![first_client_id, second_client_id]
     );
     let first = all_scope_windows
         .clients
@@ -2148,8 +2166,199 @@ fn client_focus_result_marks_current_window_client_focused() {
         .iter()
         .find(|client| client.id == second_client_id)
         .expect("second client should remain live");
-    assert!(!first.focused);
-    assert!(second.focused);
+    assert!(
+        first.focused,
+        "a sampled result must not clear another native Window's cached state"
+    );
+    assert!(
+        !second.focused,
+        "the returned snapshot must not manufacture cached focus"
+    );
+}
+
+fn focus_target_document_owner_for_test(
+    service: &ServiceWorkerRuntimeService,
+    client: ServiceWorkerClientId,
+) -> Option<crate::window_document_identity::WindowDocumentOwner> {
+    service
+        .inner
+        .state
+        .lock()
+        .live_clients
+        .get(&client)
+        .and_then(|client| client.document_owner)
+}
+
+fn focused_native_window_state_for_test()
+-> crate::service_worker_runtime::ServiceWorkerWindowClientState {
+    crate::service_worker_runtime::ServiceWorkerWindowClientState {
+        frame_type: ServiceWorkerClientFrameType::TopLevel,
+        visibility_state: ServiceWorkerClientVisibilityState::Visible,
+        focused: true,
+        last_focus_order: Some(1),
+    }
+}
+
+#[test]
+fn client_focus_result_requires_a_focused_native_snapshot() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        url("https://example.test/sw.js"),
+        url("https://example.test/"),
+        [],
+    );
+    let client = register_client_for_test(&service, url("https://example.test/page"));
+    assert_eq!(
+        service.client_focus_result_for_current_window_client(
+            version_id,
+            client,
+            focus_target_document_owner_for_test(&service, client),
+            None
+        ),
+        Err(ServiceWorkerClientFocusError::not_found())
+    );
+    assert_eq!(
+        service.client_focus_result_for_current_window_client(
+            version_id,
+            client,
+            None,
+            Some(focused_native_window_state_for_test())
+        ),
+        Err(ServiceWorkerClientFocusError::not_found()),
+        "a native snapshot cannot authorize a different Document owner"
+    );
+    let mut native = focused_native_window_state_for_test();
+    native.focused = false;
+    assert_eq!(
+        service.client_focus_result_for_current_window_client(
+            version_id,
+            client,
+            focus_target_document_owner_for_test(&service, client),
+            Some(native)
+        ),
+        Err(ServiceWorkerClientFocusError::inactive())
+    );
+    native.focused = true;
+    native.frame_type = ServiceWorkerClientFrameType::Nested;
+    native.visibility_state = ServiceWorkerClientVisibilityState::Hidden;
+    let sampled = service
+        .client_focus_result_for_current_window_client(
+            version_id,
+            client,
+            focus_target_document_owner_for_test(&service, client),
+            Some(native),
+        )
+        .unwrap();
+    assert!(sampled.focused);
+    assert_eq!(sampled.frame_type, ServiceWorkerClientFrameType::Nested);
+    assert_eq!(
+        sampled.visibility_state,
+        ServiceWorkerClientVisibilityState::Hidden
+    );
+}
+
+#[test]
+fn client_focus_browser_activation_requires_original_document_storage_key_and_run() {
+    let service = new_service_worker_runtime_service();
+    let version_id = ServiceWorkerVersionId(1);
+    insert_registered_version(
+        &service,
+        ServiceWorkerRegistrationId(1),
+        version_id,
+        url("https://example.test/sw.js"),
+        url("https://example.test/"),
+        [],
+    );
+    let client_id = register_client_for_test(&service, url("https://example.test/page"));
+    let (target, run) = {
+        let state = service.inner.state.lock();
+        (
+            state.live_clients[&client_id]
+                .window_completion_target()
+                .unwrap(),
+            state.versions[&version_id].run.clone(),
+        )
+    };
+    let completion = crate::types::ServiceWorkerClientFocusRequestCompletion {
+        target,
+        request_id: 1,
+        source_version_id: version_id,
+        source_run: run.clone(),
+    };
+    let current = service.window_client_focus_currentness(&completion);
+    assert!(current());
+    let crate::window_document_identity::WindowDocumentOwner::Frame(mut replacement) =
+        target.document_owner
+    else {
+        panic!("Window fixture");
+    };
+    replacement.document_id = crate::frame_owner_model::DocumentId(replacement.document_id.0 + 1);
+    service
+        .inner
+        .state
+        .lock()
+        .live_clients
+        .get_mut(&client_id)
+        .unwrap()
+        .document_owner = Some(crate::window_document_identity::WindowDocumentOwner::Frame(
+        replacement,
+    ));
+    assert!(
+        !current(),
+        "a replacement child/root Document cannot activate the old request's tab"
+    );
+    service
+        .inner
+        .state
+        .lock()
+        .live_clients
+        .get_mut(&client_id)
+        .unwrap()
+        .document_owner = Some(target.document_owner);
+    assert!(current());
+    service
+        .inner
+        .state
+        .lock()
+        .versions
+        .get_mut(&version_id)
+        .unwrap()
+        .run = crate::runtime::RendererServiceWorkerRunIdentity::fresh();
+    assert!(
+        !current(),
+        "a restarted worker cannot inherit the old focus request"
+    );
+    service
+        .inner
+        .state
+        .lock()
+        .versions
+        .get_mut(&version_id)
+        .unwrap()
+        .run = run;
+    service
+        .inner
+        .state
+        .lock()
+        .live_clients
+        .get_mut(&client_id)
+        .unwrap()
+        .storage_key =
+        moli_storage_key::partitioned_storage_key("https://example.test", "https://other-top.test");
+    assert!(
+        !current(),
+        "matching URL origin cannot bypass the complete native storage key"
+    );
+    service.inner.state.lock().live_clients.remove(&client_id);
+    assert!(
+        !current(),
+        "a closed client cancels before browser activation"
+    );
 }
 #[test]
 fn client_focus_result_reports_not_found_for_missing_or_cross_origin_client() {
@@ -2171,12 +2380,19 @@ fn client_focus_result_reports_not_found_for_missing_or_cross_origin_client() {
         .client_focus_result_for_current_window_client(
             version_id,
             ServiceWorkerClientId::from_u64_for_test(999),
+            None,
+            Some(focused_native_window_state_for_test()),
         )
         .expect_err("missing focus target should reject");
     assert_eq!(missing, ServiceWorkerClientFocusError::not_found());
 
     let cross_origin = service
-        .client_focus_result_for_current_window_client(version_id, cross_origin_client_id)
+        .client_focus_result_for_current_window_client(
+            version_id,
+            cross_origin_client_id,
+            focus_target_document_owner_for_test(&service, cross_origin_client_id),
+            Some(focused_native_window_state_for_test()),
+        )
         .expect_err("cross-origin focus target should be hidden as not found");
     assert_eq!(cross_origin, ServiceWorkerClientFocusError::not_found());
 }
@@ -2212,7 +2428,12 @@ fn client_focus_result_reports_inactive_for_discarded_window_client() {
     }
 
     let inactive = service
-        .client_focus_result_for_current_window_client(version_id, discarded_client_id)
+        .client_focus_result_for_current_window_client(
+            version_id,
+            discarded_client_id,
+            focus_target_document_owner_for_test(&service, discarded_client_id),
+            Some(focused_native_window_state_for_test()),
+        )
         .expect_err("discarded focus target should reject as inactive");
     assert_eq!(inactive, ServiceWorkerClientFocusError::inactive());
 
@@ -2412,7 +2633,12 @@ fn client_focus_completion_checks_inherited_origin_and_full_partition_key() {
             test_completion_sender(),
         );
         let snapshot = service
-            .client_focus_result_for_current_window_client(version_id, client_id)
+            .client_focus_result_for_current_window_client(
+                version_id,
+                client_id,
+                focus_target_document_owner_for_test(&service, client_id),
+                Some(focused_native_window_state_for_test()),
+            )
             .expect("same-key uncontrolled Window must remain a valid focus target");
         assert_eq!(snapshot.id, client_id);
         assert_eq!(snapshot.url.as_str(), document);
@@ -2436,7 +2662,12 @@ fn client_focus_completion_checks_inherited_origin_and_full_partition_key() {
     );
     assert_eq!(
         service
-            .client_focus_result_for_current_window_client(version_id, foreign_partition)
+            .client_focus_result_for_current_window_client(
+                version_id,
+                foreign_partition,
+                focus_target_document_owner_for_test(&service, foreign_partition),
+                Some(focused_native_window_state_for_test())
+            )
             .expect_err("same URL origin cannot bypass a different partition key"),
         ServiceWorkerClientFocusError::not_found()
     );

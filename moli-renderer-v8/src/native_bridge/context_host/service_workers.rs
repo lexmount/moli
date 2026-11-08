@@ -170,7 +170,7 @@ impl JsContextHost {
         request_id
     }
 
-    fn service_worker_task_sender(
+    pub(crate) fn service_worker_task_sender(
         &self,
     ) -> crate::page_task_queue::RendererPageServiceWorkerTaskSender {
         self.service_worker_task_tx.clone()

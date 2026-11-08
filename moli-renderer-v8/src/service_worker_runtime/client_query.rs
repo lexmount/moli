@@ -130,6 +130,16 @@ pub(crate) struct ServiceWorkerWindowClientStateReply {
 }
 
 impl ServiceWorkerWindowClientStateReply {
+    pub(crate) fn new(
+        client_id: ServiceWorkerClientId,
+        callback: impl FnOnce(Option<ServiceWorkerWindowClientState>) + Send + 'static,
+    ) -> Self {
+        Self {
+            client_id,
+            callback: Some(Box::new(callback)),
+        }
+    }
+
     pub(crate) fn complete(mut self, state: ServiceWorkerWindowClientState) {
         if let Some(callback) = self.callback.take() {
             callback(Some(state));
