@@ -164,6 +164,7 @@ mod window_document_tasks;
 mod window_execution_context;
 mod window_security_tokens;
 mod window_world;
+pub(crate) use window_security_tokens::WindowOriginKey;
 mod workers;
 pub(crate) use window_security_tokens::set_window_security_token;
 

@@ -175,6 +175,12 @@ impl WindowEnvironmentSettings {
         Some(document.base_url().clone())
     }
 
+    pub(in crate::native_bridge::context_host) fn immutable_access_origin(
+        &self,
+    ) -> WindowAccessOrigin {
+        self.access_origin.clone()
+    }
+
     pub(crate) fn origin(&self) -> &WebOrigin {
         &self.origin
     }

@@ -2313,6 +2313,7 @@ mod node_reflection_native_receivers;
 
 mod document_attribute_factory_realms;
 
+mod rtc_certificate;
 mod script_terminal_completion;
 mod speech_events;
 mod storage_dense_name_arrays;
