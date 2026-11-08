@@ -47,10 +47,7 @@ async fn navigation_preload_inactive_registration_reads_state_in_window_and_work
                 sw.onmessage = event => resolve(event.data);
                 registration.installing.postMessage('probe');
             });
-            await new Promise(resolve => {
-                if (sw.controller) resolve();
-                else sw.addEventListener('controllerchange', resolve, {once: true});
-            });
+            await __moliTestActivatedServiceWorker(sw);
             await manager.enable();
             const afterActivation = await manager.getState();
             await registration.unregister();
