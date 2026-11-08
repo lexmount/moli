@@ -2430,3 +2430,4 @@ mod media_streams;
 mod midi_frontend;
 mod rtp_transceivers;
 mod sqlite_web_storage;
+mod webrtc_local_description;
