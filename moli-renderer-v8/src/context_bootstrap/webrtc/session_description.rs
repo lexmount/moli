@@ -70,6 +70,30 @@ pub(super) fn install_session_description_template_bindings<'s>(
     );
 }
 
+pub(super) fn from_parts<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    kind: v8::Local<'s, v8::String>,
+    sdp: v8::Local<'s, v8::String>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let object = super::super::exposed_interfaces::build_intrinsic_interface_instance(
+        scope,
+        "RTCSessionDescription",
+    )
+    .ok()?;
+    let prototype = super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
+        scope,
+        "RTCSessionDescription",
+    )
+    .ok()?;
+    if object.set_prototype(scope, prototype.into()) != Some(true) {
+        return None;
+    }
+    SessionDescriptionObjectDeclaration::new(kind.into(), sdp)
+        .initialize(scope, object)
+        .ok()?;
+    Some(object)
+}
+
 pub(in crate::context_bootstrap) fn rtc_session_description_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -101,31 +125,6 @@ pub(in crate::context_bootstrap) fn rtc_session_description_constructor_callback
         "RTCSessionDescription",
     );
     rv.set(args.this().into());
-}
-
-pub(super) fn native_description<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    kind: SdpType,
-    sdp: v8::Local<'s, v8::String>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = super::super::exposed_interfaces::build_intrinsic_interface_instance(
-        scope,
-        "RTCSessionDescription",
-    )
-    .ok()?;
-    let prototype = super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
-        scope,
-        "RTCSessionDescription",
-    )
-    .ok()?;
-    object
-        .set_prototype(scope, prototype.into())?
-        .then_some(())?;
-    let kind = v8str(scope, webidl::WebIdlEnumSnapshot::snapshot_token(&kind));
-    SessionDescriptionObjectDeclaration::new(kind.into(), sdp)
-        .initialize(scope, object)
-        .ok()?;
-    Some(object)
 }
 
 fn description_attribute_getter<'s>(

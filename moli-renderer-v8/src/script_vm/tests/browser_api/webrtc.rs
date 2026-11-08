@@ -1,8 +1,10 @@
 use super::*;
 
-#[test]
-fn webrtc_signaling_surface_stays_explicit_about_the_missing_ice_transport() {
-    let mut vm = new_storage_test_vm("https://webrtc-surface.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn webrtc_signaling_surface_stays_explicit_about_the_missing_ice_transport() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://webrtc-surface.test/", &loader);
 
     vm.exec(
         r#"
@@ -142,6 +144,14 @@ fn webrtc_signaling_surface_stays_explicit_about_the_missing_ice_transport() {
     )
     .expect("WebRTC signaling probe should execute");
 
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__webrtcProbe.settled)",
+        "true",
+        "signaling must complete through selected networking tasks",
+    )
+    .await;
     let result = vm
         .eval("JSON.stringify(globalThis.__webrtcProbe)")
         .expect("WebRTC signaling probe should be readable");
