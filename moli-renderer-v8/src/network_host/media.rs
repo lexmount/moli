@@ -4,7 +4,7 @@ use crate::native_bridge::{
     JsContextHost, MediaLoadSequenceId, OwnerDispatchScope, PendingMediaLoadOwner,
 };
 use crate::types::SubresourceRequestInitiatorType;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use moli_fetch::{RequestCredentialsMode, RequestMode};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -24,10 +24,11 @@ pub(crate) fn start_media_element_resource_fetch(
     let pending = host
         .pending_media_load_sequence(media_handle)
         .filter(|pending| pending.id() == sequence)
-        .context(ResourceFetchError::SequenceNotPending)?;
-    if !host.pending_media_load_sequence_is_current(media_handle, sequence) {
-        return Err(ResourceFetchError::StaleOwner.into());
-    }
+        .context("resource load sequence is no longer pending")?;
+    ensure!(
+        host.pending_media_load_sequence_is_current(media_handle, sequence),
+        "resource request owner is stale"
+    );
     let owner = match pending.owner() {
         PendingMediaLoadOwner::Main { owner, .. }
             if host.main_document_task_owner_is_current(owner) =>
@@ -37,25 +38,25 @@ pub(crate) fn start_media_element_resource_fetch(
         PendingMediaLoadOwner::Child { child_handle, .. } => {
             OwnerDispatchScope::Child(child_handle)
         }
-        _ => return Err(ResourceFetchError::StaleOwner.into()),
+        _ => bail!("resource request owner is stale"),
     };
     let Some(resource_loader) = host.document_resource_loader_for_dispatch_scope(owner) else {
         return Ok(MediaElementResourceFetchStart::PolicySkipped);
     };
     let environment = host
         .subresource_request_environment(&resource_loader, owner)
-        .context(ResourceFetchError::NoRequestEnvironment)?;
+        .context("Document request environment is unavailable")?;
     let element = host
         .dom_host()
         .node(media_handle)
         .and_then(crate::dom::native::Node::as_element)
-        .context(ResourceFetchError::NoMediaElement)?;
+        .context("media element is unavailable")?;
     let options = if element.is_html_element("audio") {
         SubresourceFetchOptions::AUDIO
     } else if element.is_html_element("video") {
         SubresourceFetchOptions::VIDEO
     } else {
-        return Err(ResourceFetchError::InvalidMediaElement.into());
+        bail!("media lifecycle target is not an audio or video element");
     };
     let (request_mode, credentials_mode) = media_cross_origin_request_modes(element);
 
@@ -91,21 +92,21 @@ pub(crate) fn start_media_element_resource_fetch(
         request_url,
         options.with_request_modes(request_mode, credentials_mode),
     );
-    let Some(internal_id) = host.record_media_subresource_fetch(
-        v8::Global::new(scope, scope.get_current_context()),
-        media_handle,
-        sequence,
-        owner,
-        prepared.registration.clone(),
-        &prepared.dispatch,
-        credentials_mode,
-        request_mode,
-        prepared.network_partition_key.clone(),
-        prepared.network_context.policy_context,
-        prepared.pending_info.clone(),
-    ) else {
-        return Err(ResourceFetchError::OwnerChangedBeforeBinding.into());
-    };
+    let internal_id = host
+        .record_media_subresource_fetch(
+            v8::Global::new(scope, scope.get_current_context()),
+            media_handle,
+            sequence,
+            owner,
+            prepared.registration.clone(),
+            &prepared.dispatch,
+            credentials_mode,
+            request_mode,
+            prepared.network_partition_key.clone(),
+            prepared.network_context.policy_context,
+            prepared.pending_info.clone(),
+        )
+        .context("resource owner changed before request binding")?;
     prepared.dispatch(host, internal_id);
     Ok(MediaElementResourceFetchStart::Pending)
 }

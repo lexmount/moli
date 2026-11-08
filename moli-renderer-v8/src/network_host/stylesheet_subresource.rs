@@ -29,17 +29,17 @@ pub(crate) fn start_stylesheet_subresource_fetch(
 ) -> Result<StylesheetSubresourceFetchStart> {
     ensure!(
         host.stylesheet_subresource_load_delay_is_current(binding),
-        ResourceFetchError::StaleOwner
+        "resource request owner is stale"
     );
     let owner = binding
         .child_handle()
         .map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child);
     let resource_loader = host
         .document_resource_loader_for_owner(binding.owner())
-        .context(ResourceFetchError::NoResourceLoader)?;
+        .context("Document resource loader is unavailable")?;
     let environment = host
         .subresource_request_environment(&resource_loader, owner)
-        .context(ResourceFetchError::NoRequestEnvironment)?;
+        .context("Document request environment is unavailable")?;
     let (request_url, target) = request.into_parts();
     let options = match &target {
         StylesheetSubresourceTarget::Image(_) => SubresourceFetchOptions::CSS_IMAGE,
@@ -129,7 +129,7 @@ pub(crate) fn start_stylesheet_subresource_fetch(
             target,
             prepared.pending_info.clone(),
         )
-        .context(ResourceFetchError::OwnerChangedBeforeBinding)?;
+        .context("resource owner changed before request binding")?;
 
     prepared.dispatch(host, internal_id);
     Ok(StylesheetSubresourceFetchStart::Pending)

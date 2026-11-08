@@ -3,7 +3,7 @@ use super::*;
 use crate::document_runtime::DocumentSubresourceCspKind;
 use crate::native_bridge::{JsContextHost, PendingTextTrackLoadTerminal, TextTrackLoadSequenceId};
 use crate::types::{SubresourceRequestInitiatorType, SubresourceResourceType};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use moli_fetch::{RequestCredentialsMode, RequestMode};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -22,10 +22,11 @@ pub(crate) fn start_text_track_resource_fetch(
     let pending = host
         .pending_text_track_load_sequence(track_handle)
         .filter(|pending| pending.id() == sequence)
-        .context(ResourceFetchError::SequenceNotPending)?;
-    if !host.pending_text_track_load_sequence_is_current(track_handle, sequence) {
-        return Err(ResourceFetchError::StaleOwner.into());
-    }
+        .context("resource load sequence is no longer pending")?;
+    ensure!(
+        host.pending_text_track_load_sequence_is_current(track_handle, sequence),
+        "resource request owner is stale"
+    );
     let target = pending.target();
     let owner = target.dispatch_scope();
     let Some(resource_loader) = host.document_resource_loader_for_window_owner(target.owner())
@@ -34,7 +35,7 @@ pub(crate) fn start_text_track_resource_fetch(
     };
     let environment = host
         .subresource_request_environment(&resource_loader, owner)
-        .context(ResourceFetchError::NoRequestEnvironment)?;
+        .context("Document request environment is unavailable")?;
     if pending.source().trim().is_empty() {
         return Ok(TextTrackResourceFetchStart::Local(
             PendingTextTrackLoadTerminal::FetchFailed,
@@ -48,7 +49,7 @@ pub(crate) fn start_text_track_resource_fetch(
         .node(pending.media_handle())
         .and_then(crate::dom::native::Node::as_element)
         .filter(|element| element.is_html_element("audio") || element.is_html_element("video"))
-        .context(ResourceFetchError::NoMediaElement)?;
+        .context("media element is unavailable")?;
     let (request_mode, credentials_mode) = text_track_cross_origin_request_modes(media);
     moli_fetch::FetchUrlList::new(&request_url, &[])
         .validate_request_mode(request_mode, &environment.request_origin)?;
@@ -90,21 +91,21 @@ pub(crate) fn start_text_track_resource_fetch(
         request_url,
         SubresourceFetchOptions::TEXT_TRACK.with_request_modes(request_mode, credentials_mode),
     );
-    let Some(internal_id) = host.record_text_track_subresource_fetch(
-        v8::Global::new(scope, scope.get_current_context()),
-        track_handle,
-        sequence,
-        owner,
-        prepared.registration.clone(),
-        &prepared.dispatch,
-        credentials_mode,
-        request_mode,
-        prepared.network_partition_key.clone(),
-        prepared.network_context.policy_context,
-        prepared.pending_info.clone(),
-    ) else {
-        return Err(ResourceFetchError::OwnerChangedBeforeBinding.into());
-    };
+    let internal_id = host
+        .record_text_track_subresource_fetch(
+            v8::Global::new(scope, scope.get_current_context()),
+            track_handle,
+            sequence,
+            owner,
+            prepared.registration.clone(),
+            &prepared.dispatch,
+            credentials_mode,
+            request_mode,
+            prepared.network_partition_key.clone(),
+            prepared.network_context.policy_context,
+            prepared.pending_info.clone(),
+        )
+        .context("resource owner changed before request binding")?;
     prepared.dispatch(host, internal_id);
     Ok(TextTrackResourceFetchStart::Pending)
 }
