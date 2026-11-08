@@ -247,7 +247,7 @@ async fn navigator_service_worker_popup_post_message_uses_popup_source_url() {
 
     let expected_popup_url = format!("{base_url}/app/popup.html");
     let expected = format!(
-        "reply|from-popup|ExtendableMessageEvent|true|true|true|[object ExtendableMessageEvent]|{base_url}||1|true|WindowClient|true|true|{expected_popup_url}|window|top-level|visible|false"
+        "reply|from-popup|ExtendableMessageEvent|true|true|true|[object ExtendableMessageEvent]|{base_url}||1|true|WindowClient|true|true|{expected_popup_url}|window|auxiliary|visible|true"
     );
     drain_service_worker_test_until_eval_equals(
         &mut vm,
