@@ -76,3 +76,5 @@ limits return `None` before entering V8; invalid syntax retains the pending
 exception. `moli-v8-test-util/tests/regexp_bindings.rs` covers bounded rejection,
 normal matches, invalid limits and invalid syntax. Keep this local bridge when
 refreshing the vendored bindings.
+
+- `src/function_ext.cc` exposes V8's public `Function::GetBoundFunction` for trap-free WebIDL constructor realm lookup. Callback argument storage and NewTarget are unchanged.
