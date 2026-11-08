@@ -2283,6 +2283,220 @@ fn client_focus_request_rejects_discarded_window_before_page_owner() {
             .focused
     );
 }
+
+#[test]
+fn client_focus_request_uses_storage_key_without_scope_or_controller_restrictions() {
+    for (document, partitioned, expected) in [
+        ("https://example.test/outside/page.html", false, true),
+        ("https://example.test/other/page.html", false, true),
+        ("about:blank", false, true),
+        ("about:srcdoc", false, true),
+        (
+            "blob:https://example.test/c07bec18-0000-4000-8000-000000000000",
+            false,
+            true,
+        ),
+        ("https://other.test/app/page.html", false, false),
+        ("https://example.test/app/page.html", true, false),
+    ] {
+        let service = new_service_worker_runtime_service();
+        let registration_id = ServiceWorkerRegistrationId(1);
+        let version_id = ServiceWorkerVersionId(1);
+        insert_registered_version(
+            &service,
+            registration_id,
+            version_id,
+            url("https://example.test/app/worker.js"),
+            url("https://example.test/app/"),
+            [],
+        );
+        let other_controller = insert_registered_version(
+            &service,
+            ServiceWorkerRegistrationId(2),
+            ServiceWorkerVersionId(2),
+            url("https://example.test/other/worker.js"),
+            url("https://example.test/other/"),
+            [],
+        );
+        let document_url = url(document);
+        let storage_key = if partitioned {
+            moli_storage_key::partitioned_storage_key(
+                "https://example.test",
+                "https://other-top.test",
+            )
+        } else if document.starts_with("about:") || document.starts_with("blob:") {
+            ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&url(
+                "https://example.test/",
+            ))
+        } else {
+            ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&document_url)
+        };
+        let mut queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+        let document_owner = crate::native_bridge::WindowDocumentOwner::for_test(7);
+        let client_id = service.register_client_with_storage_key(
+            document_url,
+            storage_key,
+            ServiceWorkerClientFrameType::TopLevel,
+            Some(document_owner),
+            queue.sender(),
+        );
+        if document.contains("/other/page") {
+            assert_eq!(
+                service.matching_controller_for_client(client_id),
+                Some(other_controller)
+            );
+        }
+        assert!(
+            !service.inner.state.lock().registrations[&registration_id]
+                .controlled_client_ids
+                .contains(&client_id)
+        );
+        let run = exact_version_run(&service, version_id);
+        service.finish_client_focus_requested(
+            ServiceWorkerClientFocus {
+                request_id: 91,
+                source_version_id: version_id,
+                target_client_id: client_id,
+            },
+            run.clone(),
+        );
+        if expected {
+            let Some(
+                crate::page_task_queue::RendererServiceWorkerInternalTask::ClientFocusRequest(
+                    request,
+                ),
+            ) = queue.pop_internal()
+            else {
+                panic!("eligible focus request not delivered: {document}");
+            };
+            assert_eq!(request.target.client_id, client_id);
+            assert_eq!(request.target.document_owner, document_owner);
+            assert_eq!(request.source_version_id, version_id);
+            assert_eq!(request.source_run, run);
+        } else {
+            assert!(
+                !queue.has_ready_task(),
+                "foreign storage key reached Page: {document}"
+            );
+        }
+        assert!(!queue.has_ready_task());
+    }
+}
+
+#[test]
+fn client_focus_completion_checks_inherited_origin_and_full_partition_key() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        url("https://example.test/app/worker.js"),
+        url("https://example.test/app/"),
+        [],
+    );
+    let key = ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&url(
+        "https://example.test/",
+    ));
+    for document in [
+        "https://example.test/outside/page.html",
+        "about:blank",
+        "about:srcdoc",
+    ] {
+        let client_id = service.register_client_with_storage_key(
+            url(document),
+            key.clone(),
+            ServiceWorkerClientFrameType::TopLevel,
+            None,
+            test_completion_sender(),
+        );
+        let snapshot = service
+            .client_focus_result_for_current_window_client(version_id, client_id)
+            .expect("same-key uncontrolled Window must remain a valid focus target");
+        assert_eq!(snapshot.id, client_id);
+        assert_eq!(snapshot.url.as_str(), document);
+        assert!(!snapshot.controlled);
+    }
+    let sentinel = register_client_for_test(&service, url("https://example.test/sentinel"));
+    service
+        .inner
+        .state
+        .lock()
+        .live_clients
+        .get_mut(&sentinel)
+        .unwrap()
+        .focused = true;
+    let foreign_partition = service.register_client_with_storage_key(
+        url("https://example.test/app/page.html"),
+        moli_storage_key::partitioned_storage_key("https://example.test", "https://other-top.test"),
+        ServiceWorkerClientFrameType::TopLevel,
+        None,
+        test_completion_sender(),
+    );
+    assert_eq!(
+        service
+            .client_focus_result_for_current_window_client(version_id, foreign_partition)
+            .expect_err("same URL origin cannot bypass a different partition key"),
+        ServiceWorkerClientFocusError::not_found()
+    );
+    assert!(service.inner.state.lock().live_clients[&sentinel].focused);
+    assert!(!service.inner.state.lock().live_clients[&foreign_partition].focused);
+}
+
+#[test]
+fn client_focus_request_requires_original_run_without_requiring_active_version() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        url("https://example.test/app/worker.js"),
+        url("https://example.test/app/"),
+        [],
+    );
+    let mut queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    let client_id =
+        service.register_client(url("https://example.test/app/page.html"), 7, queue.sender());
+    {
+        let mut state = service.inner.state.lock();
+        state
+            .registrations
+            .get_mut(&registration_id)
+            .unwrap()
+            .active_version_id = None;
+        state.versions.get_mut(&version_id).unwrap().lifecycle_state =
+            ServiceWorkerVersionLifecycleState::Installed;
+    }
+    service.finish_client_focus_requested(
+        ServiceWorkerClientFocus {
+            request_id: 92,
+            source_version_id: version_id,
+            target_client_id: client_id,
+        },
+        RendererServiceWorkerRunIdentity::fresh(),
+    );
+    assert!(!queue.has_ready_task());
+    service.finish_client_focus_requested(
+        ServiceWorkerClientFocus {
+            request_id: 93,
+            source_version_id: version_id,
+            target_client_id: client_id,
+        },
+        exact_version_run(&service, version_id),
+    );
+    let Some(crate::page_task_queue::RendererServiceWorkerInternalTask::ClientFocusRequest(
+        request,
+    )) = queue.pop_internal()
+    else {
+        panic!("current live run should retain focus access while not active");
+    };
+    assert_eq!(request.request_id, 93);
+    assert_eq!(request.target.client_id, client_id);
+    assert!(!queue.has_ready_task());
+}
 #[test]
 fn clients_open_window_uses_ready_active_window_host() {
     let service = new_service_worker_runtime_service();

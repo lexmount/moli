@@ -275,17 +275,11 @@ impl ServiceWorkerRuntimeService {
             if source_version.run != run {
                 return;
             }
-            if source_version.lifecycle_state == ServiceWorkerVersionLifecycleState::Redundant {
-                return;
-            }
             let Some(source_registration) =
                 state.registrations.get(&source_version.registration_id)
             else {
                 return;
             };
-            if source_registration.active_version_id != Some(focus.source_version_id) {
-                return;
-            }
             let Some(target_client) = state.live_clients.get(&focus.target_client_id) else {
                 let result = ServiceWorkerClientFocusResult {
                     request_id: focus.request_id,
@@ -304,27 +298,13 @@ impl ServiceWorkerRuntimeService {
                 self.finish_client_focus(focus.source_version_id, run, result);
                 return;
             }
-            if !service_worker_scope_matches_url(
-                &source_registration.scope_url,
-                &target_client.document_url,
-            ) {
+            // WindowClient.focus is allowed for uncontrolled and out-of-scope
+            // Windows. Its boundary is the complete native storage key, also
+            // covering inherited about:blank/srcdoc origins and partitions.
+            if target_client.storage_key != source_registration.storage_key {
                 let result = ServiceWorkerClientFocusResult {
                     request_id: focus.request_id,
                     result: Err(ServiceWorkerClientFocusError::not_found()),
-                };
-                drop(state);
-                self.finish_client_focus(focus.source_version_id, run, result);
-                return;
-            }
-            if !source_registration
-                .controlled_client_ids
-                .contains(&focus.target_client_id)
-            {
-                let result = ServiceWorkerClientFocusResult {
-                    request_id: focus.request_id,
-                    result: Err(ServiceWorkerClientFocusError::type_error(
-                        "This service worker is not the client's active service worker.".to_owned(),
-                    )),
                 };
                 drop(state);
                 self.finish_client_focus(focus.source_version_id, run, result);
@@ -503,7 +483,6 @@ impl ServiceWorkerRuntimeService {
             return Err(ServiceWorkerClientFocusError::not_found());
         };
         let registration_id = source_version.registration_id;
-        let script_url = source_version.script_url.clone();
         let Some(source_registration) = state.registrations.get(&registration_id) else {
             return Err(ServiceWorkerClientFocusError::not_found());
         };
@@ -516,7 +495,7 @@ impl ServiceWorkerRuntimeService {
         if client.client_type != ServiceWorkerClientType::Window {
             return Err(ServiceWorkerClientFocusError::not_found());
         }
-        if !moli_url::same_origin(&script_url, &client.document_url) {
+        if client.storage_key != source_registration.storage_key {
             return Err(ServiceWorkerClientFocusError::not_found());
         }
         if !client.execution_ready {

@@ -418,7 +418,7 @@ impl ServiceWorkerClientFocusError {
     }
 
     pub(crate) fn inactive() -> Self {
-        Self::TypeError("The client is inactive.".to_owned())
+        Self::type_error("The client is inactive.")
     }
 
     pub(crate) fn type_error(message: impl Into<String>) -> Self {
