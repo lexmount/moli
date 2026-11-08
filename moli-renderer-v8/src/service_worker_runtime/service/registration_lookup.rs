@@ -185,9 +185,7 @@ impl ServiceWorkerRuntimeService {
             .registrations
             .values()
             .find(|registration| {
-                registration.scope_url == *scope_url
-                    && !registration.pending_unregistration
-                    && registration.active_version_id.is_some()
+                registration.scope_url == *scope_url && !registration.pending_unregistration
             })
             .map(|registration| registration.navigation_preload_state.clone())
     }

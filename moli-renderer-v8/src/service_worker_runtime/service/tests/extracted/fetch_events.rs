@@ -215,7 +215,10 @@ fn navigation_preload_state_defaults_and_mutation_requires_active_worker() {
         scope_url.clone(),
     );
 
-    assert_eq!(service.navigation_preload_state_for_scope(&scope_url), None);
+    assert_eq!(
+        service.navigation_preload_state_for_scope(&scope_url),
+        Some(ServiceWorkerNavigationPreloadState::default())
+    );
     assert_eq!(
         service.navigation_preload_state_for_scope(&url("https://example.test/other/")),
         None

@@ -1,5 +1,7 @@
 use super::*;
 
+mod navigation_preload;
+
 #[tokio::test]
 async fn service_worker_navigation_fallback_preserves_reload_validation_on_wire() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
