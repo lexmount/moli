@@ -2272,6 +2272,7 @@ mod iir_filter_interfaces;
 mod import_meta;
 mod indexed_db;
 mod indexed_db_gc;
+mod inline_csp_violation_targets;
 mod inspector_unwrap;
 mod lazy_storage;
 

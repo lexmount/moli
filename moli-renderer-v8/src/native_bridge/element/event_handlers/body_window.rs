@@ -1,11 +1,8 @@
-use crate::{
-    document_runtime::EventTargetHandle, dom::native::Node, native_bridge::JsContextHost,
-    util::v8_string,
-};
+use crate::{document_runtime::EventTargetHandle, dom::native::Node, native_bridge::JsContextHost};
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
 use super::super::element_attribute;
-use super::shared::compile_event_attribute_handler;
+use super::shared::{EventAttributeHandlerScope, compile_event_attribute_handler_for_owner};
 
 const MESSAGEERROR_EVENT_TYPE: &str = "messageerror";
 const ONMESSAGEERROR_ATTRIBUTE: &str = "onmessageerror";
@@ -100,13 +97,12 @@ fn compile_body_onmessageerror_attribute<'s>(
     if source.is_empty() {
         return None;
     }
-    let event_argument = v8_string(scope, "event")?;
-    compile_event_attribute_handler(
+    let owner = runtime.owner_dispatch_scope_for_node(body_handle)?;
+    compile_event_attribute_handler_for_owner(
         scope,
         host_ptr,
-        body_handle,
+        owner,
         &source,
-        &[event_argument],
-        &[],
+        EventAttributeHandlerScope::Element,
     )
 }
