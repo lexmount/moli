@@ -1,5 +1,21 @@
-use super::{JsContextHost, PendingWindowMessageEndpoint};
+use super::{JsContextHost, OwnerDispatchScope, PendingWindowMessageEndpoint};
 use crate::document_runtime::DomHandle;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_WINDOW_FOCUS_ORDER: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum WindowFocusIdentity {
+    Frame(crate::frame_owner_model::FrameSchedulerLaneId),
+    Popup(u64),
+}
+
+pub(super) struct WindowFocusHistory {
+    identity: WindowFocusIdentity,
+    top_document: DomHandle,
+    focused: bool,
+    last_order: Option<u64>,
+}
 
 mod navigation;
 pub(crate) use navigation::SequentialFocusStartingPoint;
@@ -13,6 +29,121 @@ pub(super) struct DocumentFocusChangeState {
 }
 
 impl JsContextHost {
+    pub(crate) fn note_window_focus_changes(&mut self) {
+        let mut windows = vec![OwnerDispatchScope::Top];
+        windows.extend(
+            self.child_browsing_context_handles_in_document_order()
+                .into_iter()
+                .map(OwnerDispatchScope::Child),
+        );
+        let mut popups = self
+            .lightweight_popup_browsing_contexts
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        popups.sort_unstable();
+        windows.extend(popups.into_iter().map(OwnerDispatchScope::LightweightPopup));
+        let mut live = std::collections::HashSet::new();
+        let mut changed_roots = std::collections::HashSet::new();
+        for dispatch in windows {
+            let Some(target) =
+                self.current_window_document_task_target_for_dispatch_scope(dispatch)
+            else {
+                continue;
+            };
+            let document = match dispatch {
+                OwnerDispatchScope::Top => Some(self.document_handle()),
+                OwnerDispatchScope::Child(frame) => {
+                    self.child_browsing_context_document_handle(frame)
+                }
+                OwnerDispatchScope::LightweightPopup(id) => {
+                    self.lightweight_popup_document_handle(id)
+                }
+            };
+            let Some(document) = document else {
+                continue;
+            };
+            let Some(top_document) = self.top_level_document_for_document(document) else {
+                continue;
+            };
+            let identity = match target.owner() {
+                crate::window_document_identity::WindowDocumentOwner::Frame(owner) => {
+                    WindowFocusIdentity::Frame(owner.scheduler_lane_id)
+                }
+                crate::window_document_identity::WindowDocumentOwner::LightweightPopup(owner) => {
+                    WindowFocusIdentity::Popup(owner.popup_id())
+                }
+            };
+            let focused = self.document_has_focus(document);
+            live.insert(dispatch);
+            let entry = self
+                .window_focus_history
+                .entry(dispatch)
+                .or_insert(WindowFocusHistory {
+                    identity,
+                    top_document,
+                    focused: false,
+                    last_order: None,
+                });
+            if entry.identity != identity {
+                *entry = WindowFocusHistory {
+                    identity,
+                    top_document,
+                    focused: false,
+                    last_order: None,
+                };
+            }
+            if focused != entry.focused {
+                changed_roots.insert(top_document);
+            }
+            entry.top_document = top_document;
+            entry.focused = focused;
+        }
+        self.window_focus_history.retain(|dispatch, entry| {
+            if live.contains(dispatch) {
+                return true;
+            }
+            if entry.focused {
+                changed_roots.insert(entry.top_document);
+            }
+            false
+        });
+        let order = self
+            .window_focus_history
+            .values()
+            .any(|entry| entry.focused && changed_roots.contains(&entry.top_document))
+            .then(|| {
+                NEXT_WINDOW_FOCUS_ORDER
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                        value.checked_add(1)
+                    })
+                    .expect("Window focus order exhausted")
+            });
+        for entry in self.window_focus_history.values_mut() {
+            if entry.focused && changed_roots.contains(&entry.top_document) {
+                // A focused frame and its focused ancestors share one focus
+                // time; creation order breaks ties within that chain.
+                entry.last_order = order;
+            }
+        }
+    }
+
+    pub(crate) fn window_last_focus_order(&self, dispatch: OwnerDispatchScope) -> Option<u64> {
+        let entry = self.window_focus_history.get(&dispatch)?;
+        let target = self.current_window_document_task_target_for_dispatch_scope(dispatch)?;
+        let identity = match target.owner() {
+            crate::window_document_identity::WindowDocumentOwner::Frame(owner) => {
+                WindowFocusIdentity::Frame(owner.scheduler_lane_id)
+            }
+            crate::window_document_identity::WindowDocumentOwner::LightweightPopup(owner) => {
+                WindowFocusIdentity::Popup(owner.popup_id())
+            }
+        };
+        (entry.identity == identity)
+            .then_some(entry.last_order)
+            .flatten()
+    }
+
     pub(crate) fn document_has_focus(&self, document: DomHandle) -> bool {
         if !self.document_activity().focused || !self.document_is_fully_active(document) {
             return false;
@@ -52,11 +183,13 @@ impl JsContextHost {
     }
 
     pub(crate) fn clear_disconnected_document_focus(&mut self) {
+        let mut changed = false;
         if self
             .focused_viewport_document
             .is_some_and(|document| self.top_level_document_for_document(document).is_none())
         {
             self.focused_viewport_document = None;
+            changed = true;
         }
         let documents = self
             .document_focus_changes
@@ -74,7 +207,10 @@ impl JsContextHost {
         for (document, area) in documents {
             // A retained iframe handle must not revive its former parent's
             // focus when script inserts the iframe again after removal.
-            self.clear_document_focused_area_for_fixup(document, area);
+            changed |= self.clear_document_focus_record(document, area);
+        }
+        if changed {
+            self.note_window_focus_changes();
         }
     }
 
@@ -154,6 +290,12 @@ impl JsContextHost {
         document: DomHandle,
         area: DomHandle,
     ) {
+        if self.clear_document_focus_record(document, area) {
+            self.note_window_focus_changes();
+        }
+    }
+
+    fn clear_document_focus_record(&mut self, document: DomHandle, area: DomHandle) -> bool {
         if let Some(state) = self.document_focus_changes.get_mut(&document)
             && state.focused_area == Some(area)
         {
@@ -163,7 +305,9 @@ impl JsContextHost {
             // even after an earlier focus() call. Later author focus changes
             // still suppress the navigation's focus reset.
             state.last_change_was_automatic_fixup = true;
+            return true;
         }
+        false
     }
 
     pub(crate) fn top_level_document_for_document(
@@ -262,6 +406,7 @@ impl JsContextHost {
         {
             self.note_document_focused_area(document, None);
         }
+        self.note_window_focus_changes();
     }
 
     pub(crate) fn window_endpoint_for_document(

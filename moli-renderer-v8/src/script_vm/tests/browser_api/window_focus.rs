@@ -1,6 +1,51 @@
 use super::*;
 
 #[test]
+fn window_focus_history_keeps_unfocused_windows_and_shared_ancestor_times() {
+    let mut vm = new_storage_test_vm("https://focus-history.test/");
+    vm.eval(r#"
+        const root = document.documentElement || document.appendChild(document.createElement('html'));
+        const body = document.body || root.appendChild(document.createElement('body'));
+        body.innerHTML = '<iframe id=a></iframe><iframe id=b></iframe>';
+        document.getElementById('a').focus();
+    "#).unwrap();
+    let (a, b) = {
+        let host = vm._context_host.borrow();
+        let frames = host.child_browsing_context_handles_in_document_order();
+        (frames[0], frames[1])
+    };
+    let first = {
+        let host = vm._context_host.borrow();
+        let order = host
+            .window_last_focus_order(crate::native_bridge::OwnerDispatchScope::Child(a))
+            .unwrap();
+        assert_eq!(
+            host.window_last_focus_order(crate::native_bridge::OwnerDispatchScope::Top),
+            Some(order)
+        );
+        assert_eq!(
+            host.window_last_focus_order(crate::native_bridge::OwnerDispatchScope::Child(b)),
+            None
+        );
+        order
+    };
+    vm.eval("document.getElementById('b').focus()").unwrap();
+    let host = vm._context_host.borrow();
+    let second = host
+        .window_last_focus_order(crate::native_bridge::OwnerDispatchScope::Child(b))
+        .unwrap();
+    assert!(second > first);
+    assert_eq!(
+        host.window_last_focus_order(crate::native_bridge::OwnerDispatchScope::Top),
+        Some(second)
+    );
+    assert_eq!(
+        host.window_last_focus_order(crate::native_bridge::OwnerDispatchScope::Child(a)),
+        Some(first)
+    );
+}
+
+#[test]
 fn document_has_focus_checks_every_live_ancestor_in_the_native_focus_chain() {
     let mut vm = new_storage_test_vm("https://document-focus-chain.test/");
     let result = vm.eval(r#"(() => {

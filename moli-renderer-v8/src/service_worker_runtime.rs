@@ -1,3 +1,4 @@
+mod client_query;
 mod clients;
 pub(crate) mod diagnostics;
 mod errors;
@@ -22,10 +23,13 @@ mod state;
 mod target_output_streams;
 mod version;
 
+pub(crate) use client_query::{
+    ServiceWorkerWindowClientState, ServiceWorkerWindowClientStateReply,
+};
 pub(crate) use clients::{
     ServiceWorkerClientFrameType, ServiceWorkerClientQuery, ServiceWorkerClientQueryKind,
     ServiceWorkerClientQueryOptions, ServiceWorkerClientQueryResult, ServiceWorkerClientQueryType,
-    ServiceWorkerClientSnapshot, ServiceWorkerClientType,
+    ServiceWorkerClientSnapshot, ServiceWorkerClientType, ServiceWorkerClientVisibilityState,
     allocate_service_worker_exposed_client_id, service_worker_exposed_client_id,
 };
 pub(crate) use errors::{ServiceWorkerRegistrationError, ServiceWorkerRegistrationErrorKind};

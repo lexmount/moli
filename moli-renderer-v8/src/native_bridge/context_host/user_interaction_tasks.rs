@@ -19,6 +19,7 @@ pub(crate) enum PendingUserInteractionTaskPayload {
         request_id: super::InputImageRequestId,
         kind: crate::page_task_queue::RendererPageImageLoadEventKind,
     },
+    ServiceWorkerWindowClientState(crate::types::ServiceWorkerWindowClientStateRequest),
 }
 
 pub(super) type UserInteractionTaskState = ExactWindowDocumentTaskLedger<
@@ -28,6 +29,25 @@ pub(super) type UserInteractionTaskState = ExactWindowDocumentTaskLedger<
 >;
 
 impl JsContextHost {
+    pub(crate) fn queue_service_worker_window_client_state_request(
+        &mut self,
+        request: crate::types::ServiceWorkerWindowClientStateRequest,
+    ) -> bool {
+        let Some(owner) = self.service_worker_window_client_completion_owner(request.target) else {
+            return false;
+        };
+        let Some(target) =
+            self.current_window_document_task_target_for_dispatch_scope(owner.dispatch_scope())
+        else {
+            return false;
+        };
+        self.publish_user_interaction_task(
+            target,
+            RendererPageUserInteractionTaskKind::ServiceWorkerWindowClientState,
+            PendingUserInteractionTaskPayload::ServiceWorkerWindowClientState(request),
+        )
+    }
+
     pub(crate) fn queue_input_image_event_task(
         &mut self,
         target: WindowDocumentTaskTarget,
@@ -189,6 +209,49 @@ impl JsContextHost {
         let dispatch_scope = target.dispatch_scope();
         let previous_scope = dispatch_scope.enter(scope);
         let effect = match (kind, payload) {
+            (
+                RendererPageUserInteractionTaskKind::ServiceWorkerWindowClientState,
+                PendingUserInteractionTaskPayload::ServiceWorkerWindowClientState(request),
+            ) => {
+                if self
+                    .service_worker_window_client_completion_owner(request.target)
+                    .is_some()
+                {
+                    use crate::service_worker_runtime::{
+                        ServiceWorkerClientFrameType, ServiceWorkerClientVisibilityState,
+                        ServiceWorkerWindowClientState,
+                    };
+                    let focused = self.document_has_focus(resolved.document_handle);
+                    if focused && self.window_last_focus_order(dispatch_scope).is_none() {
+                        self.note_window_focus_changes();
+                    }
+                    let frame_type = match dispatch_scope {
+                        super::OwnerDispatchScope::Child(_) => ServiceWorkerClientFrameType::Nested,
+                        super::OwnerDispatchScope::Top
+                            if self.top_window_opener(scope).is_some() =>
+                        {
+                            ServiceWorkerClientFrameType::Auxiliary
+                        }
+                        super::OwnerDispatchScope::LightweightPopup(id)
+                            if self.lightweight_popup_opener_endpoint(id).is_some() =>
+                        {
+                            ServiceWorkerClientFrameType::Auxiliary
+                        }
+                        _ => ServiceWorkerClientFrameType::TopLevel,
+                    };
+                    request.reply.complete(ServiceWorkerWindowClientState {
+                        frame_type,
+                        visibility_state: if self.document_activity().visible {
+                            ServiceWorkerClientVisibilityState::Visible
+                        } else {
+                            ServiceWorkerClientVisibilityState::Hidden
+                        },
+                        focused,
+                        last_focus_order: self.window_last_focus_order(dispatch_scope),
+                    });
+                }
+                PageUserInteractionBodyEffect::NotApplied
+            }
             (
                 RendererPageUserInteractionTaskKind::InputImage,
                 PendingUserInteractionTaskPayload::InputImage {

@@ -1223,6 +1223,12 @@ pub(super) struct ServiceWorkerClientNavigateCompletion {
 }
 
 #[derive(Debug)]
+pub(super) struct ServiceWorkerWindowClientStateRequest {
+    pub(super) target: ServiceWorkerWindowClientTarget,
+    pub(super) reply: crate::service_worker_runtime::ServiceWorkerWindowClientStateReply,
+}
+
+#[derive(Debug)]
 pub(super) struct ServiceWorkerClientFocusRequestCompletion {
     pub(super) target: ServiceWorkerWindowClientTarget,
     pub(super) request_id: u64,

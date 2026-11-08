@@ -1780,7 +1780,16 @@ async fn client_query_replies_during_startup_reject_stale_runs() {
     let version_id = ServiceWorkerVersionId(1);
     let script_url = url("https://example.test/app/sw.js");
     let scope_url = url("https://example.test/app/");
-    let client_id = register_client_for_test(&service, url("https://example.test/outside.html"));
+    let mut page_tasks = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    let page_url = url("https://example.test/outside.html");
+    let client_id = service.register_client_with_storage_key(
+        page_url.clone(),
+        ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&page_url),
+        ServiceWorkerClientFrameType::TopLevel,
+        Some(crate::native_bridge::WindowDocumentOwner::for_test(0)),
+        page_tasks.sender(),
+    );
+    register_client_for_test(&service, url("https://example.test/closed.html"));
     let exposed_id = serde_json::to_string(&service_worker_exposed_client_id(client_id)).unwrap();
     let source = format!(
         r#"
@@ -1789,7 +1798,7 @@ async fn client_query_replies_during_startup_reject_stale_runs() {
             clients.matchAll({{includeUncontrolled: true}}),
             clients.get(expectedId)
         ]).then(([all, one]) => {{
-            if (all.length !== 1 || all[0].id !== expectedId || one?.id !== expectedId) {{
+            if (all.length !== 1 || all[0].id !== expectedId || one?.id !== expectedId || !all[0].focused || !one.focused) {{
                 throw new Error("startup query returned incorrect clients");
             }}
             all[0].postMessage("queried during startup");
@@ -1850,7 +1859,60 @@ async fn client_query_replies_during_startup_reject_stale_runs() {
                 clients: vec![],
             },
         );
+        // A sampled reply from an old run must not settle this run's pending
+        // JS promise, even when its request id and client id match.
+        service.finish_client_query_requested(query.clone(), run.clone());
+        let Some(
+            crate::page_task_queue::RendererServiceWorkerInternalTask::WindowClientStateRequest(
+                stale,
+            ),
+        ) = page_tasks.pop_internal()
+        else {
+            panic!("window state request should be queued");
+        };
+        service
+            .inner
+            .state
+            .lock()
+            .versions
+            .get_mut(&version_id)
+            .unwrap()
+            .run = RendererServiceWorkerRunIdentity::fresh();
+        stale.reply.complete(
+            crate::service_worker_runtime::ServiceWorkerWindowClientState {
+                frame_type: ServiceWorkerClientFrameType::TopLevel,
+                visibility_state: ServiceWorkerClientVisibilityState::Visible,
+                focused: false,
+                last_focus_order: None,
+            },
+        );
+        service.drain_service_lane();
+        service
+            .inner
+            .state
+            .lock()
+            .versions
+            .get_mut(&version_id)
+            .unwrap()
+            .run = run.clone();
         service.finish_client_query_requested(query, run.clone());
+        let Some(
+            crate::page_task_queue::RendererServiceWorkerInternalTask::WindowClientStateRequest(
+                current,
+            ),
+        ) = page_tasks.pop_internal()
+        else {
+            panic!("current window state request should be queued");
+        };
+        current.reply.complete(
+            crate::service_worker_runtime::ServiceWorkerWindowClientState {
+                frame_type: ServiceWorkerClientFrameType::TopLevel,
+                visibility_state: ServiceWorkerClientVisibilityState::Visible,
+                focused: true,
+                last_focus_order: Some(1),
+            },
+        );
+        service.drain_service_lane();
     }
     let message = tokio::time::timeout(Duration::from_secs(5), parent_rx.recv())
         .await

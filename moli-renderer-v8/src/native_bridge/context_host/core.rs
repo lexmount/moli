@@ -639,6 +639,7 @@ impl JsContextHost {
             javascript_dialog_handler_enabled,
             pending_network_output: Vec::new(),
             document_focus_changes: HashMap::new(),
+            window_focus_history: HashMap::new(),
             focused_viewport_document: None,
             next_subresource_network_request_handle: 1,
             subresource_activity_epoch: 0,

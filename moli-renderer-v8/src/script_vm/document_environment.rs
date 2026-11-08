@@ -338,6 +338,7 @@ impl ScriptVm {
         if host.document_activity() != activity {
             host.queue_environment_change();
             host.set_document_activity(activity);
+            host.note_window_focus_changes();
         }
         Ok(())
     }
@@ -346,9 +347,9 @@ impl ScriptVm {
         &mut self,
         activity: moli_page_types::DocumentActivity,
     ) {
-        self._context_host
-            .borrow_mut()
-            .set_document_activity(activity);
+        let mut host = self._context_host.borrow_mut();
+        host.set_document_activity(activity);
+        host.note_window_focus_changes();
     }
 
     pub(crate) fn set_layout_policy(&mut self, policy: moli_page_types::LayoutPolicy) {

@@ -1,5 +1,10 @@
 use super::*;
 
+type WindowClientQueryTarget = (
+    crate::types::ServiceWorkerWindowClientTarget,
+    crate::page_task_queue::RendererPageServiceWorkerTaskSender,
+);
+
 impl ServiceWorkerRuntimeService {
     /// The current environment ID, including replacement documents which kept
     /// the runtime's internal client ID but received a new public Client.id.
@@ -624,35 +629,73 @@ impl ServiceWorkerRuntimeService {
         client_ids
     }
 
+    #[cfg(test)]
     pub(crate) fn query_clients(
         &self,
         query: &ServiceWorkerClientQuery,
     ) -> ServiceWorkerClientQueryResult {
         let state = self.inner.state.lock();
-        let clients = match &query.kind {
-            ServiceWorkerClientQueryKind::Get { exposed_client_id } => {
-                service_worker_get_client_locked(
-                    &state,
-                    query.registration_id,
-                    query.version_id,
-                    exposed_client_id,
-                )
-                .into_iter()
-                .collect()
-            }
-            ServiceWorkerClientQueryKind::MatchAll { options } => {
-                service_worker_match_all_clients_locked(
-                    &state,
-                    query.registration_id,
-                    query.version_id,
-                    *options,
-                )
-            }
-        };
-        ServiceWorkerClientQueryResult {
-            request_id: query.request_id,
-            clients,
+        service_worker_query_clients_locked(&state, query)
+    }
+
+    pub(super) fn query_clients_with_window_targets(
+        &self,
+        query: &ServiceWorkerClientQuery,
+        run: &RendererServiceWorkerRunIdentity,
+    ) -> Option<(ServiceWorkerClientQueryResult, Vec<WindowClientQueryTarget>)> {
+        let state = self.inner.state.lock();
+        if state.versions.get(&query.version_id)?.run != *run {
+            return None;
         }
+        let mut result = service_worker_query_clients_locked(&state, query);
+        let mut targets = Vec::new();
+        result.clients.retain(|snapshot| {
+            if snapshot.client_type != ServiceWorkerClientType::Window {
+                return true;
+            }
+            let Some(client) = state.live_clients.get(&snapshot.id) else {
+                return false;
+            };
+            let Some(target) = client.window_completion_target() else {
+                return false;
+            };
+            let Some(sender) = client.endpoint.page_task_sender() else {
+                return false;
+            };
+            targets.push((target, sender));
+            true
+        });
+        Some((result, targets))
+    }
+}
+
+fn service_worker_query_clients_locked(
+    state: &ServiceWorkerRuntimeState,
+    query: &ServiceWorkerClientQuery,
+) -> ServiceWorkerClientQueryResult {
+    let clients = match &query.kind {
+        ServiceWorkerClientQueryKind::Get { exposed_client_id } => {
+            service_worker_get_client_locked(
+                state,
+                query.registration_id,
+                query.version_id,
+                exposed_client_id,
+            )
+            .into_iter()
+            .collect()
+        }
+        ServiceWorkerClientQueryKind::MatchAll { options } => {
+            service_worker_match_all_clients_locked(
+                state,
+                query.registration_id,
+                query.version_id,
+                *options,
+            )
+        }
+    };
+    ServiceWorkerClientQueryResult {
+        request_id: query.request_id,
+        clients,
     }
 }
 

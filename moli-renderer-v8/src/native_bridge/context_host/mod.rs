@@ -1205,6 +1205,7 @@ pub(crate) struct JsContextHost {
     javascript_dialog_handler_enabled: bool,
     pending_network_output: Vec<ScriptNetworkOutputItem>,
     document_focus_changes: HashMap<DomHandle, focus::DocumentFocusChangeState>,
+    window_focus_history: HashMap<OwnerDispatchScope, focus::WindowFocusHistory>,
     focused_viewport_document: Option<DomHandle>,
     next_subresource_network_request_handle: u64,
     subresource_activity_epoch: u64,
