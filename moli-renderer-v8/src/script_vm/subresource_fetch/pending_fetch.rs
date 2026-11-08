@@ -1,15 +1,5 @@
 use super::*;
 
-#[derive(Debug, thiserror::Error)]
-enum PendingSubresourceError {
-    #[error("unknown pending subresource fetch `{0}`")]
-    FetchNotFound(u64),
-    #[error("unknown pending subresource auth `{0}`")]
-    AuthNotFound(u64),
-    #[error("unknown pending subresource response `{0}`")]
-    ResponseNotFound(u64),
-}
-
 fn with_subresource_request_metadata(
     request: moli_fetch::Request,
     resource_type: SubresourceResourceType,
@@ -131,7 +121,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_fetch(internal_id)
-            .ok_or(PendingSubresourceError::FetchNotFound(internal_id))?;
+            .ok_or_else(|| anyhow!("unknown pending subresource fetch `{internal_id}`"))?;
         let headers = headers.map(|override_headers| match override_headers {
             moli_fetch::RequestHeaderOverride::CurrentRequest {
                 headers,
@@ -653,7 +643,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_auth(internal_id)
-            .ok_or(PendingSubresourceError::AuthNotFound(internal_id))?;
+            .ok_or_else(|| anyhow!("unknown pending subresource auth `{internal_id}`"))?;
         if !pending.pending.load.try_restart_with_auth() {
             // Reuse the terminal auth path to settle Window and Worker consumers.
             self._context_host
@@ -865,7 +855,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_auth(internal_id)
-            .ok_or(PendingSubresourceError::AuthNotFound(internal_id))?;
+            .ok_or_else(|| anyhow!("unknown pending subresource auth `{internal_id}`"))?;
         if let Some(target) =
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
@@ -955,7 +945,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_auth(internal_id)
-            .ok_or(PendingSubresourceError::AuthNotFound(internal_id))?;
+            .ok_or_else(|| anyhow!("unknown pending subresource auth `{internal_id}`"))?;
         let PendingSubresourceAuthState {
             pending,
             request_url,
@@ -1028,7 +1018,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_fetch(internal_id)
-            .ok_or(PendingSubresourceError::FetchNotFound(internal_id))?;
+            .ok_or_else(|| anyhow!("unknown pending subresource fetch `{internal_id}`"))?;
         let PendingSubresourceFetchState {
             dispatch,
             redirect_headers: _,
@@ -1232,7 +1222,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_fetch(internal_id)
-            .ok_or(PendingSubresourceError::FetchNotFound(internal_id))?;
+            .ok_or_else(|| anyhow!("unknown pending subresource fetch `{internal_id}`"))?;
         let PendingSubresourceFetchState {
             dispatch,
             redirect_headers: _,
@@ -1718,7 +1708,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_response(internal_id)
-            .ok_or(PendingSubresourceError::ResponseNotFound(internal_id))?;
+            .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
         if let Some(target) =
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
@@ -1887,7 +1877,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_response(internal_id)
-            .ok_or(PendingSubresourceError::ResponseNotFound(internal_id))?;
+            .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
         if let Some(target) =
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
@@ -2008,7 +1998,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_response(internal_id)
-            .ok_or(PendingSubresourceError::ResponseNotFound(internal_id))?;
+            .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
         if let Some(target) =
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
