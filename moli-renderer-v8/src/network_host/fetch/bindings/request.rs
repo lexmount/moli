@@ -140,8 +140,8 @@ pub(super) fn prepare_window_fetch_request<'s>(
     let cors_preflight_request_headers = request_headers.clone();
     let request_headers =
         merge_byte_string_request_headers(host.extra_http_headers(), &request_headers);
-    let resolved_url = resolve_context_url(&base_url, &parsed.url, None)?;
-    validate_request_url_credentials(&resolved_url)?;
+    let resolved_url = resolve_context_url(&base_url, parsed.url.as_str(), None)?;
+    parsed.url.validate_credentials(&resolved_url)?;
     let referrer = parsed
         .init_validation
         .validate(scope, parsed.request_mode.as_ref(), &parsed.cache)?

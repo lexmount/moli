@@ -199,6 +199,7 @@ mod client_lifecycle_and_sync;
 mod fetch_abort_reasons;
 mod fetch_events_and_messages;
 mod fetch_request_headers;
+mod fetch_request_urls;
 mod keepalive_fetch;
 mod messages_clients_and_windows;
 mod worker_and_fetch_lifecycle;

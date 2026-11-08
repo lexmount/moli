@@ -160,7 +160,7 @@ pub(crate) use self::preload::{
 };
 pub(crate) use self::request::build_service_worker_request_object;
 pub(crate) use self::request::{
-    FetchArgs, RequestInfo, parse_fetch_init, parse_request_redirect_mode_label,
+    FetchArgs, RequestInfo, RequestInputUrl, parse_fetch_init, parse_request_redirect_mode_label,
     request_object_credentials_mode, validate_fetch_body,
 };
 pub(crate) use self::request::{FetchArgumentError, convert_fetch_arguments};
@@ -172,7 +172,6 @@ pub(crate) use self::request::{
     mark_request_input_body_used_for_fetch, request_body_already_used_error,
     request_headers_guard_for_mode, try_resolve_request_constructor_url_for_base,
     try_resolve_request_constructor_url_for_child, validate_request_method_body,
-    validate_request_url_credentials,
 };
 pub(in crate::network_host) use self::request_scope::{
     XHR_CHILD_CONTEXT_HANDLE_SLOT, active_subresource_network_partition_key,

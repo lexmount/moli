@@ -2405,14 +2405,14 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             init.validation,
         )
     };
-    let resolved_url = resolve_context_url(base_url, &url_input, None)?;
+    let resolved_url = resolve_context_url(base_url, url_input.as_str(), None)?;
     crate::network_host::validate_fetch_body(
         body.is_some() || body_stream.is_some(),
         has_stream_body,
         &method,
         request_mode,
     )?;
-    crate::network_host::validate_request_url_credentials(&resolved_url)?;
+    url_input.validate_credentials(&resolved_url)?;
     if let Some(referrer) =
         init_validation.validate(scope, request_mode.as_ref(), &metadata.cache)?
     {

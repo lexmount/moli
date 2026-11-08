@@ -2,7 +2,6 @@ use super::super::init::RequestInitMembers;
 use super::super::input::{
     normalize_fetch_request_method, request_body_already_used_error,
     request_headers_guard_for_mode, request_method_allows_body,
-    try_resolve_request_constructor_url_for_scope, validate_request_url_credentials,
 };
 use super::super::*;
 use crate::webidl;
@@ -40,15 +39,8 @@ pub(super) fn request_initial_state<'s>(
     child_handle: Option<crate::document_runtime::DomHandle>,
     base_url: Option<url::Url>,
 ) -> Result<RequestConstructionState, webidl::WebIdlError> {
-    let (url_str, inherited, input_object) = input.materialize(scope)?;
-    let url_resolved =
-        try_resolve_request_constructor_url_for_scope(scope, &url_str, child_handle, base_url)
-            .map_err(|_| {
-                webidl::WebIdlError::custom_message("Failed to construct 'Request': invalid URL")
-            })?;
-    if let Ok(url) = url::Url::parse(&url_resolved) {
-        validate_request_url_credentials(&url)?;
-    }
+    let (url, inherited, input_object) = input.materialize(scope)?;
+    let url_resolved = url.into_constructor_url(scope, child_handle, base_url)?;
     let method = inherited
         .as_ref()
         .map(|snapshot| snapshot.method.clone())

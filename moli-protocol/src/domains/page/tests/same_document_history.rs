@@ -7,6 +7,7 @@ mod cross_origin_navigation;
 mod frame_attribute_ancestors;
 mod history_limits;
 mod hyperlink_navigation;
+mod native_request_urls;
 mod navigation_focus;
 mod navigation_inspector_output;
 mod navigation_window_reuse;
