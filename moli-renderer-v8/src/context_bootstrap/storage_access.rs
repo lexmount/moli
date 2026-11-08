@@ -1,11 +1,12 @@
 use crate::web_api_interfaces;
 use moli_storage_service::StorageBucketLocator;
+use moli_v8_util::reject_promise_with_type_error as reject_type_error;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::opfs::resolve_opfs_root_with_handle_access;
 use crate::native_bridge::OwnerDispatchScope;
 use crate::opfs_owner_tasks::OpfsHandleAccessContext;
-use crate::util::{context_host_ptr_from_global_bridge, get_private_value, v8_string};
+use crate::util::{context_host_ptr_from_global_bridge, get_private_value};
 use crate::webidl;
 
 const STORAGE_ACCESS_HANDLE_GET_DIRECTORY_SLOT: &str = "__moliStorageAccessHandleGetDirectory";
@@ -348,17 +349,6 @@ fn storage_access_handle_get_directory_callback<'s>(
         locator,
         OpfsHandleAccessContext::window(identity, storage_key),
     );
-}
-
-fn reject_type_error<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    resolver: v8::Local<'s, v8::PromiseResolver>,
-    message: &str,
-) {
-    let error = v8_string(scope, message)
-        .map(|message| v8::Exception::type_error(scope, message))
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    let _ = resolver.reject(scope, error);
 }
 
 fn reject_dom_exception<'s>(

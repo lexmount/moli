@@ -1,3 +1,4 @@
+use moli_v8_util::reject_promise_with_type_error as reject_body_type_error;
 mod binary;
 mod text_json;
 
@@ -179,17 +180,6 @@ fn reject_body_materialization_failure<'s>(
     resolver: v8::Local<'s, v8::PromiseResolver>,
 ) {
     reject_body_type_error(scope, resolver, "Failed to materialize response body");
-}
-
-fn reject_body_type_error<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    resolver: v8::Local<'s, v8::PromiseResolver>,
-    message: &str,
-) {
-    let error = v8_string(scope, message)
-        .map(|message| v8::Exception::type_error(scope, message))
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    let _ = resolver.reject(scope, error);
 }
 
 fn reject_body_illegal_receiver<'s>(
