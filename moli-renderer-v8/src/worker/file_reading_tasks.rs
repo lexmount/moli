@@ -1,6 +1,6 @@
 //! File-reading requests stay in native state so queue operations cannot call
-//! author code through Array.prototype. The worker loop drains these tasks
-//! before waiting, with a microtask checkpoint after each request phase.
+//! author code through Array.prototype. The worker loop selects one ready task
+//! per turn, with a microtask checkpoint after each request phase.
 
 use std::sync::atomic::Ordering;
 
