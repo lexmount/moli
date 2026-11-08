@@ -1,5 +1,10 @@
 (async () => {
   const assert=(value,label)=>{if(!value)throw Error(label);};
+  const closeChannel=async channel=>{
+    const closed=new Promise(resolve=>channel.addEventListener('close',resolve,{once:true}));
+    channel.close();
+    await closed;
+  };
   const peer=new RTCPeerConnection();peer.close();
   const cases=[
     ['createOffer',x=>peer.createOffer(x),['voiceActivityDetection','iceRestart','offerToReceiveAudio','offerToReceiveVideo'],true],
@@ -30,22 +35,22 @@
   try{
     const channel=live.createDataChannel('\ud800',{ordered:false,negotiated:true,id:7,protocol:'\ud800',maxRetransmits:null});
     assert(channel.label==='\ufffd' && channel.protocol==='\ufffd' && !channel.ordered && channel.negotiated && channel.id===7 && channel.maxRetransmits===0 && channel.maxPacketLifeTime===null,'native channel options');
-    channel.close();
+    await closeChannel(channel);
     for (const maxPacketLifeTime of [-1,65536,NaN,Infinity]) {
       let caught;try{live.createDataChannel('out-of-range',{maxPacketLifeTime});}catch(error){caught=error;}
       assert(caught instanceof TypeError,'packet lifetime enforces the unsigned-short range');
     }
     for(const init of [{},{id:undefined}]) {
       const missing=live.createDataChannel('missing',init);
-      assert(missing.id===null,'missing or undefined id snapshot default');missing.close();
+      assert(missing.id===null,'missing or undefined id snapshot default');await closeChannel(missing);
     }
     for(const [id,expected] of [[null,0],[false,0],[true,1],['7',7]]) {
       const converted=live.createDataChannel('converted',{negotiated:true,id});
-      assert(converted.id===expected,'non-nullable id numeric conversion');converted.close();
+      assert(converted.id===expected,'non-nullable id numeric conversion');await closeChannel(converted);
     }
     let idReads=0;
     const coerced=live.createDataChannel('coerced',{negotiated:true,id:{valueOf(){idReads++;return 7;}}});
-    assert(coerced.id===7 && idReads===1,'id conversion once');coerced.close();
+    assert(coerced.id===7 && idReads===1,'id conversion once');await closeChannel(coerced);
     for(const init of [{id:-1},{id:65536},{negotiated:true,id:65535},{negotiated:true},{negotiated:true,id:undefined},{maxPacketLifeTime:1,maxRetransmits:1}]){
       let caught;try{live.createDataChannel('bad',init);}catch(e){caught=e;}
       assert(caught instanceof TypeError,'invalid channel options');
