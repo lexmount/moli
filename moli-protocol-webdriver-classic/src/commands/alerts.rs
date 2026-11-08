@@ -21,7 +21,7 @@ pub fn alert_handle_command(
     AutomationCommand::HandleJavaScriptDialog(DevToolsHandleJavaScriptDialogCommand {
         context: context.command_context(),
         accept,
-        prompt_text: String::new(),
+        prompt_text: None,
     })
 }
 

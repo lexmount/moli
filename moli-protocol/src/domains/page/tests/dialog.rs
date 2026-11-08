@@ -281,7 +281,7 @@ async fn last_cdp_subscriber_detach_preserves_native_dialog_handler() {
                     browser_context_id: None,
                 },
                 accept: true,
-                prompt_text: "native answer".to_owned(),
+                prompt_text: Some("native answer".to_owned()),
             },
         ),
     )
@@ -351,7 +351,7 @@ async fn bidi_dialog_handler_survives_last_cdp_detach_without_enabling_modal_wai
             crate::automation::DevToolsHandleJavaScriptDialogCommand {
                 context,
                 accept: true,
-                prompt_text: String::new(),
+                prompt_text: None,
             },
         ),
     )
@@ -444,7 +444,7 @@ async fn assert_page_disable_preserves_native_dialog_handler(
             crate::automation::DevToolsHandleJavaScriptDialogCommand {
                 context,
                 accept: true,
-                prompt_text: "native answer".to_owned(),
+                prompt_text: Some("native answer".to_owned()),
             },
         ),
     )
@@ -557,7 +557,7 @@ async fn assert_native_dialog_handler_release_preserves_peer(
                     browser_context_id: None,
                 },
                 accept: true,
-                prompt_text: "peer answer".to_owned(),
+                prompt_text: Some("peer answer".to_owned()),
             },
         ),
     )
@@ -730,7 +730,7 @@ async fn dialog_broadcast_emits_one_native_event_per_physical_dialog() {
                     browser_context_id: None,
                 },
                 accept: true,
-                prompt_text: String::new(),
+                prompt_text: None,
             },
         ))
         .await
@@ -877,7 +877,7 @@ async fn unhandled_prepared_dialog_does_not_consume_an_existing_queued_dialog() 
                     browser_context_id: None,
                 },
                 accept: true,
-                prompt_text: String::new(),
+                prompt_text: None,
             },
         ),
     )
@@ -1490,7 +1490,7 @@ async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
                 crate::automation::DevToolsHandleJavaScriptDialogCommand {
                     context,
                     accept: true,
-                    prompt_text: String::new(),
+                    prompt_text: None,
                 },
             ),
         )
@@ -1600,7 +1600,7 @@ async fn set_javascript_dialog_prompt_text_is_shared_across_attached_sessions() 
                 crate::automation::DevToolsHandleJavaScriptDialogCommand {
                     context: attached_context,
                     accept: true,
-                    prompt_text: String::new(),
+                    prompt_text: None,
                 },
             ),
         )
@@ -1621,6 +1621,50 @@ async fn set_javascript_dialog_prompt_text_is_shared_across_attached_sessions() 
         ),
         "stored prompt text should be consumed by native accept: {events:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cdp_empty_prompt_text_overrides_native_stored_text() {
+    for prompt_text in [Some(""), None] {
+        let mut ctx = shared_dialog_context();
+        let completion = RendererJavaScriptDialogCompletion::pending();
+        push_dialog_for_session(
+            &mut ctx,
+            Some("SID-primary"),
+            renderer_dialog_for_test(
+                Some("TID-1"),
+                "prompt",
+                "empty override",
+                "initial",
+                Some(completion.clone()),
+            ),
+        );
+        let result = ctx
+            .execute_automation_command_through_renderer_fence_for_test(
+                crate::automation::AutomationCommand::SetJavaScriptDialogPromptText(
+                    crate::automation::DevToolsSetJavaScriptDialogPromptTextCommand {
+                        context: crate::automation::AutomationContext {
+                            protocol: crate::automation::FrontendProtocol::WebDriverClassic,
+                            session_id: Some("SID-primary".into()),
+                            target_id: Some("TID-1".into()),
+                            browser_context_id: Some("BID-1".into()),
+                        },
+                        prompt_text: "stored prior text".to_owned(),
+                    },
+                ),
+            )
+            .await;
+        result.expect("store native prompt text");
+        let mut params = json!({"accept": true});
+        if let Some(text) = prompt_text {
+            params["promptText"] = json!(text);
+        }
+        ctx.process_async(json!({"id": 90, "method": "Page.handleJavaScriptDialog", "sessionId": "SID-attached", "params": params})).await;
+        assert_eq!(take_response_by_id(&mut ctx, 90)["result"], json!({}));
+        let result = completion.wait();
+        assert!(result.accepted);
+        assert_eq!(result.user_input, "");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

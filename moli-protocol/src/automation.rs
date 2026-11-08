@@ -627,7 +627,9 @@ pub struct DevToolsSetJavaScriptDialogPromptTextCommand {
 pub struct DevToolsHandleJavaScriptDialogCommand {
     pub context: AutomationContext,
     pub accept: bool,
-    pub prompt_text: String,
+    /// None preserves text previously set through the native Classic adapter.
+    /// CDP and BiDi supply Some("") when their optional input is omitted.
+    pub prompt_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

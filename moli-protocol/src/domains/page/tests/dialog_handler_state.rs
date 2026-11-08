@@ -69,7 +69,7 @@ async fn assert_non_modal_confirm(
                 AutomationCommand::HandleJavaScriptDialog(DevToolsHandleJavaScriptDialogCommand {
                     context: cleanup_context,
                     accept: false,
-                    prompt_text: String::new(),
+                    prompt_text: None,
                 }),
             );
         });
@@ -83,7 +83,7 @@ async fn assert_non_modal_confirm(
         AutomationCommand::HandleJavaScriptDialog(DevToolsHandleJavaScriptDialogCommand {
             context,
             accept: true,
-            prompt_text: String::new(),
+            prompt_text: None,
         }),
     )
     .await
