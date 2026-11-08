@@ -110,10 +110,8 @@ fn media_section(kind: &str, direction: &str, codecs: &[Codec], mid: usize) -> S
 pub(super) fn build(sections: &[Section], data: bool) -> String {
     let count = sections.len() + usize::from(data);
     let mids: Vec<_> = (0..count).map(|mid| mid.to_string()).collect();
-    let mut sdp = format!(
-        "v=0\r\no=- 0 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE {}\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\n",
-        mids.join(" ")
-    );
+    let mids: Vec<_> = mids.iter().map(String::as_str).collect();
+    let mut sdp = super::sdp::session_header(&mids);
     for (mid, section) in sections.iter().enumerate() {
         sdp.push_str(&media_section(
             &section.kind,

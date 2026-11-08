@@ -127,3 +127,35 @@ fn slot_getter<'s>(
         rv.set(value);
     }
 }
+
+pub(crate) fn build_rtc_sdp_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    message: &str,
+    line_number: i32,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let object = crate::context_bootstrap::exposed_interfaces::build_intrinsic_interface_instance(
+        scope, "RTCError",
+    )
+    .ok()?;
+    let prototype =
+        crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
+            scope, "RTCError",
+        )
+        .ok()?;
+    if object.set_prototype(scope, prototype.into()) != Some(true) {
+        return None;
+    }
+    ObjectDeclaration::new(v8_string(scope, message)?)
+        .initialize(scope, object)
+        .ok()?;
+    ErrorInit {
+        error_detail: ErrorDetail::SdpSyntaxError,
+        received_alert: None,
+        sctp_cause_code: None,
+        sdp_line_number: Some(line_number),
+        sent_alert: None,
+    }
+    .initialize_snapshot(scope, object)?;
+    capture_dom_exception_stack(scope, object);
+    Some(object)
+}
