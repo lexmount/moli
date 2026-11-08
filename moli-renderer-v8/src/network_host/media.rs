@@ -1,3 +1,4 @@
+use super::cross_origin_request_modes as media_cross_origin_request_modes;
 use super::subresource::{PreparedSubresourceFetch, SubresourceFetchOptions};
 use super::*;
 use crate::native_bridge::{
@@ -5,7 +6,6 @@ use crate::native_bridge::{
 };
 use crate::types::SubresourceRequestInitiatorType;
 use anyhow::{Context, Result, bail, ensure};
-use moli_fetch::{RequestCredentialsMode, RequestMode};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MediaElementResourceFetchStart {
@@ -113,19 +113,4 @@ pub(crate) fn start_media_element_resource_fetch(
 
 pub(crate) fn media_response_status_is_successful(status: u16) -> bool {
     (200..300).contains(&status)
-}
-
-fn media_cross_origin_request_modes(
-    element: &crate::dom::native::Element,
-) -> (RequestMode, RequestCredentialsMode) {
-    match element
-        .attribute("crossorigin")
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        None => (RequestMode::NoCors, RequestCredentialsMode::Include),
-        Some("use-credentials") => (RequestMode::Cors, RequestCredentialsMode::Include),
-        Some(_) => (RequestMode::Cors, RequestCredentialsMode::SameOrigin),
-    }
 }

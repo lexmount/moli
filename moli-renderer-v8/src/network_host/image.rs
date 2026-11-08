@@ -1,3 +1,4 @@
+use super::cross_origin_request_modes as image_cross_origin_request_modes;
 use super::*;
 use crate::native_bridge::{
     ImageLoadEventId, JsContextHost, OwnerDispatchScope, PendingImageLoadEventOwner,
@@ -456,21 +457,6 @@ fn image_response_descriptor_from_bytes(
     Some(crate::native_bridge::ImageResponseDescriptor::raster(
         metadata,
     ))
-}
-
-fn image_cross_origin_request_modes(
-    element: &crate::dom::native::Element,
-) -> (RequestMode, RequestCredentialsMode) {
-    match element
-        .attribute("crossorigin")
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        None => (RequestMode::NoCors, RequestCredentialsMode::Include),
-        Some("use-credentials") => (RequestMode::Cors, RequestCredentialsMode::Include),
-        Some(_) => (RequestMode::Cors, RequestCredentialsMode::SameOrigin),
-    }
 }
 
 #[cfg(test)]
