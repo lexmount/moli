@@ -2314,6 +2314,7 @@ mod node_reflection_native_receivers;
 mod document_attribute_factory_realms;
 
 mod rtc_certificate;
+mod rtp_sender;
 mod script_terminal_completion;
 mod speech_events;
 mod storage_dense_name_arrays;
