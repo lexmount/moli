@@ -6,7 +6,7 @@ use moli_layout::{
     LayoutQueryAnswer, LayoutQueryBatch, LayoutResolvedGridTracks, LayoutScrollIntoViewGeometry,
 };
 
-use super::client_rect::{ClientRect, client_rect_from_quad, union_client_rect, zero_client_rect};
+use super::client_rect::{ClientRect, union_client_rect, zero_client_rect};
 use super::mock::{answer_queries as answer_mock_queries, answer_query as answer_mock_query};
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
@@ -93,7 +93,7 @@ pub(crate) fn read_client_rects(
 ) -> Result<Vec<ClientRect>, LayoutError> {
     match query_source(runtime, source, LayoutQuery::ClientRects { source })? {
         Some(LayoutQueryAnswer::ClientRects(rects)) => {
-            Ok(rects.into_iter().map(client_rect_from_quad).collect())
+            Ok(rects.into_iter().map(ClientRect::from).collect())
         }
         None => Ok(Vec::new()),
         _ => Err(provider_contract_error("client rects")),
@@ -189,7 +189,7 @@ pub(crate) fn observable_bounding_client_rects(
         .map(|answer| match answer {
             LayoutQueryAnswer::ClientRects(rects) => Ok(rects
                 .into_iter()
-                .map(client_rect_from_quad)
+                .map(ClientRect::from)
                 .reduce(union_client_rect)
                 .unwrap_or_else(zero_client_rect)),
             _ => Err(provider_contract_error("bounding client rects")),

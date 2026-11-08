@@ -156,7 +156,7 @@ pub(super) fn native_range_client_rects_for_boundaries(
                     ));
                 }
             };
-            rects.extend(quads.into_iter().map(client_rect_from_layout_quad));
+            rects.extend(quads.into_iter().map(ClientRect::from));
         }
         Ok(rects)
     }))
@@ -170,18 +170,6 @@ fn collect_range_geometry_subtree(
     out.push(root);
     for child in dom_host.child_handles(root) {
         collect_range_geometry_subtree(dom_host, child, out);
-    }
-}
-
-fn client_rect_from_layout_quad(quad: moli_layout::LayoutQuad) -> ClientRect {
-    let rect = quad.bounding_rect();
-    ClientRect {
-        left: f64::from(rect.x),
-        top: f64::from(rect.y),
-        right: f64::from(rect.right()),
-        bottom: f64::from(rect.bottom()),
-        width: f64::from(rect.width),
-        height: f64::from(rect.height),
     }
 }
 
