@@ -48,7 +48,7 @@ pub use error::{
     FetchCacheMiss, FetchCancelled, NET_ERR_ABORTED_ERROR_TEXT, ensure_http_status_success,
     is_fetch_cancelled,
 };
-pub use fetch_url_list::{FetchUrlList, RequestModeError};
+pub use fetch_url_list::FetchUrlList;
 pub use headers::{
     DefaultAcceptKind, cors_unsafe_request_header_names, default_accept_header,
     encode_redirect_location, is_cors_safelisted_method, is_cors_safelisted_request_content_type,

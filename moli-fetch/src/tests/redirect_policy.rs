@@ -126,10 +126,12 @@ fn request_mode_validation_is_pure_and_admission_rechecks_recorded_policy() -> R
     let error = request
         .validate_request_mode_for_url(&cross_origin_url)
         .unwrap_err();
-    assert!(matches!(
-        error.downcast_ref::<crate::RequestModeError>(),
-        Some(crate::RequestModeError::CrossOrigin { url }) if url == &cross_origin_url
-    ));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "same-origin request mode blocked a cross-origin URL in the fetch of {cross_origin_url}"
+        )
+    );
     assert_eq!(
         calls.load(Ordering::SeqCst),
         0,
