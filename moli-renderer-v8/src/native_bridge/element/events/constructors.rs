@@ -23,7 +23,7 @@ struct MouseEventInitDeclaration<'scope> {
     meta_key: bool,
     shift_key: bool,
     related_target: Option<v8::Local<'scope, v8::Value>>,
-    view: v8::Local<'scope, v8::Object>,
+    view: Option<v8::Local<'scope, v8::Object>>,
 }
 
 #[derive(WebApiObject)]
@@ -488,6 +488,7 @@ pub(crate) fn construct_mouse_event_with_modifiers<'s>(
         buttons,
         modifiers,
         None,
+        Some(scope.get_current_context().global(scope)),
     )
 }
 
@@ -509,6 +510,7 @@ pub(crate) fn construct_mouse_event_with_detail_and_modifiers<'s>(
         buttons,
         modifiers,
         None,
+        Some(scope.get_current_context().global(scope)),
     )
 }
 
@@ -530,6 +532,7 @@ pub(crate) fn construct_mouse_event_with_related_target_and_modifiers<'s>(
         buttons,
         modifiers,
         related_target,
+        Some(scope.get_current_context().global(scope)),
     )
 }
 
@@ -542,6 +545,7 @@ fn construct_mouse_event_with_detail_and_related_target<'s>(
     buttons: i32,
     modifiers: u8,
     related_target: Option<v8::Local<'s, v8::Value>>,
+    view: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let modifier_keys = modifier_key_state(modifiers);
     let is_boundary = matches!(event_type, "mouseenter" | "mouseleave");
@@ -569,7 +573,7 @@ fn construct_mouse_event_with_detail_and_related_target<'s>(
         modifier_keys.meta,
         modifier_keys.shift,
         related_target,
-        scope.get_current_context().global(scope),
+        view,
     )
     .bind(scope)
     .ok()?;
@@ -1032,8 +1036,9 @@ pub(in crate::native_bridge::element) fn construct_click_event_with_detail_and_m
     button: i32,
     buttons: i32,
     modifiers: u8,
+    view: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    construct_mouse_event_with_detail_and_modifiers(
+    construct_mouse_event_with_detail_and_related_target(
         scope,
         "click",
         coordinates,
@@ -1041,6 +1046,8 @@ pub(in crate::native_bridge::element) fn construct_click_event_with_detail_and_m
         button,
         buttons,
         modifiers,
+        None,
+        view,
     )
 }
 

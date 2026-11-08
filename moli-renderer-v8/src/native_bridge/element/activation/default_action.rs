@@ -747,6 +747,16 @@ fn dispatch_click_event(
     trusted: bool,
 ) -> Option<NodePublicEventDispatchOutcome> {
     let event = {
+        let document = unsafe { &*runtime_ptr }
+            .dom_host()
+            .owner_document_handle(handle);
+        let view = document.and_then(|document| {
+            crate::native_bridge::document::document_associated_window_for_handle(
+                scope,
+                runtime_ptr,
+                document,
+            )
+        });
         let context = if trusted {
             crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)?
         } else {
@@ -760,6 +770,7 @@ fn dispatch_click_event(
             button,
             buttons,
             modifiers,
+            view,
         )?
     };
     crate::context_bootstrap::set_event_trusted(scope, event, trusted);

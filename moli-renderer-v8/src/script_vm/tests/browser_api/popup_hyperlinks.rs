@@ -204,3 +204,15 @@ async fn popup_hyperlink_opens_a_nested_window_and_relays_messages_to_its_opener
     vm.eval("__firstHyperlinkPopup.__nestedChild.close(); __firstHyperlinkPopup.close();")
         .expect("close nested popup fixtures");
 }
+
+#[test]
+fn windowless_synthetic_clicks_have_null_views_without_changing_event_realms() {
+    let mut vm = new_storage_test_vm("https://windowless-click-view.test/");
+    vm.eval("const root = document.documentElement || document.appendChild(document.createElement('html')); if (!document.body) root.appendChild(document.createElement('body')); document.body.innerHTML='<iframe id=child></iframe>'")
+        .unwrap();
+    assert_eq!(
+        vm.eval(&format!("({})()", include_str!("windowless_click_view.js")))
+            .unwrap(),
+        "[]"
+    );
+}
