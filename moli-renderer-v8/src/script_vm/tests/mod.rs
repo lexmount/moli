@@ -2415,7 +2415,9 @@ mod domrect_receiver_consolidation;
 
 mod resize_observer_entries;
 
+mod dtmf_tone_event;
 mod encoded_video_chunk;
+
 mod payment_events;
 
 mod file_value_receivers;

@@ -209,6 +209,7 @@ interfaces! {
     Gamepad;
     GamepadButton;
     GamepadEvent: Event;
+    RTCDTMFToneChangeEvent: Event;
     PictureInPictureEvent: Event;
     PaymentRequestUpdateEvent: Event;
     PaymentMethodChangeEvent: PaymentRequestUpdateEvent;
