@@ -1,10 +1,21 @@
 use super::*;
 
-#[test]
-fn rtc_peer_methods_convert_complete_dictionaries_before_native_state() {
-    let mut vm = new_storage_html_test_vm("https://rtc-peer-dictionary.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn rtc_peer_methods_convert_complete_dictionaries_before_native_state() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://rtc-peer-dictionary.test/",
+        &loader,
+    );
     vm.eval(&format!("globalThis.rtcPeerResult='pending'; ({}).then(value=>rtcPeerResult=value,error=>rtcPeerResult=String(error.stack||error));",include_str!("../../../../tests/fixtures/rtc-peer-dictionaries.js"))).unwrap();
-    vm.eval("0").unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(rtcPeerResult !== 'pending')",
+        "true",
+        "dictionary conversion must complete through selected RTC tasks",
+    )
+    .await;
     assert_eq!(vm.eval("String(rtcPeerResult)").unwrap(), "true");
 }
 

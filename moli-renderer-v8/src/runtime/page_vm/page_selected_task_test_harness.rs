@@ -61,6 +61,7 @@ pub(crate) enum PageSelectedTaskTestSelector {
     InternalLoading,
     MainParserContinuation,
     MediaElementEvent,
+    WebRtc,
     MessagePortDelivery,
     ModuleReaction,
     ModulepreloadStart,
@@ -186,6 +187,13 @@ impl PageSelectedTaskTestSelector {
                 descriptor,
                 RendererPageReadyDescriptor::Networking {
                     owner: RendererPageNetworkingOwner::MainParserContinuation(_),
+                    ..
+                }
+            ),
+            Self::WebRtc => matches!(
+                descriptor,
+                RendererPageReadyDescriptor::Networking {
+                    owner: RendererPageNetworkingOwner::WebRtc(_),
                     ..
                 }
             ),
@@ -385,6 +393,10 @@ impl PageSelectedTaskTestSelector {
                 RendererPageSchedulerTask::Networking(
                     RendererPageNetworkingTask::MainParserContinuation(_),
                 ),
+            )
+            | (
+                Self::WebRtc,
+                RendererPageSchedulerTask::Networking(RendererPageNetworkingTask::WebRtc(_)),
             )
             | (Self::MediaElementEvent, RendererPageSchedulerTask::MediaElementEvent(_))
             | (Self::MessagePortDelivery, RendererPageSchedulerTask::MessagePortDelivery { .. })
