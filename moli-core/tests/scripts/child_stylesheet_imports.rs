@@ -191,6 +191,34 @@ impl ChildImportServer {
                                     ("text/css", format!("@import url('/child-import-sibling-real.css?token={token}#direct');"))
                                 }
                                 "/child-import-sibling-real.css" => ("text/css", format!(":root {{ --sibling-load: {request_count}; }}")),
+                                "/child-import-probe-alias.css" => {
+                                    status = "302 Found";
+                                    extra_headers = format!("Location: /child-import-probe-real.css?token={token}\r\n");
+                                    ("text/css", String::new())
+                                }
+                                "/child-import-probe-real.css" => ("text/css", format!("@import url('/child-import-probe-{}.css?token={token}#cycle'); :root {{ --nested-redirect: ready; --redirect-first: ready; }}", if token.contains("-shared-") { "common" } else { "real" })),
+                                "/child-import-probe-root.css" => {
+                                    let cross = query.get("cross").is_some_and(|value| value == "true");
+                                    ("text/css", format!("@import url('{}/child-import-probe-alias.css?token={token}'); @import url('/child-import-probe-divider.css?token={token}'); @import url('/child-import-probe-branch.css?token={token}&cross={cross}');", if cross { &cross_origin } else { "" }))
+                                }
+                                "/child-import-probe-divider.css" => ("text/css", ":root { --nested-redirect: between; }".to_owned()),
+                                "/child-import-probe-branch.css" => {
+                                    if token.starts_with("policy-late-") { asset.wait(true).await; }
+                                    ("text/css", format!("@import url('{}/child-import-probe-{}.css?token={token}');", if query.get("cross").is_some_and(|value| value == "true") { &cross_origin } else { "" }, if token.contains("-shared-") { "common" } else { "real" }))
+                                }
+                                "/child-import-probe-common.css" => ("text/css", format!("@import url('/child-import-probe-real.css?token={token}');")),
+                                "/child-import-probe-policy" => {
+                                    if query.get("mode").is_some_and(|mode| mode == "path") {
+                                        extra_headers = format!("Content-Security-Policy: style-src 'self' {cross_origin}/child-import-probe-alias.css\r\n");
+                                    }
+                                    ("text/html", format!(r#"<!doctype html><head><script>
+                                      globalThis.firstViolation = new Promise(resolve => document.addEventListener('securitypolicyviolation', event => resolve({{
+                                        target: event.target === document, directive: event.effectiveDirective,
+                                        disposition: event.disposition, blockedURI: event.blockedURI
+                                      }}), {{once:true}}));
+                                    </script><link rel='stylesheet' href='/child-import-probe-root.css?token={token}&amp;cross=true'>
+                                    <script>globalThis.afterSiblingStylesheet=true;</script></head><body>Sibling CSP"#))
+                                }
                                 "/child-import-csp-branch.css" => ("text/css", format!("@import url('{}{}?token={token}'); @import url('/child-import-csp-allowed.css?token={token}');", if token.contains("redirect") { "" } else { &cross_origin }, if token.contains("redirect") { "/child-import-csp-hop.css" } else { "/child-import-csp-blocked.css" })),
                                 "/child-import-csp-hop.css" => {
                                     status = "302 Found";
@@ -868,6 +896,123 @@ async fn child_import_redirect_siblings_check_csp_for_the_direct_request() -> Re
             1,
             "{kind}: only the allowed redirect may reach the server"
         );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_imports_keep_redirect_aliases_in_sibling_branches() -> Result<()> {
+    let server = ChildImportServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser.fetch(&server.origin).await?;
+    let probe = include_str!("../fixtures/stylesheet-import-redirect-siblings.js");
+    for scenario in ["direct", "shared"] {
+        for owner in ["main", "child"] {
+            for kind in ["linked", "inline"] {
+                let token = format!("siblings-{scenario}-{owner}-{kind}");
+                let result = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    page.evaluate_runtime_expression_with_await_async(
+                        &format!("({probe})({owner:?}, {kind:?}, {token:?}).then(JSON.stringify)"),
+                        true,
+                    ),
+                )
+                .await??;
+                let result: serde_json::Value = serde_json::from_str(
+                    result["value"]
+                        .as_str()
+                        .with_context(|| format!("sibling redirect snapshot: {result}"))?,
+                )?;
+                assert_eq!(result["style"], "ready", "{owner}/{kind}: {result}");
+                for key in ["first", "last"] {
+                    assert_eq!(
+                        result[key]["text"],
+                        ":root { --nested-redirect: ready; --redirect-first: ready; }",
+                        "{owner}/{kind}: {result}"
+                    );
+                    assert_eq!(result[key]["cycleRules"], 0, "{owner}/{kind}: {result}");
+                    assert_eq!(result[key]["owner"], true, "{owner}/{kind}: {result}");
+                    assert_eq!(
+                        result[key]["depth"],
+                        if scenario == "shared" && key == "first" {
+                            2
+                        } else {
+                            1
+                        },
+                        "{scenario}/{owner}/{kind}: {result}"
+                    );
+                }
+                assert_eq!(result["distinct"], true, "{owner}/{kind}: {result}");
+                assert_eq!(result["script"], true, "{owner}/{kind}: {result}");
+                for (name, expected) in [
+                    ("root", 1),
+                    ("alias", 1),
+                    ("real", 2),
+                    ("divider", 1),
+                    ("branch", 1),
+                    ("common", usize::from(scenario == "shared")),
+                ] {
+                    let count = server
+                        .assets
+                        .lock()
+                        .get(&format!("{token}:/child-import-probe-{name}.css"))
+                        .map_or(0, |asset| asset.count.load(Ordering::Acquire));
+                    assert_eq!(count, expected, "{owner}/{kind}, {name}: {result}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_imports_check_redirect_siblings_under_their_own_csp() -> Result<()> {
+    let server = ChildImportServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser.fetch(&server.origin).await?;
+    let probe = include_str!("../fixtures/stylesheet-import-redirect-sibling-csp.js");
+    for mode in ["path", "late"] {
+        let token = format!("policy-{mode}-sibling");
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            page.evaluate_runtime_expression_with_await_async(
+                &format!("({probe})({mode:?}, {token:?}).then(JSON.stringify)"),
+                true,
+            ),
+        )
+        .await??;
+        let result: serde_json::Value = serde_json::from_str(
+            result["value"]
+                .as_str()
+                .with_context(|| format!("sibling CSP snapshot: {result}"))?,
+        )?;
+        assert_eq!(result["first"], "ready", "{mode}: {result}");
+        assert_eq!(result["style"], "between", "{mode}: {result}");
+        assert_eq!(result["script"], true, "{mode}: {result}");
+        assert_eq!(result["violation"]["target"], true, "{mode}: {result}");
+        assert_eq!(
+            result["violation"]["directive"], "style-src-elem",
+            "{mode}: {result}"
+        );
+        assert_eq!(
+            result["violation"]["disposition"], "enforce",
+            "{mode}: {result}"
+        );
+        assert!(
+            result["violation"]["blockedURI"]
+                .as_str()
+                .unwrap()
+                .starts_with("http://localhost:"),
+            "{mode}: {result}"
+        );
+        for name in ["root", "alias", "real", "divider", "branch"] {
+            let count = server
+                .assets
+                .lock()
+                .get(&format!("{token}:/child-import-probe-{name}.css"))
+                .map_or(0, |asset| asset.count.load(Ordering::Acquire));
+            assert_eq!(count, 1, "{mode}, {name}: {result}");
+        }
     }
     Ok(())
 }
