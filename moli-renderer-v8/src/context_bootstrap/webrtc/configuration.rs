@@ -170,8 +170,12 @@ pub(super) fn constructor_configuration<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<ConfigurationSnapshot<'s>> {
     let parsed = webidl::parse_args::<ConfigurationArgs>(scope, args)?;
+    super::certificate::validate_configuration(scope, &parsed.configuration.certificates)?;
     validate_servers(scope, &parsed.configuration)?;
-    parsed.configuration.to_snapshot(scope)
+    let snapshot = parsed.configuration.to_snapshot(scope)?;
+    let record = snapshot.to_v8_value(scope)?.try_into().ok()?;
+    super::certificate::initialize_connection(scope, record, &parsed.configuration.certificates)?;
+    Some(snapshot)
 }
 
 fn target<'s>(
@@ -182,7 +186,7 @@ fn target<'s>(
         .expect("validated RTCPeerConnection")
 }
 
-fn configuration<'s>(
+pub(super) fn configuration<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
 ) -> ConfigurationSnapshot<'s> {
@@ -252,6 +256,7 @@ pub(super) fn set_configuration<'s>(
     if validate_servers(scope, &parsed.configuration).is_none() {
         return;
     }
+    super::certificate::preserve_connection(scope, old, next);
     snapshot
         .store_private(scope, target, RTC_PEER_CONNECTION_CONFIGURATION_SLOT)
         .expect("RTCConfiguration snapshot slot");

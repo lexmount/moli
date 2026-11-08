@@ -712,6 +712,54 @@ fn window_isolated_world_security_token_key(
     ))
 }
 
+/// Origin identity for native capabilities, independent of document.domain.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WindowOriginKey {
+    Tuple(String),
+    Opaque {
+        browser_context: String,
+        profile_partition: String,
+        namespace: moli_storage_key::OpaqueOriginNonce,
+        owner: WindowExecutionContextOwner,
+    },
+}
+
+impl JsContextHost {
+    pub(crate) fn window_origin_key_for_current_realm(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Option<WindowOriginKey> {
+        let origin = if let Some(settings) = WindowEnvironmentSettings::for_current_realm(scope) {
+            settings.immutable_access_origin()
+        } else {
+            let context = scope.get_current_context();
+            let identity = self.window_execution_context_identity_for_access_check(context)?;
+            if !self.window_execution_context_identity_is_current(identity) {
+                return None;
+            }
+            self.window_access_origin(identity)?
+        };
+        match origin {
+            WindowAccessOrigin::Tuple {
+                serialized_origin, ..
+            } => Some(WindowOriginKey::Tuple(serialized_origin)),
+            WindowAccessOrigin::Opaque {
+                identity: Some(owner),
+            } => {
+                let namespace = self.ensure_web_storage_opaque_context_nonce();
+                let partition = self.browser_context_runtime().storage_partition_identity();
+                Some(WindowOriginKey::Opaque {
+                    browser_context: partition.browser_context_id().to_owned(),
+                    profile_partition: partition.profile_partition_id().to_owned(),
+                    namespace,
+                    owner,
+                })
+            }
+            WindowAccessOrigin::Opaque { identity: None } => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
