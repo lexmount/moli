@@ -125,3 +125,21 @@ pub(in crate::network_host) fn effective_subresource_referrer_policy(
     }?;
     crate::context_bootstrap::document_referrer_policy_for_native_document(host, document)
 }
+
+pub(in crate::network_host) fn callback_child_handle(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Option<crate::document_runtime::DomHandle> {
+    if let Ok(big) = v8::Local::<v8::BigInt>::try_from(value) {
+        let (index, lossless) = big.u64_value();
+        return lossless
+            .then_some(index)
+            .and_then(|index| usize::try_from(index).ok())
+            .map(crate::document_runtime::DomHandle::new);
+    }
+    value
+        .integer_value(scope)
+        .filter(|index| *index >= 0)
+        .and_then(|index| usize::try_from(index).ok())
+        .map(crate::document_runtime::DomHandle::new)
+}
