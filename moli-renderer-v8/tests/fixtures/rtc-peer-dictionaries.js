@@ -31,8 +31,10 @@
     const channel=live.createDataChannel('\ud800',{ordered:false,negotiated:true,id:7,protocol:'\ud800',maxRetransmits:null});
     assert(channel.label==='\ufffd' && channel.protocol==='\ufffd' && !channel.ordered && channel.negotiated && channel.id===7 && channel.maxRetransmits===0 && channel.maxPacketLifeTime===null,'native channel options');
     channel.close();
-    const wrapped=live.createDataChannel('wrapped',{maxPacketLifeTime:65536});
-    assert(wrapped.maxPacketLifeTime===0,'ordinary ushort wraps');wrapped.close();
+    for (const maxPacketLifeTime of [-1,65536,NaN,Infinity]) {
+      let caught;try{live.createDataChannel('out-of-range',{maxPacketLifeTime});}catch(error){caught=error;}
+      assert(caught instanceof TypeError,'packet lifetime enforces the unsigned-short range');
+    }
     for(const init of [{},{id:undefined}]) {
       const missing=live.createDataChannel('missing',init);
       assert(missing.id===null,'missing or undefined id snapshot default');missing.close();
@@ -44,7 +46,7 @@
     let idReads=0;
     const coerced=live.createDataChannel('coerced',{negotiated:true,id:{valueOf(){idReads++;return 7;}}});
     assert(coerced.id===7 && idReads===1,'id conversion once');coerced.close();
-    for(const init of [{id:-1},{id:65536},{id:65535},{negotiated:true},{negotiated:true,id:undefined},{maxPacketLifeTime:1,maxRetransmits:1}]){
+    for(const init of [{id:-1},{id:65536},{negotiated:true,id:65535},{negotiated:true},{negotiated:true,id:undefined},{maxPacketLifeTime:1,maxRetransmits:1}]){
       let caught;try{live.createDataChannel('bad',init);}catch(e){caught=e;}
       assert(caught instanceof TypeError,'invalid channel options');
     }
