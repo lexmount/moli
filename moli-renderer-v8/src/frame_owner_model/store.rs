@@ -3512,6 +3512,20 @@ impl FrameOwnerStore {
             .register_import_map(source, base_url)
     }
 
+    pub(crate) fn resolve_current_child_document_module_integrity(
+        &self,
+        child_handle: DomHandle,
+        owner: FrameDocumentTaskOwner,
+        url: &Url,
+    ) -> Option<String> {
+        if !self.child_document_task_owner_is_current(child_handle, owner) {
+            return None;
+        }
+        self.documents
+            .get(&owner.document_id)
+            .and_then(|document| document.import_map_registry.resolve_module_integrity(url))
+    }
+
     pub(crate) fn resolve_frame_document_module_specifier(
         &mut self,
         owner: FrameDocumentOwner,

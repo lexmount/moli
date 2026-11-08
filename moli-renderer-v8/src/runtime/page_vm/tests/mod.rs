@@ -123,6 +123,7 @@ mod child_host_load;
 mod child_module_dependency_fetch_start;
 mod child_module_document_script_ready;
 mod child_module_error_reporting;
+mod child_module_integrity;
 mod child_module_script_terminal;
 mod child_module_script_terminal_completion;
 mod child_modulepreload_event_action;
