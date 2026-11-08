@@ -37,7 +37,7 @@ use super::navigation_window::{
 };
 use super::*;
 use crate::native_bridge::NavigationHistoryEntrySeed;
-use crate::util::context_host_ptr_from_window_object;
+use crate::util::context_host_ptr_for_navigation_owner;
 use crate::webidl;
 use moli_page_types::{NavigationHistoryMutation, cross_document_navigation_seed};
 
@@ -1088,20 +1088,6 @@ fn history_entry_seed_for_cross_document_location<'s>(
     );
     super::session_history::capture_for_navigation(scope, owner, &mut seed);
     Some(seed)
-}
-
-fn context_host_ptr_for_navigation_owner(
-    scope: &mut v8::PinScope<'_, '_>,
-    owner: v8::Local<'_, v8::Object>,
-) -> Option<*mut JsContextHost> {
-    context_host_ptr_from_global_bridge(scope)
-        .or_else(|| context_host_ptr_from_window_object(scope, owner))
-        .or_else(|| {
-            owner
-                .get(scope, v8str(scope, "parent").into())
-                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-                .and_then(|parent| context_host_ptr_from_window_object(scope, parent))
-        })
 }
 
 #[cfg(test)]

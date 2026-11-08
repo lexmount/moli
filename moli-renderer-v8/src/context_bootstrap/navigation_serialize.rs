@@ -12,10 +12,8 @@ use crate::native_bridge::{
     NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntryId,
     NavigationHistoryEntryKey, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
 };
-use crate::{
-    document_runtime::DomHandle, native_bridge::node_runtime_and_handle_from_object,
-    util::context_host_ptr_from_window_object,
-};
+use crate::util::context_host_ptr_for_navigation_owner as context_host_ptr_for_navigation_seed_owner;
+use crate::{document_runtime::DomHandle, native_bridge::node_runtime_and_handle_from_object};
 
 fn capture_navigation_entry_seed_for_holder<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -76,20 +74,6 @@ fn sync_child_navigation_entry_seed_from_owner_with_document_url<'s>(
     {
         host.sync_child_browsing_context_document_url(scope, handle);
     }
-}
-
-fn context_host_ptr_for_navigation_seed_owner(
-    scope: &mut v8::PinScope<'_, '_>,
-    owner: v8::Local<'_, v8::Object>,
-) -> Option<*mut crate::native_bridge::JsContextHost> {
-    context_host_ptr_from_global_bridge(scope)
-        .or_else(|| context_host_ptr_from_window_object(scope, owner))
-        .or_else(|| {
-            owner
-                .get(scope, v8str(scope, "parent").into())
-                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-                .and_then(|parent| context_host_ptr_from_window_object(scope, parent))
-        })
 }
 
 pub(super) fn serialize_navigation_entry_object<'s>(
