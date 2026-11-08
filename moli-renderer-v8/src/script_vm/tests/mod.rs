@@ -2353,6 +2353,7 @@ mod idb_object_store_native_receivers;
 mod exception_constructor_strings;
 mod webidl_receivers;
 mod webidl_trusted_types;
+mod webrtc_signaling_state;
 mod websocket;
 mod websocket_close_info_numbers;
 
