@@ -175,7 +175,7 @@ impl JsContextHost {
                         ("selectionchange", false, false)
                     }
                     RendererPageUserInteractionEventKind::TextControlSelectionChange => {
-                        ("selectionchange", true, true)
+                        ("selectionchange", true, false)
                     }
                     RendererPageUserInteractionEventKind::TextControlSelect => {
                         ("select", true, false)
