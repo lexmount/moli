@@ -112,6 +112,7 @@ impl ServiceWorkerClientType {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ServiceWorkerClientFrameType {
+    Auxiliary,
     Nested,
     None,
     TopLevel,
@@ -120,6 +121,7 @@ pub(crate) enum ServiceWorkerClientFrameType {
 impl ServiceWorkerClientFrameType {
     pub(crate) fn as_webidl_str(self) -> &'static str {
         match self {
+            Self::Auxiliary => "auxiliary",
             Self::Nested => "nested",
             Self::None => "none",
             Self::TopLevel => "top-level",

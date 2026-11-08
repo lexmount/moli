@@ -9,6 +9,7 @@ use crate::{
         ServiceWorkerLifecycleNotification,
         ServiceWorkerNotificationActionNavigateRequestCompletion, ServiceWorkerReadyCompletion,
         ServiceWorkerRegisterCompletion, ServiceWorkerUnregisterCompletion,
+        ServiceWorkerWindowClientStateRequest,
     },
 };
 
@@ -28,6 +29,7 @@ pub(crate) enum RendererServiceWorkerInternalTask {
     ControllerChange(ServiceWorkerControllerChangeCompletion),
     ClientNavigateRequest(ServiceWorkerClientNavigateRequestCompletion),
     ClientFocusRequest(ServiceWorkerClientFocusRequestCompletion),
+    WindowClientStateRequest(ServiceWorkerWindowClientStateRequest),
     ClientsOpenWindowRequest(ServiceWorkerClientsOpenWindowRequestCompletion),
     NotificationActionNavigateRequest(ServiceWorkerNotificationActionNavigateRequestCompletion),
 }
@@ -41,6 +43,7 @@ pub(crate) enum RendererServiceWorkerInternalTaskKind {
     ControllerChange,
     ClientNavigateRequest,
     ClientFocusRequest,
+    WindowClientStateRequest,
     ClientsOpenWindowRequest,
     NotificationActionNavigateRequest,
 }
@@ -58,6 +61,9 @@ impl RendererServiceWorkerInternalTask {
             }
             Self::ClientFocusRequest(_) => {
                 RendererServiceWorkerInternalTaskKind::ClientFocusRequest
+            }
+            Self::WindowClientStateRequest(_) => {
+                RendererServiceWorkerInternalTaskKind::WindowClientStateRequest
             }
             Self::ClientsOpenWindowRequest(_) => {
                 RendererServiceWorkerInternalTaskKind::ClientsOpenWindowRequest

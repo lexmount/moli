@@ -1828,6 +1828,87 @@ async fn navigator_service_worker_message_port_wasm_module_to_sandbox_fires_mess
         .expect("service worker sandbox wasm MessagePort script server should finish");
 }
 #[tokio::test]
+async fn service_worker_client_queries_sample_native_window_state_and_keep_old_wrappers() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/state-worker.js",
+        "text/javascript; charset=utf-8",
+        r#"
+        self.addEventListener('install', e => e.waitUntil(self.skipWaiting()));
+        self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+        let previous;
+        self.addEventListener('message', event => event.waitUntil((async () => {
+            const all = await clients.matchAll({includeUncontrolled: true});
+            const root = all.find(client => client.url === event.data);
+            const one = await clients.get(root.id);
+            event.source.postMessage(JSON.stringify({
+                focus: all.map(client => client.focused),
+                visibility: all.map(client => client.visibilityState),
+                frames: all.map(client => client.frameType),
+                main: [one.focused, one.visibilityState],
+                before: previous ? [previous.focused, previous.visibilityState] : null
+            }));
+            if (previous === one) throw new Error('Clients.get reused an old wrapper');
+            previous = one;
+        })()));
+        "#,
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, context) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(
+        r#"
+        globalThis.__nativeClientState = 'pending';
+        navigator.serviceWorker.onmessage = e => { __nativeClientState = e.data; };
+        (async () => {
+            await navigator.serviceWorker.register('state-worker.js', {scope:'./'});
+            await __moliTestActivatedServiceWorker();
+            navigator.serviceWorker.controller.postMessage(location.href);
+        })();
+    "#,
+    )
+    .unwrap();
+    drain_service_worker_test_until_eval_equals(&mut vm, &context, &loader, "String(__nativeClientState)",
+        r#"{"focus":[true],"visibility":["visible"],"frames":["top-level"],"main":[true,"visible"],"before":null}"#).await;
+
+    vm.eval(
+        r#"
+        document.body.innerHTML = '<input id=main><iframe id=outer></iframe>';
+        const middle = document.getElementById('outer').contentDocument;
+        middle.body.innerHTML = '<iframe id=inner></iframe>';
+        const deep = middle.getElementById('inner').contentDocument;
+        deep.body.innerHTML = '<input id=deep>';
+        deep.getElementById('deep').focus();
+        __nativeClientState = 'pending';
+        navigator.serviceWorker.controller.postMessage(location.href);
+    "#,
+    )
+    .unwrap();
+    drain_service_worker_test_until_eval_equals(&mut vm, &context, &loader, "String(__nativeClientState)",
+        r#"{"focus":[true,true,true],"visibility":["visible","visible","visible"],"frames":["top-level","nested","nested"],"main":[true,"visible"],"before":[true,"visible"]}"#).await;
+
+    vm.eval(
+        r#"
+        document.getElementById('main').focus();
+        __nativeClientState = 'pending';
+        navigator.serviceWorker.controller.postMessage(location.href);
+    "#,
+    )
+    .unwrap();
+    drain_service_worker_test_until_eval_equals(&mut vm, &context, &loader, "String(__nativeClientState)",
+        r#"{"focus":[true,false,false],"visibility":["visible","visible","visible"],"frames":["top-level","nested","nested"],"main":[true,"visible"],"before":[true,"visible"]}"#).await;
+
+    vm.set_document_activity(moli_page_types::DocumentActivity::new(false, false))
+        .unwrap();
+    vm.eval("__nativeClientState = 'pending'; navigator.serviceWorker.controller.postMessage(location.href);").unwrap();
+    drain_service_worker_test_until_eval_equals(&mut vm, &context, &loader, "String(__nativeClientState)",
+        r#"{"focus":[false,false,false],"visibility":["hidden","hidden","hidden"],"frames":["top-level","nested","nested"],"main":[false,"hidden"],"before":[true,"visible"]}"#).await;
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn navigator_service_worker_clients_query_live_window_clients() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
         "/app/worker.js",
@@ -1934,7 +2015,7 @@ async fn navigator_service_worker_clients_query_live_window_clients() {
 
     let expected_page_url = format!("{base_url}/app/page.html#client-fragment");
     let expected = format!(
-        r#"{{"controlledLength":1,"allLength":1,"firstId":"client-0000000000000001","firstIdIsInternal":false,"firstUrl":"{expected_page_url}","firstType":"window","firstFrameType":"top-level","firstLifecycleState":"active","firstVisibilityState":"visible","firstFocused":false,"firstPostMessage":"function","firstFocus":"function","firstNavigate":"function","clientsOpenWindow":"function","focusError":{{"name":"InvalidAccessError","message":"Not allowed to focus a window.","isDomException":true}},"openWindowError":{{"name":"InvalidAccessError","message":"Not allowed to open a window.","isDomException":true}},"navigatePromiseThen":"function","navigateSettled":false,"sameId":true,"workerLength":0}}"#
+        r#"{{"controlledLength":1,"allLength":1,"firstId":"client-0000000000000001","firstIdIsInternal":false,"firstUrl":"{expected_page_url}","firstType":"window","firstFrameType":"top-level","firstLifecycleState":"active","firstVisibilityState":"visible","firstFocused":true,"firstPostMessage":"function","firstFocus":"function","firstNavigate":"function","clientsOpenWindow":"function","focusError":{{"name":"InvalidAccessError","message":"Not allowed to focus a window.","isDomException":true}},"openWindowError":{{"name":"InvalidAccessError","message":"Not allowed to open a window.","isDomException":true}},"navigatePromiseThen":"function","navigateSettled":false,"sameId":true,"workerLength":0}}"#
     );
     drain_service_worker_test_until_eval_equals(
         &mut vm,

@@ -132,6 +132,10 @@ enum ServiceWorkerRuntimeCompletionKind {
         query: ServiceWorkerClientQuery,
         owner: ServiceWorkerRunOwner,
     },
+    ClientQueryCompleted {
+        result: super::clients::ServiceWorkerClientQueryResult,
+        owner: ServiceWorkerRunOwner,
+    },
     ClientNavigate {
         navigate: ServiceWorkerClientNavigate,
         owner: ServiceWorkerRunOwner,
@@ -498,6 +502,17 @@ impl ServiceWorkerRuntimeCompletion {
         }
     }
 
+    pub(super) fn client_query_completed(
+        runtime_service: WeakServiceWorkerRuntimeService,
+        owner: ServiceWorkerRunOwner,
+        result: super::clients::ServiceWorkerClientQueryResult,
+    ) -> Self {
+        Self {
+            runtime_service,
+            kind: ServiceWorkerRuntimeCompletionKind::ClientQueryCompleted { owner, result },
+        }
+    }
+
     pub(super) fn client_navigate(
         runtime_service: WeakServiceWorkerRuntimeService,
         navigate: ServiceWorkerClientNavigate,
@@ -779,6 +794,10 @@ impl ServiceWorkerRuntimeCompletion {
                 self.runtime_service
                     .finish_client_query_requested(query, owner.cloned_run_identity());
             }
+            ServiceWorkerRuntimeCompletionKind::ClientQueryCompleted { result, owner } => {
+                self.runtime_service
+                    .finish_client_query_completed(owner, result);
+            }
             ServiceWorkerRuntimeCompletionKind::ClientNavigate { navigate, owner } => {
                 if owner.version_id() != navigate.source_version_id {
                     return;
@@ -1010,6 +1029,11 @@ impl fmt::Debug for ServiceWorkerRuntimeCompletion {
                 .field("request_id", &query.request_id)
                 .field("registration_id", &query.registration_id)
                 .field("version_id", &query.version_id)
+                .field("owner", owner)
+                .finish_non_exhaustive(),
+            ServiceWorkerRuntimeCompletionKind::ClientQueryCompleted { result, owner } => f
+                .debug_struct("ServiceWorkerRuntimeCompletion::ClientQueryCompleted")
+                .field("request_id", &result.request_id)
                 .field("owner", owner)
                 .finish_non_exhaustive(),
             ServiceWorkerRuntimeCompletionKind::ClientNavigate { navigate, owner } => f

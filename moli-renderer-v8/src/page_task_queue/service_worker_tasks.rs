@@ -4,6 +4,7 @@ use crate::types::{
     ServiceWorkerControllerChangeCompletion, ServiceWorkerLifecycleNotification,
     ServiceWorkerNotificationActionNavigateRequestCompletion, ServiceWorkerReadyCompletion,
     ServiceWorkerRegisterCompletion, ServiceWorkerUnregisterCompletion,
+    ServiceWorkerWindowClientStateRequest,
 };
 
 use super::{
@@ -94,6 +95,15 @@ impl RendererPageServiceWorkerTaskSender {
     ) -> Result<(), RendererPageServiceWorkerTaskRouteClosed> {
         self.send_internal(RendererServiceWorkerInternalTask::ClientFocusRequest(
             completion,
+        ))
+    }
+
+    pub(crate) fn send_service_worker_window_client_state_request(
+        &self,
+        request: ServiceWorkerWindowClientStateRequest,
+    ) -> Result<(), RendererPageServiceWorkerTaskRouteClosed> {
+        self.send_internal(RendererServiceWorkerInternalTask::WindowClientStateRequest(
+            request,
         ))
     }
 

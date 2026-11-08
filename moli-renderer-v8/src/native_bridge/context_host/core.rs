@@ -674,6 +674,7 @@ impl PageScriptHost {
             next_javascript_dialog_id: 1,
             pending_network_output: Vec::new(),
             document_focus_changes: HashMap::new(),
+            window_focus_history: HashMap::new(),
             focused_viewport_document: None,
             subresource_activity_epoch: 0,
             subresource_last_activity_at: std::time::Instant::now(),

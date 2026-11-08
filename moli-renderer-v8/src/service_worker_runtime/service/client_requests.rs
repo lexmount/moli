@@ -130,8 +130,26 @@ impl ServiceWorkerRuntimeService {
         run: RendererServiceWorkerRunIdentity,
     ) {
         let version_id = query.version_id;
-        let result = self.query_clients(&query);
-        self.finish_client_query(version_id, run, result);
+        let Some((result, windows)) = self.query_clients_with_window_targets(&query, &run) else {
+            return;
+        };
+        if windows.is_empty() {
+            self.finish_client_query(version_id, run, result);
+            return;
+        }
+        let accumulator =
+            crate::service_worker_runtime::client_query::ServiceWorkerClientQueryAccumulator::new(
+                self.downgrade(),
+                ServiceWorkerRunOwner::new(version_id, run),
+                result,
+                windows.len(),
+            );
+        for (target, sender) in windows {
+            let reply = accumulator.reply_for(target.client_id);
+            let _ = sender.send_service_worker_window_client_state_request(
+                crate::types::ServiceWorkerWindowClientStateRequest { target, reply },
+            );
+        }
     }
 
     pub(super) fn finish_client_navigate_requested(
