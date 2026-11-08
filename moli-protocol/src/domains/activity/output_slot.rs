@@ -40,6 +40,7 @@ pub(in crate::domains) enum ProtocolOutputSlot {
     JavascriptDialog,
     WindowOpen,
     Popup,
+    FocusWindowClient,
     CloseAuxiliaryWindow,
     NavigateAuxiliaryWindow,
     SharedWorkerTargetLifecycle,
@@ -72,6 +73,7 @@ impl ProtocolOutputSlot {
             | Self::Download
             | Self::JavascriptDialog
             | Self::Popup
+            | Self::FocusWindowClient
             | Self::CloseAuxiliaryWindow
             | Self::NavigateAuxiliaryWindow
             | Self::SharedWorkerTargetLifecycle
@@ -130,6 +132,7 @@ impl ProtocolOutputSlot {
             | Self::JavascriptDialog
             | Self::WindowOpen
             | Self::Popup
+            | Self::FocusWindowClient
             // A blob: DedicatedWorker can be created by a Runtime command that
             // awaits the worker's first message. With pause-on-start auto-attach,
             // Chromium exposes attachedToTarget before that command completes so
@@ -229,6 +232,8 @@ impl ProtocolOutputSlot {
                 crate::domains::page::PreparedPageOutputClose::take(payloads)
                     .map(PreparedProtocolOutputWait::Close)
             }
+            Self::FocusWindowClient => crate::domains::page::window_client_focus::PreparedWindowClientFocusProjection::take(payloads)
+                .map(PreparedProtocolOutputWait::WindowClientFocus),
             Self::PendingSubresourceContinueEvents => {
                 crate::domains::network::PreparedSubresourceProjection::take(
                     conn, owner, payloads, context,
@@ -260,6 +265,9 @@ impl ProtocolOutputSlot {
 
 pub(crate) enum PreparedProtocolOutputWait {
     Close(crate::domains::page::PreparedPageOutputClose),
+    WindowClientFocus(
+        crate::domains::page::window_client_focus::PreparedWindowClientFocusProjection,
+    ),
     Subresource(crate::domains::network::PreparedSubresourceProjection),
     Worker(crate::domains::target::WorkerTargetOutputProjection),
     Runtime(crate::domains::runtime::PreparedRuntimeInspectorProjection),
@@ -274,6 +282,7 @@ impl PreparedProtocolOutputWait {
     ) -> LocalBoxFuture<'a, Result<()>> {
         match self {
             Self::Close(projection) => projection.run(driver, context).boxed_local(),
+            Self::WindowClientFocus(projection) => projection.run(driver, context).boxed_local(),
             Self::Subresource(projection) => projection.run(driver, context).boxed_local(),
             Self::Worker(projection) => projection.run(driver, context).boxed_local(),
             Self::Runtime(projection) => projection.run(driver, context).boxed_local(),
@@ -320,6 +329,7 @@ mod tests {
             (JavascriptDialog, OwnerAction, BeforeResponse),
             (WindowOpen, ProtocolObservation, BeforeResponse),
             (Popup, OwnerAction, BeforeResponse),
+            (FocusWindowClient, OwnerAction, BeforeResponse),
             (SharedWorkerTargetLifecycle, OwnerAction, BeforeResponse),
             (ServiceWorkerTargetLifecycle, OwnerAction, BeforeResponse),
             (DedicatedWorkerTargetLifecycle, OwnerAction, BeforeResponse),

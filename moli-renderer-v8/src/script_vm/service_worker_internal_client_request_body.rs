@@ -132,12 +132,11 @@ impl ScriptVm {
         &mut self,
         completion: ServiceWorkerClientFocusRequestCompletion,
     ) -> Result<ServiceWorkerInternalBodyEffect> {
-        let owner_is_current = self
+        let owner = self
             ._context_host
             .borrow()
-            .service_worker_window_client_completion_owner(completion.target)
-            .is_some();
-        if !owner_is_current {
+            .service_worker_window_client_completion_owner(completion.target);
+        let Some(owner) = owner else {
             self._context_host
                 .borrow()
                 .browser_context_runtime()
@@ -149,23 +148,33 @@ impl ScriptVm {
                     result: Err(crate::runtime::ServiceWorkerClientFocusError::not_found()),
                 });
             return Ok(ServiceWorkerInternalBodyEffect::ExactTargetUnavailable);
-        }
+        };
 
-        let browser_context_runtime = self._context_host.borrow().browser_context_runtime();
-        let result = browser_context_runtime
-            .service_worker_runtime()
-            .client_focus_result_for_current_window_client(
-                completion.source_version_id,
-                completion.target.client_id,
-            );
-        browser_context_runtime
-            .service_worker_runtime()
-            .enqueue_client_focus_completed(crate::types::ServiceWorkerClientFocusCompletion {
-                request_id: completion.request_id,
-                source_version_id: completion.source_version_id,
-                source_run: completion.source_run,
-                result,
-            });
+        let host = self._context_host.borrow();
+        let target = completion.target;
+        let browser_context_runtime = host.browser_context_runtime();
+        let service = browser_context_runtime.service_worker_runtime();
+        let is_current = service.window_client_focus_currentness(&completion);
+        let reply = service.window_client_focus_reply(completion);
+        let Some((_, source_document, window)) =
+            host.renderer_window_document_source_for_dispatch_scope(owner.dispatch_scope())
+        else {
+            return Ok(ServiceWorkerInternalBodyEffect::ExactTargetUnavailable);
+        };
+        let sender = host.service_worker_task_sender();
+        let request = crate::types::ServiceWorkerWindowClientStateRequest { target, reply };
+        host.append_live_turn_owner_action(crate::runtime::RendererOwnerAction::FocusWindowClient(
+            crate::runtime::RendererPendingWindowClientFocus::new(
+                source_document,
+                window,
+                is_current,
+                move |activated| {
+                    if activated {
+                        let _ = sender.send_service_worker_window_client_focus_request(request);
+                    }
+                },
+            ),
+        ));
         Ok(ServiceWorkerInternalBodyEffect::InternalActionApplied)
     }
 

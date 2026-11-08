@@ -95,6 +95,7 @@ mod pdf_output;
 pub(crate) use pdf_output::PreparedPdfOutput;
 mod popup;
 mod preload;
+pub(crate) mod window_client_focus;
 pub(crate) use completion::PageCommandCompletionError;
 pub(crate) use preload::PreparedPageAddPreload;
 mod prepared_navigation;

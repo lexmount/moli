@@ -30,6 +30,7 @@ pub(crate) enum RendererServiceWorkerInternalTask {
     ClientNavigateRequest(ServiceWorkerClientNavigateRequestCompletion),
     ClientFocusRequest(ServiceWorkerClientFocusRequestCompletion),
     WindowClientStateRequest(ServiceWorkerWindowClientStateRequest),
+    WindowClientFocusRequest(ServiceWorkerWindowClientStateRequest),
     ClientsOpenWindowRequest(ServiceWorkerClientsOpenWindowRequestCompletion),
     NotificationActionNavigateRequest(ServiceWorkerNotificationActionNavigateRequestCompletion),
 }
@@ -44,6 +45,7 @@ pub(crate) enum RendererServiceWorkerInternalTaskKind {
     ClientNavigateRequest,
     ClientFocusRequest,
     WindowClientStateRequest,
+    WindowClientFocusRequest,
     ClientsOpenWindowRequest,
     NotificationActionNavigateRequest,
 }
@@ -64,6 +66,9 @@ impl RendererServiceWorkerInternalTask {
             }
             Self::WindowClientStateRequest(_) => {
                 RendererServiceWorkerInternalTaskKind::WindowClientStateRequest
+            }
+            Self::WindowClientFocusRequest(_) => {
+                RendererServiceWorkerInternalTaskKind::WindowClientFocusRequest
             }
             Self::ClientsOpenWindowRequest(_) => {
                 RendererServiceWorkerInternalTaskKind::ClientsOpenWindowRequest

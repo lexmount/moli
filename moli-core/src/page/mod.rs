@@ -118,7 +118,7 @@ pub use moli_renderer_v8::{
     RendererPendingDownloadResponse, RendererPendingFileChooserActivation,
     RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
     RendererPendingSameDocumentNavigation, RendererPendingTopLevelHistoryTraversal,
-    RendererPendingWindowOpenEvent, RendererPerformanceMetricSnapshot,
+    RendererPendingWindowClientFocus, RendererPendingWindowOpenEvent, RendererPerformanceMetricSnapshot,
     RendererPointerEventProperties, RendererPopupActivationSource, RendererPopupDisposition,
     RendererPrintToPdfReply, RendererPrintToPdfRequest, RendererResourceContentBody,
     RendererResourceSearchRequest, RendererResourceTextSearchOutcome, RendererRuntimeCommandOutput,

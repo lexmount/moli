@@ -477,8 +477,10 @@ impl ServiceWorkerRuntimeService {
         &self,
         source_version_id: ServiceWorkerVersionId,
         client_id: ServiceWorkerClientId,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
+        native_state: Option<crate::service_worker_runtime::ServiceWorkerWindowClientState>,
     ) -> Result<ServiceWorkerClientSnapshot, ServiceWorkerClientFocusError> {
-        let mut state = self.inner.state.lock();
+        let state = self.inner.state.lock();
         let Some(source_version) = state.versions.get(&source_version_id) else {
             return Err(ServiceWorkerClientFocusError::not_found());
         };
@@ -495,6 +497,9 @@ impl ServiceWorkerRuntimeService {
         if client.client_type != ServiceWorkerClientType::Window {
             return Err(ServiceWorkerClientFocusError::not_found());
         }
+        if client.document_owner != document_owner {
+            return Err(ServiceWorkerClientFocusError::not_found());
+        }
         if client.storage_key != source_registration.storage_key {
             return Err(ServiceWorkerClientFocusError::not_found());
         }
@@ -504,16 +509,80 @@ impl ServiceWorkerRuntimeService {
         if client.discarded_or_frozen {
             return Err(ServiceWorkerClientFocusError::inactive());
         }
-        for client in state.live_clients.values_mut() {
-            client.focused = false;
-        }
-        let Some(client) = state.live_clients.get_mut(&client_id) else {
+        let Some(native_state) = native_state else {
             return Err(ServiceWorkerClientFocusError::not_found());
         };
-        client.focused = true;
-        Ok(service_worker_client_snapshot_with_controlled(
-            client, controlled,
-        ))
+        if !native_state.focused {
+            return Err(ServiceWorkerClientFocusError::inactive());
+        }
+        let mut snapshot = service_worker_client_snapshot_with_controlled(client, controlled);
+        snapshot.frame_type = native_state.frame_type;
+        snapshot.visibility_state = native_state.visibility_state;
+        snapshot.focused = native_state.focused;
+        Ok(snapshot)
+    }
+
+    pub(crate) fn window_client_focus_reply(
+        &self,
+        completion: crate::types::ServiceWorkerClientFocusRequestCompletion,
+    ) -> crate::service_worker_runtime::ServiceWorkerWindowClientStateReply {
+        let service = self.downgrade();
+        crate::service_worker_runtime::ServiceWorkerWindowClientStateReply::new(
+            completion.target.client_id,
+            move |native_state| {
+                let Some(service) = service.upgrade() else {
+                    return;
+                };
+                let result = service.client_focus_result_for_current_window_client(
+                    completion.source_version_id,
+                    completion.target.client_id,
+                    Some(completion.target.document_owner),
+                    native_state,
+                );
+                service.enqueue_client_focus_completed(
+                    crate::types::ServiceWorkerClientFocusCompletion {
+                        request_id: completion.request_id,
+                        source_version_id: completion.source_version_id,
+                        source_run: completion.source_run,
+                        result,
+                    },
+                );
+            },
+        )
+    }
+
+    pub(crate) fn window_client_focus_currentness(
+        &self,
+        completion: &crate::types::ServiceWorkerClientFocusRequestCompletion,
+    ) -> Box<dyn Fn() -> bool + Send + Sync> {
+        let service = self.downgrade();
+        let version_id = completion.source_version_id;
+        let run = completion.source_run.clone();
+        let target = completion.target;
+        Box::new(move || {
+            let Some(service) = service.upgrade() else {
+                return false;
+            };
+            let state = service.inner.state.lock();
+            let Some(version) = state.versions.get(&version_id) else {
+                return false;
+            };
+            if version.run != run {
+                return false;
+            }
+            let Some(registration) = state.registrations.get(&version.registration_id) else {
+                return false;
+            };
+            state
+                .live_clients
+                .get(&target.client_id)
+                .is_some_and(|client| {
+                    client.window_completion_target() == Some(target)
+                        && client.execution_ready
+                        && !client.discarded_or_frozen
+                        && client.storage_key == registration.storage_key
+                })
+        })
     }
 
     fn finish_client_navigate(

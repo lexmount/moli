@@ -2725,7 +2725,7 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_document_ow
         .expect("service worker stale owner script server should finish");
 }
 #[tokio::test]
-async fn service_worker_client_focus_request_marks_current_page_focused() {
+async fn service_worker_client_focus_request_does_not_manufacture_cached_focus() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
         "/app/worker.js",
         "text/javascript; charset=utf-8",
@@ -2819,7 +2819,10 @@ async fn service_worker_client_focus_request_marks_current_page_focused() {
         .iter()
         .find(|client| client.id == crate::runtime::ServiceWorkerClientId::from_u64_for_test(1))
         .expect("current page client should be queryable");
-    assert!(current.focused);
+    assert!(
+        !current.focused,
+        "a standalone fixture cannot claim focus before browser activation and native sampling"
+    );
 
     server
         .await

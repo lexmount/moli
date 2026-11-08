@@ -22,6 +22,57 @@ fn take_next_user_interaction_task_for_authorization_test(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn service_worker_window_focus_samples_only_after_its_exact_user_interaction_task() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader, Url::parse("https://example.test/native-focus")?);
+        page_vm.vm_mut().set_document_activity(moli_page_types::DocumentActivity::new(true, true))?;
+        page_vm.vm_mut().eval("document.body.innerHTML='<input id=control value=abcdef>'; control.focus(); control.setSelectionRange(2,4); 'ready'")?;
+        let target = page_vm.vm().service_worker_internal_window_client_target_for_test(
+            crate::native_bridge::OwnerDispatchScope::Top).unwrap();
+        let sampled = std::sync::Arc::new(parking_lot::Mutex::new(None));
+        let observed = sampled.clone();
+        let reply = crate::service_worker_runtime::ServiceWorkerWindowClientStateReply::new(
+            target.client_id, move |state| *observed.lock() = Some(state));
+        let root = page_vm.document_lifecycle.identity().document;
+        page_vm.service_worker_task_sender_for_root_for_test(root)
+            .send_service_worker_window_client_focus_request(
+                crate::types::ServiceWorkerWindowClientStateRequest { target, reply }).unwrap();
+        assert!(page_vm.run_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::ServiceWorkerInternal, &loader).await?);
+        assert!(sampled.lock().is_none(), "queuing cannot sample or claim native focus");
+        // Focus and setSelectionRange queued earlier selection tasks. Preserve
+        // their FIFO position instead of selecting a focus payload past them.
+        for _ in 0..16 {
+            if sampled.lock().is_some() { break; }
+            let task = take_next_user_interaction_task_for_authorization_test(&mut page_vm).unwrap();
+            let outcome = page_vm.apply_selected_page_user_interaction_turn(task)?;
+            assert_eq!(outcome.action.target_effect, PageUserInteractionTargetEffect::AppliedToCurrentOwner);
+            page_vm.finish_selected_page_callback_task(&loader).await?;
+        }
+        assert!(sampled.lock().as_ref().unwrap().as_ref().unwrap().focused);
+        assert_eq!(page_vm.vm_mut().eval("[document.activeElement.id, control.selectionStart, control.selectionEnd].join(',')")?, "control,2,4");
+
+        let cancelled = std::sync::Arc::new(parking_lot::Mutex::new(None));
+        let observed = cancelled.clone();
+        let reply = crate::service_worker_runtime::ServiceWorkerWindowClientStateReply::new(
+            target.client_id, move |state| *observed.lock() = Some(state));
+        page_vm.service_worker_task_sender_for_root_for_test(root)
+            .send_service_worker_window_client_focus_request(
+                crate::types::ServiceWorkerWindowClientStateRequest { target, reply }).unwrap();
+        assert!(page_vm.run_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::ServiceWorkerInternal, &loader).await?);
+        let task = take_next_user_interaction_task_for_authorization_test(&mut page_vm).unwrap();
+        page_vm.vm_mut().eval("document.open(); document.write('<body>replacement</body>'); document.close(); 'replaced'")?;
+        let _ = page_vm.apply_selected_page_user_interaction_turn(task)?;
+        assert!(cancelled.lock().as_ref().unwrap().is_none(),
+            "a replaced Document cancels instead of sampling the replacement realm");
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("native Window-client focus task test");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn user_interaction_body_cleans_up_callbacks_before_selected_completion() {
     run_page_vm_async_test(async move {
         let loader =
