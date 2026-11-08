@@ -165,16 +165,11 @@ fn call_original_worker_console_method<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     method_name: &'static str,
 ) {
-    let global = scope.get_current_context().global(scope);
-    let Some(original_console) = get_private_value(scope, global, WORKER_ORIGINAL_CONSOLE_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    let Some(method) = original_console
-        .get(scope, v8str(scope, method_name).into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
+    let Some((original_console, method)) = crate::console_forwarding::captured_console_method(
+        scope,
+        WORKER_ORIGINAL_CONSOLE_SLOT,
+        method_name,
+    ) else {
         return;
     };
 
