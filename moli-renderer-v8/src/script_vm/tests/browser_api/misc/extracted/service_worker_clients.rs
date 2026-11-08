@@ -1,6 +1,169 @@
 use super::*;
 
 #[tokio::test]
+async fn service_worker_message_source_samples_native_window_state_and_keeps_old_wrappers() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/source-worker.js",
+        "text/javascript; charset=utf-8",
+        r#"
+        self.addEventListener('install', e => e.waitUntil(self.skipWaiting()));
+        self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+        let previous;
+        self.addEventListener('message', event => {
+            const source = event.source;
+            event.data.port.postMessage(JSON.stringify({
+                state: [source.url, source.frameType, source.focused,
+                        source.visibilityState, event.origin],
+                before: previous ? [previous.frameType, previous.focused,
+                                    previous.visibilityState] : null
+            }));
+            if (source === previous) throw new Error('Message source reused an old wrapper');
+            previous = source;
+        });
+        "#,
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, context) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+        globalThis.__nativeMessageSource = 'pending';
+        globalThis.__sendNativeSource = (realm, prepare) => {
+            const channel = new MessageChannel();
+            channel.port1.onmessage = event => { __nativeMessageSource = event.data; };
+            const payload = {port: channel.port2};
+            if (prepare) Object.defineProperty(payload, 'prepare', {enumerable:true, get:prepare});
+            realm.__nativeSourcePayload = payload;
+            __nativeMessageSource = 'pending';
+            realm.eval('__nativeSourceWorker.postMessage(__nativeSourcePayload, [__nativeSourcePayload.port])');
+        };
+        (async () => {
+            await navigator.serviceWorker.register('source-worker.js', {scope:'./'});
+            await __moliTestActivatedServiceWorker();
+            globalThis.__nativeSourceWorker = navigator.serviceWorker.controller;
+            __sendNativeSource(globalThis);
+        })();
+    "#).unwrap();
+    let initial = format!(
+        r#"{{"state":["{base_url}/app/page.html","top-level",true,"visible","{base_url}"],"before":null}}"#
+    );
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &context,
+        &loader,
+        "String(__nativeMessageSource)",
+        &initial,
+    )
+    .await;
+
+    vm.eval(
+        r#"
+        document.body.innerHTML = '<input id=main><iframe id=outer></iframe>';
+        const middle = document.getElementById('outer').contentDocument;
+        middle.body.innerHTML = '<iframe id=inner></iframe>';
+        const deep = middle.getElementById('inner').contentDocument;
+        deep.body.innerHTML = '<input id=deep>';
+        const deepWindow = deep.defaultView;
+        deep.hasFocus = () => { throw new Error('author hasFocus must not be called'); };
+        deepWindow.eval(`(async () => {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            if (registrations.length !== 1) throw new Error('expected one registration');
+            globalThis.__nativeSourceWorker = registrations[0].active;
+            parent.parent.__nativeChildSourceReady = true;
+        })().catch(error => { parent.parent.__nativeChildSourceReady = 'error:' + String(error); })`);
+    "#,
+    )
+    .unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &context,
+        &loader,
+        "String(globalThis.__nativeChildSourceReady)",
+        "true",
+    )
+    .await;
+    vm.eval("__sendNativeSource(deepWindow, () => { deep.getElementById('deep').focus(); return true; });").unwrap();
+    let focused_child = format!(
+        r#"{{"state":["about:blank","nested",true,"visible","{base_url}"],"before":["top-level",true,"visible"]}}"#
+    );
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &context,
+        &loader,
+        "String(__nativeMessageSource)",
+        &focused_child,
+    )
+    .await;
+
+    vm.eval("document.getElementById('main').focus(); __sendNativeSource(deepWindow);")
+        .unwrap();
+    let unfocused_child = format!(
+        r#"{{"state":["about:blank","nested",false,"visible","{base_url}"],"before":["nested",true,"visible"]}}"#
+    );
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &context,
+        &loader,
+        "String(__nativeMessageSource)",
+        &unfocused_child,
+    )
+    .await;
+
+    vm.set_document_activity(moli_page_types::DocumentActivity::new(false, false))
+        .unwrap();
+    vm.eval("__sendNativeSource(globalThis)").unwrap();
+    let background = format!(
+        r#"{{"state":["{base_url}/app/page.html","top-level",false,"hidden","{base_url}"],"before":["nested",false,"visible"]}}"#
+    );
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &context,
+        &loader,
+        "String(__nativeMessageSource)",
+        &background,
+    )
+    .await;
+
+    vm.set_document_activity(moli_page_types::DocumentActivity::new(true, true))
+        .unwrap();
+    vm.eval(
+        r#"
+        const sourcePopup = window.open('about:blank', 'native-source');
+        sourcePopup.eval(`(async () => {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            if (registrations.length !== 1) throw new Error('expected one registration');
+            globalThis.__nativeSourceWorker = registrations[0].active;
+            opener.__nativePopupSourceReady = true;
+        })().catch(error => { opener.__nativePopupSourceReady = 'error:' + String(error); })`);
+    "#,
+    )
+    .unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &context,
+        &loader,
+        "String(globalThis.__nativePopupSourceReady)",
+        "true",
+    )
+    .await;
+    vm.eval("__sendNativeSource(sourcePopup)").unwrap();
+    let auxiliary = format!(
+        r#"{{"state":["about:blank","auxiliary",true,"visible","{base_url}"],"before":["top-level",false,"hidden"]}}"#
+    );
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &context,
+        &loader,
+        "String(__nativeMessageSource)",
+        &auxiliary,
+    )
+    .await;
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn navigator_service_worker_child_frame_controller_uses_child_client() {
     let (base_url, server) = spawn_service_worker_response_server(vec![
         (
