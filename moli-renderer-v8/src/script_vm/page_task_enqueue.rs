@@ -783,3 +783,17 @@ impl ScriptVm {
             .lifecycle_error_messages_for_testing()
     }
 }
+
+impl ScriptVm {
+    /// Reconcile a selected script callback after its existing task body.
+    pub(super) fn finish_selected_page_script_callback_checkpoint(&mut self) -> Result<()> {
+        let result = self.perform_owner_lane_task_microtask_checkpoints();
+        if result.is_ok() {
+            self.sync_child_browsing_context_records();
+        }
+        self.finish_runtime_turn_with_style_drain(
+            crate::style_engine::StyleInvalidationTurnExitBoundary::SelectedPageTask,
+            result,
+        )
+    }
+}
