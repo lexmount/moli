@@ -359,6 +359,17 @@ impl ServiceWorkerRuntimeService {
         self.signal_service_lane_wake();
     }
 
+    pub(in crate::service_worker_runtime) fn enqueue_client_query_completed(
+        &self,
+        owner: ServiceWorkerRunOwner,
+        result: ServiceWorkerClientQueryResult,
+    ) {
+        self.enqueue_service_lane_completion(
+            ServiceWorkerRuntimeCompletion::client_query_completed(self.downgrade(), owner, result),
+        );
+        self.signal_service_lane_wake();
+    }
+
     pub(crate) fn enqueue_client_navigate(
         &self,
         navigate: ServiceWorkerClientNavigate,
@@ -787,6 +798,17 @@ impl WeakServiceWorkerRuntimeService {
             return;
         };
         service.finish_client_query_requested(query, run);
+    }
+
+    pub(in crate::service_worker_runtime) fn finish_client_query_completed(
+        &self,
+        owner: ServiceWorkerRunOwner,
+        result: ServiceWorkerClientQueryResult,
+    ) {
+        let Some(service) = self.upgrade() else {
+            return;
+        };
+        service.finish_client_query(owner.version_id(), owner.cloned_run_identity(), result);
     }
 
     pub(in crate::service_worker_runtime) fn finish_client_navigate_requested(

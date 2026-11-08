@@ -50,6 +50,7 @@ pub(crate) enum RendererPageUserInteractionTaskKind {
     Event(RendererPageUserInteractionEventKind),
     DataTransferGetAsString,
     InputImage,
+    ServiceWorkerWindowClientState,
 }
 
 pub(crate) type RendererPageUserInteractionOwner = RendererPageWindowDocumentTaskOwner;
