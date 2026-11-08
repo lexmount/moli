@@ -819,7 +819,11 @@ fn service_worker_get_client_locked(
     if !service_worker_registration_can_see_client(registration, client) {
         return None;
     }
-    Some(service_worker_client_snapshot(registration, client))
+    Some(service_worker_client_snapshot_with_controlled(
+        client,
+        registration.active_version_id == Some(version_id)
+            && registration.controlled_client_ids.contains(&client.id),
+    ))
 }
 
 fn service_worker_match_all_clients_locked(
@@ -839,6 +843,7 @@ fn service_worker_match_all_clients_locked(
         .filter_map(|client| {
             service_worker_client_visible_to_query(
                 registration,
+                version_id,
                 client.id,
                 client,
                 options.include_uncontrolled,
@@ -856,24 +861,17 @@ fn service_worker_query_registration_locked(
     version_id: ServiceWorkerVersionId,
 ) -> Option<&ServiceWorkerRegistration> {
     let version = state.versions.get(&version_id)?;
-    if version.registration_id != registration_id
-        || !matches!(
-            version.lifecycle_state,
-            ServiceWorkerVersionLifecycleState::Activating
-                | ServiceWorkerVersionLifecycleState::Activated
-        )
-    {
+    if version.registration_id != registration_id {
         return None;
     }
-    let registration = state.registrations.get(&registration_id)?;
-    if registration.pending_unregistration || registration.active_version_id != Some(version_id) {
-        return None;
-    }
-    Some(registration)
+    // Clients queries are also available during evaluation and installation,
+    // and while a live worker's registration is being unregistered.
+    state.registrations.get(&registration_id)
 }
 
 fn service_worker_client_visible_to_query(
     registration: &ServiceWorkerRegistration,
+    version_id: ServiceWorkerVersionId,
     client_id: ServiceWorkerClientId,
     client: &ServiceWorkerClient,
     include_uncontrolled: bool,
@@ -890,7 +888,8 @@ fn service_worker_client_visible_to_query(
     if !service_worker_client_is_exposed_to_clients_api(client) || !client.secure_context {
         return None;
     }
-    let controlled = registration.controlled_client_ids.contains(&client_id);
+    let controlled = registration.active_version_id == Some(version_id)
+        && registration.controlled_client_ids.contains(&client_id);
     if !include_uncontrolled && !controlled {
         return None;
     }
