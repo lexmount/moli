@@ -5,6 +5,7 @@ use super::pdb_compat::{
     style_entry_is_pdb_supplemental_side_entry, style_property_affected_names_with_pdb,
 };
 use super::*;
+pub(super) use crate::css_style::serialize_text_decoration_shorthand_value as serialize_pdb_text_decoration_shorthand;
 
 pub(crate) fn style_entries_css_text_with_pdb(entries: &[StyleEntry]) -> Option<String> {
     if entries.iter().any(|entry| {
@@ -428,42 +429,6 @@ pub(super) fn pdb_text_decoration_longhand_entry(
         value,
         priority: block.property_priority(property),
     })
-}
-
-pub(super) fn serialize_pdb_text_decoration_shorthand(
-    line: &str,
-    thickness: &str,
-    style: &str,
-    color: &str,
-) -> String {
-    let line = text_decoration_component_or_initial(line, "none");
-    let thickness = text_decoration_component_or_initial(thickness, "auto");
-    let style = text_decoration_component_or_initial(style, "solid");
-    let color = text_decoration_component_or_initial(color, "currentcolor");
-    let defaults =
-        line == "none" && thickness == "auto" && style == "solid" && color == "currentcolor";
-
-    let mut values = Vec::new();
-    if defaults || line != "none" {
-        values.push(line);
-    }
-    if thickness != "auto" {
-        values.push(thickness);
-    }
-    if style != "solid" {
-        values.push(style);
-    }
-    if !color.eq_ignore_ascii_case("currentcolor") {
-        values.push(color);
-    }
-    values.join(" ")
-}
-
-pub(super) fn text_decoration_component_or_initial<'a>(
-    value: &'a str,
-    initial: &'static str,
-) -> &'a str {
-    if value.is_empty() { initial } else { value }
 }
 
 pub(super) fn pdb_overflow_longhand_value(
