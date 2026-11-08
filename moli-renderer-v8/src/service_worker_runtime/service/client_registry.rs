@@ -786,7 +786,6 @@ fn service_worker_matching_registration_id_for_client(
         .registrations
         .values()
         .filter(|registration| !registration.pending_unregistration)
-        .filter(|registration| registration.active_version_id.is_some())
         .filter(|registration| service_worker_registration_matches_client(registration, client))
         .max_by_key(|registration| registration.scope_url.as_str().len())
         .map(|registration| registration.id)

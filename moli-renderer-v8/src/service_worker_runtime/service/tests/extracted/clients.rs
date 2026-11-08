@@ -77,6 +77,62 @@ fn new_client_selects_longest_active_controller_on_registration() {
     assert_eq!(diagnostics.controlled_client_count, 2);
 }
 #[test]
+fn new_client_does_not_fall_back_to_shorter_active_scope() {
+    for lifecycle in [
+        ServiceWorkerVersionLifecycleState::Installing,
+        ServiceWorkerVersionLifecycleState::Installed,
+    ] {
+        let service = new_service_worker_runtime_service();
+        let short_registration_id = ServiceWorkerRegistrationId(1);
+        let long_registration_id = ServiceWorkerRegistrationId(2);
+        let long_version_id = ServiceWorkerVersionId(2);
+        insert_registered_version(
+            &service,
+            short_registration_id,
+            ServiceWorkerVersionId(1),
+            url("https://example.test/short-worker.js"),
+            url("https://example.test/app/"),
+            [],
+        );
+        insert_registered_version(
+            &service,
+            long_registration_id,
+            long_version_id,
+            url("https://example.test/long-worker.js"),
+            url("https://example.test/app/nested/"),
+            [],
+        );
+        {
+            let mut state = service.inner.state.lock();
+            let registration = state.registrations.get_mut(&long_registration_id).unwrap();
+            registration.active_version_id = None;
+            if lifecycle == ServiceWorkerVersionLifecycleState::Installing {
+                registration.installing_version_id = Some(long_version_id);
+            } else {
+                registration.waiting_version_id = Some(long_version_id);
+            }
+            state
+                .versions
+                .get_mut(&long_version_id)
+                .unwrap()
+                .lifecycle_state = lifecycle;
+        }
+
+        let client_id =
+            register_client_for_test(&service, url("https://example.test/app/nested/page"));
+        assert_eq!(service.matching_controller_for_client(client_id), None);
+        let state = service.inner.state.lock();
+        for registration_id in [short_registration_id, long_registration_id] {
+            assert!(
+                !state.registrations[&registration_id]
+                    .controlled_client_ids
+                    .contains(&client_id)
+            );
+        }
+    }
+}
+
+#[test]
 fn devtools_controlled_window_client_urls_use_current_document_urls() {
     let service = new_service_worker_runtime_service();
     let registration_id = ServiceWorkerRegistrationId(1);
@@ -322,6 +378,73 @@ fn clients_claim_does_not_claim_client_when_longer_registration_matches() {
             .contains(&app_client_id)
     );
 }
+#[test]
+fn clients_claim_respects_longer_scope_without_active_worker() {
+    for lifecycle in [
+        ServiceWorkerVersionLifecycleState::Installing,
+        ServiceWorkerVersionLifecycleState::Installed,
+    ] {
+        let service = new_service_worker_runtime_service();
+        let client_id = register_client_for_test(&service, url("https://example.test/app/nested/"));
+        let short_registration_id = ServiceWorkerRegistrationId(1);
+        let short_version_id = ServiceWorkerVersionId(1);
+        let long_registration_id = ServiceWorkerRegistrationId(2);
+        let long_version_id = ServiceWorkerVersionId(2);
+        let short_controller = insert_registered_version(
+            &service,
+            short_registration_id,
+            short_version_id,
+            url("https://example.test/short-worker.js"),
+            url("https://example.test/app/"),
+            [],
+        );
+        insert_registered_version(
+            &service,
+            long_registration_id,
+            long_version_id,
+            url("https://example.test/long-worker.js"),
+            url("https://example.test/app/nested/"),
+            [],
+        );
+        {
+            let mut state = service.inner.state.lock();
+            let registration = state.registrations.get_mut(&long_registration_id).unwrap();
+            registration.active_version_id = None;
+            if lifecycle == ServiceWorkerVersionLifecycleState::Installing {
+                registration.installing_version_id = Some(long_version_id);
+            } else {
+                registration.waiting_version_id = Some(long_version_id);
+            }
+            state
+                .versions
+                .get_mut(&long_version_id)
+                .unwrap()
+                .lifecycle_state = lifecycle;
+        }
+
+        service.finish_worker_clients_claim_requested(short_registration_id, short_version_id);
+        assert_eq!(service.matching_controller_for_client(client_id), None);
+        {
+            let mut state = service.inner.state.lock();
+            assert!(
+                !state.registrations[&short_registration_id]
+                    .controlled_client_ids
+                    .contains(&client_id)
+            );
+            state
+                .registrations
+                .get_mut(&long_registration_id)
+                .unwrap()
+                .pending_unregistration = true;
+        }
+        service.finish_worker_clients_claim_requested(short_registration_id, short_version_id);
+        assert_eq!(
+            service.matching_controller_for_client(client_id),
+            Some(short_controller)
+        );
+    }
+}
+
 #[test]
 fn clients_claim_replaces_previous_controller_registration() {
     let service = new_service_worker_runtime_service();
