@@ -81,13 +81,11 @@ impl SharedClassicSessionRegistry {
         self.inner.lock().has_session(session_id)
     }
 
-    pub(in crate::protocol_server) fn file_prompt_handler_for_bidi_script_commands(
+    pub(in crate::protocol_server) fn unhandled_prompt_behavior(
         &self,
         session_id: &str,
-    ) -> Option<&'static str> {
-        self.inner
-            .lock()
-            .file_prompt_handler_for_bidi_script_commands(session_id)
+    ) -> Option<ClassicUnhandledPromptBehavior> {
+        self.inner.lock().unhandled_prompt_behavior(session_id)
     }
 
     pub(in crate::protocol_server) fn runtime_handle(
@@ -131,13 +129,11 @@ impl ClassicSessionManager {
         self.registry.session_count()
     }
 
-    pub(super) fn file_prompt_handler_for_bidi_script_commands(
+    pub(super) fn unhandled_prompt_behavior(
         &self,
         session_id: &str,
-    ) -> Option<&'static str> {
-        self.registry
-            .unhandled_prompt_behavior(session_id)?
-            .file_prompt_handler_for_bidi_script_commands()
+    ) -> Option<ClassicUnhandledPromptBehavior> {
+        self.registry.unhandled_prompt_behavior(session_id)
     }
 
     pub(super) fn bind_runtime(
@@ -714,7 +710,7 @@ impl ClassicSessionRuntimeHandle {
         socket: WebSocket,
         web_socket_url: String,
         session_id: String,
-        file_prompt_handler: Option<String>,
+        unhandled_prompt_behavior: ClassicUnhandledPromptBehavior,
         session_registry: SharedBidiSessionRegistry,
     ) -> bool {
         let (response_tx, response_rx) = oneshot::channel();
@@ -724,7 +720,7 @@ impl ClassicSessionRuntimeHandle {
                 socket: Box::new(socket),
                 web_socket_url,
                 session_id,
-                file_prompt_handler,
+                unhandled_prompt_behavior,
                 session_registry,
                 response_tx,
             })
@@ -776,7 +772,7 @@ enum ClassicSessionRuntimeRequest {
         socket: Box<WebSocket>,
         web_socket_url: String,
         session_id: String,
-        file_prompt_handler: Option<String>,
+        unhandled_prompt_behavior: ClassicUnhandledPromptBehavior,
         session_registry: SharedBidiSessionRegistry,
         response_tx: oneshot::Sender<bool>,
     },
@@ -976,7 +972,7 @@ async fn handle_classic_session_runtime_request(
             socket,
             web_socket_url,
             session_id,
-            file_prompt_handler,
+            unhandled_prompt_behavior,
             session_registry,
             response_tx,
         } => {
@@ -993,12 +989,15 @@ async fn handle_classic_session_runtime_request(
                 let _ = response_tx.send(false);
                 return ClassicSessionRuntimeRequestOutcome::Continue;
             }
-            scheduler.register_automation_javascript_dialog_handler(
-                FrontendProtocol::WebDriverBidi,
-                false,
-            );
+            if actor
+                .configure_existing_session_prompt_handlers(scheduler, &unhandled_prompt_behavior)
+                .is_err()
+            {
+                actor.release_session(&mut session_registry.lock());
+                let _ = response_tx.send(false);
+                return ClassicSessionRuntimeRequestOutcome::Continue;
+            }
             actor.install_runtime_response_ready_sender(scheduler);
-            actor.set_file_prompt_handler_for_script_commands(file_prompt_handler.as_deref());
             let _ = response_tx.send(true);
             ClassicSessionRuntimeRequestOutcome::AttachedBidi(Box::new(ClassicAttachedBidiSocket {
                 actor,

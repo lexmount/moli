@@ -374,10 +374,26 @@ async fn bidi_session_with_context(
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     String,
 ) {
+    bidi_session_with_capabilities(cdp_addr, json!({})).await
+}
+
+async fn bidi_session_with_capabilities(
+    cdp_addr: std::net::SocketAddr,
+    capabilities: serde_json::Value,
+) -> (
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    String,
+) {
     let (mut socket, _) = connect_async(format!("ws://{cdp_addr}/session"))
         .await
         .expect("connect to BiDi websocket");
-    let session = send_bidi_command(&mut socket, 1, "session.new", json!({})).await;
+    let session = send_bidi_command(
+        &mut socket,
+        1,
+        "session.new",
+        json!({"capabilities": capabilities}),
+    )
+    .await;
     assert_eq!(session["type"], json!("success"));
     let create = send_bidi_command(
         &mut socket,

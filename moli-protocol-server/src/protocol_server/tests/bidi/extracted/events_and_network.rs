@@ -371,303 +371,177 @@ async fn websocket_bidi_global_log_subscription_covers_later_created_context() {
 }
 #[tokio::test]
 async fn websocket_bidi_user_prompt_opened_handler_capabilities_match_wpt() {
-    // Ported from Chromium/WPT
-    // webdriver/tests/bidi/browsing_context/user_prompt_opened/handler.py.
-    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-
-    for (offset, (capability, expected_handler)) in [
+    // WPT user_prompt_opened/handler.py: handler is an action as well as event metadata.
+    let (addr, server) = spawn_test_protocol_server().await;
+    for (capability, handler) in [
         ("accept", "accept"),
         ("accept and notify", "accept"),
         ("dismiss", "dismiss"),
         ("dismiss and notify", "dismiss"),
         ("ignore", "ignore"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let base_id = (offset as u64) * 10;
-        let (mut socket, _) = connect_async(format!("ws://{cdp_addr}/session"))
-            .await
-            .expect("connect to BiDi websocket");
-        let session = send_bidi_command(
+    ] {
+        let (mut socket, context) =
+            bidi_session_with_capabilities(addr, json!({"unhandledPromptBehavior": capability}))
+                .await;
+        send_bidi_command(
             &mut socket,
-            base_id + 1,
-            "session.new",
-            json!({
-                "capabilities": {
-                    "unhandledPromptBehavior": capability
-                }
-            }),
-        )
-        .await;
-        assert_eq!(session["type"], json!("success"));
-
-        let create = send_bidi_command(
-            &mut socket,
-            base_id + 2,
-            "browsingContext.create",
-            json!({ "type": "tab" }),
-        )
-        .await;
-        assert_eq!(create["type"], json!("success"));
-        let context_id = create["result"]["context"]
-            .as_str()
-            .expect("created context id")
-            .to_owned();
-
-        let subscribe = send_bidi_command(
-            &mut socket,
-            base_id + 3,
+            3,
             "session.subscribe",
             json!({
-                "events": ["browsingContext.userPromptOpened"],
-                "contexts": [context_id]
+                "events": ["browsingContext.userPromptOpened"], "contexts": [context],
             }),
         )
         .await;
-        assert_eq!(subscribe["type"], json!("success"));
-
-        socket
-            .send(WsMessage::Text(
-                json!({
-                    "id": base_id + 4,
-                    "method": "script.evaluate",
-                    "params": {
-                        "expression": "window.alert('handler check')",
-                        "awaitPromise": false,
-                        "target": {
-                            "context": context_id
-                        }
-                    }
-                })
-                .to_string()
-                .into(),
-            ))
-            .await
-            .expect("send alert script.evaluate");
-        let initial_messages = recv_until_id(&mut socket, base_id + 4).await;
-        let messages = collect_bidi_messages_until_method_count(
+        socket.send(WsMessage::Text(json!({"id": 4, "method": "script.evaluate", "params": {
+            "expression": "alert('handler check')", "awaitPromise": false, "target": {"context": context},
+        }}).to_string().into())).await.unwrap();
+        let mut messages = collect_bidi_messages_until_method_count(
             &mut socket,
-            initial_messages,
+            Vec::new(),
             "browsingContext.userPromptOpened",
             1,
         )
         .await;
-        assert_eq!(
-            bidi_message_by_id(&messages, base_id + 4)["type"],
-            json!("success")
-        );
         let event = bidi_events_by_method(&messages, "browsingContext.userPromptOpened")[0];
         assert_eq!(
             event["params"],
             json!({
-                "context": context_id,
-                "type": "alert",
-                "message": "handler check",
-                "handler": expected_handler
+                "context": context, "type": "alert", "message": "handler check", "handler": handler,
             }),
-            "unhandledPromptBehavior={capability:?} should surface handler={expected_handler:?}"
+            "unhandledPromptBehavior={capability:?}"
         );
-
-        let close_prompt = send_bidi_command(
+        socket.send(WsMessage::Text(json!({"id": 5, "method": "browsingContext.handleUserPrompt", "params": {"context": context}}).to_string().into())).await.unwrap();
+        messages = collect_bidi_messages_until(
             &mut socket,
-            base_id + 5,
-            "browsingContext.handleUserPrompt",
-            json!({ "context": context_id }),
+            messages,
+            |messages| {
+                [4, 5]
+                    .into_iter()
+                    .all(|id| messages.iter().any(|message| message["id"] == id))
+            },
+            "prompt handling and evaluated script",
         )
         .await;
-        assert_eq!(close_prompt["type"], json!("success"));
-        let _ = socket.close(None).await;
+        assert_eq!(bidi_message_by_id(&messages, 4)["type"], "success");
+        if handler == "ignore" {
+            assert_eq!(bidi_message_by_id(&messages, 5)["type"], "success");
+        } else {
+            assert_bidi_error(
+                bidi_message_by_id(&messages, 5),
+                "no such alert",
+                "automatic policy consumed the alert",
+            );
+        }
+        socket.close(None).await.unwrap();
     }
-
-    protocol_server.abort();
+    server.abort();
 }
 #[tokio::test]
 async fn websocket_bidi_handle_user_prompt_emits_wpt_prompt_events() {
-    // Ported from Chromium/WPT
-    // webdriver/tests/bidi/browsing_context/handle_user_prompt/handle_user_prompt.py
-    // and browsing_context/user_prompt_{opened,closed}/user_prompt_*.py.
-    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, context_id) = bidi_session_with_context(cdp_addr).await;
-
-    let subscribe = send_bidi_command(
+    // WPT handle_user_prompt and user_prompt_{opened,closed}: manual handling uses ignore.
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, context) =
+        bidi_session_with_capabilities(addr, json!({"unhandledPromptBehavior": "ignore"})).await;
+    send_bidi_command(
         &mut socket,
         3,
         "session.subscribe",
-        json!({
-            "events": [
-                "browsingContext.userPromptOpened",
-                "browsingContext.userPromptClosed"
-            ]
-        }),
+        json!({"events": [
+            "browsingContext.userPromptOpened", "browsingContext.userPromptClosed",
+        ]}),
     )
     .await;
-    assert_eq!(subscribe["type"], json!("success"));
-
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 4_u64,
-                "method": "script.evaluate",
-                "params": {
-                    "expression": "window.alert('bidi alert')",
-                    "awaitPromise": false,
-                    "target": {
-                        "context": context_id
-                    }
-                }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("send alert script.evaluate");
-    let initial_alert_messages = recv_until_id(&mut socket, 4).await;
-    let alert_messages = collect_bidi_messages_until_method_count(
-        &mut socket,
-        initial_alert_messages,
-        "browsingContext.userPromptOpened",
-        1,
-    )
-    .await;
-    assert_eq!(
-        bidi_message_by_id(&alert_messages, 4)["type"],
-        json!("success")
-    );
-    let alert_opened =
-        bidi_events_by_method(&alert_messages, "browsingContext.userPromptOpened")[0];
-    assert_eq!(
-        alert_opened["params"],
-        json!({
-            "context": context_id,
-            "type": "alert",
-            "message": "bidi alert",
-            "handler": "dismiss"
-        })
-    );
-
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 5_u64,
-                "method": "browsingContext.handleUserPrompt",
-                "params": {
-                    "context": context_id
-                }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("send alert handleUserPrompt");
-    let initial_alert_closed_messages = recv_until_id(&mut socket, 5).await;
-    let alert_closed_messages = collect_bidi_messages_until_method_count(
-        &mut socket,
-        initial_alert_closed_messages,
-        "browsingContext.userPromptClosed",
-        1,
-    )
-    .await;
-    assert_eq!(
-        bidi_message_by_id(&alert_closed_messages, 5)["result"],
-        json!({})
-    );
-    let alert_closed =
-        bidi_events_by_method(&alert_closed_messages, "browsingContext.userPromptClosed")[0];
-    assert_eq!(
-        alert_closed["params"],
-        json!({
-            "context": context_id,
-            "accepted": true,
-            "type": "alert"
-        })
-    );
-
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 6_u64,
-                "method": "script.evaluate",
-                "params": {
-                    "expression": "window.prompt('Enter Your Name: ')",
-                    "awaitPromise": false,
-                    "target": {
-                        "context": context_id
-                    }
-                }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("send prompt script.evaluate");
-    let initial_prompt_messages = recv_until_id(&mut socket, 6).await;
-    let prompt_messages = collect_bidi_messages_until_method_count(
-        &mut socket,
-        initial_prompt_messages,
-        "browsingContext.userPromptOpened",
-        1,
-    )
-    .await;
-    assert_eq!(
-        bidi_message_by_id(&prompt_messages, 6)["type"],
-        json!("success")
-    );
-    let prompt_opened =
-        bidi_events_by_method(&prompt_messages, "browsingContext.userPromptOpened")[0];
-    assert_eq!(
-        prompt_opened["params"],
-        json!({
-            "context": context_id,
-            "type": "prompt",
-            "message": "Enter Your Name: ",
-            "handler": "dismiss",
-            "defaultValue": ""
-        })
-    );
-
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 7_u64,
-                "method": "browsingContext.handleUserPrompt",
-                "params": {
-                    "context": context_id,
-                    "accept": true,
-                    "userText": "Test"
-                }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("send prompt handleUserPrompt");
-    let initial_prompt_closed_messages = recv_until_id(&mut socket, 7).await;
-    let prompt_closed_messages = collect_bidi_messages_until_method_count(
-        &mut socket,
-        initial_prompt_closed_messages,
-        "browsingContext.userPromptClosed",
-        1,
-    )
-    .await;
-    assert_eq!(
-        bidi_message_by_id(&prompt_closed_messages, 7)["type"],
-        json!("success")
-    );
-    let prompt_closed =
-        bidi_events_by_method(&prompt_closed_messages, "browsingContext.userPromptClosed")[0];
-    assert_eq!(
-        prompt_closed["params"],
-        json!({
-            "context": context_id,
-            "accepted": true,
-            "type": "prompt",
-            "userText": "Test"
-        })
-    );
-
-    let _ = socket.close(None).await;
-    protocol_server.abort();
+    for (index, (prompt_type, expression, message, expected)) in [
+        (
+            "alert",
+            "alert('bidi alert')",
+            "bidi alert",
+            json!({"type": "undefined"}),
+        ),
+        (
+            "prompt",
+            "prompt('Enter Your Name: ')",
+            "Enter Your Name: ",
+            json!({"type": "string", "value": "Test"}),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let evaluate_id = 10 + index as u64 * 2;
+        let handle_id = evaluate_id + 1;
+        socket
+            .send(WsMessage::Text(
+                json!({"id": evaluate_id, "method": "script.evaluate", "params": {
+                    "expression": expression, "awaitPromise": false, "target": {"context": context},
+                }})
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let messages = collect_bidi_messages_until_method_count(
+            &mut socket,
+            Vec::new(),
+            "browsingContext.userPromptOpened",
+            1,
+        )
+        .await;
+        let mut expected_opening = json!({"context": context, "type": prompt_type, "message": message, "handler": "ignore"});
+        if prompt_type == "prompt" {
+            expected_opening["defaultValue"] = json!("");
+        }
+        assert_eq!(
+            bidi_events_by_method(&messages, "browsingContext.userPromptOpened")[0]["params"],
+            expected_opening
+        );
+        socket
+            .send(WsMessage::Text(
+                json!({"id": handle_id, "method": "browsingContext.handleUserPrompt", "params": {
+                    "context": context, "accept": true, "userText": "Test",
+                }})
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let messages = collect_bidi_messages_until(
+            &mut socket,
+            messages,
+            |messages| {
+                [evaluate_id, handle_id]
+                    .into_iter()
+                    .all(|id| messages.iter().any(|message| message["id"] == id))
+                    && bidi_events_by_method(messages, "browsingContext.userPromptClosed").len()
+                        == 1
+            },
+            "manual prompt close and script result",
+        )
+        .await;
+        assert_eq!(
+            bidi_message_by_id(&messages, handle_id)["result"],
+            json!({})
+        );
+        assert_eq!(
+            bidi_message_by_id(&messages, evaluate_id)["type"],
+            "success"
+        );
+        assert_eq!(
+            bidi_message_by_id(&messages, evaluate_id)["result"]["result"],
+            expected
+        );
+        let mut expected_closed =
+            json!({"context": context, "accepted": true, "type": prompt_type});
+        if prompt_type == "prompt" {
+            expected_closed["userText"] = json!("Test");
+        }
+        assert_eq!(
+            bidi_events_by_method(&messages, "browsingContext.userPromptClosed")[0]["params"],
+            expected_closed
+        );
+    }
+    socket.close(None).await.unwrap();
+    server.abort();
 }
 #[tokio::test]
 async fn websocket_bidi_handle_user_prompt_invalid_parameters_match_wpt_error_shape() {

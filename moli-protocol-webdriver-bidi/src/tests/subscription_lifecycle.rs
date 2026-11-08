@@ -41,6 +41,61 @@ fn existing_frame_replay_uses_core_ownership_and_publishes_parents_first() {
 }
 
 use super::*;
+use crate::{BidiConnectionState, BidiSessionRegistry};
+
+#[test]
+fn session_capability_requests_configure_actual_dialog_handlers() {
+    use moli_protocol::automation::{
+        DevToolsJavaScriptDialogHandlers, DevToolsUserPromptHandler::*,
+    };
+    for capabilities in [
+        json!({"alwaysMatch": {"unhandledPromptBehavior": {"default": "ignore", "confirm": "accept", "prompt": "dismiss"}}}),
+        json!({"firstMatch": [{"browserName": "other"}, {"browserName": "moli", "unhandledPromptBehavior": {"default": "ignore", "confirm": "accept", "prompt": "dismiss"}}]}),
+    ] {
+        let mut state = BidiConnectionState::new();
+        let outcome = state.handle_message_with_session_registry(
+            json!({
+                "id": 1, "method": "session.new", "params": {"capabilities": capabilities},
+            }),
+            &mut BidiSessionRegistry::new(),
+        );
+        assert_eq!(outcome.response["type"], "success");
+        assert_eq!(
+            state.javascript_dialog_handlers(),
+            DevToolsJavaScriptDialogHandlers {
+                alert: Ignore,
+                confirm: Accept,
+                prompt: Dismiss,
+            }
+        );
+        assert!(
+            outcome.response["result"]["capabilities"]
+                .get("alwaysMatch")
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn invalid_prompt_capability_requests_do_not_create_a_session() {
+    for capabilities in [
+        json!({"alwaysMatch": false}),
+        json!({"firstMatch": []}),
+        json!({"firstMatch": [false]}),
+        json!({"alwaysMatch": {"browserName": "moli"}, "firstMatch": [{"browserName": "moli"}]}),
+        json!({"alwaysMatch": {"unhandledPromptBehavior": {"default": "invalid"}}}),
+    ] {
+        let mut state = BidiConnectionState::new();
+        let outcome = state.handle_message_with_session_registry(
+            json!({
+                "id": 1, "method": "session.new", "params": {"capabilities": capabilities},
+            }),
+            &mut BidiSessionRegistry::new(),
+        );
+        assert_eq!(outcome.response["error"], "invalid argument", "{outcome:?}");
+        assert!(state.session_id().is_none());
+    }
+}
 
 #[test]
 fn frame_facts_publish_lifecycle_and_retire_the_context_without_cdp_page_hooks() {

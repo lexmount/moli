@@ -13,6 +13,7 @@ struct PendingAuxiliaryPageReservation {
     reservation: RendererPageReservationToken,
     popup_id: u64,
     runtime: Arc<dyn super::page::RendererRuntimeLease>,
+    output_journal: std::sync::OnceLock<RendererTurnOutputJournal>,
 }
 
 impl Drop for PendingAuxiliaryPageReservation {
@@ -32,6 +33,30 @@ impl PartialEq for RendererPendingAuxiliaryPage {
 impl Eq for RendererPendingAuxiliaryPage {}
 
 impl RendererPendingAuxiliaryPage {
+    pub(crate) fn retain_output_journal(&self, journal: RendererTurnOutputJournal) {
+        self.inner
+            .output_journal
+            .set(journal)
+            .expect("one journal per auxiliary Page");
+    }
+
+    /// Called after protocol reserves this exact Page's output owner. Modal
+    /// prefixes must reach that owner before V8 adoption can run on the paused
+    /// renderer thread. Binding the journal requires no V8 or Page access.
+    pub fn bind_protocol_output(&self) {
+        if let Some(transport) = self
+            .renderer_runtime()
+            .browser_context_runtime()
+            .renderer_output_transport_sender()
+        {
+            self.inner
+                .output_journal
+                .get()
+                .expect("staged auxiliary Page has a journal")
+                .reserve_transport_for_initial_context(transport);
+        }
+    }
+
     pub fn page_reservation(&self) -> RendererPageReservationToken {
         self.inner.reservation
     }
@@ -115,6 +140,7 @@ impl RendererAuxiliaryPageAllocator {
                     .get()
                     .and_then(super::page::RendererProducerShutdownHandle::upgrade_runtime)
                     .ok_or_else(|| anyhow!("auxiliary creator renderer is shutting down"))?,
+                output_journal: std::sync::OnceLock::new(),
             }),
         };
         let environment =

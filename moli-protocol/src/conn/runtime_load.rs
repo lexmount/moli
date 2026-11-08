@@ -2096,6 +2096,9 @@ impl CdpConnection {
             .pending_target_page_residence_identity_for_owner(owner)
             .ok_or(InitialDocumentBuildError::ReservationOwnerLost)?;
         self.bind_renderer_page_output_owner(renderer_page, renderer_page_owner.clone());
+        if let Some(auxiliary_page) = pending_auxiliary_page.as_ref() {
+            auxiliary_page.bind_protocol_output();
+        }
         let page_owner = InitialDocumentPageOwner {
             page_owner: Some(renderer_page_owner),
             ..page_owner

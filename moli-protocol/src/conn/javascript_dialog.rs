@@ -1,5 +1,12 @@
 use super::{BackgroundProtocolEvent, CdpConnection};
-use crate::automation::FrontendProtocol;
+use crate::automation::{
+    DevToolsJavaScriptDialogHandlers, DevToolsUserPromptHandler, FrontendProtocol,
+};
+
+pub(super) struct AutomationJavaScriptDialogHandler {
+    wait_enabled: bool,
+    prompt_handlers: Option<DevToolsJavaScriptDialogHandlers>,
+}
 
 impl CdpConnection {
     /// Registers a native adapter for all browser contexts owned by this connection.
@@ -13,10 +20,44 @@ impl CdpConnection {
         if protocol == FrontendProtocol::Cdp {
             return false;
         }
-        self.automation_javascript_dialog_handlers
-            .insert(protocol, wait_enabled);
+        self.automation_javascript_dialog_handlers.insert(
+            protocol,
+            AutomationJavaScriptDialogHandler {
+                wait_enabled,
+                prompt_handlers: None,
+            },
+        );
         self.sync_automation_javascript_dialog_handlers();
         true
+    }
+
+    /// A live BiDi adapter must wait even when its policy will close the dialog
+    /// automatically. Policy runs when the Page admits the native fact, so it
+    /// also applies to unsubscribed clients and page-created dialogs.
+    pub fn register_bidi_javascript_dialog_handler(
+        &mut self,
+        handlers: DevToolsJavaScriptDialogHandlers,
+    ) {
+        self.automation_javascript_dialog_handlers.insert(
+            FrontendProtocol::WebDriverBidi,
+            AutomationJavaScriptDialogHandler {
+                wait_enabled: true,
+                prompt_handlers: Some(handlers),
+            },
+        );
+        self.sync_automation_javascript_dialog_handlers();
+    }
+
+    pub(crate) fn automation_javascript_dialog_response(&self, dialog_type: &str) -> Option<bool> {
+        let handlers = self
+            .automation_javascript_dialog_handlers
+            .get(&FrontendProtocol::WebDriverBidi)?
+            .prompt_handlers?;
+        match handlers.handler_for(dialog_type) {
+            DevToolsUserPromptHandler::Accept => Some(true),
+            DevToolsUserPromptHandler::Dismiss => Some(false),
+            DevToolsUserPromptHandler::Ignore => None,
+        }
     }
 
     /// Releases only this adapter's registration and settles abandoned dialogs
@@ -43,7 +84,7 @@ impl CdpConnection {
     pub(crate) fn automation_javascript_dialog_wait_enabled(&self) -> bool {
         self.automation_javascript_dialog_handlers
             .values()
-            .any(|wait_enabled| *wait_enabled)
+            .any(|handler| handler.wait_enabled)
     }
 
     fn sync_automation_javascript_dialog_handlers(&self) {

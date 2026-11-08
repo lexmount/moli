@@ -334,6 +334,14 @@ impl ProtocolWorkflowState<'_> {
             .register_automation_javascript_dialog_handler(protocol, wait_enabled)
     }
 
+    pub fn register_bidi_javascript_dialog_handler(
+        self,
+        handlers: crate::automation::DevToolsJavaScriptDialogHandlers,
+    ) {
+        self.connection
+            .register_bidi_javascript_dialog_handler(handlers);
+    }
+
     pub fn unregister_automation_javascript_dialog_handler(
         self,
         protocol: crate::automation::FrontendProtocol,

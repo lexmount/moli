@@ -15,6 +15,7 @@ struct RendererTurnOutputJournalState {
     last_published_sequence: Option<NonZeroU64>,
     records: Vec<PendingRendererOutputRecord>,
     transport: Option<RendererOutputTransportSender>,
+    reserved_transport: Option<RendererOutputTransportSender>,
     closed: bool,
     deferred_publications: Vec<RendererOutputPublication>,
     deferred_close: Option<RendererOutputStreamControl>,
@@ -69,6 +70,7 @@ impl RendererTurnOutputJournal {
                 last_published_sequence: None,
                 records: Vec::new(),
                 transport: None,
+                reserved_transport: None,
                 closed: false,
                 deferred_publications: Vec::new(),
                 deferred_close: None,
@@ -177,9 +179,11 @@ impl RendererTurnOutputJournal {
     ) -> anyhow::Result<Vec<PendingRendererOutputRecord>> {
         let mut state = self.state.lock();
         anyhow::ensure!(
-            !state.closed && state.last_published_sequence.is_none(),
-            "initial Context adoption cannot reorder an already published stream"
+            !state.closed,
+            "initial Context adoption requires a live stream"
         );
+        // Modal prefixes retain their already-published cursors. Only the
+        // unpublished tail is placed after Inspector context registration.
         Ok(std::mem::take(&mut state.records))
     }
 
@@ -199,8 +203,30 @@ impl RendererTurnOutputJournal {
     /// at the next stream sequence.
     pub(crate) fn publish_pending(&self) -> Option<RendererOutputCursor> {
         let mut state = self.state.lock();
-        let publication = Self::settle_locked(&mut state)?;
+        Self::publish_pending_locked(&mut state)
+    }
+
+    pub(crate) fn publish_pending_before_modal_wait(&self) -> Option<RendererOutputCursor> {
+        let mut state = self.state.lock();
+        // An unadopted Page without a creation predecessor must keep ordinary
+        // records after its Inspector context registration.
+        if state.transport.is_none()
+            && !state
+                .records
+                .iter()
+                .any(|record| Self::is_modal_dependency(record.item()))
+        {
+            return None;
+        }
+        Self::publish_pending_locked(&mut state)
+    }
+
+    fn publish_pending_locked(
+        state: &mut RendererTurnOutputJournalState,
+    ) -> Option<RendererOutputCursor> {
+        let publication = Self::settle_locked(state)?;
         let cursor = publication.cursor();
+        let modal_prefix = Self::contains_modal_dependency(&publication);
         if let Some(transport) = state.transport.as_ref() {
             // A closed transport means the protocol owner has already
             // retired. The concrete prefix is still settled at `cursor`; it
@@ -209,6 +235,9 @@ impl RendererTurnOutputJournal {
             let _ = publication.publish_to(transport);
         } else {
             state.deferred_publications.push(publication);
+            if modal_prefix && let Some(transport) = state.reserved_transport.take() {
+                Self::bind_transport_locked(state, transport);
+            }
         }
         Some(cursor)
     }
@@ -349,6 +378,65 @@ impl RendererTurnOutputJournal {
     /// produced facts before a CDP connection installed its receiver.
     pub(crate) fn bind_transport(&self, transport: RendererOutputTransportSender) {
         let mut state = self.state.lock();
+        Self::bind_transport_locked(&mut state, transport);
+    }
+
+    /// Protocol has reserved this Page, but Inspector adoption may still need
+    /// its renderer thread. Only a modal prefix activates delivery early;
+    /// ordinary creator-script records retain their context-registration order.
+    pub(crate) fn reserve_transport_for_initial_context(
+        &self,
+        transport: RendererOutputTransportSender,
+    ) {
+        let mut state = self.state.lock();
+        if let Some(existing) = state
+            .transport
+            .as_ref()
+            .or(state.reserved_transport.as_ref())
+        {
+            assert!(
+                existing.same_channel(&transport),
+                "one transport per renderer stream"
+            );
+        }
+        if state.transport.is_some() {
+            return;
+        }
+        state.reserved_transport = Some(transport);
+        if state
+            .deferred_publications
+            .iter()
+            .any(Self::contains_modal_dependency)
+        {
+            let transport = state
+                .reserved_transport
+                .take()
+                .expect("reserved initial transport");
+            Self::bind_transport_locked(&mut state, transport);
+        }
+    }
+
+    fn contains_modal_dependency(publication: &RendererOutputPublication) -> bool {
+        publication
+            .records()
+            .iter()
+            .any(|record| Self::is_modal_dependency(record.item()))
+    }
+
+    fn is_modal_dependency(item: &super::RendererOutputItem) -> bool {
+        matches!(
+            item,
+            super::RendererOutputItem::OwnerAction(
+                crate::runtime::RendererOwnerAction::JavaScriptDialog(_)
+                    | crate::runtime::RendererOwnerAction::Popup(_)
+            )
+        )
+    }
+
+    fn bind_transport_locked(
+        state: &mut RendererTurnOutputJournalState,
+        transport: RendererOutputTransportSender,
+    ) {
         if let Some(existing) = state.transport.as_ref() {
             assert!(
                 existing.same_channel(&transport),
@@ -362,6 +450,7 @@ impl RendererTurnOutputJournal {
         // protocol boundary, not permission to replay Opened or a concrete
         // prefix into a later, unrelated transport.
         state.transport = Some(transport.clone());
+        state.reserved_transport = None;
         let opened = RendererOutputStreamControl::Opened {
             stream: state.stream,
         };
@@ -375,8 +464,8 @@ impl RendererTurnOutputJournal {
         }
         state.deferred_publications.clear();
         if !state.records.is_empty() {
-            let publication = Self::settle_locked(&mut state)
-                .expect("pre-transport renderer records must settle");
+            let publication =
+                Self::settle_locked(state).expect("pre-transport renderer records must settle");
             if publication.publish_to(&transport).is_err() {
                 return;
             }

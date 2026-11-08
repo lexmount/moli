@@ -127,6 +127,95 @@ fn journal_preserves_append_order_and_only_sequences_non_empty_publications() {
 }
 
 #[test]
+fn reserved_auxiliary_transport_publishes_modal_prefix_once_before_adoption() {
+    for reserve_first in [false, true] {
+        let page_id = PageId::new_for_testing(7);
+        let journal = RendererTurnOutputJournal::new(
+            RendererOutputStreamIdentity::new_page_for_protocol_test(page_id),
+        );
+        let (transport, mut receiver) = renderer_output_transport_channel();
+        journal.append(lifecycle_record(11));
+        if reserve_first {
+            journal.reserve_transport_for_initial_context(transport.clone());
+        }
+        assert!(
+            receiver.try_recv().is_err(),
+            "ordinary creator facts wait for context adoption"
+        );
+        assert!(journal.publish_pending_before_modal_wait().is_none());
+        assert!(journal.last_published_cursor().is_none());
+        let dialog = crate::runtime::RendererPendingJavaScriptDialog::new(
+            crate::runtime::RendererJavaScriptDialogId::new(1),
+            crate::runtime::RendererDocumentLifecycleIdentity {
+                frame: RendererFrameToken { page_id },
+                document: RendererDocumentToken::new_for_testing(page_id, 3),
+                epoch: RendererLifecycleEpoch(2),
+            },
+            crate::runtime::RendererJavaScriptDialogSource::RootFrame,
+            "about:blank".into(),
+            "confirm".into(),
+            "modal prefix".into(),
+            String::new(),
+            None,
+        );
+        journal.append(PendingRendererOutputRecord::owner_action(
+            None,
+            RendererOwnerAction::JavaScriptDialog(dialog),
+        ));
+        let first = journal.publish_pending().unwrap();
+        if !reserve_first {
+            journal.reserve_transport_for_initial_context(transport.clone());
+        }
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            RendererOutputTransportMessage::StreamControl(
+                RendererOutputStreamControl::Opened { .. }
+            )
+        ));
+        let RendererOutputTransportMessage::Publication(prefix) = receiver.try_recv().unwrap()
+        else {
+            panic!("modal prefix");
+        };
+        assert_eq!(prefix.cursor(), first);
+        assert_eq!(prefix.records().len(), 2);
+        assert!(matches!(
+            prefix.records()[1].item(),
+            RendererOutputItem::OwnerAction(RendererOwnerAction::JavaScriptDialog(_))
+        ));
+        journal.append(lifecycle_record(12));
+        let tail = journal
+            .take_unpublished_records_for_initial_context_adoption()
+            .unwrap();
+        journal.bind_transport(transport);
+        journal.append(lifecycle_record(99));
+        journal.append_records(tail);
+        let second = journal.publish_pending().unwrap();
+        assert_eq!(second.sequence(), first.sequence() + 1);
+        let RendererOutputTransportMessage::Publication(after_adoption) =
+            receiver.try_recv().unwrap()
+        else {
+            panic!("adoption tail");
+        };
+        assert_eq!(after_adoption.cursor(), second);
+        let sequences = after_adoption
+            .records()
+            .iter()
+            .map(|record| match record.item() {
+                RendererOutputItem::Observation(
+                    RendererProtocolObservation::DocumentLifecycle(event),
+                ) => event.sequence,
+                item => panic!("unexpected tail: {item:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(sequences, [99, 12]);
+        assert!(
+            receiver.try_recv().is_err(),
+            "adoption cannot replay the modal prefix or Opened"
+        );
+    }
+}
+
+#[test]
 fn pending_resolution_releases_journal_before_later_producer_append() {
     let journal = RendererTurnOutputJournal::new(
         RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(8)),

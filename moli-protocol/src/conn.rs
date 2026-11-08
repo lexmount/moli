@@ -1260,7 +1260,8 @@ pub struct CdpConnection {
     pub inactive_browser_contexts: Vec<BrowserContext>,
     /// Native adapters own these registrations for their session lifetime.
     /// Presence permits handling dialogs; the value separately controls modal waits.
-    automation_javascript_dialog_handlers: HashMap<FrontendProtocol, bool>,
+    automation_javascript_dialog_handlers:
+        HashMap<FrontendProtocol, javascript_dialog::AutomationJavaScriptDialogHandler>,
     /// Root/browser owner Target discovery mirror for diagnostics and
     /// cross-crate schedulers. Event routing uses `target_handlers`.
     pub(crate) target_discovery_enabled: bool,
