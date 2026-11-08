@@ -9,8 +9,7 @@ use crate::context_bootstrap::service_worker_interfaces::{
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::OwnerDispatchScope;
 use crate::service_worker_runtime::{
-    ServiceWorkerClientUrlError, resolve_service_worker_script_url, service_worker_client_url,
-    service_worker_scope_url,
+    ServiceWorkerClientUrlError, resolve_service_worker_script_url, service_worker_scope_url,
 };
 use crate::service_worker_runtime::{
     ServiceWorkerNavigationPreloadState, ServiceWorkerNavigationPreloadStateError,
@@ -1093,7 +1092,8 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registration_ca
         return;
     };
     let client_url =
-        match service_worker_client_url(request_context.document_url(), &parsed.client_url) {
+        match host.service_worker_get_registration_url(scope, &request_context, &parsed.client_url)
+        {
             Ok(client_url) => client_url,
             Err(ServiceWorkerClientUrlError::Invalid) => {
                 reject_service_worker_promise_with_type_error(

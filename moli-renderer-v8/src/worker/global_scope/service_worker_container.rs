@@ -187,7 +187,8 @@ pub(crate) fn try_worker_service_worker_get_registration<'s>(
             );
             return true;
         };
-        let url = match service_worker_client_url(base, client) {
+        let origin = worker_global_origin(scope).unwrap_or(moli_url::WebOrigin::Opaque);
+        let url = match service_worker_client_url(base, &origin, client) {
             Ok(url) => url,
             Err(ServiceWorkerClientUrlError::Invalid) => {
                 reject(scope, resolver, "Failed to parse the client URL.", None);

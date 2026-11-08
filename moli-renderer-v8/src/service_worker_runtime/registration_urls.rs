@@ -27,16 +27,17 @@ pub(crate) enum ServiceWorkerClientUrlError {
 }
 
 pub(crate) fn service_worker_client_url(
-    document_url: &url::Url,
+    api_base_url: &url::Url,
+    client_origin: &moli_url::WebOrigin,
     client: &str,
 ) -> std::result::Result<url::Url, ServiceWorkerClientUrlError> {
-    let mut client_url = document_url
+    let mut client_url = api_base_url
         .join(client)
         .map_err(|_| ServiceWorkerClientUrlError::Invalid)?;
-    if !moli_url::same_origin(document_url, &client_url) {
+    client_url.set_fragment(None);
+    if !client_origin.same_origin_url(&client_url) {
         return Err(ServiceWorkerClientUrlError::CrossOrigin);
     }
-    client_url.set_fragment(None);
     Ok(client_url)
 }
 
