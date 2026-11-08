@@ -92,3 +92,97 @@ document.body.appendChild(frame);
         anyhow::Ok(())
     }).await.expect("child module integrity must use its preparation Document and attribute presence");
 }
+
+#[tokio::test]
+async fn child_parser_modules_use_their_own_import_map_integrity() {
+    run_page_vm_async_test(async move {
+        let source = "globalThis.moduleExecutions = (globalThis.moduleExecutions || 0) + 1;";
+        let matching = format!(
+            "sha384-{}",
+            base64::engine::general_purpose::STANDARD
+                .encode(moli_crypto::DigestAlgorithm::Sha384.digest_bytes(source.as_bytes()))
+        );
+        let mismatching = format!(
+            "sha384-{}",
+            base64::engine::general_purpose::STANDARD
+                .encode(moli_crypto::DigestAlgorithm::Sha384.digest_bytes(b"different source"))
+        );
+        let import_map = json!({"integrity": {
+            "/parser-bad.mjs": mismatching,
+            "/implicit-good.mjs": matching,
+            "/implicit-bad.mjs": mismatching,
+            "/explicit-empty.mjs": mismatching,
+            "/explicit-space.mjs": mismatching,
+            "/explicit-good.mjs": mismatching,
+            "/explicit-bad.mjs": matching,
+        }});
+        let mut child = format!(
+            r#"<!doctype html><script type="importmap">{import_map}</script><script>globalThis.results = {{}};</script>"#
+        );
+        for (path, explicit_integrity) in [
+            ("/parser-bad.mjs", None),
+            ("/implicit-good.mjs", None),
+            ("/implicit-bad.mjs", None),
+            ("/explicit-empty.mjs", Some("")),
+            ("/explicit-space.mjs", Some("   ")),
+            ("/explicit-good.mjs", Some(matching.as_str())),
+            ("/explicit-bad.mjs", Some(mismatching.as_str())),
+        ] {
+            let integrity = explicit_integrity
+                .map(|value| format!(r#" integrity="{value}""#))
+                .unwrap_or_default();
+            child.push_str(&format!(
+                r#"<script type="module" src="{path}"{integrity} onload="results['{path}']='load'" onerror="results['{path}']='error'"></script>"#
+            ));
+        }
+        child.push_str(
+            r#"<script>addEventListener('load', () => parent.postMessage({results, executions:globalThis.moduleExecutions || 0}, '*'));</script>"#,
+        );
+        let mut responses = vec![("/child.html", "HTTP/1.1 200 OK", child, Duration::ZERO)];
+        for path in [
+            "/parser-bad.mjs", "/implicit-good.mjs", "/implicit-bad.mjs",
+            "/explicit-empty.mjs", "/explicit-space.mjs", "/explicit-good.mjs",
+            "/explicit-bad.mjs",
+        ] {
+            responses.push((path, "HTTP/1.1 200 OK", source.to_owned(), Duration::ZERO));
+        }
+        let (base, server) = spawn_path_response_http_server(responses).await;
+        let mut page_vm = test_page_vm_with_document_url(Url::parse(&format!("{base}/parent"))?);
+        let executor = page_vm.local_executor.clone();
+        executor.run(async move {
+            let parent_map = serde_json::to_string(&json!({"integrity": {
+                "/parser-bad.mjs": matching,
+                "/implicit-good.mjs": mismatching,
+                "/implicit-bad.mjs": matching,
+            }}).to_string())?;
+            page_vm.vm_mut().eval(&format!(r#"
+const map = document.createElement('script'); map.type = 'importmap';
+map.textContent = {parent_map}; document.head.appendChild(map);
+addEventListener('message', event => {{ globalThis.childModuleIntegrityResult = event.data; }});
+const frame = document.createElement('iframe'); frame.src = '/child.html';
+document.body.appendChild(frame);
+"#))?;
+            drive_websocket_until_done(
+                &mut page_vm,
+                "String(globalThis.childModuleIntegrityResult !== undefined)",
+                "child module integrity preparation",
+            ).await?;
+            let result = page_vm.vm_mut().eval("JSON.stringify(childModuleIntegrityResult)")?;
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&result)?, json!({
+                "results": {
+                    "/parser-bad.mjs": "error",
+                    "/implicit-good.mjs": "load",
+                    "/implicit-bad.mjs": "error",
+                    "/explicit-empty.mjs": "load",
+                    "/explicit-space.mjs": "load",
+                    "/explicit-good.mjs": "load",
+                    "/explicit-bad.mjs": "error",
+                },
+                "executions": 4,
+            }));
+            server.await.expect("each module request should reach the fixture");
+            anyhow::Ok(())
+        }).await?;
+        anyhow::Ok(())
+    }).await.expect("child module integrity must use its preparation Document and attribute presence");
+}
