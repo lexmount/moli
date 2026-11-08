@@ -12,6 +12,7 @@ use crate::native_bridge::element::image_selected_source;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
+use crate::webidl::dom_string_property_value as canvas_context_dom_string_value;
 use moli_canvas::{
     DEFAULT_FILL_STYLE, DEFAULT_FONT, DrawImageBlit, ScaleFilter, blit_draw_image_filtered,
     blit_image_data, byte_len, data_image_rgba8_pixels, draw_text, extract_image_data,
@@ -549,25 +550,6 @@ pub(crate) fn canvas_context_image_smoothing_quality_setter_callback<'s>(
         quality.label(),
     );
     rv.set_undefined();
-}
-
-fn canvas_context_dom_string_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    owner: &'static str,
-    property: &'static str,
-) -> Option<String> {
-    match webidl::convert::<webidl::DomString>(
-        scope,
-        value,
-        webidl::Context::member(owner, property),
-    ) {
-        Ok(value) => Some(value.0),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
 }
 
 fn canvas_required_unrestricted_double_arg<'s>(
