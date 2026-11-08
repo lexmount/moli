@@ -1,6 +1,7 @@
 //! Worker thread — owns a V8 isolate and Tokio `LocalRuntime`, runs the
 //! worker event loop, and handles message dispatch.
 
+use super::module_runtime::worker_bootstrap_error;
 use crate::content_security_policy::ContentSecurityPolicy;
 
 use std::cell::RefCell;
@@ -3484,30 +3485,6 @@ fn worker_bootstrap_success<'s>(
     WorkerBootstrapSuccess {
         service_worker_fetch_handler_type,
     }
-}
-
-fn worker_bootstrap_error(
-    scope: &mut v8::PinScope<'_, '_>,
-    script_url: &str,
-    summary: &str,
-    event_kind: WorkerParentErrorEventKind,
-) -> WorkerBootstrapError {
-    let exception =
-        v8::String::new(scope, summary).map(|message| v8::Exception::syntax_error(scope, message));
-    (
-        V8ExceptionReport {
-            summary: summary.to_owned(),
-            source: Some(script_url.to_owned()),
-            line: Some(1),
-            column: Some(1),
-            source_line: None,
-            stack: None,
-            callback_context: None,
-            exception: None,
-        },
-        exception.map(|value| v8::Global::new(scope, value)),
-        event_kind,
-    )
 }
 
 enum WorkerBootstrapStart {

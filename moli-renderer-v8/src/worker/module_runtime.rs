@@ -2723,7 +2723,7 @@ struct WorkerModuleRuntimeEvaluationSlot {
     evaluation_completion_tx: mpsc::UnboundedSender<WorkerModuleEvaluationCompletion>,
 }
 
-fn worker_bootstrap_error(
+pub(super) fn worker_bootstrap_error(
     scope: &mut v8::PinScope<'_, '_>,
     script_url: &str,
     summary: &str,
