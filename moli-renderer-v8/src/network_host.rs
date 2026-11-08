@@ -232,3 +232,27 @@ use super::{
 
 #[cfg(test)]
 pub(crate) use self::body_source::consume_native_body_value_for_teardown_test;
+
+fn cross_origin_request_modes(
+    element: &crate::dom::native::Element,
+) -> (moli_fetch::RequestMode, moli_fetch::RequestCredentialsMode) {
+    match element
+        .attribute("crossorigin")
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        None => (
+            moli_fetch::RequestMode::NoCors,
+            moli_fetch::RequestCredentialsMode::Include,
+        ),
+        Some("use-credentials") => (
+            moli_fetch::RequestMode::Cors,
+            moli_fetch::RequestCredentialsMode::Include,
+        ),
+        Some(_) => (
+            moli_fetch::RequestMode::Cors,
+            moli_fetch::RequestCredentialsMode::SameOrigin,
+        ),
+    }
+}
