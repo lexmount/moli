@@ -565,6 +565,27 @@ impl JsContextHost {
         );
     }
 
+    fn record_subresource_admission(
+        &mut self,
+        registration: &SubresourceFetchRegistration,
+        info: &PendingSubresourceFetchInfo,
+        initiator: SubresourceRequestInitiatorType,
+        disposition: ResourceLoadDisposition,
+    ) {
+        match registration {
+            SubresourceFetchRegistration::Intercepted => {
+                self.push_pending_subresource_fetch_info(info.clone());
+            }
+            SubresourceFetchRegistration::Direct(_) => {
+                self.record_pending_subresource_request_started_with_initiator(
+                    info,
+                    initiator,
+                    disposition,
+                );
+            }
+        }
+    }
+
     pub(crate) fn record_deferred_pending_subresource_request_started(
         &mut self,
         pending: &mut PendingSubresourceFetchState,
@@ -1004,18 +1025,12 @@ impl JsContextHost {
         );
         let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
             .then(|| Box::new(dispatch.clone()));
-        match registration {
-            SubresourceFetchRegistration::Intercepted => {
-                self.push_pending_subresource_fetch_info(info.clone());
-            }
-            SubresourceFetchRegistration::Direct(_) => {
-                self.record_pending_subresource_request_started_with_initiator(
-                    &info,
-                    SubresourceRequestInitiatorType::Other,
-                    load.disposition(),
-                );
-            }
-        }
+        self.record_subresource_admission(
+            &registration,
+            &info,
+            SubresourceRequestInitiatorType::Other,
+            load.disposition(),
+        );
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1070,18 +1085,12 @@ impl JsContextHost {
             ResourceLoadDisposition::Ordinary,
             registration.cancel_handle(),
         );
-        match registration {
-            SubresourceFetchRegistration::Intercepted => {
-                self.push_pending_subresource_fetch_info(info.clone());
-            }
-            SubresourceFetchRegistration::Direct(_) => {
-                self.record_pending_subresource_request_started_with_initiator(
-                    &info,
-                    request_initiator_type,
-                    load.disposition(),
-                );
-            }
-        }
+        self.record_subresource_admission(
+            &registration,
+            &info,
+            request_initiator_type,
+            load.disposition(),
+        );
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1198,18 +1207,12 @@ impl JsContextHost {
         );
         let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
             .then(|| Box::new(dispatch.clone()));
-        match registration {
-            SubresourceFetchRegistration::Intercepted => {
-                self.push_pending_subresource_fetch_info(info.clone());
-            }
-            SubresourceFetchRegistration::Direct(_) => {
-                self.record_pending_subresource_request_started_with_initiator(
-                    &info,
-                    SubresourceRequestInitiatorType::Other,
-                    load.disposition(),
-                );
-            }
-        }
+        self.record_subresource_admission(
+            &registration,
+            &info,
+            SubresourceRequestInitiatorType::Other,
+            load.disposition(),
+        );
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1264,18 +1267,12 @@ impl JsContextHost {
             .expect("current stylesheet owner must have a Document resource authority");
         let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
             .then(|| Box::new(dispatch.clone()));
-        match registration {
-            SubresourceFetchRegistration::Intercepted => {
-                self.push_pending_subresource_fetch_info(info.clone());
-            }
-            SubresourceFetchRegistration::Direct(_) => {
-                self.record_pending_subresource_request_started_with_initiator(
-                    &info,
-                    SubresourceRequestInitiatorType::Css,
-                    load.disposition(),
-                );
-            }
-        }
+        self.record_subresource_admission(
+            &registration,
+            &info,
+            SubresourceRequestInitiatorType::Css,
+            load.disposition(),
+        );
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1322,18 +1319,12 @@ impl JsContextHost {
         );
         let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
             .then(|| Box::new(dispatch.clone()));
-        match registration {
-            SubresourceFetchRegistration::Intercepted => {
-                self.push_pending_subresource_fetch_info(info.clone());
-            }
-            SubresourceFetchRegistration::Direct(_) => {
-                self.record_pending_subresource_request_started_with_initiator(
-                    &info,
-                    SubresourceRequestInitiatorType::Script,
-                    load.disposition(),
-                );
-            }
-        }
+        self.record_subresource_admission(
+            &registration,
+            &info,
+            SubresourceRequestInitiatorType::Script,
+            load.disposition(),
+        );
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
