@@ -1250,36 +1250,28 @@ pub(super) struct ChildClassicScriptLoadCompletion {
 }
 
 #[derive(Debug)]
-pub(super) struct ChildBlockingStylesheetNetworkResult {
-    pub(super) frame_id: Option<String>,
-    pub(super) document_url: Url,
-    pub(super) request_url: Url,
-    pub(super) initiator_type: SubresourceRequestInitiatorType,
-    pub(super) terminal: crate::stylesheet_blocking::StylesheetFetchTerminal,
-}
-
-#[derive(Debug)]
 pub(super) struct ChildBlockingStylesheetLoadCompletion {
     pub(super) child_handle: NativeNodeId,
     pub(super) owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     pub(super) signature: crate::DocumentBlockingStylesheetSignature,
     pub(super) load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
-    pub(super) network_results: Vec<ChildBlockingStylesheetNetworkResult>,
-    pub(super) import_graph:
-        Option<std::sync::Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>>,
+    pub(super) frame_id: Option<String>,
+    pub(super) document_url: Url,
+    pub(super) graph: std::sync::Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>,
     pub(super) csp_violations: Vec<crate::document_runtime::DocumentContentSecurityPolicyViolation>,
 }
 
 impl ChildBlockingStylesheetLoadCompletion {
-    pub(super) fn successful(&self) -> bool {
-        self.import_graph.as_ref().map_or_else(
-            || {
-                self.network_results
-                    .iter()
-                    .all(|result| result.terminal.is_ready())
-            },
-            |graph| graph.successful(),
-        )
+    pub(super) fn request_initiator_type(
+        &self,
+        request_url: &Url,
+    ) -> SubresourceRequestInitiatorType {
+        if matches!(&self.signature, crate::DocumentBlockingStylesheetSignature::Link { url, .. } if url == request_url)
+        {
+            SubresourceRequestInitiatorType::Parser
+        } else {
+            SubresourceRequestInitiatorType::Css
+        }
     }
 }
 

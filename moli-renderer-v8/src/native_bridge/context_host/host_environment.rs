@@ -297,40 +297,35 @@ impl JsContextHost {
             .imported_stylesheet_for_rule_wrapper(id, expected_stylesheet_id)
     }
 
-    pub(crate) fn install_live_stylesheet_import_graph(
-        &self,
+    pub(crate) fn install_and_refresh_live_stylesheet_import_graph(
+        &mut self,
         root: crate::document_runtime::ConnectedStyleImportRoot,
         responses: &[crate::live_stylesheet::LiveStylesheetImportResponse],
     ) -> Option<bool> {
-        self.live_stylesheets.install_import_graph(
+        let successful = self.live_stylesheets.install_import_graph(
             root.stylesheet_id,
             root.contents_revision,
             root.import_generation,
             responses,
             root.root_resource_url.as_ref(),
-        )
-    }
-
-    pub(crate) fn refresh_live_stylesheet_after_import_graph(
-        &mut self,
-        owner: DomHandle,
-        stylesheet_id: crate::live_stylesheet::StylesheetId,
-    ) -> bool {
+        )?;
+        // Some(false) still installs the valid branches of a partial graph.
+        // Only a stale root (None) must skip refreshing the cascade.
         let dom_host = self.dom_host() as *const _;
         let refreshed = self.style_engine.refresh_owner_live_stylesheet_with_host(
             unsafe { &*dom_host },
-            owner,
-            stylesheet_id,
+            root.owner,
+            root.stylesheet_id,
         ) || self.style_engine.refresh_linked_live_stylesheet_with_host(
             unsafe { &*dom_host },
-            owner,
-            stylesheet_id,
+            root.owner,
+            root.stylesheet_id,
         );
         if refreshed {
             self.clear_layout_rect_cache();
-            self.queue_stylesheet_source_css_projection(owner);
+            self.queue_stylesheet_source_css_projection(root.owner);
         }
-        refreshed
+        Some(successful)
     }
 
     pub(in crate::native_bridge::context_host) fn install_owner_live_stylesheet(
