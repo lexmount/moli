@@ -90,10 +90,11 @@ impl ChildImportServer {
                             let asset = assets.lock().entry(asset_token).or_default().clone();
                             let mut extra_headers = String::new();
                             let mut status = "200 OK";
-                            if url.path().ends_with(".css") {
-                                asset.count.fetch_add(1, Ordering::AcqRel);
+                            let request_count = if url.path().ends_with(".css") {
+                                let count = asset.count.fetch_add(1, Ordering::AcqRel) + 1;
                                 asset.started.notify_waiters();
-                            }
+                                count
+                            } else { 0 };
                             let (mime, body) = match url.path() {
                                 "/child-import-entry.css" => {
                                     status = "302 Found";
@@ -147,6 +148,49 @@ impl ChildImportServer {
                                     ("text/css", String::new())
                                 }
                                 "/child-import-real.css" => ("text/css", format!("@import url('/child-import-real.css?token={token}#cycle'); :root {{ --nested-redirect: ready; }}")),
+                                "/child-import-sibling-page" => {
+                                    let kind = query.get("kind").map(String::as_str).unwrap_or("linked");
+                                    let order = query.get("order").map(String::as_str).unwrap_or("alias-first");
+                                    if query.get("policy").is_some_and(|value| value == "paths") {
+                                        let origin = format!("http://{}", stream.local_addr().unwrap());
+                                        extra_headers = format!("Content-Security-Policy: style-src 'nonce-allowed' {origin}/child-import-sibling-root.css {origin}/child-import-sibling-alias.css {origin}/child-import-sibling-branch.css\r\n");
+                                    }
+                                    let root = format!("/child-import-sibling-root.css?token={token}&order={order}");
+                                    let style = if kind == "inline" {
+                                        format!("<style nonce='allowed'>@import url('{root}');</style>")
+                                    } else { format!("<link rel='stylesheet' href='{root}'>") };
+                                    let probe = include_str!("../fixtures/child-stylesheet-redirect-siblings.js");
+                                    ("text/html", format!(r#"<!doctype html><script>
+                                      globalThis.siblingViolations = [];
+                                      document.addEventListener('securitypolicyviolation', event => siblingViolations.push({{
+                                        target:event.target === document, directive:event.effectiveDirective, blockedURI:event.blockedURI
+                                      }}));
+                                    </script>{style}<script>
+                                      try {{ globalThis.siblingSnapshot = ({probe})(); }}
+                                      catch (error) {{ globalThis.siblingSnapshot = {{error:String(error), stack:error.stack}}; }}
+                                    </script><body>Redirect siblings"#))
+                                }
+                                "/child-import-sibling-root.css" => {
+                                    let alias = format!("@import url('/child-import-sibling-alias.css?token={token}');");
+                                    let branch = format!("@import url('/child-import-sibling-branch.css?token={token}');");
+                                    ("text/css", if query.get("order").is_some_and(|value| value == "branch-first") {
+                                        format!("{branch}{alias}")
+                                    } else { format!("{alias}{branch}") })
+                                }
+                                "/child-import-sibling-alias.css" => {
+                                    status = "302 Found";
+                                    extra_headers = format!("Location: /child-import-sibling-real.css?token={token}\r\n");
+                                    ("text/css", String::new())
+                                }
+                                "/child-import-sibling-branch.css" => {
+                                    // Keep response numbering independent of sibling source order.
+                                    let redirected = assets.lock()
+                                        .entry(format!("{token}:/child-import-sibling-real.css"))
+                                        .or_default().clone();
+                                    redirected.wait(false).await;
+                                    ("text/css", format!("@import url('/child-import-sibling-real.css?token={token}#direct');"))
+                                }
+                                "/child-import-sibling-real.css" => ("text/css", format!(":root {{ --sibling-load: {request_count}; }}")),
                                 "/child-import-csp-branch.css" => ("text/css", format!("@import url('{}{}?token={token}'); @import url('/child-import-csp-allowed.css?token={token}');", if token.contains("redirect") { "" } else { &cross_origin }, if token.contains("redirect") { "/child-import-csp-hop.css" } else { "/child-import-csp-blocked.css" })),
                                 "/child-import-csp-hop.css" => {
                                     status = "302 Found";
@@ -712,6 +756,117 @@ async fn child_imports_register_each_redirect_response_before_expanding_imports(
         assert_eq!(
             count, 1,
             "{name}: a redirected import must not fetch itself again"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_import_redirect_siblings_keep_their_own_requests_and_cssom() -> Result<()> {
+    let server = ChildImportServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser.fetch(&server.origin).await?;
+    for kind in ["linked", "inline"] {
+        for order in ["alias-first", "branch-first"] {
+            let token = format!("siblings-{kind}-{order}");
+            let expression = format!(
+                r#"(async () => {{
+                  const frame = document.createElement('iframe');
+                  const loaded = new Promise(resolve => frame.onload = resolve);
+                  frame.src = '/child-import-sibling-page?kind={kind}&order={order}&token={token}';
+                  document.body.append(frame);
+                  await loaded;
+                  const result = frame.contentWindow.siblingSnapshot;
+                  frame.remove();
+                  return JSON.stringify(result);
+                }})()"#
+            );
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                page.evaluate_runtime_expression_with_await_async(&expression, true),
+            )
+            .await??;
+            let result: serde_json::Value =
+                serde_json::from_str(result["value"].as_str().with_context(|| {
+                    format!("{kind}, {order}: redirect sibling snapshot: {result}")
+                })?)?;
+            assert_eq!(
+                result,
+                serde_json::json!({
+                    "alias":"1", "direct":"2", "directRules":1,
+                    "distinct":true, "owners":true,
+                    "cascade":if order == "alias-first" { "2" } else { "1" }
+                }),
+                "{kind}, {order}: each sibling needs its own admitted request and CSSOM child"
+            );
+            for (name, expected) in [("root", 1), ("alias", 1), ("branch", 1), ("real", 2)] {
+                assert_eq!(
+                    server
+                        .assets
+                        .lock()
+                        .get(&format!("{token}:/child-import-sibling-{name}.css"))
+                        .map_or(0, |asset| asset.count.load(Ordering::Acquire)),
+                    expected,
+                    "{kind}, {order}, {name}: no-store responses must go through Fetch again"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_import_redirect_siblings_check_csp_for_the_direct_request() -> Result<()> {
+    let server = ChildImportServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser.fetch(&server.origin).await?;
+    for kind in ["linked", "inline"] {
+        let token = format!("siblings-csp-{kind}");
+        let expression = format!(
+            r#"(async () => {{
+              const frame = document.createElement('iframe');
+              const loaded = new Promise(resolve => frame.onload = resolve);
+              frame.src = '/child-import-sibling-page?kind={kind}&token={token}&policy=paths';
+              document.body.append(frame);
+              await loaded;
+              const result = {{snapshot:frame.contentWindow.siblingSnapshot,
+                violations:frame.contentWindow.siblingViolations}};
+              frame.remove();
+              return JSON.stringify(result);
+            }})()"#
+        );
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            page.evaluate_runtime_expression_with_await_async(&expression, true),
+        )
+        .await??;
+        let result: serde_json::Value = serde_json::from_str(
+            result["value"]
+                .as_str()
+                .context("redirect sibling CSP snapshot")?,
+        )?;
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "snapshot":{
+                    "alias":"1", "direct":"", "directRules":0,
+                    "distinct":true, "owners":true, "cascade":"1"
+                },
+                "violations":[{
+                    "target":true, "directive":"style-src-elem",
+                    "blockedURI":format!("{}/child-import-sibling-real.css?token={token}", server.origin)
+                }]
+            }),
+            "{kind}: a redirect's path exemption must not authorize a direct sibling request"
+        );
+        assert_eq!(
+            server
+                .assets
+                .lock()
+                .get(&format!("{token}:/child-import-sibling-real.css"))
+                .map_or(0, |asset| asset.count.load(Ordering::Acquire)),
+            1,
+            "{kind}: only the allowed redirect may reach the server"
         );
     }
     Ok(())
