@@ -52,7 +52,10 @@ impl StylesheetFetchOptions {
             referrer_policy: normalize_token(referrer_policy),
             document_referrer_policy: None,
             referrer_url: None,
-            integrity: normalize_preserved_value(integrity),
+            // Fetch exposes the original string even when it contains only spaces.
+            integrity: integrity
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
             nonce: normalize_preserved_value(nonce),
             charset: normalize_token(charset),
             fetch_priority: normalize_token(fetch_priority),
