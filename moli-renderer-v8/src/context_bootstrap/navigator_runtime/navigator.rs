@@ -845,6 +845,7 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     install_geolocation_template_bindings(scope, template, interface_name);
     install_navigator_collection_template_bindings(scope, template, interface_name);
     super::gamepad::install(scope, template, interface_name);
+    super::midi::install(scope, template, interface_name);
     install_media_capabilities_template_bindings(scope, template, interface_name);
     super::credentials::install(scope, template, interface_name);
     super::media_session::install(scope, template, interface_name);
@@ -901,6 +902,7 @@ fn filter_navigator_secure_context_exposure<'s>(
         delete_object_property(scope, prototype, "clipboard")?;
         delete_object_property(scope, prototype, "credentials")?;
         delete_object_property(scope, prototype, "mediaDevices")?;
+        delete_object_property(scope, prototype, "requestMIDIAccess")?;
         delete_object_property(scope, prototype, "storage")?;
         delete_object_property(scope, prototype, "storageBuckets")?;
         delete_object_property(scope, prototype, "serviceWorker")?;

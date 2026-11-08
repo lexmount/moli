@@ -8,6 +8,7 @@ use url::Url;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DocumentPermissionsPolicy {
     gamepad: bool,
+    midi: bool,
     tools: bool,
     tools_allowlist: Option<ToolsAllowlist>,
 }
@@ -16,6 +17,7 @@ impl Default for DocumentPermissionsPolicy {
     fn default() -> Self {
         Self {
             gamepad: true,
+            midi: true,
             tools: true,
             tools_allowlist: None,
         }
@@ -27,6 +29,10 @@ impl DocumentPermissionsPolicy {
         self.gamepad
     }
 
+    pub(crate) const fn midi_enabled(&self) -> bool {
+        self.midi
+    }
+
     pub(crate) const fn tools_enabled(&self) -> bool {
         self.tools
     }
@@ -34,6 +40,7 @@ impl DocumentPermissionsPolicy {
     pub(crate) fn intersect(&self, other: &Self) -> Self {
         Self {
             gamepad: self.gamepad && other.gamepad,
+            midi: self.midi && other.midi,
             tools: self.tools && other.tools,
             tools_allowlist: other.tools_allowlist.clone(),
         }
@@ -54,6 +61,9 @@ impl DocumentPermissionsPolicy {
                 };
                 if feature.trim().eq_ignore_ascii_case("gamepad") {
                     policy.gamepad = response_allowlist_allows_document(allowlist, document_url);
+                }
+                if feature.trim().eq_ignore_ascii_case("midi") {
+                    policy.midi = response_allowlist_allows_document(allowlist, document_url);
                 }
                 if feature.trim().eq_ignore_ascii_case("tools") {
                     policy.tools_allowlist = response_tools_allowlist(allowlist);
@@ -81,6 +91,14 @@ impl DocumentPermissionsPolicy {
             source_origin,
         )
         .unwrap_or(true);
+        let midi = iframe_allow_feature(
+            allow_attribute,
+            "midi",
+            parent_origin,
+            child_origin,
+            source_origin,
+        )
+        .unwrap_or(same_origin);
         let tools = iframe_allow_feature(
             allow_attribute,
             "tools",
@@ -91,6 +109,7 @@ impl DocumentPermissionsPolicy {
         .unwrap_or(same_origin);
         Self {
             gamepad: self.gamepad && gamepad,
+            midi: self.midi && midi,
             tools: self.tools
                 && self.tools_allows_origin(parent_origin, parent_origin)
                 && self.tools_allows_origin(child_origin, parent_origin)
@@ -386,6 +405,46 @@ mod tests {
             &url("https://example.test/document"),
         );
         assert!(policy.gamepad_enabled());
+    }
+
+    #[test]
+    fn midi_policy_preserves_header_denial_and_same_origin_default() {
+        let parent = url("https://parent.test/page");
+        let same = url("https://parent.test/child");
+        let cross = url("https://child.test/");
+        let policy = DocumentPermissionsPolicy::default();
+        assert!(policy.midi_enabled());
+        assert!(
+            policy
+                .delegated_to_child_urls(&parent, &same, false, None)
+                .midi_enabled()
+        );
+        assert!(
+            !policy
+                .delegated_to_child_urls(&parent, &cross, false, None)
+                .midi_enabled()
+        );
+        assert!(
+            policy
+                .delegated_to_child_urls(&parent, &cross, false, Some("midi *"))
+                .midi_enabled()
+        );
+        assert!(
+            !policy
+                .delegated_to_child_urls(&parent, &same, false, Some("midi 'none'"))
+                .midi_enabled()
+        );
+        let denied = DocumentPermissionsPolicy::from_navigation_response_headers(
+            &[("Permissions-Policy".into(), b"midi=()".to_vec())],
+            &parent,
+        );
+        assert!(!denied.midi_enabled());
+        assert!(!denied.intersect(&policy).midi_enabled());
+        assert!(
+            !denied
+                .delegated_to_child_urls(&parent, &same, false, Some("midi *"))
+                .midi_enabled()
+        );
     }
 
     #[test]
