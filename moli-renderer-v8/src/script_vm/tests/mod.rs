@@ -2544,6 +2544,7 @@ mod performance_receivers;
 mod periodic_wave_interfaces;
 mod popup_root_window;
 mod post_parse;
+mod promise_jobs;
 mod push_interfaces;
 mod queue_microtask;
 
