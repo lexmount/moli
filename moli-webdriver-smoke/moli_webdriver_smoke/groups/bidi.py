@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Awaitable, Callable
@@ -10,6 +11,7 @@ from urllib.parse import urlsplit
 import websockets
 
 from ..assertions import assert_equal, assert_true, record
+from ..client import ClassicClient
 from ..scenarios import record_failure
 
 
@@ -25,6 +27,23 @@ async def run_bidi_group(
     results: list[dict[str, Any]],
     continue_on_failure: bool = False,
 ) -> None:
+    for handler in ("ignore", "accept", "dismiss"):
+        try:
+            await _run_bidi_isolated_scenario(
+                endpoint, fixture, results,
+                partial(_run_bidi_user_prompt_smoke, handler=handler),
+                prompt_handler=handler,
+            )
+        except Exception as error:
+            if not continue_on_failure:
+                raise
+            record_failure(results, "bidi", f"bidi_user_prompts_{handler}", error)
+    try:
+        await _run_bidi_stored_prompt_text_smoke(endpoint, fixture, results)
+    except Exception as error:
+        if not continue_on_failure:
+            raise
+        record_failure(results, "bidi", "bidi_stored_prompt_text", error)
     if continue_on_failure:
         for name, scenario in _bidi_scenarios():
             try:
@@ -55,7 +74,6 @@ async def run_bidi_group(
 
 def _bidi_scenarios() -> tuple[tuple[str, BidiScenario], ...]:
     return (
-        ("bidi_user_prompts", _run_bidi_user_prompt_smoke),
         ("bidi_input_actions", _run_bidi_input_smoke),
         ("bidi_network_get_data", _run_bidi_network_get_data_smoke),
         ("bidi_network_set_cache_behavior", _run_bidi_network_cache_behavior_smoke),
@@ -70,10 +88,12 @@ async def _run_bidi_isolated_scenario(
     fixture: str,
     results: list[dict[str, Any]],
     scenario: BidiScenario,
+    *,
+    prompt_handler: str | None = None,
 ) -> None:
     ws_endpoint = endpoint.replace("http://", "ws://", 1).rstrip("/") + "/session"
     async with websockets.connect(ws_endpoint, max_size=2**24) as websocket:
-        context = await _bootstrap_bidi_context(websocket, fixture, results)
+        context = await _bootstrap_bidi_context(websocket, fixture, results, prompt_handler=prompt_handler)
         scenario_error: BaseException | None = None
         try:
             await scenario(websocket, context, fixture, results)
@@ -93,13 +113,18 @@ async def _bootstrap_bidi_context(
     websocket: Any,
     fixture: str,
     results: list[dict[str, Any]],
+    *,
+    prompt_handler: str | None = None,
 ) -> str:
     await _send(websocket, 1, "session.status", {})
     status = await _recv(websocket)
     assert_equal(status["type"], "success", "BiDi session.status type")
     assert_equal(status["result"]["ready"], True, "BiDi session.status ready")
 
-    await _send(websocket, 2, "session.new", {"capabilities": {}})
+    capabilities = {} if prompt_handler is None else {
+        "alwaysMatch": {"unhandledPromptBehavior": {"default": prompt_handler}},
+    }
+    await _send(websocket, 2, "session.new", {"capabilities": capabilities})
     session = await _recv(websocket)
     assert_equal(session["type"], "success", "BiDi session.new type")
     session_id = session["result"]["sessionId"]
@@ -162,6 +187,8 @@ async def _run_bidi_user_prompt_smoke(
     context: str,
     fixture: str,
     results: list[dict[str, Any]],
+    *,
+    handler: str,
 ) -> None:
     del fixture
     await _send(websocket, 200, "session.subscribe", {
@@ -193,13 +220,17 @@ async def _run_bidi_user_prompt_smoke(
 
         try:
             async with asyncio.timeout(5):
-                while not prompt_events("browsingContext.userPromptOpened"):
-                    seen.append(await _recv(websocket))
-                params: dict[str, Any] = {"context": context, "accept": True}
-                if prompt_type == "prompt":
-                    params["userText"] = "typed BiDi reply"
-                await _send(websocket, handle_id, "browsingContext.handleUserPrompt", params)
-                while (response(evaluate_id) is None or response(handle_id) is None
+                if handler == "ignore":
+                    while not prompt_events("browsingContext.userPromptOpened"):
+                        seen.append(await _recv(websocket))
+                    assert_equal(response(evaluate_id), None, "ignored prompt keeps JavaScript waiting")
+                    params: dict[str, Any] = {"context": context, "accept": True}
+                    if prompt_type == "prompt":
+                        params["userText"] = "typed BiDi reply"
+                    await _send(websocket, handle_id, "browsingContext.handleUserPrompt", params)
+                while (response(evaluate_id) is None
+                       or (handler == "ignore" and response(handle_id) is None)
+                       or not prompt_events("browsingContext.userPromptOpened")
                        or not prompt_events("browsingContext.userPromptClosed")):
                     seen.append(await _recv(websocket))
         except TimeoutError as error:
@@ -207,7 +238,17 @@ async def _run_bidi_user_prompt_smoke(
 
         assert_equal(response(evaluate_id)["type"], "success", f"BiDi {prompt_type} script response")
         assert_equal(response(evaluate_id)["result"]["type"], "success", f"BiDi {prompt_type} completion")
-        assert_equal(response(handle_id)["type"], "success", f"BiDi {prompt_type} handle response")
+        accepted = handler != "dismiss"
+        expected_result = {"type": "undefined"}
+        if prompt_type == "confirm":
+            expected_result = {"type": "boolean", "value": accepted}
+        elif prompt_type == "prompt":
+            expected_result = ({"type": "string", "value": "typed BiDi reply" if handler == "ignore" else ""}
+                               if accepted else {"type": "null"})
+        assert_equal(response(evaluate_id)["result"]["result"], expected_result,
+                     f"BiDi {handler} {prompt_type} JavaScript return value")
+        if handler == "ignore":
+            assert_equal(response(handle_id)["type"], "success", f"BiDi {prompt_type} handle response")
         await _send(websocket, repeated_id, "browsingContext.handleUserPrompt", {"context": context})
         seen.extend(await _recv_until_id(websocket, repeated_id))
         assert_equal(response(repeated_id)["error"], "no such alert", "BiDi prompt is consumed once")
@@ -219,15 +260,114 @@ async def _run_bidi_user_prompt_smoke(
         assert_equal(len(opened), 1, f"one BiDi {prompt_type} opening notification")
         assert_equal(len(closed), 1, f"one BiDi {prompt_type} closing notification")
         assert_equal(opened[0]["params"]["message"], text, f"BiDi {prompt_type} opening message")
-        assert_equal(opened[0]["params"]["handler"], "dismiss", f"BiDi {prompt_type} handler policy")
-        assert_equal(closed[0]["params"]["accepted"], True, f"BiDi {prompt_type} accepted")
+        assert_equal(opened[0]["params"]["handler"], handler, f"BiDi {prompt_type} handler policy")
+        assert_equal(closed[0]["params"]["accepted"], accepted, f"BiDi {prompt_type} accepted")
         if prompt_type == "prompt":
             assert_equal(opened[0]["params"]["defaultValue"], "initial value", "BiDi prompt default")
-            assert_equal(closed[0]["params"]["userText"], "typed BiDi reply", "BiDi prompt reply")
+            if handler == "ignore":
+                assert_equal(closed[0]["params"]["userText"], "typed BiDi reply", "BiDi prompt reply")
 
     await _send(websocket, 219, "session.unsubscribe", {"subscriptions": [subscription]})
     await _recv_success(websocket, 219, "BiDi prompt unsubscribe")
-    record(results, "bidi_user_prompts", {"types": ["alert", "confirm", "prompt"], "opened": 3, "closed": 3})
+    record(results, f"bidi_user_prompts_{handler}", {"types": ["alert", "confirm", "prompt"], "opened": 3, "closed": 3})
+    await _run_bidi_popup_prompt_smoke(websocket, context, results, handler=handler)
+
+
+async def _run_bidi_popup_prompt_smoke(
+    websocket: Any,
+    context: str,
+    results: list[dict[str, Any]],
+    *,
+    handler: str,
+) -> None:
+    # Only prompt events are subscribed. A newly opened Window must acquire
+    # its identity without a contextCreated observer or a completed script.
+    await _send(websocket, 230, "session.subscribe", {"events": [
+        "browsingContext.userPromptOpened", "browsingContext.userPromptClosed",
+    ]})
+    subscribed = await _recv_success(websocket, 230, "BiDi popup prompt subscription")
+    await _send(websocket, 231, "script.evaluate", {
+        "expression": "(() => { const child = window.open('about:blank'); return child.confirm('popup prompt'); })()",
+        "target": {"context": context}, "awaitPromise": False,
+    })
+    seen: list[dict[str, Any]] = []
+
+    def events(method: str) -> list[dict[str, Any]]:
+        return [message for message in seen if message.get("method") == method]
+
+    def response(id_: int) -> dict[str, Any] | None:
+        return next((message for message in seen if message.get("id") == id_), None)
+
+    async with asyncio.timeout(5):
+        while not events("browsingContext.userPromptOpened"):
+            seen.append(await _recv(websocket))
+        popup = events("browsingContext.userPromptOpened")[0]["params"]["context"]
+        assert_true(popup != context, "popup prompt belongs to its own browsing context")
+        if handler == "ignore":
+            assert_equal(response(231), None, "popup keeps its causing script waiting")
+            await _send(websocket, 232, "browsingContext.handleUserPrompt", {"context": popup, "accept": True})
+        while (response(231) is None or not events("browsingContext.userPromptClosed")
+               or (handler == "ignore" and response(232) is None)):
+            seen.append(await _recv(websocket))
+    assert_equal(response(231)["result"]["result"], {"type": "boolean", "value": handler != "dismiss"},
+                 "popup JavaScript receives the handled result")
+    if handler == "ignore":
+        assert_equal(response(232)["type"], "success", "BiDi popup handle response")
+    await _send(websocket, 233, "browsingContext.handleUserPrompt", {"context": popup})
+    seen.extend(await _recv_until_id(websocket, 233))
+    assert_equal(response(233)["error"], "no such alert", "popup prompt is consumed once")
+    assert_equal(len(events("browsingContext.userPromptOpened")), 1, "one popup opening")
+    assert_equal(len(events("browsingContext.userPromptClosed")), 1, "one popup closing")
+    await _send(websocket, 234, "session.unsubscribe", {"subscriptions": [subscribed["result"]["subscription"]]})
+    await _recv_success(websocket, 234, "BiDi popup prompt unsubscribe")
+    await _send(websocket, 235, "browsingContext.close", {"context": popup})
+    await _recv_success(websocket, 235, "BiDi popup cleanup")
+    record(results, f"bidi_popup_prompt_{handler}", {"opened": 1, "closed": 1})
+
+
+async def _run_bidi_stored_prompt_text_smoke(
+    endpoint: str,
+    fixture: str,
+    results: list[dict[str, Any]],
+) -> None:
+    client = ClassicClient(endpoint)
+    created = await asyncio.to_thread(client.post, "/session", {"capabilities": {"alwaysMatch": {
+        "webSocketUrl": True, "unhandledPromptBehavior": "ignore",
+    }}})
+    session_id = created["value"]["sessionId"]
+    try:
+        await asyncio.to_thread(client.post, f"/session/{session_id}/url", {"url": f"{fixture}/webdriver/basic"})
+        async with websockets.connect(created["value"]["capabilities"]["webSocketUrl"], max_size=2**24) as websocket:
+            await _send(websocket, 1, "browsingContext.getTree", {})
+            tree = await _recv_success(websocket, 1, "BiDi shared prompt context")
+            context = tree["result"]["contexts"][0]["context"]
+            await _send(websocket, 2, "session.subscribe", {"events": ["browsingContext.userPromptOpened"]})
+            await _recv_success(websocket, 2, "BiDi shared prompt subscription")
+            for index, user_text in enumerate(["", None, "replacement"]):
+                evaluate_id, handle_id = 10 + index * 2, 11 + index * 2
+                await _send(websocket, evaluate_id, "script.evaluate", {
+                    "expression": "prompt('shared prompt text', 'initial')",
+                    "target": {"context": context}, "awaitPromise": False,
+                })
+                seen: list[dict[str, Any]] = []
+                async with asyncio.timeout(5):
+                    while not any(message.get("method") == "browsingContext.userPromptOpened" for message in seen):
+                        seen.append(await _recv(websocket))
+                    await asyncio.to_thread(client.post, f"/session/{session_id}/alert/text", {"text": "stored prior text"})
+                    params = {"context": context, "accept": True}
+                    if user_text is not None:
+                        params["userText"] = user_text
+                    await _send(websocket, handle_id, "browsingContext.handleUserPrompt", params)
+                    while not all(any(message.get("id") == id_ for message in seen) for id_ in [evaluate_id, handle_id]):
+                        seen.append(await _recv(websocket))
+                evaluated = next(message for message in seen if message.get("id") == evaluate_id)
+                handled = next(message for message in seen if message.get("id") == handle_id)
+                assert_equal(handled["type"], "success", "BiDi shared prompt handled")
+                assert_equal(evaluated["result"]["result"], {"type": "string", "value": user_text or ""},
+                             "BiDi userText overrides stored Classic text")
+    finally:
+        await asyncio.to_thread(client.delete, f"/session/{session_id}")
+    record(results, "bidi_stored_prompt_text", {"cases": ["explicit empty", "omitted", "replacement"]})
 
 
 async def _run_bidi_input_smoke(
