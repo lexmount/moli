@@ -3,7 +3,6 @@ use super::*;
 mod dispatch;
 mod handlers;
 mod listeners;
-mod operations;
 mod state;
 
 pub(in crate::context_bootstrap::media_queries::events::simple_event_target) use dispatch::simple_object_event_target_dispatch;
