@@ -547,6 +547,8 @@ fn emit_to_attachment(
         return;
     }
     let subscriptions = audience.iter().map(|(_, generation)| *generation).collect();
+    let dialog_id = dialog.id();
+    let source_document = dialog.source_document();
     // The Page owns the completion; sessions only hold permission to handle it.
     let installed =
         conn.with_target_javascript_dialog_state_for_owner_mut(&event_owner, move |state| {
@@ -579,10 +581,18 @@ fn emit_to_attachment(
             accept,
             prompt_text: Some(String::new()),
         };
-        if let Ok(events) =
-            finish_devtools_handle_javascript_dialog_command(conn, command, &event_owner)
-        {
-            out.extend(events);
+        match finish_devtools_handle_javascript_dialog_command(conn, command, &event_owner) {
+            Ok(events) => out.extend(events),
+            Err(error) => tracing::warn!(
+                browser_context_id = destination.page_owner().browser_context_id(),
+                target_id = destination.page_owner().target_id(),
+                page_attachment_id = destination.page_owner().page_attachment_id().get(),
+                dialog_id = dialog_id.sequence(),
+                ?source_document,
+                accept,
+                ?error,
+                "automatic JavaScript dialog handling failed"
+            ),
         }
     }
 }
