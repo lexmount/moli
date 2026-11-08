@@ -1071,6 +1071,54 @@ fn child_realm_promotion_moves_the_runtime_without_closing_its_work() {
 }
 
 #[test]
+fn failed_main_realm_baseline_does_not_publish_inspector_context() {
+    let vm = new_storage_test_vm("https://failed-main-bootstrap.test/");
+    let isolate = vm.renderer_document_isolate.clone();
+    let mut inspector = crate::script_vm::inspector::DocumentInspectorBinding::new(
+        isolate.inspector_isolate_backend_handle(),
+    );
+    let context = isolate
+        .with_entered_renderer_document_isolate(|isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let context = v8::Context::new(scope, Default::default());
+            Ok(v8::Global::new(scope, context))
+        })
+        .expect("baseline test context should be allocated");
+    let url = Url::parse("https://failed-main-bootstrap.test/").unwrap();
+    let failed = isolate.with_renderer_document_isolate_and_inspector_mut(|v8, backend| {
+        v8.terminate_execution();
+        let result = ScriptVmDefaultWorldBootstrap::capture_baseline_globals_and_attach_context(
+            isolate.clone(),
+            v8,
+            backend,
+            &mut inspector,
+            &context,
+            &url,
+            None,
+        );
+        v8.cancel_terminate_execution();
+        result
+    });
+    assert!(failed.is_err(), "terminated baseline capture must fail");
+    assert_eq!(inspector.context_registration_count_for_diagnostics(), 0);
+    isolate
+        .with_renderer_document_isolate_and_inspector_mut(|v8, backend| {
+            ScriptVmDefaultWorldBootstrap::capture_baseline_globals_and_attach_context(
+                isolate.clone(),
+                v8,
+                backend,
+                &mut inspector,
+                &context,
+                &url,
+                None,
+            )
+        })
+        .expect("baseline capture should be retryable after cancellation");
+    assert_eq!(inspector.context_registration_count_for_diagnostics(), 1);
+}
+
+#[test]
 fn failed_child_realm_bootstrap_releases_context_and_registration() {
     let mut vm = new_storage_test_vm("https://failed-realm-bootstrap.test/");
     vm.eval("const frame = document.createElement('iframe'); document.appendChild(frame)")
