@@ -251,6 +251,7 @@ pub use native_bridge::element::ClientRect as RendererClientRect;
 #[cfg(feature = "molio")]
 #[doc(hidden)]
 pub use raster_worker::RendererRasterStream;
+pub use runtime::RendererPendingWindowClientFocus;
 #[cfg(feature = "devtools")]
 pub use runtime::RendererScreencastPaintSession;
 pub use runtime::{

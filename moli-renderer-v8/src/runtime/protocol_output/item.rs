@@ -37,6 +37,7 @@ pub enum RendererOwnerAction {
     Download(RendererPendingDownloadActivation),
     JavaScriptDialog(RendererPendingJavaScriptDialog),
     Popup(RendererPendingPopupActivation),
+    FocusWindowClient(crate::runtime::RendererPendingWindowClientFocus),
     CloseAuxiliaryWindow(crate::runtime::RendererAuxiliaryWindow),
     NavigateAuxiliaryWindow {
         window: crate::runtime::RendererAuxiliaryWindow,

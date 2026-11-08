@@ -93,6 +93,17 @@ impl ScriptVm {
                     ServiceWorkerInternalBodyEffect::ExactTargetUnavailable
                 })
             }
+            RendererServiceWorkerInternalTask::WindowClientFocusRequest(request) => {
+                let queued = self
+                    ._context_host
+                    .borrow_mut()
+                    .queue_service_worker_window_client_focus_request(request);
+                Ok(if queued {
+                    ServiceWorkerInternalBodyEffect::InternalActionApplied
+                } else {
+                    ServiceWorkerInternalBodyEffect::ExactTargetUnavailable
+                })
+            }
             RendererServiceWorkerInternalTask::ClientsOpenWindowRequest(completion) => {
                 self.apply_service_worker_clients_open_window_request_body(completion)
             }
